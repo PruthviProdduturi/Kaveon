@@ -10,7 +10,10 @@
 //! shard fails closed with `Indeterminate` until it is compacted into a new
 //! index format. This is a safe operational limit, not unbounded deduplication.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use kaveon_storage::{
     AdlsConditionalCommit, CommitErrorKind, ImmutableParquetWriter, ObjectVersion,
@@ -75,6 +78,27 @@ pub struct ProductCatalogCommit {
     storage: AdlsConditionalCommit,
     prefix: String,
     metrics: Arc<TransactionMetrics>,
+    /// The most recently verified snapshot, held by the exact immutable
+    /// identity the head names it by. Shared by every clone of this handle, so
+    /// one process reads and verifies a given catalog generation once however
+    /// many product calls arrive against it.
+    snapshot_cache: Arc<Mutex<Option<VerifiedSnapshot>>>,
+}
+
+/// A snapshot read from storage, with every typed table it references loaded
+/// and digest-checked, and validated.
+///
+/// `sha256` is the digest of the manifest bytes it was decoded from — the value
+/// the head and the operation index attest — so a caller can check that
+/// attestation without holding the bytes.
+///
+/// Its typed-table references therefore describe the very rows in its
+/// `typed_rows`. Only this read path, and a commit that has just published
+/// both, can establish that; `split_typed_tables` depends on it.
+#[derive(Clone)]
+struct VerifiedSnapshot {
+    sha256: String,
+    snapshot: Arc<CatalogSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +155,7 @@ pub enum MutationRecovery {
 }
 
 struct Head {
-    snapshot: CatalogSnapshot,
+    verified: VerifiedSnapshot,
     version: ObjectVersion,
     operation_index: Option<BTreeMap<String, ImmutableIndexRef>>,
 }
@@ -194,6 +218,7 @@ impl ProductCatalogCommit {
             storage,
             prefix,
             metrics,
+            snapshot_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -446,10 +471,13 @@ cannot be told from a new operation"
                 attempt.finish(TransactionOutcome::Conflict);
                 return (CommitOutcome::Conflict, false);
             }
-            match self.read_snapshot_with_bytes(&existing.snapshot).await {
-                Ok((snapshot, bytes)) if digest(&bytes) == existing.snapshot_sha256 => {
+            match self.read_verified_snapshot(&existing.snapshot).await {
+                Ok(verified) if verified.sha256 == existing.snapshot_sha256 => {
                     attempt.finish(TransactionOutcome::Replayed);
-                    return (CommitOutcome::Replayed(snapshot), false);
+                    return (
+                        CommitOutcome::Replayed(Arc::unwrap_or_clone(verified.snapshot)),
+                        false,
+                    );
                 }
                 Ok(_) => return (finish_indeterminate(attempt), false),
                 Err(_) => return (finish_indeterminate(attempt), false),
@@ -461,14 +489,16 @@ cannot be told from a new operation"
         // head instead of trusting the base. A write set another writer has
         // invalidated is then rejected there, on its own merits.
         let mut request = request;
-        if request.base != head.snapshot.reference() {
+        if request.base != head.verified.snapshot.reference() {
             if !is_rebasable(&request) {
                 attempt.finish(TransactionOutcome::Conflict);
                 return (CommitOutcome::Conflict, false);
             }
-            request.base = head.snapshot.reference();
+            request.base = head.verified.snapshot.reference();
         }
-        let next = match head.snapshot.prepare(request.clone()) {
+        // The head was validated where it was read, and nothing but this
+        // function can produce the snapshot it holds.
+        let next = match head.verified.snapshot.prepare_verified(request.clone()) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 // prepare() names the violation — a stale revision, a dangling
@@ -519,7 +549,7 @@ cannot be told from a new operation"
         // Carve the typed tables out before encoding. What gets published and
         // digested is the manifest — references to the tables, not the rows —
         // so the snapshot's size no longer grows with the catalog's contents.
-        let (manifest, pending_tables) = match split_typed_tables(&next) {
+        let (manifest, pending_tables) = match split_typed_tables(&next, Some(&head.verified)) {
             Ok(split) => split,
             Err(()) => {
                 eprintln!(
@@ -565,6 +595,7 @@ operation {}",
             }
         };
         let snapshot_sha256 = digest(&bytes);
+        let published_manifest_tables = manifest.typed_tables.clone();
         shard.entries.insert(
             request.operation_id.clone(),
             OperationRecord {
@@ -604,7 +635,7 @@ operation {}",
         }
         let head_bytes = match encode_head(&HeadRecord {
             reference: next.reference(),
-            snapshot_sha256,
+            snapshot_sha256: snapshot_sha256.clone(),
             operation_index: Some(next_index),
         }) {
             Ok(bytes) => bytes,
@@ -619,6 +650,18 @@ operation {}",
             .await
         {
             Ok(_) => {
+                // The head now names these exact manifest bytes, and every
+                // typed-table object they reference is published. Reading them
+                // back would decode this snapshot and reload those rows, so
+                // what is remembered here is what that read would return: the
+                // prepared snapshot carrying the manifest's own table
+                // references rather than its parent's.
+                let mut published = next.clone();
+                published.typed_tables = published_manifest_tables;
+                self.remember_snapshot(&VerifiedSnapshot {
+                    sha256: snapshot_sha256,
+                    snapshot: Arc::new(published),
+                });
                 attempt.finish(TransactionOutcome::Committed);
                 (CommitOutcome::Committed(next), false)
             }
@@ -634,7 +677,19 @@ operation {}",
     }
 
     pub async fn read_current(&self) -> Result<CatalogSnapshot, CommitErrorKind> {
-        self.read_head().await.map(|head| head.snapshot)
+        self.read_head()
+            .await
+            .map(|head| Arc::unwrap_or_clone(head.verified.snapshot))
+    }
+
+    /// The current snapshot without copying it.
+    ///
+    /// A reader that only inspects the head — a product listing, a document
+    /// fetch — should prefer this. `read_current` has to hand back an owned
+    /// snapshot, so it copies every product record and typed row the catalog
+    /// holds on each call; this shares the one validated value instead.
+    pub async fn read_current_shared(&self) -> Result<Arc<CatalogSnapshot>, CommitErrorKind> {
+        self.read_head().await.map(|head| head.verified.snapshot)
     }
 
     /// Reads and verifies one immutable product document on demand. Snapshot
@@ -645,7 +700,7 @@ operation {}",
         id: &str,
     ) -> Result<Option<Vec<u8>>, CommitErrorKind> {
         let head = self.read_head().await?;
-        self.fetch_product_document_at(&head.snapshot, kind, id)
+        self.fetch_product_document_at(&head.verified.snapshot, kind, id)
             .await
     }
 
@@ -707,8 +762,13 @@ operation {}",
         max_hops: usize,
     ) -> Result<OperationResolution, CommitErrorKind> {
         let head = self.read_head().await?;
-        self.resolve_from(head.snapshot, operation_id, request_digest, max_hops)
-            .await
+        self.resolve_from(
+            head.verified.snapshot,
+            operation_id,
+            request_digest,
+            max_hops,
+        )
+        .await
     }
 
     /// Resolves the retained immutable mutation journal entry against the
@@ -741,7 +801,7 @@ operation {}",
         // transaction would be misreported as merely prepared after restart.
         let outcome = match self
             .resolve_from(
-                head.snapshot.clone(),
+                head.verified.snapshot.clone(),
                 transaction_id,
                 request_digest,
                 MAX_INDEX_SHARD_ENTRIES,
@@ -791,7 +851,7 @@ operation {}",
 
     async fn resolve_from(
         &self,
-        mut snapshot: CatalogSnapshot,
+        mut snapshot: Arc<CatalogSnapshot>,
         operation_id: &str,
         request_digest: &str,
         max_hops: usize,
@@ -799,12 +859,12 @@ operation {}",
         for hop in 0..=max_hops {
             if snapshot.operation_id == operation_id {
                 return Ok(if snapshot.request_digest == request_digest {
-                    OperationResolution::Committed(snapshot)
+                    OperationResolution::Committed(Arc::unwrap_or_clone(snapshot))
                 } else {
                     OperationResolution::Conflict
                 });
             }
-            let Some(parent) = snapshot.parent else {
+            let Some(parent) = snapshot.parent.clone() else {
                 return Ok(OperationResolution::NotCommitted);
             };
             if hop == max_hops {
@@ -819,6 +879,15 @@ operation {}",
         Ok(OperationResolution::Unresolved)
     }
 
+    /// Reads the durable head, every time, and pairs it with the validated
+    /// snapshot it names.
+    ///
+    /// The head object itself is never cached: it carries the conditional-write
+    /// version a commit swaps against and the operation index that tells a
+    /// replay from a new operation, and both must be the current ones. What the
+    /// cache can save is turning one fixed set of immutable bytes into a
+    /// validated snapshot, which is the part that reads and SHA-256-verifies
+    /// every typed table in the catalog.
     async fn read_head(&self) -> Result<Head, CommitErrorKind> {
         let object = self
             .storage
@@ -830,12 +899,15 @@ operation {}",
         if !valid_digest(&record.snapshot_sha256) {
             return Err(CommitErrorKind::Invalid);
         }
-        let (snapshot, snapshot_bytes) = self.read_snapshot_with_bytes(&record.reference).await?;
-        if digest(&snapshot_bytes) != record.snapshot_sha256 {
+        let verified = self.read_verified_snapshot(&record.reference).await?;
+        // Unchanged, and it is the whole attestation: the snapshot served must
+        // be the bytes this head names, whether it came from storage or from
+        // the cache.
+        if verified.sha256 != record.snapshot_sha256 {
             return Err(CommitErrorKind::Invalid);
         }
         Ok(Head {
-            snapshot,
+            verified,
             version: object.version,
             operation_index: record.operation_index,
         })
@@ -844,18 +916,29 @@ operation {}",
     async fn read_snapshot(
         &self,
         reference: &SnapshotRef,
-    ) -> Result<CatalogSnapshot, CommitErrorKind> {
-        self.read_snapshot_with_bytes(reference)
+    ) -> Result<Arc<CatalogSnapshot>, CommitErrorKind> {
+        self.read_verified_snapshot(reference)
             .await
-            .map(|(snapshot, _)| snapshot)
+            .map(|verified| verified.snapshot)
     }
 
-    async fn read_snapshot_with_bytes(
+    /// The validated snapshot for one immutable reference.
+    ///
+    /// Everything after the object read is a pure function of those bytes:
+    /// decoding, loading each typed table by the digest the manifest names for
+    /// it, and validation. A snapshot object is create-only and reached by its
+    /// own ID, so one reference names one byte string for good — which is what
+    /// makes it sound to answer from a remembered result instead of repeating
+    /// the pass.
+    async fn read_verified_snapshot(
         &self,
         reference: &SnapshotRef,
-    ) -> Result<(CatalogSnapshot, Vec<u8>), CommitErrorKind> {
+    ) -> Result<VerifiedSnapshot, CommitErrorKind> {
         if !valid_snapshot_id(&reference.snapshot_id) {
             return Err(CommitErrorKind::Invalid);
+        }
+        if let Some(cached) = self.cached_snapshot(reference) {
+            return Ok(cached);
         }
         let object = self
             .storage
@@ -873,9 +956,49 @@ operation {}",
         if snapshot.reference() != *reference || snapshot.validate().is_err() {
             return Err(CommitErrorKind::Invalid);
         }
-        // The manifest bytes, which are what was published and what the head
-        // and the operation index record a digest of.
-        Ok((snapshot, object.bytes))
+        let verified = VerifiedSnapshot {
+            // The manifest bytes, which are what was published and what the
+            // head and the operation index record a digest of.
+            sha256: digest(&object.bytes),
+            snapshot: Arc::new(snapshot),
+        };
+        self.remember_snapshot(&verified);
+        Ok(verified)
+    }
+
+    /// The remembered snapshot, and only when it is the very one asked for.
+    ///
+    /// Identity is the pair the head publishes — generation and snapshot ID.
+    /// Snapshot objects are create-only, so that pair names one immutable
+    /// object; a commit publishes a new one and swings the head to it, so the
+    /// next head read cannot match this entry and goes to storage. Nothing here
+    /// is time-based and nothing expires: an entry is either exactly the object
+    /// the caller named, or it is not used at all.
+    fn cached_snapshot(&self, reference: &SnapshotRef) -> Option<VerifiedSnapshot> {
+        let cache = self
+            .snapshot_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        cache
+            .as_ref()
+            .filter(|entry| entry.snapshot.reference() == *reference)
+            .cloned()
+    }
+
+    /// Keeps the newest verified snapshot. Walking history to resolve an
+    /// operation reads older generations, and those must not displace the head,
+    /// which is what every product call needs.
+    fn remember_snapshot(&self, verified: &VerifiedSnapshot) {
+        let mut cache = self
+            .snapshot_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if cache
+            .as_ref()
+            .is_none_or(|entry| entry.snapshot.generation <= verified.snapshot.generation)
+        {
+            *cache = Some(verified.clone());
+        }
     }
 
     async fn publish_snapshot(
@@ -1062,15 +1185,37 @@ const MAX_TYPED_TABLE_BYTES: usize = 64 * 1024 * 1024;
 /// already had and is not republished. That is the whole point: a commit used
 /// to rewrite every row in the catalog — saving a favourite republished 5.3 MB
 /// of query history — and now writes only the tables it touched.
+///
+/// `parent` is the snapshot this one was prepared from, as it was read back
+/// from storage. A table whose rows are byte-identical to the parent's is then
+/// recognised without being encoded or hashed at all: a verified parent's
+/// references describe the very rows being compared, and encoding is
+/// deterministic, so equal rows carry that same digest. Without a parent the
+/// digest is computed and compared, which costs an encode and a SHA-256 of
+/// every table in the catalog on every commit.
 #[allow(clippy::type_complexity)]
 fn split_typed_tables(
     snapshot: &CatalogSnapshot,
+    parent: Option<&VerifiedSnapshot>,
 ) -> Result<(CatalogSnapshot, Vec<(String, Vec<u8>)>), ()> {
     let mut manifest = snapshot.clone();
     manifest.typed_rows = BTreeMap::new();
     manifest.typed_tables = BTreeMap::new();
     let mut pending = Vec::new();
     for (table, rows) in &snapshot.typed_rows {
+        if let Some(reference) = parent
+            .filter(|parent| parent.snapshot.typed_rows.get(table) == Some(rows))
+            .and_then(|parent| parent.snapshot.typed_tables.get(table))
+        {
+            manifest.typed_tables.insert(
+                table.clone(),
+                TypedTableRef {
+                    document: reference.document.clone(),
+                    rows: rows.len() as u64,
+                },
+            );
+            continue;
+        }
         let bytes = encode_bounded(rows, MAX_TYPED_TABLE_BYTES)?;
         let sha256 = digest(&bytes);
         let path = format!("typed-tables/{sha256}.json");
@@ -1167,7 +1312,7 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn valid_digest(value: &str) -> bool {
+pub(crate) fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -2205,7 +2350,7 @@ mod tests {
         );
 
         // The manifest is the thing with a ceiling, and it holds a reference.
-        let (manifest, _) = split_typed_tables(&current).unwrap();
+        let (manifest, _) = split_typed_tables(&current, None).unwrap();
         let bytes = encode(&manifest).expect("the manifest must encode well inside its bound");
         assert!(
             bytes.len() < 64 * 1024,
@@ -2241,7 +2386,7 @@ mod tests {
             CommitOutcome::Committed(value) => value,
             outcome => panic!("the unrelated write did not commit: {outcome:?}"),
         };
-        let (_, pending) = split_typed_tables(&after).unwrap();
+        let (_, pending) = split_typed_tables(&after, None).unwrap();
         let rewritten: Vec<&String> = pending.iter().map(|(path, _)| path).collect();
         assert_eq!(
             rewritten.len(),
@@ -2385,5 +2530,364 @@ mod tests {
             Err(CommitErrorKind::Missing)
         ));
         assert_eq!(catalog.read_current().await.unwrap(), current);
+    }
+
+    fn product_request(
+        base: SnapshotRef,
+        id: &str,
+        operation: &str,
+        change: CatalogChange,
+    ) -> PrepareChange {
+        PrepareChange {
+            base,
+            snapshot_id: format!("snapshot-{id}"),
+            operation_id: operation.into(),
+            request_digest: DIGEST.into(),
+            changes: vec![change],
+        }
+    }
+
+    async fn commit_product(
+        catalog: &ProductCatalogCommit,
+        base: SnapshotRef,
+        id: &str,
+        operation: &str,
+        change: CatalogChange,
+    ) -> CommitOutcome {
+        let request = product_request(base, id, operation, change);
+        let documents = documents_for(&request);
+        catalog.commit_with_documents(request, documents).await
+    }
+
+    fn history_row(id: &str, revision: u64, payload: &str) -> TypedRow {
+        TypedRow {
+            primary_key: id.into(),
+            revision,
+            columns: BTreeMap::from([(
+                "payload".to_owned(),
+                TypedValue::String(payload.to_owned()),
+            )]),
+            unique_keys: BTreeMap::new(),
+        }
+    }
+
+    /// The property that makes the snapshot cache safe to have at all: a
+    /// generation another writer published is served, never the one this handle
+    /// happens to be holding.
+    ///
+    /// Two handles over one store, which is what two coordinator processes look
+    /// like. The reader warms its cache, the writer advances the head twice,
+    /// and the reader must see both.
+    #[tokio::test]
+    async fn a_moved_head_is_never_answered_from_the_cache() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let reader = catalog_with(storage.clone());
+        let writer = catalog_with(storage);
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        reader.initialize(genesis.clone()).await;
+        assert_eq!(reader.read_current().await.unwrap().generation, 0);
+
+        assert!(matches!(
+            commit_product(
+                &writer,
+                genesis.reference(),
+                "one",
+                "create-one",
+                CatalogChange::CreateProduct {
+                    record: dashboard("dash-1", 1, "alice/one"),
+                },
+            )
+            .await,
+            CommitOutcome::Committed(_)
+        ));
+        let first = reader.read_current().await.unwrap();
+        assert_eq!(first.generation, 1);
+        assert!(
+            first
+                .product_record(ProductRecordKind::Dashboard, "dash-1")
+                .unwrap()
+                .is_some()
+        );
+
+        // Again, so that a cache filled by a read is shown to be no different
+        // from one filled by the commit before it.
+        assert!(matches!(
+            commit_product(
+                &writer,
+                first.reference(),
+                "two",
+                "create-two",
+                CatalogChange::CreateProduct {
+                    record: dashboard("dash-2", 1, "bob/two"),
+                },
+            )
+            .await,
+            CommitOutcome::Committed(_)
+        ));
+        let second = reader.read_current().await.unwrap();
+        assert_eq!(second.generation, 2);
+        assert!(
+            second
+                .product_record(ProductRecordKind::Dashboard, "dash-2")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// A write set that was valid against a remembered generation must be
+    /// judged against the head, and refused on its own precondition once
+    /// another writer has moved past it. If a cached snapshot could stand in
+    /// for the head here, this update would overwrite the other writer's.
+    #[tokio::test]
+    async fn a_stale_cached_snapshot_cannot_carry_a_write_set_past_the_head() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let mine = catalog_with(storage.clone());
+        let theirs = catalog_with(storage);
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        mine.initialize(genesis.clone()).await;
+        assert!(matches!(
+            commit_product(
+                &mine,
+                genesis.reference(),
+                "created",
+                "create-dash",
+                CatalogChange::CreateProduct {
+                    record: dashboard("dash-1", 1, "alice/one"),
+                },
+            )
+            .await,
+            CommitOutcome::Committed(_)
+        ));
+        // Reading it is what fills this handle's cache with the generation the
+        // stale write below was prepared against.
+        let base = mine.read_current().await.unwrap();
+
+        assert!(matches!(
+            commit_product(
+                &theirs,
+                base.reference(),
+                "theirs",
+                "update-theirs",
+                CatalogChange::UpdateProduct {
+                    expected_revision: 1,
+                    record: dashboard("dash-1", 2, "alice/theirs"),
+                },
+            )
+            .await,
+            CommitOutcome::Committed(_)
+        ));
+
+        assert_eq!(
+            commit_product(
+                &mine,
+                base.reference(),
+                "mine",
+                "update-mine",
+                CatalogChange::UpdateProduct {
+                    expected_revision: 1,
+                    record: dashboard("dash-1", 2, "alice/mine"),
+                },
+            )
+            .await,
+            CommitOutcome::Rejected
+        );
+        let settled = mine.read_current().await.unwrap();
+        assert_eq!(
+            settled
+                .product_record(ProductRecordKind::Dashboard, "dash-1")
+                .unwrap()
+                .unwrap()
+                .unique_values["owner_name"],
+            "alice/theirs"
+        );
+    }
+
+    /// The digest the head records is still the attestation on a cache hit. A
+    /// head that names other bytes for a remembered snapshot fails closed
+    /// exactly as it does when the snapshot is read from storage.
+    #[tokio::test]
+    async fn a_cached_snapshot_is_refused_when_the_head_attests_other_bytes() {
+        let raw_store = Arc::new(InMemory::new());
+        let catalog = catalog_with(AdlsConditionalCommit::new(raw_store.clone()));
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis).await;
+        assert_eq!(catalog.read_current().await.unwrap().generation, 0);
+
+        let head = raw_store
+            .get(&Path::from("product/head.json"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let mut record: serde_json::Value = serde_json::from_slice(&head).unwrap();
+        record["snapshot_sha256"] = serde_json::Value::String(DIGEST.to_owned());
+        raw_store
+            .put(
+                &Path::from("product/head.json"),
+                serde_json::to_vec(&record).unwrap().into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            catalog.read_current().await.unwrap_err(),
+            CommitErrorKind::Invalid
+        );
+    }
+
+    /// Proof that a repeat read does not go back to the snapshot object: with
+    /// the object removed, the handle that already verified it still answers,
+    /// and a handle that never saw it cannot.
+    ///
+    /// This is the cost D-3 was measuring — reading, SHA-256-verifying and
+    /// decoding the manifest and every typed table in the catalog, on every
+    /// product call.
+    #[tokio::test]
+    async fn a_verified_snapshot_is_not_read_again_for_the_next_caller() {
+        let raw_store = Arc::new(InMemory::new());
+        let storage = AdlsConditionalCommit::new(raw_store.clone());
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        assert!(matches!(
+            commit_product(
+                &catalog,
+                genesis.reference(),
+                "kept",
+                "create-kept",
+                CatalogChange::CreateProduct {
+                    record: dashboard("dash-1", 1, "alice/one"),
+                },
+            )
+            .await,
+            CommitOutcome::Committed(_)
+        ));
+        assert_eq!(catalog.read_current().await.unwrap().generation, 1);
+
+        raw_store
+            .delete(&Path::from("product/snapshots/snapshot-kept.json"))
+            .await
+            .unwrap();
+
+        assert_eq!(catalog.read_current().await.unwrap().generation, 1);
+        assert_eq!(
+            catalog_with(storage).read_current().await.unwrap_err(),
+            CommitErrorKind::Missing
+        );
+    }
+
+    /// A commit remembers what it just published, so the read that follows a
+    /// save does not pay for the whole pass either. What it remembers has to be
+    /// exactly what a reader coming to the store cold would decode — including
+    /// the typed-table references, which a prepared snapshot still carries from
+    /// its parent.
+    #[tokio::test]
+    async fn the_remembered_snapshot_is_what_a_cold_reader_decodes() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        let mut current = match commit_product(
+            &catalog,
+            genesis.reference(),
+            "history",
+            "insert-history",
+            CatalogChange::InsertTypedRow {
+                table: "query_history".into(),
+                row: history_row("row-1", 1, "select 1"),
+            },
+        )
+        .await
+        {
+            CommitOutcome::Committed(value) => value,
+            other => panic!("the first typed row did not commit: {other:?}"),
+        };
+        let later = [
+            ("insert-second", "query_history", "row-2"),
+            ("insert-third", "favorites", "row-3"),
+        ];
+        for (operation, table, row) in later {
+            current = match commit_product(
+                &catalog,
+                current.reference(),
+                operation,
+                operation,
+                CatalogChange::InsertTypedRow {
+                    table: table.into(),
+                    row: history_row(row, 1, "select 2"),
+                },
+            )
+            .await
+            {
+                CommitOutcome::Committed(value) => value,
+                other => panic!("{operation} did not commit: {other:?}"),
+            };
+        }
+        assert!(matches!(
+            commit_product(
+                &catalog,
+                current.reference(),
+                "dash",
+                "create-dash",
+                CatalogChange::CreateProduct {
+                    record: dashboard("dash-1", 1, "alice/one"),
+                },
+            )
+            .await,
+            CommitOutcome::Committed(_)
+        ));
+
+        let warm = catalog.read_current().await.unwrap();
+        let cold = catalog_with(storage).read_current().await.unwrap();
+        assert_eq!(
+            warm, cold,
+            "a remembered snapshot must be indistinguishable from a read one"
+        );
+        assert_eq!(cold.typed_rows["query_history"].len(), 2);
+        assert_eq!(cold.typed_rows["favorites"].len(), 1);
+    }
+
+    /// An unchanged table is recognised from the verified parent's rows, so it
+    /// is neither encoded nor hashed on a commit that did not touch it.
+    ///
+    /// The snapshot here references no typed tables of its own, which is what a
+    /// snapshot written before typed tables moved out of line looks like. The
+    /// digest comparison cannot recognise anything in that state, so a table
+    /// that is reused proves the parent's rows were what recognised it.
+    #[test]
+    fn an_unchanged_typed_table_is_recognised_from_the_verified_parent() {
+        let mut inline = CatalogSnapshot::empty("snapshot-parent").unwrap();
+        inline.typed_rows.insert(
+            "query_history".to_owned(),
+            BTreeMap::from([("row-1".to_owned(), history_row("row-1", 1, "select 1"))]),
+        );
+        let (published, pending) = split_typed_tables(&inline, None).unwrap();
+        assert_eq!(pending.len(), 1, "the table has never been published");
+
+        let mut materialised = inline.clone();
+        materialised.typed_tables = published.typed_tables.clone();
+        let parent = VerifiedSnapshot {
+            sha256: DIGEST.into(),
+            snapshot: Arc::new(materialised),
+        };
+        let (manifest, pending) = split_typed_tables(&inline, Some(&parent)).unwrap();
+        assert!(
+            pending.is_empty(),
+            "an unchanged table must not be published again"
+        );
+        assert_eq!(
+            manifest.typed_tables["query_history"],
+            published.typed_tables["query_history"]
+        );
+
+        let mut changed = inline.clone();
+        changed.typed_rows.insert(
+            "query_history".to_owned(),
+            BTreeMap::from([("row-1".to_owned(), history_row("row-1", 2, "select 2"))]),
+        );
+        let (_, pending) = split_typed_tables(&changed, Some(&parent)).unwrap();
+        assert_eq!(pending.len(), 1, "changed rows must be published");
     }
 }
