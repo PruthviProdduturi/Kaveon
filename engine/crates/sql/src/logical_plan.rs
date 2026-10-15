@@ -1686,6 +1686,17 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Aggregate { group_by, .. } => group_by.is_empty(),
             LogicalPlan::Filter { input, .. } => single_row(input),
+            // `SELECT 42` and constant `UNNEST(ARRAY[...])` relations are
+            // statically single-row when every array has at most one value.
+            // This is safe for a scalar subquery: unlike a general table
+            // scan, the relation cannot produce a second row.
+            LogicalPlan::Unnest { expressions, .. } => expressions.iter().all(|expr| {
+                matches!(
+                    expr,
+                    Expr::Function { name, args }
+                        if name == "ARRAY" && args.len() <= 1
+                )
+            }),
             _ => false,
         }
     }
@@ -5439,6 +5450,23 @@ mod tests {
             panic!("projection scalar should cross join its one-row relation");
         };
         assert!(matches!(*left, LogicalPlan::Scan { .. }));
+        assert!(matches!(*right, LogicalPlan::Project { .. }));
+
+        let plan = sql_to_logical_plan("SELECT (SELECT 42) AS answer FROM t")
+            .expect("a scalar literal subquery has one implicit row");
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("literal scalar projection");
+        };
+        assert_eq!(
+            columns,
+            vec![Expr::Alias {
+                expr: Box::new(Expr::Column("__kaveon_scalar_0".into())),
+                name: "answer".into(),
+            }]
+        );
+        let LogicalPlan::Join { right, .. } = *input else {
+            panic!("literal scalar should cross join its one-row relation");
+        };
         assert!(matches!(*right, LogicalPlan::Project { .. }));
     }
 
