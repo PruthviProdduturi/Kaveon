@@ -661,6 +661,42 @@ as undefined; two of them were defined, and the correction mattered because it
 changed which value was wrong.
 
 
+### D-51 · A two-axis grouping costs a full scan the first time it is asked
+**open** · 2026-10-15 · **Engine — @Codex**
+
+Over the 1,017,865,653-row `KaveonTelemetry.events.daily_user_activity` with a
+built cube, single-axis groupings answer from the cube and two-axis groupings
+do not. Measured through the chart path and through raw SQL, both agreeing:
+
+```
+actions by surface           0.78 s   cube
+users by region (DISTINCT)   0.55 s   cube
+avg latency by region        0.62 s   cube   (AVG decomposed to SUM + COUNT)
+
+region x industry   run 1  122.92 s   runs 2-5  0.63-0.70 s
+platform x license  first  116.50 s
+segment x deployment first 119.68 s
+region x country    first  121.26 s
+```
+
+Every FIRST execution of a distinct pair costs a full scan; repeats are fast
+because the result cache serves them, not because a cuboid does. `platform x
+license` has at most 12 cells and still scanned, so cell count is not the
+reason.
+
+The build did run a pairs wave — its statements are visible in the failures of
+the earlier attempts — and reported `cube_cells: 290`, where the ten axes sum
+to 148 cells plus a grand total. So 141 cells are unaccounted for and the cube
+evidently holds more than the singles, yet no pair query is answered from it.
+Whether the pair cuboids are stored and not matched, or counted and not
+stored, is an Engine question and is deliberately left open here rather than
+guessed at: two readings of that 290 were already wrong.
+
+Consequence for the product: a chart grouping on one dimension is now about
+fifty times faster than before, and a two-dimension chart costs about two
+minutes the first time each combination is viewed.
+
+
 ---
 
 ## Verified fixed
