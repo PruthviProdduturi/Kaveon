@@ -10,7 +10,7 @@ import type { UserRole } from "../../utils/permissions";
 import { useTheme } from "../../contexts/ThemeContext";
 import { KaveonLoading } from "../../components/KaveonLoading";
 import { LineageView } from "../../components/LineageView";
-import { unknownText } from "../../components/Reading";
+import { reasonFromStatus, unknownText } from "../../components/Reading";
 
 type TabKey = "lineage" | "dashboards" | "charts" | "datasets" | "queries";
 
@@ -240,6 +240,39 @@ const RECENT_ICON: Record<string, string> = {
   chat: "fas fa-comment",
 };
 
+/**
+ * The pin and the delete on a card or a row.
+ *
+ * They are quiet until the item is being attended to, which was implemented
+ * as `opacity: 0` lifted by the container's `mouseenter`. A pointer is not
+ * the only way to attend to something: a keyboard reaches these buttons by
+ * Tab and used to focus one that was still fully transparent, and a touch
+ * device fires no hover at all, so on a phone the delete control did not
+ * exist. Focus reveals them here too (React's focus events bubble, so the
+ * container hears its buttons), and the stylesheet at the foot of this file
+ * keeps them visible wherever the pointer cannot hover.
+ */
+const ACTION_SELECTORS = [".workspace-card-pin", ".workspace-card-delete", ".workspace-row-pin", ".workspace-row-delete"];
+
+function revealActions(container: HTMLElement): void {
+  for (const selector of ACTION_SELECTORS) {
+    const control = container.querySelector<HTMLElement>(selector);
+    if (control) control.style.opacity = "1";
+  }
+}
+
+/** Hide them again, except a pin that is on — that is state, not an affordance. */
+function hideActions(container: HTMLElement, pinned: boolean, busy: boolean): void {
+  for (const selector of [".workspace-card-delete", ".workspace-row-delete"]) {
+    const control = container.querySelector<HTMLElement>(selector);
+    if (control && !busy) control.style.opacity = "0";
+  }
+  for (const selector of [".workspace-card-pin", ".workspace-row-pin"]) {
+    const control = container.querySelector<HTMLElement>(selector);
+    if (control && !pinned) control.style.opacity = "0";
+  }
+}
+
 // Humanize a chart_type slug for display on chart cards (e.g. "time_series_line"
 // -> "Time Series Line", "big_number" -> "Big Number").
 function chartTypeLabel(t?: string | null): string {
@@ -361,37 +394,67 @@ export default function WorkspacePage() {
     const tabKey = tab.key; // the tab this load belongs to
     setLoading(true);
     setError(null);
-    try {
-      const res = await msalFetch(tab.endpoint);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const arr: WorkspaceItem[] = Array.isArray(data) ? data : Array.isArray(data.result) ? data.result : Array.isArray(data.items) ? data.items : [];
-      setItems(arr);
-      setLoadedTab(tabKey);
-    } catch {
-      // Retry once on failure (cold start can cause the first call to time out)
+    /**
+     * One attempt, and what it answered.
+     *
+     * The status is kept rather than flattened into a message. A list read
+     * that failed used to throw `HTTP 503` and then compose its sentence with
+     * no `reason` at all, so a Library this deployment was never configured
+     * for and a Library whose API was restarting produced the same words —
+     * and the only control offered was Retry, which is right for one and
+     * useless for the other. `reasonFromStatus` is the one place that
+     * distinction is read, so the status has to survive the throw.
+     */
+    const attempt = async (): Promise<{ items: WorkspaceItem[] } | { status: number | null; detail: string | null }> => {
       try {
-        const retry = await msalFetch(tab.endpoint);
-        if (retry.ok) {
-          const retryData = await retry.json();
-          const retryArr: WorkspaceItem[] = Array.isArray(retryData) ? retryData : Array.isArray(retryData.result) ? retryData.result : Array.isArray(retryData.items) ? retryData.items : [];
-          setItems(retryArr);
-          setLoadedTab(tabKey);
-          setError(null);
-          return;
+        const res = await msalFetch(tab.endpoint);
+        if (!res.ok) {
+          let detail: string | null = null;
+          try {
+            const body = await res.json();
+            detail = typeof body?.detail === "string" ? body.detail : null;
+          } catch {
+            detail = null;
+          }
+          return { status: res.status, detail };
         }
-      } catch {}
-      // The empty state below is already gated on this being null, so a
-      // failed read never draws "No charts yet" here. What it said instead —
-      // "Failed to load charts." — still left a reader to guess whether
-      // anything had been lost, so it now says what could not be reached and
-      // that nothing is known to be missing.
-      setError(unknownText({
-        what: `The ${tab.label.toLowerCase()} list`, says: "what the Library holds",
-      }));
-    } finally {
+        const data = await res.json();
+        return {
+          items: Array.isArray(data) ? data
+            : Array.isArray(data.result) ? data.result
+            : Array.isArray(data.items) ? data.items
+            : [],
+        };
+      } catch (transport) {
+        // No response at all: a status would be invented, so none is claimed.
+        return { status: null, detail: transport instanceof Error ? transport.message : null };
+      }
+    };
+
+    // Retry once on failure (cold start can cause the first call to time out).
+    let outcome = await attempt();
+    if (!("items" in outcome)) outcome = await attempt();
+
+    if ("items" in outcome) {
+      setItems(outcome.items);
+      setLoadedTab(tabKey);
+      setError(null);
       setLoading(false);
+      return;
     }
+
+    // The empty state below is already gated on this being null, so a
+    // failed read never draws "No charts yet" here. What it said instead —
+    // "Failed to load charts." — still left a reader to guess whether
+    // anything had been lost, so it now says what could not be reached and
+    // that nothing is known to be missing.
+    setError(unknownText({
+      what: `The ${tab.label.toLowerCase()} list`,
+      says: "what the Library holds",
+      reason: reasonFromStatus(outcome.status),
+      detail: outcome.detail,
+    }));
+    setLoading(false);
   }, [isAuthenticated, tab.endpoint, tab.label, tab.key]);
 
   useEffect(() => { void load(); }, [load]);
@@ -431,18 +494,52 @@ export default function WorkspacePage() {
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [confirmItem, setConfirmItem] = useState<WorkspaceItem | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // An action that was refused, reported where the action was taken. This is
+  // not the list's error slot: the list loaded, and saying otherwise over a
+  // full grid would be the same mistake as reporting a failed read as empty.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const requestDelete = useCallback((e: React.MouseEvent, item: WorkspaceItem) => {
     e.stopPropagation();
     setDeleteError(null);
+    setActionError(null);
     setConfirmItem(item);
+  }, []);
+
+  /**
+   * Why a write was refused, in the response's own words.
+   *
+   * The reason is read off the body first and the status only where the body
+   * carried none. The delete control here used to answer "You may not have
+   * permission" for every failure, which sent a reader to look at their role
+   * while the real answer was a 502; the same discipline applies to every
+   * write on this page, so it is written once.
+   */
+  const refusalReason = useCallback(async (res: Response): Promise<string> => {
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = typeof body?.detail === "string" ? body.detail : "";
+    } catch {
+      detail = "";
+    }
+    if (detail) return detail;
+    if (res.status === 403) return "You don't have permission to do that.";
+    if (res.status === 404) return "It no longer exists.";
+    if (res.status === 503) return "That store is not configured on this server.";
+    if (res.status === 502 || res.status === 504) {
+      return "The server did not answer. It may be restarting; nothing is known to be wrong with the record.";
+    }
+    return `The server returned ${res.status}.`;
   }, []);
 
   // Pin/unpin — persisted per user via the generic favorites store.
   const togglePin = useCallback(async (e: React.MouseEvent, item: WorkspaceItem) => {
     e.stopPropagation();
     const next = !item.favorite;
+    const label = item.name ?? item.title ?? "that item";
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, favorite: next } : i)));
+    setActionError(null);
     try {
       const res = await msalFetch("/api/v1/favorites/toggle", {
         method: "POST",
@@ -453,12 +550,16 @@ export default function WorkspacePage() {
           object_name: item.name ?? item.title ?? "",
         }),
       });
-      if (!res.ok) throw new Error(String(res.status));
-    } catch {
-      // Revert on failure.
+      if (!res.ok) throw new Error(await refusalReason(res));
+    } catch (error) {
+      // Revert, and say why. Reverting on its own left the pin flipping back
+      // under the reader's hand with nothing said, which reads as a control
+      // that does not work rather than a write that was refused.
       setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, favorite: !next } : i)));
+      const reason = error instanceof Error && error.message ? error.message : "";
+      setActionError(`${next ? "Couldn't pin" : "Couldn't unpin"} “${label}”.${reason ? ` ${reason}` : ""}`);
     }
-  }, [activeTab]);
+  }, [activeTab, refusalReason]);
 
   const confirmDelete = useCallback(async () => {
     if (!confirmItem) return;
@@ -473,21 +574,7 @@ export default function WorkspacePage() {
         // "You may not have permission" for every failure, which sent the
         // reader looking at roles while the real answer was a 502 from the
         // catalog refusing to delete a record other records still referenced.
-        let detail = "";
-        try {
-          const body = await res.json();
-          detail = typeof body?.detail === "string" ? body.detail : "";
-        } catch {
-          detail = "";
-        }
-        const reason =
-          detail ||
-          (res.status === 403
-            ? "You don't have permission to delete it."
-            : res.status === 404
-              ? "It no longer exists."
-              : `The server returned ${res.status}.`);
-        throw new Error(reason);
+        throw new Error(await refusalReason(res));
       }
       setItems((prev) => prev.filter((i) => i.id !== item.id));
       setConfirmItem(null);
@@ -497,7 +584,7 @@ export default function WorkspacePage() {
     } finally {
       setDeletingId(null);
     }
-  }, [confirmItem, tab.endpoint, tab.label]);
+  }, [confirmItem, tab.endpoint, tab.label, refusalReason]);
 
   const email = account?.email ?? "";
   // A dashboard list that cannot be read is said so rather than silently
@@ -513,6 +600,11 @@ export default function WorkspacePage() {
     if (scope === "mine" && item.created_by && item.created_by !== email) return false;
     return true;
   });
+
+  // The list answered and holds records, and the search or the scope toggle is
+  // what left nothing on screen. Distinguishing this from a genuinely empty
+  // Library is the difference between "no matches" and "nothing exists".
+  const narrowed = ready && items.length > 0 && filtered.length === 0;
 
   // Pinned items surface in their own section at the top (and are removed from
   // the normal grouped sections so they aren't shown twice).
@@ -585,20 +677,16 @@ export default function WorkspacePage() {
           e.currentTarget.style.transform = "translateY(-3px)";
           e.currentTarget.style.boxShadow = "0 12px 28px rgba(0,0,0,0.28)";
           e.currentTarget.style.borderColor = accent;
-          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-card-delete");
-          if (del) del.style.opacity = "1";
-          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-card-pin");
-          if (pin) pin.style.opacity = "1";
+          revealActions(e.currentTarget);
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.transform = "translateY(0)";
           e.currentTarget.style.boxShadow = "none";
           e.currentTarget.style.borderColor = "var(--border)";
-          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-card-delete");
-          if (del && deletingId !== item.id) del.style.opacity = "0";
-          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-card-pin");
-          if (pin && !item.favorite) pin.style.opacity = "0";
+          hideActions(e.currentTarget, !!item.favorite, deletingId === item.id);
         }}
+        onFocus={(e) => revealActions(e.currentTarget)}
+        onBlur={(e) => hideActions(e.currentTarget, !!item.favorite, deletingId === item.id)}
       >
         {/* Cover: the captured preview when there is one, else a calm group-tinted
             panel + glyph. Colour comes from the item's GROUP accent, not a random
@@ -614,7 +702,7 @@ export default function WorkspacePage() {
               position: "absolute", top: 8, left: 8, width: 30, height: 30, borderRadius: 8,
               border: "none", background: "rgba(15,23,42,0.72)", backdropFilter: "blur(4px)",
               display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-              color: item.favorite ? "#fbbf24" : "#fff",
+              color: item.favorite ? "var(--warning)" : "#fff",
               opacity: item.favorite ? 1 : 0, transition: "opacity 0.12s",
             }}
           >
@@ -637,6 +725,9 @@ export default function WorkspacePage() {
               cursor: deletingId === item.id ? "default" : "pointer",
               color: "#fff", opacity: 0, transition: "opacity 0.12s, background 0.12s",
             }}
+            // A fill behind a white glyph, so this is the literal rather than
+            // `--danger`: white on #dc2626 is 4.83:1, white on the dark theme's
+            // #f87171 only 2.77:1, which would miss the 3:1 icon threshold.
             onMouseEnter={(e) => { e.currentTarget.style.background = "#dc2626"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(15,23,42,0.72)"; }}
           >
@@ -713,18 +804,14 @@ export default function WorkspacePage() {
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.borderColor = "var(--accent)";
-          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-row-delete");
-          if (del) del.style.opacity = "1";
-          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-row-pin");
-          if (pin) pin.style.opacity = "1";
+          revealActions(e.currentTarget);
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.borderColor = "var(--border)";
-          const del = e.currentTarget.querySelector<HTMLElement>(".workspace-row-delete");
-          if (del && deletingId !== item.id) del.style.opacity = "0";
-          const pin = e.currentTarget.querySelector<HTMLElement>(".workspace-row-pin");
-          if (pin && !item.favorite) pin.style.opacity = "0";
+          hideActions(e.currentTarget, !!item.favorite, deletingId === item.id);
         }}
+        onFocus={(e) => revealActions(e.currentTarget)}
+        onBlur={(e) => hideActions(e.currentTarget, !!item.favorite, deletingId === item.id)}
       >
         <div style={{
           width: 38, height: 38, borderRadius: 9, flexShrink: 0,
@@ -738,7 +825,7 @@ export default function WorkspacePage() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
             {isDataset && qualified && (
-              <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: "var(--text-muted)", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)", borderRadius: 6, padding: "1px 7px", flexShrink: 0 }}>
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono, monospace)", color: "var(--text-muted)", background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 6, padding: "1px 7px", flexShrink: 0 }}>
                 {qualified}
               </span>
             )}
@@ -770,7 +857,7 @@ export default function WorkspacePage() {
           style={{
             flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "1px solid transparent",
             background: "transparent", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-            color: item.favorite ? "#f59e0b" : "var(--text-faint)",
+            color: item.favorite ? "var(--warning)" : "var(--text-faint)",
             opacity: item.favorite ? 1 : 0, transition: "opacity 0.12s, color 0.12s",
           }}
         >
@@ -791,7 +878,7 @@ export default function WorkspacePage() {
             cursor: deletingId === item.id ? "default" : "pointer",
             color: "var(--text-faint)", opacity: 0, transition: "opacity 0.12s, color 0.12s, background 0.12s",
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#dc2626"; e.currentTarget.style.background = "rgba(220,38,38,0.08)"; }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--danger)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-faint)"; e.currentTarget.style.background = "transparent"; }}
         >
           {deletingId === item.id ? (
@@ -833,7 +920,7 @@ export default function WorkspacePage() {
               >
                 <div style={{
                   width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-                  background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)",
+                  background: "var(--bg-hover)", border: "1px solid var(--border)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
                   <i className={RECENT_ICON[r.type] || "fas fa-file"} style={{ color: "var(--text-secondary)", fontSize: 14 }} />
@@ -869,7 +956,7 @@ export default function WorkspacePage() {
               <t.Icon size={15} color={active ? "var(--accent)" : "var(--text-muted)"} />
               {t.label}
               {active && ready && items.length > 0 && (
-                <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", background: "rgba(255,255,255,0.06)", borderRadius: 6, padding: "1px 6px" }}>{items.length}</span>
+                <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", background: "var(--bg-hover)", borderRadius: 6, padding: "1px 6px" }}>{items.length}</span>
               )}
             </button>
           );
@@ -878,12 +965,12 @@ export default function WorkspacePage() {
 
         {activeTab !== "lineage" && (<>
         {/* Scope toggle */}
-        <div style={{ display: "flex", gap: 0, background: "rgba(255,255,255,0.04)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 0, background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden", flexShrink: 0 }}>
           {(["mine", "all"] as const).map((s) => (
             <button key={s} type="button" onClick={() => setScope(s)} style={{
               padding: "6px 16px", fontSize: 12, fontWeight: scope === s ? 600 : 400,
               color: scope === s ? "var(--text-primary)" : "var(--text-muted)",
-              background: scope === s ? "rgba(255,255,255,0.08)" : "transparent",
+              background: scope === s ? "var(--bg-hover)" : "transparent",
               border: "none", cursor: "pointer", textTransform: "capitalize", transition: "all 0.15s",
             }}>
               {s}
@@ -935,6 +1022,28 @@ export default function WorkspacePage() {
 
       <div style={{ height: 1, background: "var(--border)", marginBottom: 4 }} />
 
+      {/* A write that was refused. It sits above the list rather than inside
+          it, because the list is fine — only the action failed. */}
+      {actionError && (
+        <div
+          role="alert"
+          style={{
+            display: "flex", alignItems: "center", gap: 10, marginTop: 12,
+            padding: "10px 14px", borderRadius: 10,
+            border: "1px solid var(--border)", background: "var(--bg-surface)",
+            fontSize: 12.5, color: "var(--danger)",
+          }}
+        >
+          <span style={{ flex: 1 }}>{actionError}</span>
+          <button type="button" onClick={() => setActionError(null)} aria-label="Dismiss" style={{
+            border: "none", background: "transparent", cursor: "pointer",
+            color: "var(--text-muted)", fontSize: 14, lineHeight: 1, padding: "0 2px",
+          }}>
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Lineage — custom full-width visualization */}
       {activeTab === "lineage" && <LineageView />}
 
@@ -956,28 +1065,55 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* Empty */}
+      {/* Empty — and which kind of empty.
+          "No charts yet" is a statement about the Library. With a search term
+          typed or the scope narrowed to Mine it was being printed over a
+          Library that holds plenty, under an invitation to create the first
+          one. The narrowing is this page's own doing, so it is this page that
+          has to say so. */}
       {activeTab !== "lineage" && ready && !error && filtered.length === 0 && (
         <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
-          <p style={{ fontSize: 15, marginBottom: 16 }}>
-            {mayCreateHere
-              ? `No ${tab.label.toLowerCase()} yet`
-              : `No ${tab.label.toLowerCase()} are shared with you yet`}
-          </p>
-          {/* The empty state invites a create only where one would be accepted;
-              a read-only role is told what it is looking at, not offered a
-              form the API will refuse. */}
-          {mayCreateHere ? (
-            <button type="button" onClick={() => router.push(tab.newRoute)} style={{
-              padding: "9px 22px", fontSize: 13, fontWeight: 500,
-              background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer",
-            }}>
-              Create your first {tab.label.toLowerCase().replace(/s$/, "")}
-            </button>
+          {narrowed ? (
+            <>
+              <p style={{ fontSize: 15, marginBottom: 8 }}>
+                {`No ${tab.label.toLowerCase()} match ${search.trim() ? "this search" : "this filter"}`}
+              </p>
+              <p style={{ fontSize: 13, marginBottom: 16 }}>
+                {`The Library holds ${items.length} ${items.length === 1
+                  ? tab.label.toLowerCase().replace(/s$/, "")
+                  : tab.label.toLowerCase()}.`}
+              </p>
+              <button type="button" onClick={() => { setSearch(""); setScope("all"); }} style={{
+                padding: "8px 16px", fontSize: 13,
+                border: "1px solid var(--border)", borderRadius: 8,
+                background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: "pointer",
+              }}>
+                Clear filters
+              </button>
+            </>
           ) : (
-            <p style={{ fontSize: 13 }}>
-              Your role has read-only access. The Analyst role or higher is required to create one.
-            </p>
+            <>
+              <p style={{ fontSize: 15, marginBottom: 16 }}>
+                {mayCreateHere
+                  ? `No ${tab.label.toLowerCase()} yet`
+                  : `No ${tab.label.toLowerCase()} are shared with you yet`}
+              </p>
+              {/* The empty state invites a create only where one would be
+                  accepted; a read-only role is told what it is looking at, not
+                  offered a form the API will refuse. */}
+              {mayCreateHere ? (
+                <button type="button" onClick={() => router.push(tab.newRoute)} style={{
+                  padding: "9px 22px", fontSize: 13, fontWeight: 500,
+                  background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer",
+                }}>
+                  Create your first {tab.label.toLowerCase().replace(/s$/, "")}
+                </button>
+              ) : (
+                <p style={{ fontSize: 13 }}>
+                  Your role has read-only access. The Analyst role or higher is required to create one.
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
@@ -986,7 +1122,7 @@ export default function WorkspacePage() {
       {ready && !error && pinned.length > 0 && (
         <div style={{ marginTop: 20, marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 12px", borderBottom: "1px solid var(--border)" }}>
-            <i className="fas fa-thumbtack" style={{ fontSize: 12, color: "#fbbf24" }} />
+            <i className="fas fa-thumbtack" style={{ fontSize: 12, color: "var(--warning)" }} />
             <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>Pinned</span>
             <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>{pinned.length}</span>
           </div>
@@ -1091,9 +1227,13 @@ export default function WorkspacePage() {
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
               <div style={{
                 width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                // A 10% wash of the destructive red, written as a literal
+                // because there is no `--danger-rgb` token to compose it from.
+                // The glyph on top is the token, so the colour that carries
+                // the meaning is the one that follows the theme.
                 background: "rgba(220,38,38,0.1)", display: "flex", alignItems: "center", justifyContent: "center",
               }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
                 </svg>
               </div>
@@ -1105,7 +1245,7 @@ export default function WorkspacePage() {
               &ldquo;<span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{confirmItem.name ?? confirmItem.title ?? "Untitled"}</span>&rdquo; will be permanently removed. This can&apos;t be undone.
             </p>
             {deleteError && (
-              <div style={{ marginBottom: 14, fontSize: 13, color: "#dc2626" }}>{deleteError}</div>
+              <div role="alert" style={{ marginBottom: 14, fontSize: 13, color: "var(--danger)" }}>{deleteError}</div>
             )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
               <button
@@ -1126,6 +1266,9 @@ export default function WorkspacePage() {
                 disabled={!!deletingId}
                 style={{
                   padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: deletingId ? "default" : "pointer",
+                  // Same reason as the card's delete swatch: a fill behind
+                  // white text, where the darker red is the one that clears
+                  // 4.5:1 in both themes.
                   border: "none", borderRadius: 10, background: "#dc2626", color: "#fff",
                   display: "flex", alignItems: "center", gap: 8, minWidth: 88, justifyContent: "center",
                 }}
@@ -1138,6 +1281,27 @@ export default function WorkspacePage() {
       )}
 
       <style jsx>{`
+        /* A pointer that cannot hover never fires the reveal above, so on a
+           touch device the pin and the delete were unreachable. The inline
+           opacity they carry can only be beaten from here, hence the
+           override: it applies to exactly this one case. */
+        @media (hover: none) {
+          .workspace-card-pin,
+          .workspace-card-delete,
+          .workspace-row-pin,
+          .workspace-row-delete {
+            opacity: 1 !important;
+          }
+        }
+        /* Revealed by focus is only useful if the focus itself is visible. */
+        .workspace-card-pin:focus-visible,
+        .workspace-card-delete:focus-visible,
+        .workspace-row-pin:focus-visible,
+        .workspace-row-delete:focus-visible {
+          opacity: 1 !important;
+          outline: 2px solid var(--accent);
+          outline-offset: 2px;
+        }
         @keyframes workspaceModalIn {
           from { opacity: 0; transform: translateY(8px) scale(0.98); }
           to   { opacity: 1; transform: translateY(0)   scale(1); }

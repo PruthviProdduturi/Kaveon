@@ -21,7 +21,20 @@ interface SavedQueryRow {
   created_at?: string | null;
   modified_at?: string | null;
   created_by?: string | null;
+  /**
+   * The owner, as the KaveonDB read-authority path names it. An owner-scoped
+   * family carries its owner in `user_email` and may carry no `created_by` at
+   * all -- `api/services/product_read_authority.py` says so where it resolves
+   * the owner -- so the Owner column has to read both or it shows a dash over
+   * a record whose owner is perfectly well known.
+   */
+  user_email?: string | null;
   favorite?: boolean;
+}
+
+/** Who owns a saved query, whichever field the read path used to say so. */
+function savedQueryOwner(row: SavedQueryRow): string {
+  return row.created_by || row.user_email || "";
 }
 
 interface QueryHistoryRow {
@@ -320,6 +333,25 @@ const LabQueriesPage: React.FC = () => {
     }
   }, [searchParams]);
 
+  /** Why a write was refused, in the response's own words where it gave any. */
+  const refusalReason = async (res: Response): Promise<string> => {
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = typeof body?.detail === "string" ? body.detail : "";
+    } catch {
+      detail = "";
+    }
+    if (detail) return detail;
+    if (res.status === 403) return "You don't have permission to do that.";
+    if (res.status === 404) return "It no longer exists.";
+    if (res.status === 503) return "The saved-query store is not configured on this server.";
+    if (res.status === 502 || res.status === 504) {
+      return "The server did not answer. It may be restarting; nothing is known to be wrong with the query.";
+    }
+    return `The server returned ${res.status}.`;
+  };
+
   const showToast = (message: string) => {
     setToastMessage(message);
     setTimeout(() => {
@@ -426,7 +458,7 @@ const LabQueriesPage: React.FC = () => {
     try {
       const detailRes = await msalFetch(`${API_BASE}/api/v1/lab/saved-queries/${id}`);
       if (!detailRes.ok) {
-        throw new Error("Failed to load saved query for cloning");
+        throw new Error(`The query could not be read to duplicate it. ${await refusalReason(detailRes)}`);
       }
 
       const detail: {
@@ -451,7 +483,7 @@ const LabQueriesPage: React.FC = () => {
       });
 
       if (!createRes.ok) {
-        throw new Error("Failed to clone saved query");
+        throw new Error(`The duplicate could not be saved. ${await refusalReason(createRes)}`);
       }
 
       loadSavedQueries();
@@ -492,7 +524,7 @@ const LabQueriesPage: React.FC = () => {
         method: "DELETE",
       });
       if (!res.ok && res.status !== 204) {
-        throw new Error("Failed to delete saved query");
+        throw new Error(`The query could not be deleted. ${await refusalReason(res)}`);
       }
 
       setSavedQueries((prev) => prev.filter((q) => q.id !== id));
@@ -514,7 +546,7 @@ const LabQueriesPage: React.FC = () => {
     try {
       const res = await msalFetch(`${API_BASE}/api/v1/lab/saved-queries/${row.id}`);
       if (!res.ok) {
-        throw new Error("Failed to load saved query");
+        throw new Error(`The query could not be opened. ${await refusalReason(res)}`);
       }
 
       const detail: { name?: string; sql?: string } = await res.json();
@@ -588,11 +620,21 @@ const LabQueriesPage: React.FC = () => {
   };
 
   const getSortedSavedQueries = () => {
-    let items = [...savedQueries];
-
-    if (userEmail) {
-      items = items.filter((q) => q.created_by === userEmail);
-    }
+    /*
+     * No owner filter here.
+     *
+     * `GET /lab/saved-queries` is already scoped to the caller -- the SQL path
+     * selects `WHERE s.created_by = @param0` and the KaveonDB path asks
+     * `product_read_authority` for an owner-scoped family at the Viewer role
+     * -- so every row this page receives is the reader's own, and filtering
+     * again could only ever remove rows the server had already decided to
+     * return. It did: on the KaveonDB path a saved query names its owner in
+     * `user_email` and need not carry `created_by` at all, so `created_by ===
+     * userEmail` was false for every row and the page answered "No saved
+     * queries yet." over a store full of them. The Library's own Saved
+     * Queries tab never applied this filter, which is why the two disagreed.
+     */
+    const items = [...savedQueries];
     if (!savedSortBy) return items;
 
     items.sort((a, b) => {
@@ -788,12 +830,18 @@ const LabQueriesPage: React.FC = () => {
 
           {activeTab === "saved" && (
             <div className="results-table-container">
+              <div className="query-history-toolbar" aria-label="Saved query controls">
+                <div style={{ flex: 1 }} />
+                <button type="button" className="query-refresh-btn" onClick={loadSavedQueries} disabled={isLoadingSaved}>
+                  <i className="fas fa-rotate" aria-hidden="true" /> Refresh
+                </button>
+              </div>
               {isLoadingSaved && <LoadingOverlay />}
               {!isLoadingSaved && errorSaved && (
                 <div style={{ padding: "0.75rem 1rem" }}><UnknownLine {...errorSaved} /></div>
               )}
               {actionError && (
-                <div role="alert" style={{ padding: "0.75rem 1rem", fontSize: 12.5, color: "var(--error)" }}>{actionError}</div>
+                <div role="alert" style={{ padding: "0.75rem 1rem", fontSize: 12.5, color: "var(--danger)" }}>{actionError}</div>
               )}
               {!isLoadingSaved && !errorSaved && sortedSavedQueries.length === 0 && (
                 <p className="muted">No saved queries yet.</p>
@@ -845,7 +893,7 @@ const LabQueriesPage: React.FC = () => {
                           {formatDate(q.modified_at)}
                         </td>
                         <td className="muted" style={{ fontSize: 13 }}>
-                            {q.created_by || "—"}
+                            {savedQueryOwner(q) || "—"}
                         </td>
                         <td className="actions-cell">
                           <div className="row-actions">
