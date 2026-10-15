@@ -33,6 +33,16 @@ operations, grouping sets, windows and QUALIFY, arrays/maps/rows, JSON paths,
 prepared statements and typed parameters, metadata statements, global ordering
 and limits, and local/distributed exact-result execution.
 
+## JSON_FORMAT qualification — 2026-10-15
+
+`JSON_FORMAT(json)` now canonicalizes the Engine's validated UTF-8 JSON
+representation with `serde_json` serialization, preserves SQL NULL, and
+fails with the row index for invalid input. The executor regression covers
+canonical object/array output, null preservation, and the invalid-row error
+contract. The focused expression suite passes 144 tests with one ignored
+benchmark case; broader JSON coercion and path semantics remain open in the
+matrix.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
