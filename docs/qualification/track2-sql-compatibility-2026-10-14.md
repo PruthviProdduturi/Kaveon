@@ -92,6 +92,25 @@ SELECT TIME '12:34:56.789' AS t;   -- 12:34:56.789000
 Invalid hours, minutes, seconds, and malformed fractional values fail during
 expression evaluation rather than being silently coerced.
 
+Top-level `VALUES` and derived `VALUES` relations now lower through the same
+columnar `UNNEST` path used by constant row-producing relations. Docker
+qualification returned the declared aliases and exact rows for:
+
+```sql
+SELECT t.id, t.label
+FROM (VALUES (1, 'a'), (2, 'b')) AS t(id, label);
+```
+
+The ordered top-level form also qualifies:
+
+```sql
+VALUES (1, 2), (3, 4) ORDER BY column1 DESC;
+```
+
+The focused SQL suite now passes 157 tests. The server backpressure test had
+one transient race during the first full run; its isolated rerun and five
+consecutive repetitions passed before this change was accepted.
+
 After the typed-time change, the complete workspace gate was rerun on the
 current tree and passed with zero failures: server `389/389`, SQL `151/151`,
 execution `351/351` with four pre-existing ignored benchmark tests, and all

@@ -785,6 +785,43 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
 fn set_expr_to_plan(body: &ast::SetExpr, ctes: &Lowering) -> Result<LogicalPlan> {
     match body {
         ast::SetExpr::Select(select) => select_to_plan(select, ctes),
+        ast::SetExpr::Values(values) => {
+            let rows = &values.rows;
+            if rows.is_empty() {
+                return Ok(LogicalPlan::Unnest {
+                    expressions: Vec::new(),
+                    columns: Vec::new(),
+                    with_ordinality: false,
+                    ordinality_column: "ordinality".to_owned(),
+                });
+            }
+            let width = rows[0].len();
+            if width == 0 {
+                return Err(sql_err("VALUES requires at least one column"));
+            }
+            if rows.iter().any(|row| row.len() != width) {
+                return Err(sql_err("VALUES rows must have the same number of columns"));
+            }
+            let expressions = (0..width)
+                .map(|column| {
+                    Ok(Expr::Function {
+                        name: "ARRAY".to_owned(),
+                        args: rows
+                            .iter()
+                            .map(|row| ast_expr_to_expr(&row[column]))
+                            .collect::<Result<Vec<_>>>()?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LogicalPlan::Unnest {
+                expressions,
+                columns: (0..width)
+                    .map(|column| format!("column{}", column + 1))
+                    .collect(),
+                with_ordinality: false,
+                ordinality_column: "ordinality".to_owned(),
+            })
+        }
         ast::SetExpr::SetOperation {
             op,
             left,
@@ -1213,8 +1250,25 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
         ast::TableFactor::Derived {
             subquery, alias, ..
         } => {
-            let plan = query_to_plan(subquery, ctes)?;
-            let _ = alias;
+            let mut plan = query_to_plan(subquery, ctes)?;
+            if let Some(alias) = alias
+                && !alias.columns.is_empty()
+            {
+                if let LogicalPlan::Unnest { columns, .. } = &mut plan {
+                    if alias.columns.len() != columns.len() {
+                        return Err(sql_err(format!(
+                            "derived relation alias has {} columns but the relation has {}",
+                            alias.columns.len(),
+                            columns.len()
+                        )));
+                    }
+                    *columns = alias
+                        .columns
+                        .iter()
+                        .map(|column| column.name.value.clone())
+                        .collect();
+                }
+            }
             Ok(plan)
         }
         ast::TableFactor::UNNEST {
@@ -6626,5 +6680,42 @@ mod tests {
             LogicalPlan::Project { input, .. }
                 if matches!(input.as_ref(), LogicalPlan::Unnest { .. })
         )));
+    }
+
+    #[test]
+    fn values_relation_lowers_to_columnar_unnest() {
+        let plan = sql_to_logical_plan("VALUES (1, 'a'), (2, 'b')").unwrap();
+        let LogicalPlan::Unnest {
+            expressions,
+            columns,
+            with_ordinality,
+            ..
+        } = plan
+        else {
+            panic!("expected values unnest");
+        };
+        assert_eq!(columns, ["column1", "column2"]);
+        assert!(!with_ordinality);
+        assert_eq!(expressions.len(), 2);
+        assert!(expressions.iter().all(|expr| matches!(
+            expr,
+            Expr::Function { name, args } if name == "ARRAY" && args.len() == 2
+        )));
+    }
+
+    #[test]
+    fn derived_values_honor_relation_column_aliases() {
+        let plan = sql_to_logical_plan(
+            "SELECT t.id, t.label FROM (VALUES (1, 'a'), (2, 'b')) AS t(id, label)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected projection");
+        };
+        assert!(matches!(
+            input.as_ref(),
+            LogicalPlan::Unnest { columns, .. }
+                if columns == &["id".to_owned(), "label".to_owned()]
+        ));
     }
 }
