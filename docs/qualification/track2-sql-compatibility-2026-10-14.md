@@ -13,7 +13,7 @@ cargo test --workspace --no-fail-fast --quiet
 ```
 
 The complete workspace run passed with zero failures. The run included the
-server differential sweep (388 tests, 4 ignored benchmark cases), SQL parser
+server differential sweep (389 tests, 4 ignored benchmark cases), SQL parser
 and binder coverage, optimizer tests, execution and storage tests, transaction
 and CLI tests, and the remaining workspace targets.
 
@@ -23,7 +23,7 @@ From the repository root:
 node scripts/validate-docs.mjs
 ```
 
-Documentation validation passed: 156 Markdown files, 39 routes, and 9 SVGs.
+Documentation validation passed: 159 Markdown files, 39 routes, and 9 SVGs.
 
 ## Current qualified local surface
 
@@ -49,7 +49,7 @@ qualification are separate gates in `docs/engineering/trino-parity-tracker.md`.
 
 Commit `b6a80ec5` adds the missing Trino-compatible implicit single-row
 relation for scalar `SELECT` statements without `FROM`. The focused SQL suite
-passes 148 tests, the server suite passes 388 tests, and a rebuilt Docker
+passes 151 tests, the server suite passes 389 tests, and a rebuilt Docker
 coordinator returned `SELECT CAST(1 AS BIGINT) AS value` as one typed `Int64`
 row and `SELECT 1 UNION ALL SELECT 2 ORDER BY n DESC` as `2, 1`. The full
 workspace gate was rerun after the change and all targets passed. This closes
