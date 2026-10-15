@@ -70,11 +70,11 @@ paths remain conservative NULL results under the existing JSON path contract.
 ## ARRAY_JOIN qualification — 2026-10-15
 
 `ARRAY_JOIN(array, delimiter[, null_replacement])` now handles regular and
-large UTF-8 arrays, skips null elements by default, applies the optional
-replacement text when provided, and preserves NULL array/delimiter rows. The
-focused executor regression covers joined values, null replacement, and a
-NULL array row. Non-text arrays remain explicitly unsupported until their
-coercion contract is qualified.
+large lists whose scalar elements can be cast to VARCHAR, skips null elements
+by default, applies the optional replacement text when provided, and preserves
+NULL array/delimiter rows. The focused executor regression covers text and
+integer values, null replacement, and a NULL array row. Nested values remain
+explicitly unsupported until their coercion contract is qualified.
 
 ## Explicit remaining boundaries
 

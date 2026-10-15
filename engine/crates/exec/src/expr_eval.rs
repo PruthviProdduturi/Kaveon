@@ -1895,48 +1895,25 @@ fn array_join_text<L: OffsetSizeTrait>(
                 return Ok(None);
             };
             let values = list.value(row);
+            let values = compute::cast(&values, &DataType::Utf8).map_err(|error| {
+                KaveonError::Execution(format!("ARRAY_JOIN cannot cast list elements to VARCHAR: {error}"))
+            })?;
+            let values = values.as_string::<i32>();
             let mut joined = String::new();
             let mut emitted = false;
-            match values.data_type() {
-                DataType::Utf8 => {
-                    let values = values.as_string::<i32>();
-                    for index in 0..values.len() {
-                        let value = if values.is_null(index) {
-                            replacement
-                                .map(|replacement| text_value(replacement, row))
-                                .transpose()?
-                                .flatten()
-                        } else {
-                            Some(values.value(index))
-                        };
-                        let Some(value) = value else { continue };
-                        if emitted { joined.push_str(delimiter); }
-                        joined.push_str(value);
-                        emitted = true;
-                    }
-                }
-                DataType::LargeUtf8 => {
-                    let values = values.as_string::<i64>();
-                    for index in 0..values.len() {
-                        let value = if values.is_null(index) {
-                            replacement
-                                .map(|replacement| text_value(replacement, row))
-                                .transpose()?
-                                .flatten()
-                        } else {
-                            Some(values.value(index))
-                        };
-                        let Some(value) = value else { continue };
-                        if emitted { joined.push_str(delimiter); }
-                        joined.push_str(value);
-                        emitted = true;
-                    }
-                }
-                other => {
-                    return Err(KaveonError::Execution(format!(
-                        "ARRAY_JOIN does not support list element type {other}"
-                    )));
-                }
+            for index in 0..values.len() {
+                let value = if values.is_null(index) {
+                    replacement
+                        .map(|replacement| text_value(replacement, row))
+                        .transpose()?
+                        .flatten()
+                } else {
+                    Some(values.value(index))
+                };
+                let Some(value) = value else { continue };
+                if emitted { joined.push_str(delimiter); }
+                joined.push_str(value);
+                emitted = true;
             }
             Ok(Some(joined))
         })
@@ -15799,6 +15776,23 @@ mod tests {
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), "a,<null>,b");
         assert!(values.is_null(1));
+
+        let mut numeric_builder = ListBuilder::new(Int64Builder::new());
+        numeric_builder.values().append_value(10);
+        numeric_builder.values().append_null();
+        numeric_builder.values().append_value(30);
+        numeric_builder.append(true);
+        let numeric_batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(numeric_builder.finish()) as ArrayRef),
+            ("delimiter", Arc::new(StringArray::from(vec![Some("|")])) as ArrayRef),
+        ])
+        .unwrap();
+        let numeric_expr = Expr::Function {
+            name: "ARRAY_JOIN".into(),
+            args: vec![Expr::Column("items".into()), Expr::Column("delimiter".into())],
+        };
+        let numeric_result = evaluate(&numeric_expr, &numeric_batch).unwrap();
+        assert_eq!(numeric_result.as_string::<i32>().value(0), "10|30");
     }
 
     #[test]
