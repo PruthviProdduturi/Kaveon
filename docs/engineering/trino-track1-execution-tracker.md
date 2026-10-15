@@ -55,8 +55,13 @@ exchange pressure gate now active below.
 The bounded ADLS-backed soak
 `docs/qualification/track1-aks-exchange-soak-2026-10-15.md` completed 416/416
 exact requests over 300 seconds with four-way concurrency, zero unexpected
-restarts, and zero retained exchange/spill files. Explicit cloud-storage fault
-injection, orphan-spool recovery, and longer endurance remain open for item 2.
+restarts, and zero retained exchange/spill files. The current immutable image
+also passed a 900-second ADLS-backed soak with two-way concurrency: 1,180/1,180
+exact requests, zero failures, zero unexpected restarts, and zero retained
+exchange/spill files. Evidence is retained in
+`docs/qualification/track1-aks-current-image-soak-900-2026-10-15.md` and its
+raw JSON report. Explicit cloud-storage fault injection and orphan-spool
+recovery remain open for item 2; the soak does not close those gates.
 The current-image fault/pressure qualification
 `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15.md`
 passed concurrent exact results, active-query cancellation, forced worker-loss
