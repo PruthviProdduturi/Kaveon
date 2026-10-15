@@ -91,9 +91,7 @@ struct DirectoryFiles {
 
 impl DirectoryFiles {
     fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> bool {
-        if self.current.is_some()
-            || values.is_empty()
-            || self.file_schema.index_of(column).is_err()
+        if self.current.is_some() || values.is_empty() || self.file_schema.index_of(column).is_err()
         {
             return false;
         }
@@ -243,10 +241,7 @@ impl ParquetBatchIterator {
     }
 
     fn materialize_deferred(&mut self) -> Result<()> {
-        let inner = std::mem::replace(
-            &mut self.inner,
-            ParquetBatchInner::Empty,
-        );
+        let inner = std::mem::replace(&mut self.inner, ParquetBatchInner::Empty);
         let ParquetBatchInner::Deferred(builder) = inner else {
             self.inner = inner;
             return Ok(());
@@ -395,8 +390,7 @@ impl ParquetReader {
         metrics.footer_time(footer_started.elapsed());
         metrics.file_opened();
         let builder = self.configure_builder(builder, &metrics)?;
-        let (schema, _) =
-            ordered_projection(builder.schema().clone(), self.columns.as_deref())?;
+        let (schema, _) = ordered_projection(builder.schema().clone(), self.columns.as_deref())?;
         Ok(ParquetBatchIterator {
             path: self.path.clone(),
             schema,
@@ -1546,9 +1540,11 @@ mod tests {
             .with_columns(vec!["label".to_owned()])
             .read()
             .expect("parquet source must open");
-        assert!(source
-            .apply_runtime_filter("id", &[ScalarValue::Int64(0), ScalarValue::Int64(4)])
-            .expect("runtime filter must be accepted"));
+        assert!(
+            source
+                .apply_runtime_filter("id", &[ScalarValue::Int64(0), ScalarValue::Int64(4)])
+                .expect("runtime filter must be accepted")
+        );
         let batches = source
             .collect::<Result<Vec<_>>>()
             .expect("runtime-filtered parquet must decode");

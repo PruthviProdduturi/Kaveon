@@ -14,7 +14,11 @@ use object_store::{ObjectStore, aws::AmazonS3Builder, azure::MicrosoftAzureBuild
 use parquet::arrow::{
     ParquetRecordBatchStreamBuilder, ProjectionMask, async_reader::ParquetObjectReader,
 };
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 
 #[derive(Clone)]
 pub struct ObjectLocation {
@@ -140,7 +144,11 @@ impl BatchSource for ObjectBatchSource {
         Ok(batch)
     }
 
-    fn apply_runtime_filter(&mut self, column: &str, values: &[kaveon_core::ScalarValue]) -> Result<bool> {
+    fn apply_runtime_filter(
+        &mut self,
+        column: &str,
+        values: &[kaveon_core::ScalarValue],
+    ) -> Result<bool> {
         let Some(shared) = &self.runtime_predicate else {
             return Ok(false);
         };
@@ -275,12 +283,7 @@ impl ObjectParquetReader {
                             let (start_tx, start_rx) = mpsc::sync_channel(1);
                             let _ = start_tx.send(());
                             self.directory_reader()
-                                .run(
-                                    initial_tx,
-                                    tx,
-                                    start_rx,
-                                    Arc::new(Mutex::new(None)),
-                                )
+                                .run(initial_tx, tx, start_rx, Arc::new(Mutex::new(None)))
                                 .await;
                             return;
                         }
@@ -595,12 +598,17 @@ mod tests {
             .with_late_materialisation(LateMaterialisation::Always)
             .read_blocking()
             .unwrap();
-        assert!(source
-            .apply_runtime_filter(
-                "x",
-                &[kaveon_core::ScalarValue::Int64(2), kaveon_core::ScalarValue::Int64(4)],
-            )
-            .unwrap());
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "x",
+                    &[
+                        kaveon_core::ScalarValue::Int64(2),
+                        kaveon_core::ScalarValue::Int64(4)
+                    ],
+                )
+                .unwrap()
+        );
         let mut seen = Vec::new();
         while let Some(batch) = source.next_batch().unwrap() {
             seen.extend(

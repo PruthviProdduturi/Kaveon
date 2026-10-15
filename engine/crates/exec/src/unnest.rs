@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, ArrayRef, Int64Array};
+use arrow::array::{Array, ArrayRef, Int64Array, new_null_array};
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -62,8 +62,7 @@ impl UnnestOperator {
                         })
                         .ok_or_else(|| {
                             KaveonError::Execution(
-                                "UNNEST ARRAY value has an incompatible list representation"
-                                    .into(),
+                                "UNNEST ARRAY value has an incompatible list representation".into(),
                             )
                         })?;
                     (field.data_type().clone(), value)
@@ -71,7 +70,7 @@ impl UnnestOperator {
                 other => {
                     return Err(KaveonError::Execution(format!(
                         "UNNEST requires an ARRAY value, found {other}"
-                    )))
+                    )));
                 }
             };
             fields.push(Field::new(column, element_type, true));
@@ -118,10 +117,14 @@ impl BatchOperator for UnnestOperator {
         if self.ordinality {
             columns.push(Arc::new(Int64Array::from_iter_values(
                 self.ordinality_start
-                    ..self.ordinality_start + self.values.first().map_or(0, |value| value.len()) as i64,
+                    ..self.ordinality_start
+                        + self.values.first().map_or(0, |value| value.len()) as i64,
             )) as ArrayRef);
         }
-        Ok(Some(RecordBatch::try_new(Arc::clone(&self.schema), columns)?))
+        Ok(Some(RecordBatch::try_new(
+            Arc::clone(&self.schema),
+            columns,
+        )?))
     }
 }
 
@@ -139,14 +142,30 @@ mod tests {
                 Expr::Literal(kaveon_core::ScalarValue::Int64(9)),
             ],
         };
-        let mut operator = UnnestOperator::new(&[expression], vec!["value".into()], true, "n", 1)
-            .unwrap();
+        let mut operator =
+            UnnestOperator::new(&[expression], vec!["value".into()], true, "n", 1).unwrap();
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.schema().field(0).data_type(), &DataType::Int64);
         assert_eq!(batch.schema().field(1).name(), "n");
-        assert_eq!(batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().values(), &[4, 9]);
-        assert_eq!(batch.column(1).as_any().downcast_ref::<Int64Array>().unwrap().values(), &[1, 2]);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[4, 9]
+        );
+        assert_eq!(
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[1, 2]
+        );
         assert!(operator.next_batch().unwrap().is_none());
     }
 
@@ -183,14 +202,8 @@ mod tests {
                 Expr::Literal(kaveon_core::ScalarValue::Int64(9)),
             ],
         };
-        let mut operator = UnnestOperator::new(
-            &[expression],
-            vec!["value".into()],
-            true,
-            "offset",
-            0,
-        )
-        .unwrap();
+        let mut operator =
+            UnnestOperator::new(&[expression], vec!["value".into()], true, "offset", 0).unwrap();
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(
             batch

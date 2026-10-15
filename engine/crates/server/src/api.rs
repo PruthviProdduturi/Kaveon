@@ -15,16 +15,16 @@ use kaveon_core::collect_batches;
 use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{
     AdmittedQueryMemory, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
-    ColumnDefinition, ExchangeId, ExecutableFragment, MemoryAdmissionController, SchemaDefinition,
-    Expr, SchemaId, StageId, TableDefinition, TableId, TaskId,
+    ColumnDefinition, ExchangeId, ExecutableFragment, Expr, MemoryAdmissionController,
+    SchemaDefinition, SchemaId, StageId, TableDefinition, TableId, TaskId,
 };
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::logical_plan::{
-    sql_to_logical_plan_for_binder,
+    ParameterValue, sql_to_logical_plan_for_binder,
     sql_to_logical_plan_for_binder_approximate_with_parameter_values,
-    sql_to_logical_plan_for_binder_with_parameter_values, ParameterValue,
+    sql_to_logical_plan_for_binder_with_parameter_values,
 };
 use kaveon_sql::parser::{
     NativeTransactionalStatement, adapt_product_dml_batch, parse_native_transactional,
@@ -69,9 +69,8 @@ static PREPARED_STATEMENTS: std::sync::LazyLock<RwLock<HashMap<String, PreparedS
 /// SQL PREPARE statements submitted through the Trino-compatible route.
 /// Names are scoped by the authenticated principal, matching Trino's session
 /// ownership model and preventing one user from executing another user's SQL.
-static TRINO_PREPARED_STATEMENTS: std::sync::LazyLock<
-    RwLock<HashMap<(String, String), String>>,
-> = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static TRINO_PREPARED_STATEMENTS: std::sync::LazyLock<RwLock<HashMap<(String, String), String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Number of scan partitions scheduled per compatible worker. Splitting a
 /// large Parquet file by row groups keeps decoder and partial-aggregate work
@@ -1220,9 +1219,7 @@ fn request_parameters(values: &[serde_json::Value]) -> Result<Vec<ScalarValue>, 
         .collect()
 }
 
-fn request_parameter_values(
-    values: &[serde_json::Value],
-) -> Result<Vec<ParameterValue>, String> {
+fn request_parameter_values(values: &[serde_json::Value]) -> Result<Vec<ParameterValue>, String> {
     values
         .iter()
         .enumerate()
@@ -1246,9 +1243,9 @@ fn request_parameter_value(
                     .map(|value| ParameterValue::Scalar(ScalarValue::Float64(value)))
             })
             .ok_or_else(|| format!("parameter {label} is not a supported number")),
-        serde_json::Value::String(value) => Ok(ParameterValue::Scalar(ScalarValue::Utf8(
-            value.clone(),
-        ))),
+        serde_json::Value::String(value) => {
+            Ok(ParameterValue::Scalar(ScalarValue::Utf8(value.clone())))
+        }
         serde_json::Value::Array(values) => values
             .iter()
             .map(|value| request_parameter_value(value, label))
@@ -3245,7 +3242,9 @@ async fn submit_trino_statement_parts(
     let body_text = String::from_utf8(body.to_vec()).ok();
     if let Some(body) = body_text.as_deref() {
         match trino_show_session_pattern(body) {
-            Ok(Some(pattern)) => return trino_session_response_pattern(&state.config, Some(&pattern)),
+            Ok(Some(pattern)) => {
+                return trino_session_response_pattern(&state.config, Some(&pattern));
+            }
             Ok(None) => {}
             Err(error) => {
                 return (
@@ -3421,13 +3420,15 @@ async fn submit_trino_statement_parts(
         None
     };
     let prepared_query = match (prepared_queries, execute_name.as_deref(), stored_prepared) {
-        (Some(queries), Some(name), _) => queries
-            .get(name)
-            .cloned()
-            .map(Some)
-            .ok_or_else(|| format!("prepared statement '{name}' was not supplied in X-Trino-Prepared-Statement")),
-        (Some(mut queries), None, _) if queries.len() == 1 => Ok(queries.drain().next().map(|(_, query)| query)),
-        (Some(_), None, _) => Err("multiple prepared statements require an EXECUTE name".to_owned()),
+        (Some(queries), Some(name), _) => queries.get(name).cloned().map(Some).ok_or_else(|| {
+            format!("prepared statement '{name}' was not supplied in X-Trino-Prepared-Statement")
+        }),
+        (Some(mut queries), None, _) if queries.len() == 1 => {
+            Ok(queries.drain().next().map(|(_, query)| query))
+        }
+        (Some(_), None, _) => {
+            Err("multiple prepared statements require an EXECUTE name".to_owned())
+        }
         (None, Some(_name), Some(query)) => Ok(Some(query)),
         (None, Some(name), None) => Err(format!("prepared statement '{name}' was not found")),
         (None, None, _) => Ok(None),
@@ -3552,9 +3553,7 @@ fn trino_session_settings(
 /// Trino encodes prepared statements as `name=<url-encoded SQL>` in a
 /// request header. Decode only this header value; SQL in the request body is
 /// otherwise left byte-for-byte intact.
-fn trino_prepared_queries(
-    headers: &HeaderMap,
-) -> Result<Option<HashMap<String, String>>, String> {
+fn trino_prepared_queries(headers: &HeaderMap) -> Result<Option<HashMap<String, String>>, String> {
     let Some(value) = trino_header(headers, "x-trino-prepared-statement") else {
         return Ok(None);
     };
@@ -3613,16 +3612,13 @@ fn trino_prepare_statement(body: &str) -> Result<Option<(String, String)>, Strin
     if name.is_empty() || remainder.is_empty() {
         return Err("PREPARE requires a statement name and FROM query".to_owned());
     }
-    let Some(from) = remainder
-        .char_indices()
-        .find_map(|(index, _)| {
-            remainder[index..]
-                .split_whitespace()
-                .next()
-                .filter(|word| word.eq_ignore_ascii_case("FROM"))
-                .map(|_| index)
-        })
-    else {
+    let Some(from) = remainder.char_indices().find_map(|(index, _)| {
+        remainder[index..]
+            .split_whitespace()
+            .next()
+            .filter(|word| word.eq_ignore_ascii_case("FROM"))
+            .map(|_| index)
+    }) else {
         return Err("PREPARE requires FROM <query>".to_owned());
     };
     let keyword = remainder[from..]
@@ -3678,7 +3674,11 @@ fn trino_describe_input(body: &str) -> Option<String> {
         return None;
     }
     let name = words.next()?.to_owned();
-    if words.next().is_some() || !name.chars().all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+    if words.next().is_some()
+        || !name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
         return None;
     }
     Some(name)
@@ -3697,7 +3697,11 @@ fn trino_describe_output(body: &str) -> Option<String> {
         return None;
     }
     let name = words.next()?.to_owned();
-    if words.next().is_some() || !name.chars().all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+    if words.next().is_some()
+        || !name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
         return None;
     }
     Some(name)
@@ -3718,8 +3722,8 @@ fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, Str
         .filter_map(|name| name.strip_prefix('$')?.parse::<usize>().ok())
         .max()
         .unwrap_or(0);
-    let positional = vec![ParameterValue::Scalar(ScalarValue::Null);
-        positional_count.max(numbered_count)];
+    let positional =
+        vec![ParameterValue::Scalar(ScalarValue::Null); positional_count.max(numbered_count)];
     let named = parameter_names
         .iter()
         .filter(|name| *name != "?" && !name.starts_with('$'))
@@ -3729,7 +3733,9 @@ fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, Str
         sql_to_logical_plan_for_binder(query)
     } else {
         kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_values(
-            query, &positional, &named,
+            query,
+            &positional,
+            &named,
         )
     }
     .map_err(|error| error.to_string())?;
@@ -3777,8 +3783,12 @@ fn trino_expr_type(expression: &Expr) -> String {
             kaveon_core::CastTarget::Float64 => "double",
             kaveon_core::CastTarget::Utf8 => "varchar",
             kaveon_core::CastTarget::Date32 => "date",
-            kaveon_core::CastTarget::TimestampMicros { with_timezone: true } => "timestamp with time zone",
-            kaveon_core::CastTarget::TimestampMicros { with_timezone: false } => "timestamp",
+            kaveon_core::CastTarget::TimestampMicros {
+                with_timezone: true,
+            } => "timestamp with time zone",
+            kaveon_core::CastTarget::TimestampMicros {
+                with_timezone: false,
+            } => "timestamp",
             kaveon_core::CastTarget::Decimal128 { precision, scale } => {
                 return format!("decimal({precision},{scale})");
             }
@@ -3789,7 +3799,9 @@ fn trino_expr_type(expression: &Expr) -> String {
             ScalarValue::Int64(_) => "bigint",
             ScalarValue::Float64(_) => "double",
             ScalarValue::Utf8(_) => "varchar",
-            ScalarValue::Decimal128 { precision, scale, .. } => {
+            ScalarValue::Decimal128 {
+                precision, scale, ..
+            } => {
                 return format!("decimal({precision},{scale})");
             }
             ScalarValue::Null => "unknown",
@@ -3866,9 +3878,7 @@ fn trino_explicit_parameter_type(query: &str, parameter: &str) -> String {
         let type_start = start + cast_suffix.len();
         let remainder = lower[type_start..].trim_start();
         let end = remainder
-            .find(|character: char| {
-                matches!(character, ',' | ')' | ';' | '=' | '<' | '>' | '+')
-            })
+            .find(|character: char| matches!(character, ',' | ')' | ';' | '=' | '<' | '>' | '+'))
             .unwrap_or(remainder.len());
         return normalize_declared_parameter_type(&remainder[..end]);
     }
@@ -3887,7 +3897,10 @@ fn find_cast_parameter_type<'a>(query: &'a str, parameter: &str) -> Option<&'a s
         };
         let start = cursor + offset;
         let mut index = start + 4;
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
         if bytes.get(index) != Some(&b'(') {
@@ -3895,7 +3908,10 @@ fn find_cast_parameter_type<'a>(query: &'a str, parameter: &str) -> Option<&'a s
             continue;
         }
         index += 1;
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
         if !query[index..].starts_with(parameter) {
@@ -3903,7 +3919,10 @@ fn find_cast_parameter_type<'a>(query: &'a str, parameter: &str) -> Option<&'a s
             continue;
         }
         index += parameter.len();
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
         if !query[index..].starts_with("as") {
@@ -3918,7 +3937,10 @@ fn find_cast_parameter_type<'a>(query: &'a str, parameter: &str) -> Option<&'a s
             cursor = start + 4;
             continue;
         }
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
         let type_start = index;
@@ -4075,47 +4097,306 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
     // to be a complete PostgreSQL or Trino registry.  The executor's parser
     // and evaluator remain the source of truth for actual execution.
     const FUNCTIONS: &[(&str, &str, &str, &str, bool, &str)] = &[
-        ("abs", "double", "[double]", "scalar", true, "Absolute value"),
-        ("approx_count_distinct", "bigint", "[unknown]", "aggregate", true, "Approximate distinct count"),
-        ("approx_percentile", "double", "[double, double]", "aggregate", true, "Approximate percentile"),
-        ("array", "array", "[unknown]", "scalar", true, "Construct an array"),
-        ("json_array_contains", "boolean", "[varchar, unknown]", "scalar", true, "Test JSON array membership"),
-        ("array_distinct", "array", "[array]", "scalar", true, "Remove duplicate array elements"),
-        ("array_join", "varchar", "[array, varchar]", "scalar", true, "Join array elements"),
-        ("array_position", "bigint", "[array, unknown]", "scalar", true, "Find an array element"),
-        ("array_sort", "array", "[array]", "scalar", true, "Sort an array"),
-        ("cardinality", "bigint", "[array]", "scalar", true, "Return collection cardinality"),
-        ("coalesce", "unknown", "[unknown]", "scalar", true, "First non-null value"),
-        ("concat", "varchar", "[varchar]", "scalar", true, "Concatenate strings"),
-        ("contains", "boolean", "[array, unknown]", "scalar", true, "Test array membership"),
-        ("contains_key", "boolean", "[map, unknown]", "scalar", true, "Test map key membership"),
-        ("count", "bigint", "[unknown]", "aggregate", true, "Count rows or values"),
-        ("current_date", "date", "[]", "scalar", false, "Current session date"),
-        ("date_diff", "bigint", "[varchar, date, date]", "scalar", true, "Difference between temporal values in a fixed unit"),
-        ("date_part", "bigint", "[varchar, date]", "scalar", true, "Extract a date field"),
-        ("date_trunc", "date", "[varchar, date]", "scalar", true, "Truncate a date or timestamp"),
-        ("ends_with", "boolean", "[varchar, varchar]", "scalar", true, "Test a string suffix"),
-        ("exp", "double", "[double]", "scalar", true, "Exponential function"),
+        (
+            "abs",
+            "double",
+            "[double]",
+            "scalar",
+            true,
+            "Absolute value",
+        ),
+        (
+            "approx_count_distinct",
+            "bigint",
+            "[unknown]",
+            "aggregate",
+            true,
+            "Approximate distinct count",
+        ),
+        (
+            "approx_percentile",
+            "double",
+            "[double, double]",
+            "aggregate",
+            true,
+            "Approximate percentile",
+        ),
+        (
+            "array",
+            "array",
+            "[unknown]",
+            "scalar",
+            true,
+            "Construct an array",
+        ),
+        (
+            "json_array_contains",
+            "boolean",
+            "[varchar, unknown]",
+            "scalar",
+            true,
+            "Test JSON array membership",
+        ),
+        (
+            "array_distinct",
+            "array",
+            "[array]",
+            "scalar",
+            true,
+            "Remove duplicate array elements",
+        ),
+        (
+            "array_join",
+            "varchar",
+            "[array, varchar]",
+            "scalar",
+            true,
+            "Join array elements",
+        ),
+        (
+            "array_position",
+            "bigint",
+            "[array, unknown]",
+            "scalar",
+            true,
+            "Find an array element",
+        ),
+        (
+            "array_sort",
+            "array",
+            "[array]",
+            "scalar",
+            true,
+            "Sort an array",
+        ),
+        (
+            "cardinality",
+            "bigint",
+            "[array]",
+            "scalar",
+            true,
+            "Return collection cardinality",
+        ),
+        (
+            "coalesce",
+            "unknown",
+            "[unknown]",
+            "scalar",
+            true,
+            "First non-null value",
+        ),
+        (
+            "concat",
+            "varchar",
+            "[varchar]",
+            "scalar",
+            true,
+            "Concatenate strings",
+        ),
+        (
+            "contains",
+            "boolean",
+            "[array, unknown]",
+            "scalar",
+            true,
+            "Test array membership",
+        ),
+        (
+            "contains_key",
+            "boolean",
+            "[map, unknown]",
+            "scalar",
+            true,
+            "Test map key membership",
+        ),
+        (
+            "count",
+            "bigint",
+            "[unknown]",
+            "aggregate",
+            true,
+            "Count rows or values",
+        ),
+        (
+            "current_date",
+            "date",
+            "[]",
+            "scalar",
+            false,
+            "Current session date",
+        ),
+        (
+            "date_diff",
+            "bigint",
+            "[varchar, date, date]",
+            "scalar",
+            true,
+            "Difference between temporal values in a fixed unit",
+        ),
+        (
+            "date_part",
+            "bigint",
+            "[varchar, date]",
+            "scalar",
+            true,
+            "Extract a date field",
+        ),
+        (
+            "date_trunc",
+            "date",
+            "[varchar, date]",
+            "scalar",
+            true,
+            "Truncate a date or timestamp",
+        ),
+        (
+            "ends_with",
+            "boolean",
+            "[varchar, varchar]",
+            "scalar",
+            true,
+            "Test a string suffix",
+        ),
+        (
+            "exp",
+            "double",
+            "[double]",
+            "scalar",
+            true,
+            "Exponential function",
+        ),
         ("floor", "double", "[double]", "scalar", true, "Round down"),
-        ("greatest", "unknown", "[unknown]", "scalar", true, "Greatest non-null value"),
-        ("least", "unknown", "[unknown]", "scalar", true, "Least non-null value"),
-        ("ln", "double", "[double]", "scalar", true, "Natural logarithm"),
-        ("lower", "varchar", "[varchar]", "scalar", true, "Lowercase a string"),
-        ("lpad", "varchar", "[varchar, bigint, varchar]", "scalar", true, "Left-pad a string"),
-        ("max", "unknown", "[unknown]", "aggregate", true, "Maximum value"),
-        ("min", "unknown", "[unknown]", "aggregate", true, "Minimum value"),
-        ("nullif", "unknown", "[unknown, unknown]", "scalar", true, "Null when values match"),
+        (
+            "greatest",
+            "unknown",
+            "[unknown]",
+            "scalar",
+            true,
+            "Greatest non-null value",
+        ),
+        (
+            "least",
+            "unknown",
+            "[unknown]",
+            "scalar",
+            true,
+            "Least non-null value",
+        ),
+        (
+            "ln",
+            "double",
+            "[double]",
+            "scalar",
+            true,
+            "Natural logarithm",
+        ),
+        (
+            "lower",
+            "varchar",
+            "[varchar]",
+            "scalar",
+            true,
+            "Lowercase a string",
+        ),
+        (
+            "lpad",
+            "varchar",
+            "[varchar, bigint, varchar]",
+            "scalar",
+            true,
+            "Left-pad a string",
+        ),
+        (
+            "max",
+            "unknown",
+            "[unknown]",
+            "aggregate",
+            true,
+            "Maximum value",
+        ),
+        (
+            "min",
+            "unknown",
+            "[unknown]",
+            "aggregate",
+            true,
+            "Minimum value",
+        ),
+        (
+            "nullif",
+            "unknown",
+            "[unknown, unknown]",
+            "scalar",
+            true,
+            "Null when values match",
+        ),
         ("pi", "double", "[]", "scalar", true, "The constant pi"),
-        ("repeat", "varchar", "[varchar, bigint]", "scalar", true, "Repeat a string"),
-        ("replace", "varchar", "[varchar, varchar, varchar]", "scalar", true, "Replace string occurrences"),
-        ("reverse", "varchar", "[varchar]", "scalar", true, "Reverse a string"),
-        ("rpad", "varchar", "[varchar, bigint, varchar]", "scalar", true, "Right-pad a string"),
-        ("round", "double", "[double]", "scalar", true, "Round a number"),
+        (
+            "repeat",
+            "varchar",
+            "[varchar, bigint]",
+            "scalar",
+            true,
+            "Repeat a string",
+        ),
+        (
+            "replace",
+            "varchar",
+            "[varchar, varchar, varchar]",
+            "scalar",
+            true,
+            "Replace string occurrences",
+        ),
+        (
+            "reverse",
+            "varchar",
+            "[varchar]",
+            "scalar",
+            true,
+            "Reverse a string",
+        ),
+        (
+            "rpad",
+            "varchar",
+            "[varchar, bigint, varchar]",
+            "scalar",
+            true,
+            "Right-pad a string",
+        ),
+        (
+            "round",
+            "double",
+            "[double]",
+            "scalar",
+            true,
+            "Round a number",
+        ),
         ("sqrt", "double", "[double]", "scalar", true, "Square root"),
-        ("starts_with", "boolean", "[varchar, varchar]", "scalar", true, "Test a string prefix"),
+        (
+            "starts_with",
+            "boolean",
+            "[varchar, varchar]",
+            "scalar",
+            true,
+            "Test a string prefix",
+        ),
         ("sum", "double", "[double]", "aggregate", true, "Sum values"),
-        ("trim", "varchar", "[varchar]", "scalar", true, "Trim whitespace"),
-        ("upper", "varchar", "[varchar]", "scalar", true, "Uppercase a string"),
+        (
+            "trim",
+            "varchar",
+            "[varchar]",
+            "scalar",
+            true,
+            "Trim whitespace",
+        ),
+        (
+            "upper",
+            "varchar",
+            "[varchar]",
+            "scalar",
+            true,
+            "Uppercase a string",
+        ),
     ];
     let columns = [
         ("Function", "varchar"),
@@ -4136,23 +4417,27 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
     .collect::<Vec<_>>();
     let rows = FUNCTIONS
         .iter()
-        .filter(|(name, ..)| pattern.is_none_or(|pattern| pattern.is_empty() || trino_like(name, pattern)))
-        .map(|(name, return_type, args, kind, deterministic, description)| {
-            let argument_types = args
-                .trim_matches(['[', ']'])
-                .split(',')
-                .map(str::trim)
-                .filter(|argument| !argument.is_empty())
-                .collect::<Vec<_>>();
-            serde_json::json!([
-                name,
-                return_type,
-                argument_types,
-                kind,
-                deterministic,
-                description
-            ])
+        .filter(|(name, ..)| {
+            pattern.is_none_or(|pattern| pattern.is_empty() || trino_like(name, pattern))
         })
+        .map(
+            |(name, return_type, args, kind, deterministic, description)| {
+                let argument_types = args
+                    .trim_matches(['[', ']'])
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|argument| !argument.is_empty())
+                    .collect::<Vec<_>>();
+                serde_json::json!([
+                    name,
+                    return_type,
+                    argument_types,
+                    kind,
+                    deterministic,
+                    description
+                ])
+            },
+        )
         .collect::<Vec<_>>();
     let id = Uuid::new_v4().to_string();
     Json(serde_json::json!({
@@ -4279,7 +4564,11 @@ fn trino_session_response_pattern(
     let rows = match pattern.filter(|pattern| !pattern.is_empty()) {
         Some(pattern) => rows
             .into_iter()
-            .filter(|row| row[0].as_str().is_some_and(|name| trino_like(name, pattern)))
+            .filter(|row| {
+                row[0]
+                    .as_str()
+                    .is_some_and(|name| trino_like(name, pattern))
+            })
             .collect::<Vec<_>>(),
         None => rows,
     };
@@ -4332,8 +4621,16 @@ fn trino_percent_encode(value: &str) -> String {
             encoded.push(byte as char);
         } else {
             encoded.push('%');
-            encoded.push(char::from_digit((byte >> 4) as u32, 16).unwrap().to_ascii_uppercase());
-            encoded.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap().to_ascii_uppercase());
+            encoded.push(
+                char::from_digit((byte >> 4) as u32, 16)
+                    .unwrap()
+                    .to_ascii_uppercase(),
+            );
+            encoded.push(
+                char::from_digit((byte & 0x0f) as u32, 16)
+                    .unwrap()
+                    .to_ascii_uppercase(),
+            );
         }
     }
     encoded
@@ -4413,9 +4710,7 @@ fn trino_use_statement(body: &str) -> Result<Option<(Option<String>, String)>, S
 /// be a single quoted literal; doubled quotes are decoded using SQL literal
 /// rules. Values are passed through the same typed JSON binder as named
 /// prepared statements, so this path never interpolates values into SQL.
-fn trino_execute_immediate(
-    body: &str,
-) -> Result<Option<(String, Vec<serde_json::Value>)>, String> {
+fn trino_execute_immediate(body: &str) -> Result<Option<(String, Vec<serde_json::Value>)>, String> {
     let trimmed = body.trim().trim_end_matches(';').trim();
     let prefix = "EXECUTE IMMEDIATE";
     if !trimmed
@@ -4460,7 +4755,9 @@ fn trino_execute_immediate(
         return Ok(Some((query, Vec::new())));
     }
     let Some(using) = rest.get(..5) else {
-        return Err("EXECUTE IMMEDIATE accepts only a USING clause after the SQL literal".to_owned());
+        return Err(
+            "EXECUTE IMMEDIATE accepts only a USING clause after the SQL literal".to_owned(),
+        );
     };
     if !using.eq_ignore_ascii_case("USING")
         || !rest
@@ -4468,7 +4765,9 @@ fn trino_execute_immediate(
             .and_then(|suffix| suffix.chars().next())
             .is_some_and(char::is_whitespace)
     {
-        return Err("EXECUTE IMMEDIATE accepts only a USING clause after the SQL literal".to_owned());
+        return Err(
+            "EXECUTE IMMEDIATE accepts only a USING clause after the SQL literal".to_owned(),
+        );
     }
     let values = rest[5..].trim();
     if values.is_empty() {
@@ -4612,10 +4911,15 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
         && trimmed
             .get(..4)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("date"))
-        && trimmed.get(4..).is_some_and(|suffix| suffix.trim_start().starts_with('\''))
+        && trimmed
+            .get(4..)
+            .is_some_and(|suffix| suffix.trim_start().starts_with('\''))
         && trimmed.ends_with('\'')
     {
-        let literal = trimmed.get(4..).expect("DATE prefix is four ASCII bytes").trim_start();
+        let literal = trimmed
+            .get(4..)
+            .expect("DATE prefix is four ASCII bytes")
+            .trim_start();
         let text = literal[1..literal.len() - 1].replace("''", "'");
         if kaveon_core::predicate::date_literal_days(&text).is_some() {
             return Ok(serde_json::Value::String(text));
@@ -4699,12 +5003,14 @@ async fn trino_response_shape(response: Response) -> Response {
             // These are standard Trino response links. They point at the
             // compatibility routes so clients can inspect or cancel a query
             // without knowing Kaveon's native endpoint names.
-            object
-                .entry("infoUri".to_owned())
-                .or_insert_with(|| serde_json::Value::String(format!("/v1/trino/query/{query_id}")));
-            object.entry("partialCancelUri".to_owned()).or_insert_with(|| {
+            object.entry("infoUri".to_owned()).or_insert_with(|| {
                 serde_json::Value::String(format!("/v1/trino/query/{query_id}"))
             });
+            object
+                .entry("partialCancelUri".to_owned())
+                .or_insert_with(|| {
+                    serde_json::Value::String(format!("/v1/trino/query/{query_id}"))
+                });
         }
         if let Some(next_uri) = object.remove("next_uri") {
             let next_uri = next_uri
@@ -4747,7 +5053,12 @@ async fn get_trino_query(
     Path(query_id): Path<String>,
     Extension(identity): Extension<Identity>,
 ) -> Response {
-    trino_response_shape(get_query(Path(query_id), Extension(identity)).await.into_response()).await
+    trino_response_shape(
+        get_query(Path(query_id), Extension(identity))
+            .await
+            .into_response(),
+    )
+    .await
 }
 
 async fn get_trino_result_page(
@@ -4929,7 +5240,12 @@ async fn prepare_statement(
             parameters: parameters.clone(),
         },
     );
-    Json(PreparedStatementResponse { id, query, parameters }).into_response()
+    Json(PreparedStatementResponse {
+        id,
+        query,
+        parameters,
+    })
+    .into_response()
 }
 
 async fn describe_prepared_statement(
@@ -4938,7 +5254,10 @@ async fn describe_prepared_statement(
 ) -> impl IntoResponse {
     let statement = PREPARED_STATEMENTS.read().await.get(&statement_id).cloned();
     match statement {
-        Some(statement) if identity.role == crate::security::Role::Admin || statement.owner == identity.principal => {
+        Some(statement)
+            if identity.role == crate::security::Role::Admin
+                || statement.owner == identity.principal =>
+        {
             Json(PreparedStatementResponse {
                 id: statement_id,
                 query: statement.query,
@@ -4957,7 +5276,10 @@ async fn close_prepared_statement(
 ) -> impl IntoResponse {
     let mut statements = PREPARED_STATEMENTS.write().await;
     match statements.get(&statement_id) {
-        Some(statement) if identity.role == crate::security::Role::Admin || statement.owner == identity.principal => {
+        Some(statement)
+            if identity.role == crate::security::Role::Admin
+                || statement.owner == identity.principal =>
+        {
             statements.remove(&statement_id);
             StatusCode::NO_CONTENT.into_response()
         }
@@ -5647,7 +5969,7 @@ async fn run_statement(
     let cache_key = (settings.result_cache_enabled()
         && state.result_cache.enabled()
         && !matches!(explain_kind, Some(ExplainPlanKind::Analyze)))
-        .then(|| {
+    .then(|| {
         crate::result_cache::ResultCacheKey::new(
             &sql,
             &context.catalog,
@@ -6012,12 +6334,7 @@ async fn run_statement(
             Ok((result, stage)) => {
                 let mut result = result;
                 if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
-                    render_explain_analyze_result(
-                        &mut result,
-                        &optimized_plan,
-                        analysis_us,
-                        0,
-                    );
+                    render_explain_analyze_result(&mut result, &optimized_plan, analysis_us, 0);
                 }
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
@@ -6407,7 +6724,10 @@ async fn run_statement(
         explain_plan_lines(&optimized_plan, 0, &mut lines);
         lines.push(format!(
             "Runtime: rows={}, analysis_us={}, planning_us={}, execution_us={}",
-            rows.len(), analysis_us, planning_us, execution_us
+            rows.len(),
+            analysis_us,
+            planning_us,
+            execution_us
         ));
         columns = vec![ColumnInfo {
             name: "Query Plan".to_owned(),
@@ -6807,9 +7127,9 @@ fn parse_explain_statement(sql: &str) -> Result<Option<(ExplainPlanKind, String)
     if rest
         .get(..7)
         .is_some_and(|head| head.eq_ignore_ascii_case("ANALYZE"))
-        && rest
-            .get(7..)
-            .is_some_and(|tail| tail.is_empty() || tail.starts_with(|c: char| c.is_ascii_whitespace()))
+        && rest.get(7..).is_some_and(|tail| {
+            tail.is_empty() || tail.starts_with(|c: char| c.is_ascii_whitespace())
+        })
     {
         let query = rest[7..].trim();
         if query.is_empty() {
@@ -8588,15 +8908,13 @@ async fn run_sub_statement(
     // itself until the admission timeout. Other ANALYZE children retain the
     // caller's requested bound.
     if label.starts_with("cube grouping over ") {
-        let configured = context
-            .settings
-            .query_memory_limit_bytes(&state.config);
+        let configured = context.settings.query_memory_limit_bytes(&state.config);
         let width = context.resource_group.max_concurrent;
         settings.insert(
             "query_memory_limit_bytes".into(),
-            serde_json::Value::Number(
-                serde_json::Number::from(bounded_cube_child_memory_limit(configured, width)),
-            ),
+            serde_json::Value::Number(serde_json::Number::from(bounded_cube_child_memory_limit(
+                configured, width,
+            ))),
         );
     }
     let request = StatementRequest {
@@ -12698,9 +13016,7 @@ async fn release_dispatch_outputs(client: &reqwest::Client, token: &str, dispatc
 
 fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
     match plan {
-        LogicalPlan::Aggregate {
-            input, ..
-        } => general_distributed_eligible(input),
+        LogicalPlan::Aggregate { input, .. } => general_distributed_eligible(input),
         LogicalPlan::Project { input, .. }
         | LogicalPlan::Filter { input, .. }
         | LogicalPlan::Sort { input, .. }
@@ -13554,24 +13870,34 @@ pub(crate) fn batches_to_json(
                     // through to Arrow's Debug representation makes arrays, maps and rows
                     // unusable to SQL Lab and clients (and is not Trino-compatible).
                     DataType::List(_) => array_value_to_json(arr.as_list::<i32>().value(row)),
-                    DataType::LargeList(_) => {
-                        array_value_to_json(arr.as_list::<i64>().value(row))
-                    }
+                    DataType::LargeList(_) => array_value_to_json(arr.as_list::<i64>().value(row)),
                     DataType::FixedSizeList(_, _) => {
                         array_value_to_json(arr.as_fixed_size_list().value(row))
                     }
                     DataType::Struct(fields) => {
-                        let value = arr.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+                        let value = arr
+                            .as_any()
+                            .downcast_ref::<arrow::array::StructArray>()
+                            .unwrap();
                         let mut object = serde_json::Map::with_capacity(fields.len());
                         for (index, field) in fields.iter().enumerate() {
-                            object.insert(field.name().clone(), array_value_to_json(value.column(index).slice(row, 1)));
+                            object.insert(
+                                field.name().clone(),
+                                array_value_to_json(value.column(index).slice(row, 1)),
+                            );
                         }
                         serde_json::Value::Object(object)
                     }
                     DataType::Map(_, _) => {
-                        let value = arr.as_any().downcast_ref::<arrow::array::MapArray>().unwrap();
+                        let value = arr
+                            .as_any()
+                            .downcast_ref::<arrow::array::MapArray>()
+                            .unwrap();
                         let entries = value.value(row);
-                        let entry_struct = entries.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+                        let entry_struct = entries
+                            .as_any()
+                            .downcast_ref::<arrow::array::StructArray>()
+                            .unwrap();
                         let keys = entry_struct.column(0);
                         let values = entry_struct.column(1);
                         let mut object = serde_json::Map::new();
@@ -13689,15 +14015,32 @@ fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
                 .into()
         }
         DataType::Struct(fields) => {
-            let value = array.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
-            fields.iter().enumerate().map(|(index, field)| {
-                (field.name().clone(), array_value_to_json(value.column(index).slice(0, 1)))
-            }).collect::<serde_json::Map<_, _>>().into()
+            let value = array
+                .as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap();
+            fields
+                .iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    (
+                        field.name().clone(),
+                        array_value_to_json(value.column(index).slice(0, 1)),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>()
+                .into()
         }
         DataType::Map(_, _) => {
-            let value = array.as_any().downcast_ref::<arrow::array::MapArray>().unwrap();
+            let value = array
+                .as_any()
+                .downcast_ref::<arrow::array::MapArray>()
+                .unwrap();
             let entries = value.value(0);
-            let entry_struct = entries.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+            let entry_struct = entries
+                .as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap();
             let keys = entry_struct.column(0);
             let values = entry_struct.column(1);
             let mut object = serde_json::Map::new();
@@ -13705,10 +14048,17 @@ fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
             for index in 0..entries.len() {
                 let key = array_value_to_json(keys.slice(index, 1));
                 let item = array_value_to_json(values.slice(index, 1));
-                if let Some(key) = key.as_str() { object.insert(key.to_owned(), item); }
-                else { pairs.push(serde_json::json!([key, item])); }
+                if let Some(key) = key.as_str() {
+                    object.insert(key.to_owned(), item);
+                } else {
+                    pairs.push(serde_json::json!([key, item]));
+                }
             }
-            if pairs.is_empty() { object.into() } else { pairs.into() }
+            if pairs.is_empty() {
+                object.into()
+            } else {
+                pairs.into()
+            }
         }
         DataType::Boolean => serde_json::json!(array.as_boolean().value(0)),
         DataType::Int8 => serde_json::json!(array.as_primitive::<Int8Type>().value(0)),
@@ -14658,15 +15008,13 @@ mod tests {
 
     use super::{
         AnalyzeStatement, ColumnInfo, DistinctColumns, ExplainPlanKind, MergeOperation,
-        StatisticsStatement,
-        TaskRequest, TaskResponse, aggregate_merge_contract, await_task_memory, capabilities,
-        catalog_test_state, collect_join_statistics_tables, decode_arrow_stream,
-        encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
+        StatisticsStatement, TaskRequest, TaskResponse, aggregate_merge_contract,
+        await_task_memory, capabilities, catalog_test_state, collect_join_statistics_tables,
+        decode_arrow_stream, encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
         general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, mutation_actor,
         parse_analyze_statement, parse_explain_statement, parse_statistics_statement,
-        statistics_diagnostics,
-        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
-        validate_replacement,
+        statistics_diagnostics, task_request_from_dispatch, top_n_merge_contract,
+        transaction_api_guidance, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -14723,9 +15071,11 @@ mod tests {
             parse_explain_statement("EXPLAIN ANALYZE SELECT 1"),
             Ok(Some((ExplainPlanKind::Analyze, "SELECT 1".to_owned())))
         );
-        assert!(parse_explain_statement("EXPLAIN (FORMAT GRAPHVIZ) SELECT 1")
-            .unwrap_err()
-            .contains("unsupported EXPLAIN option"));
+        assert!(
+            parse_explain_statement("EXPLAIN (FORMAT GRAPHVIZ) SELECT 1")
+                .unwrap_err()
+                .contains("unsupported EXPLAIN option")
+        );
     }
 
     /// One finished statement as the journal keeps it.
@@ -17201,11 +17551,13 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{analyzed}");
         assert_eq!(analyzed["columns"][0]["name"], "Query Plan");
-        assert!(analyzed["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row[0].as_str().unwrap().starts_with("Runtime: rows=1,")));
+        assert!(
+            analyzed["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row[0].as_str().unwrap().starts_with("Runtime: rows=1,"))
+        );
 
         // A location that cannot be read fails the statement and its record.
         let (status, body) = submit(
@@ -19696,12 +20048,10 @@ mod tests {
         .await
         .into_response();
         assert_eq!(closed.status(), StatusCode::NO_CONTENT);
-        let missing = super::describe_prepared_statement(
-            axum::Extension(admin()),
-            axum::extract::Path(id),
-        )
-        .await
-        .into_response();
+        let missing =
+            super::describe_prepared_statement(axum::Extension(admin()), axum::extract::Path(id))
+                .await
+                .into_response();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
@@ -21507,7 +21857,11 @@ mod streamed_root_tests {
             .collect::<Vec<_>>();
         assert_eq!(tags, vec!["dashboard", "ad-hoc"]);
         assert_eq!(
-            trino_prepared_queries(&headers).unwrap().unwrap().get("name").map(String::as_str),
+            trino_prepared_queries(&headers)
+                .unwrap()
+                .unwrap()
+                .get("name")
+                .map(String::as_str),
             Some("SELECT 1 AS n")
         );
         headers.insert(
@@ -21515,7 +21869,10 @@ mod streamed_root_tests {
             "result_cache=false%2Cunused=ignored".parse().unwrap(),
         );
         let settings = trino_session_settings(&headers).unwrap().unwrap();
-        assert_eq!(settings["result_cache"], serde_json::json!("false,unused=ignored"));
+        assert_eq!(
+            settings["result_cache"],
+            serde_json::json!("false,unused=ignored")
+        );
     }
 
     #[test]
@@ -21524,7 +21881,10 @@ mod streamed_root_tests {
         assert!(!is_json_content_type(&headers));
         headers.insert("content-type", "text/plain; charset=utf-8".parse().unwrap());
         assert!(!is_json_content_type(&headers));
-        headers.insert("content-type", "application/json; charset=utf-8".parse().unwrap());
+        headers.insert(
+            "content-type",
+            "application/json; charset=utf-8".parse().unwrap(),
+        );
         assert!(is_json_content_type(&headers));
         headers.insert("content-type", "Application/JSON".parse().unwrap());
         assert!(is_json_content_type(&headers));
@@ -21541,7 +21901,10 @@ mod streamed_root_tests {
     #[test]
     fn trino_prepared_statement_rejects_malformed_headers() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-trino-prepared-statement", "missing_equals".parse().unwrap());
+        headers.insert(
+            "x-trino-prepared-statement",
+            "missing_equals".parse().unwrap(),
+        );
         let error = trino_prepared_queries(&headers).expect_err("missing equals");
         assert!(error.contains("name=encoded_sql"), "{error}");
 
@@ -21560,7 +21923,8 @@ mod streamed_root_tests {
 
     #[tokio::test]
     async fn trino_sql_prepare_lifecycle_is_owner_scoped() {
-        let directory = std::env::temp_dir().join(format!("kaveon-trino-prepare-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-trino-prepare-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let state = state_over(table(&directory), true, "coordinator");
         let name = format!("lifecycle_{}", Uuid::new_v4().simple());
@@ -21670,8 +22034,14 @@ mod streamed_root_tests {
             .expect("repeated describe output body");
         let repeated_output_json: serde_json::Value =
             serde_json::from_slice(&repeated_output_body).expect("repeated describe output JSON");
-        assert_eq!(repeated_output_json["data"][0][0], serde_json::json!("total"));
-        assert_eq!(repeated_output_json["data"][0][4], serde_json::json!("bigint"));
+        assert_eq!(
+            repeated_output_json["data"][0][0],
+            serde_json::json!("total")
+        );
+        assert_eq!(
+            repeated_output_json["data"][0][4],
+            serde_json::json!("bigint")
+        );
 
         let executed = submit_trino_statement_parts(
             std::sync::Arc::clone(&state),
@@ -21765,9 +22135,7 @@ mod streamed_root_tests {
             std::sync::Arc::clone(&state),
             alice(),
             HeaderMap::new(),
-            Bytes::from(format!(
-                "EXECUTE {array_name} USING ARRAY[1, 2, NULL]"
-            )),
+            Bytes::from(format!("EXECUTE {array_name} USING ARRAY[1, 2, NULL]")),
         )
         .await;
         assert_eq!(executed_array.status(), StatusCode::OK);
@@ -21842,7 +22210,10 @@ mod streamed_root_tests {
         let queries = trino_prepared_queries(&headers).unwrap().unwrap();
         assert_eq!(queries.get("first").map(String::as_str), Some("SELECT 1"));
         assert_eq!(queries.get("second").map(String::as_str), Some("SELECT 2"));
-        assert_eq!(trino_execute_name("EXECUTE second USING 2"), Some("second".into()));
+        assert_eq!(
+            trino_execute_name("EXECUTE second USING 2"),
+            Some("second".into())
+        );
         assert_eq!(trino_execute_name("SELECT 1"), None);
     }
 
@@ -21878,10 +22249,8 @@ mod streamed_root_tests {
             Some("SELECT * FROM events WHERE id = ?")
         );
 
-        let deallocated = trino_control_response_with_header(
-            "x-trino-deallocated-prepare",
-            "recent".to_owned(),
-        );
+        let deallocated =
+            trino_control_response_with_header("x-trino-deallocated-prepare", "recent".to_owned());
         assert_eq!(
             deallocated
                 .headers()
@@ -21898,10 +22267,7 @@ mod streamed_root_tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(
-            query,
-            "SELECT * FROM events WHERE name = 'O'Reilly'"
-        );
+        assert_eq!(query, "SELECT * FROM events WHERE name = 'O'Reilly'");
         assert_eq!(parameters.len(), 2);
         assert_eq!(parameters[0], serde_json::json!("EU"));
         assert_eq!(parameters[1], serde_json::json!([1, null]));
@@ -21963,9 +22329,10 @@ mod streamed_root_tests {
             Some("ALL".to_owned())
         );
         assert!(trino_prepare_statement("PREPARE recent SELECT 1").is_err());
-        let mixed = trino_prepare_statement("PrEpArE recent FROM SELECT * FROM events WHERE id = ?")
-            .unwrap()
-            .expect("mixed-case PREPARE should be recognized");
+        let mixed =
+            trino_prepare_statement("PrEpArE recent FROM SELECT * FROM events WHERE id = ?")
+                .unwrap()
+                .expect("mixed-case PREPARE should be recognized");
         assert_eq!(mixed.0, "recent");
         assert!(kaveon_sql::parser::parse_sql(&mixed.1).is_ok());
     }
@@ -22021,11 +22388,8 @@ mod streamed_root_tests {
 
     #[tokio::test]
     async fn trino_describe_output_returns_standard_metadata_shape() {
-        let response = trino_describe_output_response(&[(
-            "id".to_owned(),
-            "bigint".to_owned(),
-            true,
-        )]);
+        let response =
+            trino_describe_output_response(&[("id".to_owned(), "bigint".to_owned(), true)]);
         let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
             .unwrap();
@@ -22040,20 +22404,26 @@ mod streamed_root_tests {
 
     #[tokio::test]
     async fn trino_describe_input_returns_positions_and_names() {
-        let response = trino_describe_input_response(&[
-            "$1".to_owned(),
-            ":region".to_owned(),
-            "?".to_owned(),
-        ]);
+        let response =
+            trino_describe_input_response(&["$1".to_owned(), ":region".to_owned(), "?".to_owned()]);
         let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["stats"]["state"], "FINISHED");
         assert_eq!(value["columns"].as_array().unwrap().len(), 4);
-        assert_eq!(value["data"][0], serde_json::json!([0, null, "unknown", "unknown"]));
-        assert_eq!(value["data"][1], serde_json::json!([1, "region", "unknown", "unknown"]));
-        assert_eq!(value["data"][2], serde_json::json!([2, null, "unknown", "unknown"]));
+        assert_eq!(
+            value["data"][0],
+            serde_json::json!([0, null, "unknown", "unknown"])
+        );
+        assert_eq!(
+            value["data"][1],
+            serde_json::json!([1, "region", "unknown", "unknown"])
+        );
+        assert_eq!(
+            value["data"][2],
+            serde_json::json!([2, null, "unknown", "unknown"])
+        );
 
         let response = trino_describe_input_query_response(
             "SELECT * FROM events WHERE id = CAST(? AS BIGINT) AND event_date = $2::date AND name = :name",
@@ -22062,9 +22432,18 @@ mod streamed_root_tests {
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["data"][0], serde_json::json!([0, null, "date", "date"]));
-        assert_eq!(value["data"][1], serde_json::json!([1, "name", "unknown", "unknown"]));
-        assert_eq!(value["data"][2], serde_json::json!([2, null, "bigint", "bigint"]));
+        assert_eq!(
+            value["data"][0],
+            serde_json::json!([0, null, "date", "date"])
+        );
+        assert_eq!(
+            value["data"][1],
+            serde_json::json!([1, "name", "unknown", "unknown"])
+        );
+        assert_eq!(
+            value["data"][2],
+            serde_json::json!([2, null, "bigint", "bigint"])
+        );
         let spaced = trino_describe_input_query_response(
             "SELECT CAST ( ? AS DECIMAL(10, 2)), $2::timestamp with time zone",
         );
@@ -22072,8 +22451,19 @@ mod streamed_root_tests {
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["data"][0], serde_json::json!([0, null, "timestamp with time zone", "timestamp with time zone"]));
-        assert_eq!(value["data"][1], serde_json::json!([1, null, "decimal(10, 2)", "decimal(10, 2)"]));
+        assert_eq!(
+            value["data"][0],
+            serde_json::json!([
+                0,
+                null,
+                "timestamp with time zone",
+                "timestamp with time zone"
+            ])
+        );
+        assert_eq!(
+            value["data"][1],
+            serde_json::json!([1, null, "decimal(10, 2)", "decimal(10, 2)"])
+        );
     }
 
     #[tokio::test]
@@ -22149,15 +22539,17 @@ mod streamed_root_tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let rows = value["data"].as_array().unwrap();
         assert!(rows.iter().any(|row| row[0] == "sum"));
-        assert!(rows.iter().all(|row| row[0].as_str().unwrap().starts_with("sum")));
+        assert!(
+            rows.iter()
+                .all(|row| row[0].as_str().unwrap().starts_with("sum"))
+        );
     }
 
     #[test]
     fn trino_execute_using_binds_scalar_literals_without_sql_interpolation() {
-        let values = trino_execute_parameters(
-            "EXECUTE statement USING 42, 'O''Reilly', true, NULL, -1.25;",
-        )
-        .unwrap();
+        let values =
+            trino_execute_parameters("EXECUTE statement USING 42, 'O''Reilly', true, NULL, -1.25;")
+                .unwrap();
         assert_eq!(
             values,
             vec![
@@ -22258,7 +22650,10 @@ mod streamed_root_tests {
             ]
         );
         let typed = request_parameters(&values).unwrap();
-        assert_eq!(typed[0], ScalarValue::Utf8("2026-10-13 12:34:56.123".into()));
+        assert_eq!(
+            typed[0],
+            ScalarValue::Utf8("2026-10-13 12:34:56.123".into())
+        );
         assert_eq!(typed[2], ScalarValue::Utf8("12.3400".into()));
     }
 
@@ -22304,7 +22699,9 @@ mod streamed_root_tests {
 
     #[test]
     fn result_rows_encode_nested_arrow_values_as_json() {
-        use arrow::array::{Array, ArrayRef, Int64Array, ListBuilder, MapBuilder, StringArray, StructArray};
+        use arrow::array::{
+            Array, ArrayRef, Int64Array, ListBuilder, MapBuilder, StringArray, StructArray,
+        };
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         let mut list_builder = ListBuilder::new(arrow::array::Int64Builder::new());
@@ -22312,14 +22709,24 @@ mod streamed_root_tests {
         list_builder.values().append_value(2);
         list_builder.append(true);
         let list = Arc::new(list_builder.finish());
-        let mut map_builder = MapBuilder::new(None, arrow::array::StringBuilder::new(), arrow::array::Int64Builder::new());
+        let mut map_builder = MapBuilder::new(
+            None,
+            arrow::array::StringBuilder::new(),
+            arrow::array::Int64Builder::new(),
+        );
         map_builder.keys().append_value("a");
         map_builder.values().append_value(3);
         map_builder.append(true).unwrap();
         let map = Arc::new(map_builder.finish());
         let row = StructArray::from(vec![
-            (Arc::new(Field::new("name", DataType::Utf8, false)), Arc::new(StringArray::from(vec!["east"])) as ArrayRef),
-            (Arc::new(Field::new("count", DataType::Int64, false)), Arc::new(Int64Array::from(vec![7])) as ArrayRef),
+            (
+                Arc::new(Field::new("name", DataType::Utf8, false)),
+                Arc::new(StringArray::from(vec!["east"])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("count", DataType::Int64, false)),
+                Arc::new(Int64Array::from(vec![7])) as ArrayRef,
+            ),
         ]);
         let schema = Arc::new(Schema::new(vec![
             Field::new("values", list.data_type().clone(), false),
@@ -22327,12 +22734,19 @@ mod streamed_root_tests {
             Field::new("attributes", map.data_type().clone(), false),
         ]));
         let batch = RecordBatch::try_new(schema, vec![list, Arc::new(row), map]).unwrap();
-        assert_eq!(batches_to_json(&[batch]), vec![vec![serde_json::json!([1, 2]), serde_json::json!({"name": "east", "count": 7}), serde_json::json!({"a": 3})]]);
+        assert_eq!(
+            batches_to_json(&[batch]),
+            vec![vec![
+                serde_json::json!([1, 2]),
+                serde_json::json!({"name": "east", "count": 7}),
+                serde_json::json!({"a": 3})
+            ]]
+        );
     }
 
     #[test]
     fn result_rows_encode_arrow_null_as_json_null() {
-        use arrow::array::{new_null_array, ArrayRef};
+        use arrow::array::{ArrayRef, new_null_array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         let nulls: ArrayRef = new_null_array(&DataType::Null, 1);
@@ -22341,7 +22755,10 @@ mod streamed_root_tests {
             vec![nulls],
         )
         .unwrap();
-        assert_eq!(batches_to_json(&[batch]), vec![vec![serde_json::Value::Null]]);
+        assert_eq!(
+            batches_to_json(&[batch]),
+            vec![vec![serde_json::Value::Null]]
+        );
     }
 
     #[test]
@@ -22350,20 +22767,29 @@ mod streamed_root_tests {
         let map = DataType::Map(
             Field::new(
                 "entries",
-                DataType::Struct(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int64, true),
-                ].into()),
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int64, true),
+                    ]
+                    .into(),
+                ),
                 false,
             )
             .into(),
             false,
         );
-        let row = DataType::Struct(vec![
-            Field::new("name", DataType::Utf8, false),
-            Field::new("attributes", map.clone(), true),
-        ].into());
+        let row = DataType::Struct(
+            vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("attributes", map.clone(), true),
+            ]
+            .into(),
+        );
         assert_eq!(presented_type(&map), "Map(Utf8, Int64)");
-        assert_eq!(presented_type(&row), "Row(name Utf8, attributes Map(Utf8, Int64))");
+        assert_eq!(
+            presented_type(&row),
+            "Row(name Utf8, attributes Map(Utf8, Int64))"
+        );
     }
 }

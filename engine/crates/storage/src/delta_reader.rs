@@ -438,9 +438,11 @@ mod tests {
             })
             .read()
             .unwrap();
-        assert!(source
-            .apply_runtime_filter("id", &[ScalarValue::Int64(0), ScalarValue::Int64(1)])
-            .unwrap());
+        assert!(
+            source
+                .apply_runtime_filter("id", &[ScalarValue::Int64(0), ScalarValue::Int64(1)])
+                .unwrap()
+        );
         let mut values = Vec::new();
         while let Some(batch) = source.next_batch().unwrap() {
             values.extend(
