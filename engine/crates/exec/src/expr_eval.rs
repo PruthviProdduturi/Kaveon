@@ -4298,6 +4298,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "JSON_EXISTS" => {
+            check_arity(name, args, 2)?;
+            let documents = as_string_array(&args[0])?;
+            let paths = as_string_array(&args[1])?;
+            let result: BooleanArray = (0..num_rows)
+                .map(|row| {
+                    if documents.is_null(row) || paths.is_null(row) {
+                        return None;
+                    }
+                    Some(json_extract_value(documents.value(row), paths.value(row)).is_some())
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" | "JSON_QUERY" | "JSON_VALUE" => {
             check_arity(name, args, 2)?;
             let documents = as_string_array(&args[0])?;
@@ -15677,6 +15691,41 @@ mod tests {
                 .to_string()
                 .contains("CARDINALITY currently supports ARRAY/List values only")
         );
+    }
+
+    #[test]
+    fn evaluates_json_exists_for_present_missing_and_null_paths() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"a":null}"#),
+                    Some(r#"{"a":1}"#),
+                    Some(r#"{"b":1}"#),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![
+                    Some("$.a"),
+                    Some("$.a"),
+                    Some("$.a"),
+                    Some("$.a"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_EXISTS".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_boolean();
+        assert_eq!(values.value(0), true);
+        assert_eq!(values.value(1), true);
+        assert_eq!(values.value(2), false);
+        assert!(values.is_null(3));
     }
 
     #[test]
