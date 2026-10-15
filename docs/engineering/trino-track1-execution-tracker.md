@@ -78,8 +78,13 @@ close it.
 The newer live rerun
 `docs/qualification/track1-aks-fault-pressure-2026-10-15.md` independently
 passes the three-worker loss, retry, cancellation, concurrent exact-result,
-and bounded-pressure checks on the current cluster. It strengthens the failure
-evidence but does not close the separate skew-splitting and repeated-lease gate.
+and bounded-pressure checks on the current cluster. The combined grouped
+workload and forced-loss qualification
+`docs/qualification/track1-aks-skew-fault-2026-10-15.md` also passes and closes
+the declared live skew/failure-injection evidence gate for this image. Item 1
+remains Active because node-drain did not produce an observed lease retry and
+repeated lease/endurance evidence, coordinator failover, and broader topology
+coverage are still open.
 
 ## Validation commands
 
