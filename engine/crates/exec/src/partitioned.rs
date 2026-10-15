@@ -16,7 +16,7 @@ use arrow::{
 };
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool,
-    Result,
+    Result, StoragePredicate,
 };
 
 use crate::{
@@ -1942,7 +1942,7 @@ impl PartitionedHashJoin {
                     .expect("right input exists before the build");
                 match self.build(right)? {
                     Ok(built) => {
-                        let left = self.runtime_filter(left, &built);
+                        let left = self.runtime_filter(left, &built)?;
                         self.active = Some(self.probe(left, built)?);
                     }
                     Err(refused) => self.repartition(left, refused, None)?,
@@ -1965,7 +1965,7 @@ impl PartitionedHashJoin {
             ));
             match self.build(right)? {
                 Ok(built) => {
-                    let left = self.runtime_filter(left, &built);
+                    let left = self.runtime_filter(left, &built)?;
                     self.active = Some(self.probe(left, built)?);
                 }
                 Err(refused) => self.repartition(left, refused, Some(partition.depth))?,
@@ -1975,19 +1975,26 @@ impl PartitionedHashJoin {
 
     fn runtime_filter(
         &self,
-        left: Box<dyn BatchOperator>,
+        mut left: Box<dyn BatchOperator>,
         built: &BuiltSide,
-    ) -> Box<dyn BatchOperator> {
+    ) -> Result<Box<dyn BatchOperator>> {
         if !matches!(self.join_type, JoinType::Inner | JoinType::Semi)
             || self.residual.is_some()
             || self.keys.is_empty()
         {
-            return left;
+            return Ok(left);
         }
         let Some(filter) = BuildKeyFilter::from_built(built, &self.key_indices) else {
-            return left;
+            return Ok(left);
         };
-        Box::new(RuntimeJoinFilter::new(left, filter))
+        if let Some(StoragePredicate::In { column, values }) =
+            filter.storage_predicate(left.schema())
+        {
+            if left.apply_runtime_filter(&column, &values)? {
+                return Ok(left);
+            }
+        }
+        Ok(Box::new(RuntimeJoinFilter::new(left, filter)))
     }
 }
 

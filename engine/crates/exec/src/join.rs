@@ -5,6 +5,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
+    ScalarValue, StoragePredicate,
 };
 use std::sync::Arc;
 
@@ -179,6 +180,47 @@ impl BuildKeyFilter {
             .map(|row| self.matches(batch, row))
             .collect::<Result<Vec<_>>>()
             .map(Into::into)
+    }
+}
+
+impl BuildKeyFilter {
+    /// Convert a bounded single-key build index into an exact storage `IN`
+    /// predicate. Composite keys and unsigned values that cannot be represented
+    /// by the storage literal type stay on the batch-level path.
+    pub(crate) fn storage_predicate(&self, schema: &SchemaRef) -> Option<StoragePredicate> {
+        let [(left, _)] = self.keys.as_slice() else {
+            return None;
+        };
+        let column = schema.field(*left).name().to_owned();
+        let values = match &self.index {
+            JoinIndex::Int32 { first_rows, duplicate_rows } => Some(first_rows
+                .keys()
+                .chain(duplicate_rows.keys())
+                .map(|value| ScalarValue::Int64(i64::from(*value)))
+                .collect()),
+            JoinIndex::Date32 { first_rows, duplicate_rows } => Some(first_rows
+                .keys()
+                .chain(duplicate_rows.keys())
+                .map(|value| ScalarValue::Int64(i64::from(*value)))
+                .collect()),
+            JoinIndex::Int64 { first_rows, duplicate_rows } => Some(first_rows
+                .keys()
+                .chain(duplicate_rows.keys())
+                .map(|value| ScalarValue::Int64(*value))
+                .collect()),
+            JoinIndex::Utf8 { first_rows, duplicate_rows } => Some(first_rows
+                .keys()
+                .chain(duplicate_rows.keys())
+                .map(|value| ScalarValue::Utf8(value.clone()))
+                .collect()),
+            JoinIndex::UInt64 { first_rows, duplicate_rows } => first_rows
+                .keys()
+                .chain(duplicate_rows.keys())
+                .map(|value| i64::try_from(*value).ok().map(ScalarValue::Int64))
+                .collect::<Option<Vec<_>>>(),
+            JoinIndex::Composite(_) => None,
+        }?;
+        (!values.is_empty()).then_some(StoragePredicate::In { column, values })
     }
 }
 
