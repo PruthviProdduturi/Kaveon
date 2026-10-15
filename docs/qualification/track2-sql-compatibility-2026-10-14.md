@@ -124,6 +124,13 @@ arguments for extraction, existence, and size accept both widths as well. A
 large-document and large-path `JSON_VALUE` regression covers quoted keys and
 scalar output. The JSON coercion and returning-mode boundaries remain open.
 
+## Typed JSON array needles qualification — 2026-10-15
+
+`JSON_ARRAY_CONTAINS` now accepts signed and unsigned integer widths plus
+`Float32`/`Float64` needles, preserving exact JSON numeric comparison and the
+existing NaN/infinity rejection. The focused executor regression adds an
+`Int32` probe alongside the existing 64-bit and text cases.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
