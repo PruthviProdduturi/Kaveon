@@ -252,6 +252,13 @@ differential sweep completed successfully. The differential corpus includes
 grouped `MIN(DISTINCT actions)` and `MAX(DISTINCT actions)` on local and
 distributed execution paths; both match the exact reference extrema.
 
+The clean current-source Trino wire qualification is retained in
+`docs/qualification/track2-trino-wire-2026-10-15.md`. It passes the prepared
+statement lifecycle and paged result retrieval locally. The deployed AKS image
+has not passed that gate because its digest still serves the older native
+statement behavior for control/prepared requests; an image rebuild and rollout
+are required before cloud client compatibility is claimed.
+
 ## Scalar-query follow-up
 
 Commit `b6a80ec5` adds the missing Trino-compatible implicit single-row
