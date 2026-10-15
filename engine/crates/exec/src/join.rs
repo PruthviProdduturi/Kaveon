@@ -188,10 +188,10 @@ impl BuildKeyFilter {
     /// predicate. Composite keys and unsigned values that cannot be represented
     /// by the storage literal type stay on the batch-level path.
     pub(crate) fn storage_predicate(&self, schema: &SchemaRef) -> Option<StoragePredicate> {
-        let [(left, _)] = self.keys.as_slice() else {
-            return None;
-        };
-        let column = schema.field(*left).name().to_owned();
+        let column = self
+            .keys
+            .first()
+            .map(|(left, _)| schema.field(*left).name().to_owned());
         let values = match &self.index {
             JoinIndex::Int32 { first_rows, duplicate_rows } => Some(first_rows
                 .keys()
@@ -260,6 +260,7 @@ impl BuildKeyFilter {
                 };
             }
         }?;
+        let column = column?;
         (!values.is_empty()).then_some(StoragePredicate::In { column, values })
     }
 }
@@ -2171,6 +2172,36 @@ mod tests {
         };
         assert_eq!(predicates.len(), 2);
         assert!(predicates.iter().all(|predicate| matches!(predicate, StoragePredicate::In { .. })));
+    }
+
+    #[test]
+    fn composite_runtime_filter_excludes_null_build_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("left_a", DataType::Int32, true),
+            Field::new("left_b", DataType::Utf8, true),
+        ]));
+        let build_schema = Arc::new(Schema::new(vec![
+            Field::new("right_a", DataType::Int32, true),
+            Field::new("right_b", DataType::Utf8, true),
+        ]));
+        let build = RecordBatch::try_new(
+            build_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), None, Some(2)])),
+                Arc::new(arrow::array::StringArray::from(vec![Some("x"), Some("z"), Some("y")])),
+            ],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&build_schema, &[build], &[(0, 0), (1, 1)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0), (1, 1)]).unwrap();
+        let StoragePredicate::And(predicates) = filter.storage_predicate(&schema).unwrap() else {
+            panic!("expected independent composite-key predicates");
+        };
+        assert_eq!(predicates.len(), 2);
+        let StoragePredicate::In { values: ints, .. } = &predicates[0] else { panic!("int predicate") };
+        assert_eq!(ints, &vec![ScalarValue::Int64(1), ScalarValue::Int64(2)]);
+        let StoragePredicate::In { values: texts, .. } = &predicates[1] else { panic!("text predicate") };
+        assert_eq!(texts, &vec![ScalarValue::Utf8("x".into()), ScalarValue::Utf8("y".into())]);
     }
 
 }
