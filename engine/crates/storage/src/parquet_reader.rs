@@ -42,15 +42,24 @@ pub struct ParquetFileMetadata {
 /// contract while also remaining usable as a standard iterator. One file, or
 /// the files of a directory table one after another.
 pub struct ParquetBatchIterator {
+    path: PathBuf,
     schema: SchemaRef,
     inner: ParquetBatchInner,
     metrics: ScanMetrics,
     output_projection: Option<Vec<usize>>,
+    batch_size: usize,
+    columns: Option<Vec<String>>,
+    predicate: Option<StoragePredicate>,
+    row_groups: Option<Vec<usize>>,
+    partition: Option<ScanPartition>,
+    filter_dirty: bool,
 }
 
 enum ParquetBatchInner {
     File(ParquetRecordBatchReader),
+    Deferred(ParquetRecordBatchReaderBuilder<File>),
     Directory(Box<DirectoryFiles>),
+    Empty,
 }
 
 /// One file of a local directory scan, after pruning.
@@ -81,6 +90,26 @@ struct DirectoryFiles {
 }
 
 impl DirectoryFiles {
+    fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> bool {
+        if self.current.is_some()
+            || values.is_empty()
+            || self.file_schema.index_of(column).is_err()
+        {
+            return false;
+        }
+        let predicate = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        for file in &mut self.files {
+            file.residual = Some(match file.residual.take() {
+                Some(existing) => StoragePredicate::And(vec![existing, predicate.clone()]),
+                None => predicate.clone(),
+            });
+        }
+        true
+    }
+
     fn open_next(&mut self, metrics: &ScanMetrics) -> Result<bool> {
         let Some(file) = self.files.get(self.next) else {
             return Ok(false);
@@ -127,6 +156,9 @@ impl Iterator for ParquetBatchIterator {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Err(error) = self.materialize_deferred() {
+            return Some(Err(error));
+        }
         match &mut self.inner {
             ParquetBatchInner::File(inner) => {
                 let started = Instant::now();
@@ -166,6 +198,9 @@ impl Iterator for ParquetBatchIterator {
                     Err(error) => return Some(Err(error)),
                 }
             },
+            ParquetBatchInner::Deferred(_) | ParquetBatchInner::Empty => {
+                unreachable!("parquet reader state was not materialized")
+            }
         }
     }
 }
@@ -178,11 +213,69 @@ impl BatchSource for ParquetBatchIterator {
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         self.next().transpose()
     }
+
+    fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> Result<bool> {
+        if values.is_empty() {
+            return Ok(false);
+        }
+        if let ParquetBatchInner::Directory(directory) = &mut self.inner {
+            return Ok(directory.apply_runtime_filter(column, values));
+        }
+        if !matches!(self.inner, ParquetBatchInner::Deferred(_)) {
+            return Ok(false);
+        }
+        let predicate = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        self.predicate = Some(match self.predicate.take() {
+            Some(existing) => StoragePredicate::And(vec![existing, predicate]),
+            None => predicate,
+        });
+        self.filter_dirty = true;
+        Ok(true)
+    }
 }
 
 impl ParquetBatchIterator {
     pub fn metrics(&self) -> ScanMetrics {
         self.metrics.clone()
+    }
+
+    fn materialize_deferred(&mut self) -> Result<()> {
+        let inner = std::mem::replace(
+            &mut self.inner,
+            ParquetBatchInner::Empty,
+        );
+        let ParquetBatchInner::Deferred(builder) = inner else {
+            self.inner = inner;
+            return Ok(());
+        };
+        let reader = ParquetReader {
+            path: self.path.clone(),
+            batch_size: self.batch_size,
+            columns: self.columns.clone(),
+            predicate: self.predicate.clone(),
+            metrics: Some(self.metrics.clone()),
+            partition: self.partition,
+            row_groups: self.row_groups.clone(),
+            listing: None,
+            assigned: None,
+            catalog_schema: None,
+        };
+        let builder = if self.filter_dirty {
+            reader.configure_builder(builder, &self.metrics)?
+        } else {
+            builder
+        };
+        let inner = builder.build().map_err(parquet_error)?;
+        let (schema, output_projection) =
+            ordered_projection(inner.schema().clone(), self.columns.as_deref())?;
+        self.schema = schema;
+        self.output_projection = output_projection;
+        self.filter_dirty = false;
+        self.inner = ParquetBatchInner::File(inner);
+        Ok(())
     }
 }
 
@@ -301,7 +394,22 @@ impl ParquetReader {
         let builder = self.open_builder()?;
         metrics.footer_time(footer_started.elapsed());
         metrics.file_opened();
-        self.finish(builder, metrics)
+        let builder = self.configure_builder(builder, &metrics)?;
+        let (schema, _) =
+            ordered_projection(builder.schema().clone(), self.columns.as_deref())?;
+        Ok(ParquetBatchIterator {
+            path: self.path.clone(),
+            schema,
+            inner: ParquetBatchInner::Deferred(builder),
+            metrics,
+            output_projection: None,
+            batch_size: self.batch_size,
+            columns: self.columns.clone(),
+            predicate: self.predicate.clone(),
+            row_groups: self.row_groups.clone(),
+            partition: self.partition,
+            filter_dirty: false,
+        })
     }
 
     /// The scan over an opened footer: projection, pruning, the partition's
@@ -316,10 +424,17 @@ impl ParquetReader {
         let (schema, output_projection) =
             ordered_projection(inner.schema(), self.columns.as_deref())?;
         Ok(ParquetBatchIterator {
+            path: self.path.clone(),
             schema,
             inner: ParquetBatchInner::File(inner),
             metrics,
             output_projection,
+            batch_size: self.batch_size,
+            columns: self.columns.clone(),
+            predicate: self.predicate.clone(),
+            row_groups: self.row_groups.clone(),
+            partition: self.partition,
+            filter_dirty: false,
         })
     }
 
@@ -379,6 +494,7 @@ impl ParquetReader {
             })
             .collect();
         Ok(ParquetBatchIterator {
+            path: self.path.clone(),
             schema: Arc::clone(columns.schema()),
             inner: ParquetBatchInner::Directory(Box::new(DirectoryFiles {
                 root: self.path.clone(),
@@ -393,6 +509,12 @@ impl ParquetReader {
             })),
             metrics,
             output_projection: None,
+            batch_size: self.batch_size,
+            columns: self.columns.clone(),
+            predicate: self.predicate.clone(),
+            row_groups: self.row_groups.clone(),
+            partition: self.partition,
+            filter_dirty: false,
         })
     }
 
@@ -506,8 +628,8 @@ impl ParquetReader {
         } else {
             ArrowReaderOptions::new()
         };
-        let arrow_metadata = ArrowReaderMetadata::try_new(Arc::new(metadata), options)
-            .map_err(parquet_error)?;
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::new(metadata), options).map_err(parquet_error)?;
         Ok(ParquetRecordBatchReaderBuilder::new_with_metadata(
             file,
             arrow_metadata,
@@ -529,12 +651,8 @@ impl ParquetReader {
             .iter()
             .map(|field| {
                 if matches!(field.data_type(), DataType::Utf8) {
-                    Field::new(
-                        field.name(),
-                        DataType::Utf8View,
-                        field.is_nullable(),
-                    )
-                    .with_metadata(field.metadata().clone())
+                    Field::new(field.name(), DataType::Utf8View, field.is_nullable())
+                        .with_metadata(field.metadata().clone())
                 } else {
                     field.as_ref().clone()
                 }
@@ -1403,6 +1521,35 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn pushes_runtime_filter_before_first_parquet_decode() {
+        let file = fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["label".to_owned()])
+            .read()
+            .expect("parquet source must open");
+        assert!(source
+            .apply_runtime_filter("id", &[ScalarValue::Int64(0), ScalarValue::Int64(4)])
+            .expect("runtime filter must be accepted"));
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("runtime-filtered parquet must decode");
+        let labels = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .flatten()
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(labels, vec!["a", "e"]);
     }
 
     #[test]
