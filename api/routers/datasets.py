@@ -7,6 +7,7 @@ from middleware.demo import allowed_in_demo
 from models.datasets import DatasetCreate, DatasetUpdate
 import services.datasets as svc
 import services.favorites as fav_svc
+import services.query_history as query_history_svc
 import services.user_recents as recents_svc
 from routers import reference_guard
 from services import engine_datasets
@@ -183,9 +184,16 @@ def delete_dataset(dataset_id: str, ctx: UserContext = Depends(require_user_cont
     # else can clear them: so the delete clears them. A failure to clear is
     # raised rather than swallowed, because proceeding would only produce the
     # catalog's rejection one line later.
+    #
+    # A query-history row names it too, and that one is easy to miss because
+    # nobody chose it: the Engine derives a dataset reference from the row's
+    # own `dataset_id`, so a dataset ANYONE had ever run a single query
+    # against was undeletable, with no favorite or recent in sight. Cleared on
+    # the same footing, bounded and per owner.
     try:
         recents_svc.remove_recent_all_users(f"dataset-{dataset_id}", "dataset")
         fav_svc.remove_favorite_all_users("dataset", dataset_id)
+        query_history_svc.remove_dataset_all_users(dataset_id)
     except Exception as error:
         raise HTTPException(
             status_code=502,

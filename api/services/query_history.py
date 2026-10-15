@@ -167,6 +167,18 @@ def _remember_history_count(owner: str, count: int) -> None:
         _HISTORY_COUNTS[owner] = count
 
 
+def _forget_history_count(owner: str) -> None:
+    """Drop a remembered count, so the next write re-establishes it.
+
+    `_at_retention_bound` reads an unknown count as one worth checking, which
+    is the state an owner should be in after rows were removed out from under
+    the cache -- a count left too high makes the retention sweep trim rows it
+    did not need to.
+    """
+    with _HISTORY_COUNT_LOCK:
+        _HISTORY_COUNTS.pop(owner, None)
+
+
 def _count_one_more(owner: str) -> None:
     """One record added. An owner never counted stays uncounted, so the sweep
     that establishes the count is the one that sets it."""
@@ -420,3 +432,64 @@ def delete_all_history(user_id: str) -> int:
         "DELETE FROM query_history WHERE user_email = @param0",
         [user_id],
     )
+
+
+# How many owners' histories one dataset delete may clear. The same bound the
+# recents and favorites purges use, and for the same reason: an unbounded
+# cross-owner delete is a way to take the catalog down by deleting one record.
+MAX_CROSS_OWNER_DELETE = 100
+
+
+def remove_dataset_all_users(dataset_id: str) -> int:
+    """Clear every owner's history rows that name `dataset_id`.
+
+    Call BEFORE deleting the dataset. A query-history document carries
+    `dataset_id` and the Engine derives a reference to the dataset from it, so
+    the catalog refuses to delete a dataset anybody has ever run a query
+    against:
+
+        invalid transaction: product record 'query_history/<id>'
+        references missing 'dataset/<id>'
+
+    A history row belongs to whoever ran the query rather than to the person
+    deleting the dataset, so this is a fanout across owners and cannot share
+    the delete's transaction -- each owner's rows are written as that owner,
+    exactly as the recents and favorites purges do it.
+
+    Returns how many rows were cleared. On the PostgreSQL path the row goes
+    with its own foreign key, so there is nothing to do.
+    """
+    from services import product_read_authority
+
+    if not product_read_authority.enabled("query_history"):
+        return 0
+    wanted = str(dataset_id or "").strip()
+    if not wanted:
+        return 0
+
+    matches = []
+    for record in product_store.list_records(
+            "query_history", "kaveon-system", "Admin", max_records=HISTORY_LIST_CEILING):
+        document, revision = record.get("document"), record.get("revision")
+        if (not isinstance(document, dict) or not isinstance(record.get("id"), str)
+                or not isinstance(revision, int) or revision < 1):
+            raise RuntimeError("KaveonDB returned an invalid query history record")
+        if str(document.get("dataset_id") or "") != wanted:
+            continue
+        owner = document.get("user_email")
+        if not isinstance(owner, str) or not owner:
+            raise RuntimeError("KaveonDB returned an invalid query history owner")
+        matches.append((owner, record))
+
+    if len(matches) > MAX_CROSS_OWNER_DELETE:
+        raise RuntimeError("cross-owner query history delete exceeds its fanout bound")
+
+    by_owner: dict = {}
+    for owner, record in matches:
+        by_owner.setdefault(owner, []).append(record)
+    for owner, owned in by_owner.items():
+        product_store.transact([product_store.ProductMutation(
+            "delete", "query_history", str(record["id"]),
+            expected_revision=record["revision"]) for record in owned], owner, "Admin")
+        _forget_history_count(owner)
+    return len(matches)
