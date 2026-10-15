@@ -4243,55 +4243,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_ARRAY_LENGTH" => {
             check_arity(name, args, 1)?;
-            let documents = as_string_array(&args[0])?;
-            let result: Int64Array = (0..num_rows)
-                .map(|row| {
-                    if documents.is_null(row) {
-                        return None;
-                    }
-                    match serde_json::from_str::<serde_json::Value>(documents.value(row)).ok()? {
-                        serde_json::Value::Array(values) => Some(values.len() as i64),
-                        _ => None,
-                    }
-                })
-                .collect();
-            Ok(Arc::new(result))
-        }
-        "JSON_ARRAY_GET" | "TRY_JSON_ARRAY_GET" => {
-            check_arity(name, args, 2)?;
-            let try_get = upper == "TRY_JSON_ARRAY_GET";
             let documents = &args[0];
-            let indices = compute::cast(&args[1], &DataType::Int64)?;
-            let indices = indices.as_primitive::<Int64Type>();
-            let result: StringArray = (0..num_rows)
+            let result: Int64Array = (0..num_rows)
                 .map(|row| {
                     let Some(document) = text_value(documents, row)? else {
                         return Ok(None);
                     };
-                    if indices.is_null(row) {
-                        return Ok(None);
-                    }
-                    let document = match serde_json::from_str::<serde_json::Value>(document) {
-                        Ok(document) => document,
-                        Err(_) if try_get => return Ok(None),
-                        Err(_) => {
-                            return Err(KaveonError::Execution(format!(
-                                "invalid JSON value at row {row}"
-                            )))
-                        }
-                    };
-                    let serde_json::Value::Array(values) = document else {
-                        return Ok(None);
-                    };
-                    let index = indices.value(row);
-                    let position = if index < 0 {
-                        values.len().checked_sub(index.unsigned_abs() as usize)
-                    } else {
-                        usize::try_from(index).ok()
-                    };
-                    Ok(position
-                        .and_then(|position| values.get(position))
-                        .map(serde_json::Value::to_string))
+                    Ok(match serde_json::from_str::<serde_json::Value>(document).ok()? {
+                        serde_json::Value::Array(values) => Some(values.len() as i64),
+                        _ => None,
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -4299,85 +4260,92 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_ARRAY_CONTAINS" => {
             check_arity(name, args, 2)?;
-            let documents = as_string_array(&args[0])?;
+            let documents = &args[0];
             let mut values = Vec::with_capacity(num_rows);
             for row in 0..num_rows {
-                    if documents.is_null(row) || args[1].is_null(row) {
-                        values.push(None);
-                        continue;
-                    }
-                    let Some(needle) = json_scalar_value(&args[1], row)? else {
-                        values.push(None);
-                        continue;
-                    };
-                    let Ok(document) =
-                        serde_json::from_str::<serde_json::Value>(documents.value(row))
-                    else {
-                        values.push(None);
-                        continue;
-                    };
-                    let serde_json::Value::Array(document_values) = document else {
-                        values.push(Some(false));
-                        continue;
-                    };
-                    values.push(Some(
-                        document_values
-                            .iter()
-                            .any(|value| value == &needle),
-                    ));
+                let Some(document) = text_value(documents, row)? else {
+                    values.push(None);
+                    continue;
+                };
+                if args[1].is_null(row) {
+                    values.push(None);
+                    continue;
+                }
+                let Some(needle) = json_scalar_value(&args[1], row)? else {
+                    values.push(None);
+                    continue;
+                };
+                let Ok(document) = serde_json::from_str::<serde_json::Value>(document) else {
+                    values.push(None);
+                    continue;
+                };
+                let serde_json::Value::Array(document_values) = document else {
+                    values.push(Some(false));
+                    continue;
+                };
+                values.push(Some(document_values.iter().any(|value| value == &needle)));
             }
             let result: BooleanArray = values.into();
             Ok(Arc::new(result))
         }
         "JSON_SIZE" => {
             check_arity(name, args, 2)?;
-            let documents = as_string_array(&args[0])?;
-            let paths = as_string_array(&args[1])?;
+            let documents = &args[0];
+            let paths = &args[1];
             let result: Int64Array = (0..num_rows)
                 .map(|row| {
-                    if documents.is_null(row) || paths.is_null(row) {
-                        return None;
-                    }
-                    let value = json_extract_value(documents.value(row), paths.value(row))?;
-                    Some(match value {
+                    let (Some(document), Some(path)) =
+                        (text_value(documents, row)?, text_value(paths, row)?)
+                    else {
+                        return Ok(None);
+                    };
+                    let value = json_extract_value(document, path);
+                    Ok(value.map(|value| match value {
                         serde_json::Value::Array(values) => values.len() as i64,
                         serde_json::Value::Object(values) => values.len() as i64,
                         _ => 0,
-                    })
+                    }))
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?
+                .into();
             Ok(Arc::new(result))
         }
         "JSON_EXISTS" => {
             check_arity(name, args, 2)?;
-            let documents = as_string_array(&args[0])?;
-            let paths = as_string_array(&args[1])?;
+            let documents = &args[0];
+            let paths = &args[1];
             let result: BooleanArray = (0..num_rows)
                 .map(|row| {
-                    if documents.is_null(row) || paths.is_null(row) {
-                        return None;
-                    }
-                    Some(json_extract_value(documents.value(row), paths.value(row)).is_some())
+                    let (Some(document), Some(path)) =
+                        (text_value(documents, row)?, text_value(paths, row)?)
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some(json_extract_value(document, path).is_some()))
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?
+                .into();
             Ok(Arc::new(result))
         }
         "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" | "JSON_QUERY" | "JSON_VALUE" => {
             check_arity(name, args, 2)?;
-            let documents = as_string_array(&args[0])?;
-            let paths = as_string_array(&args[1])?;
+            let documents = &args[0];
+            let paths = &args[1];
             let result: StringArray = (0..num_rows)
                 .map(|row| {
-                    if documents.is_null(row) || paths.is_null(row) {
-                        return None;
-                    }
-                    if upper == "JSON_EXTRACT" || upper == "JSON_QUERY" {
-                        json_extract(documents.value(row), paths.value(row))
+                    let (Some(document), Some(path)) =
+                        (text_value(documents, row)?, text_value(paths, row)?)
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(if upper == "JSON_EXTRACT" || upper == "JSON_QUERY" {
+                        json_extract(document, path)
                     } else {
-                        json_extract_scalar(documents.value(row), paths.value(row))
-                    }
+                        json_extract_scalar(document, path)
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?
+                .into();
             Ok(Arc::new(result))
         }
         "JSON_PARSE" | "TRY_JSON_PARSE" => {
@@ -15993,6 +15961,29 @@ mod tests {
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), "A-17");
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_json_value_with_large_utf8_document_and_path() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(LargeStringArray::from(vec![Some(
+                    r#"{"customer-name":{"id":42}}"#,
+                )])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(LargeStringArray::from(vec![Some("$['customer-name'].id")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "42");
     }
 
     #[test]
