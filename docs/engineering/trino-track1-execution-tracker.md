@@ -61,7 +61,11 @@ evidence. The bounded AKS fault-pressure report
 records worker loss, replacement retry, cancellation cleanup, concurrent exact
 results, and bounded pressure on the same three-worker image. A dedicated skew
 qualification and the remaining stale-attempt/lease and failure-path evidence
-are still required before item 1 can move to Complete.
+are still required before item 1 can move to Complete. The focused scheduler
+gate report `docs/qualification/track1-scheduler-gates-2026-10-14.md` records
+the corresponding skew-tail steal, retry, and stale-attempt unit evidence; a
+live AKS fault-injection run is still required before treating those behaviors
+as deployment-qualified.
 
 ## Validation commands
 
