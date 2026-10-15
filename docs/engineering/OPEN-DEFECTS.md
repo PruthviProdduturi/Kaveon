@@ -293,12 +293,73 @@ mojibake in one pass, and leaves names the corrupting write path cannot damage
 again — which is why this repair is permanent while D-42 is still open.
 
 ### D-7 · Engine chart is outside CI/CD
-**open** · long-standing
+**fixed (unverified)** · `.github/workflows/deploy-aks-engine.yml` · the
+workflow has never run; rendering could not be checked locally because Helm is
+not installed on this machine
 
-`infra/helm/kaveon-engine` is not deployed by any workflow, so every change to
-it — including `workers.replicas: 4` and the Trino anti-affinity — has to be
-applied to the cluster by hand, and the cluster can silently disagree with the
-chart.
+`infra/helm/kaveon-engine` was deployed by no workflow, so every change to it —
+`workers.replicas: 4`, the Trino anti-affinity, the node-sized resource limits
+— was applied to the cluster by hand, and the cluster could silently disagree
+with the chart.
+
+**Deliberately not a copy of the platform deploy.** A push renders, lints,
+checks ownership and prints the drift; it does not touch the cluster. Applying
+is a `workflow_dispatch` with `mode: apply`. The coordinator is one replica
+with the catalog on a PVC, it is not HA, running queries do not resume across a
+restart, and this cluster also hosts the benchmark campaign and long
+maintenance jobs — so a push-triggered `helm upgrade` would roll the
+coordinator and every worker whenever anyone edited the chart. The continuous
+half is the drift report; rolling the Engine stays a decision somebody makes.
+
+Authentication, cluster targeting and the `environment: production` gate are
+the platform deploy's: `azure/login@v2` with OIDC, `azure/use-kubelogin@v1`,
+`az aks show` state check, `az aks get-credentials`, `kubelogin
+convert-kubeconfig -l azurecli`.
+
+Four guards, each a thing that has gone wrong before:
+
+- **Adoption (D-30).** Every object the render names is looked up with
+  `kubectl get -f` and must already carry `app.kubernetes.io/managed-by=Helm`
+  plus `meta.helm.sh/release-name=kaveon` and
+  `meta.helm.sh/release-namespace=kaveon`. Anything else is refused up front,
+  with the `kubectl label`/`annotate` commands printed. Checked against the
+  live cluster: all seven objects already carry them, and release `kaveon`
+  exists at revision 1 (`deployed`), so no adoption work is needed. The release
+  was installed by hand on 2026-10-09 from the chart's old name `kaveon-test`,
+  which is why its recorded values are stale — the workflow passes
+  `--reset-values` and supplies everything that matters, so none of them can
+  survive.
+- **Replicas are preserved, not declared.** The live counts are read back and
+  passed through, clamped up to the availability guard's floor. The chart says
+  four workers; the cluster runs three. A deploy that rewrote the count would
+  take a node back from a benchmark round in flight, or restore four during
+  one. Setting them is an explicit input.
+- **The image is preserved.** The digest running on the coordinator is read
+  back and re-pinned, so a chart-only deploy changes no image and the qualified
+  image stays. A new one is an explicit input. The product-transactions
+  account, container and prefix are read back the same way and a change to any
+  of them is refused unless asked for — a prefix one segment short of the
+  catalog is indistinguishable from a new installation.
+- **Restarts are accepted, not discovered.** The rendered pod template is
+  compared field by field against the running one (image, env values and their
+  order, resources, nodeSelector, affinity, volumes) and apply is refused
+  unless `accept_restart` is given, with the differing fields printed.
+  Separately, apply is refused while any non-CronJob Job is active or the
+  benchmark engine is up.
+
+No `--atomic`, unlike the platform deploy: a rollback would roll the
+coordinator and the workers a second time, and a failed upgrade left standing
+can be read and decided on.
+
+**The one decision waiting for a human.** The chart and the cluster disagree
+about the exchange spool. The chart declares `workers.exchange.spool: true` and
+`coordinator.exchange.spool: false`; the cluster runs the inverse
+(`KAVEON_COORDINATOR_EXCHANGE_SPOOL=true`, `KAVEON_WORKER_EXCHANGE_SPOOL=false`
+— the posture release 1 was installed with). That is a behavioural difference,
+not just a restart: it decides whether producers upload straight to the
+consuming worker or the coordinator relays. The first apply flips it and rolls
+every pod, which is why `accept_restart` exists and defaults to off. Decide
+which side is right and make the other match before the first apply.
 
 ### D-8 · ~3.3s product writes
 **open** · long-standing
@@ -448,8 +509,11 @@ cluster runs the single built-in `default` group. A maintenance group with its
 own small `max_concurrent` and share, selected by that tag, is the remaining
 half and is Engine/deploy configuration.
 
-Note the interaction with D-7: the Engine chart is outside CI, so that
-configuration has to be applied by hand today.
+Note the interaction with D-7: the groups live in the coordinator's runtime
+copy, not in the chart, and the chart's `resourceGroups.enabled` must stay off
+for that copy to remain editable. The deploy workflow refuses any render that
+names `KAVEON_RESOURCE_GROUPS` unless the dispatch explicitly asks for the
+takeover, so turning that flag on cannot happen as a side effect of a deploy.
 
 **Applied and measured.** The document in
 `infra/helm/kaveon-engine/examples/resource-groups.maintenance.json` is live as
