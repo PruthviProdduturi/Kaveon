@@ -1881,6 +1881,70 @@ fn arrays_overlap_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(rows))
 }
 
+fn array_join_text<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    delimiter: &ArrayRef,
+    replacement: Option<&ArrayRef>,
+) -> Result<ArrayRef> {
+    let result: StringArray = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) {
+                return Ok(None);
+            }
+            let Some(delimiter) = text_value(delimiter, row)? else {
+                return Ok(None);
+            };
+            let values = list.value(row);
+            let mut joined = String::new();
+            let mut emitted = false;
+            match values.data_type() {
+                DataType::Utf8 => {
+                    let values = values.as_string::<i32>();
+                    for index in 0..values.len() {
+                        let value = if values.is_null(index) {
+                            replacement
+                                .map(|replacement| text_value(replacement, row))
+                                .transpose()?
+                                .flatten()
+                        } else {
+                            Some(values.value(index))
+                        };
+                        let Some(value) = value else { continue };
+                        if emitted { joined.push_str(delimiter); }
+                        joined.push_str(value);
+                        emitted = true;
+                    }
+                }
+                DataType::LargeUtf8 => {
+                    let values = values.as_string::<i64>();
+                    for index in 0..values.len() {
+                        let value = if values.is_null(index) {
+                            replacement
+                                .map(|replacement| text_value(replacement, row))
+                                .transpose()?
+                                .flatten()
+                        } else {
+                            Some(values.value(index))
+                        };
+                        let Some(value) = value else { continue };
+                        if emitted { joined.push_str(delimiter); }
+                        joined.push_str(value);
+                        emitted = true;
+                    }
+                }
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "ARRAY_JOIN does not support list element type {other}"
+                    )));
+                }
+            }
+            Ok(Some(joined))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into();
+    Ok(Arc::new(result))
+}
+
 fn array_position_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -5197,6 +5261,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 })
                 .collect();
             Ok(Arc::new(result))
+        }
+        "ARRAY_JOIN" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(KaveonError::Execution(
+                    "ARRAY_JOIN requires 2 or 3 arguments".into(),
+                ));
+            }
+            let replacement = args.get(2);
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_join_text(list, &args[1], replacement);
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into()))?;
+            array_join_text(list, &args[1], replacement)
         }
         "ARRAY_POSITION" => {
             check_arity(name, args, 2)?;
@@ -15691,6 +15771,34 @@ mod tests {
                 .to_string()
                 .contains("CARDINALITY currently supports ARRAY/List values only")
         );
+    }
+
+    #[test]
+    fn evaluates_array_join_with_null_replacement() {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        builder.values().append_value("a");
+        builder.values().append_null();
+        builder.values().append_value("b");
+        builder.append(true);
+        builder.append(false);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(builder.finish()) as ArrayRef),
+            ("delimiter", Arc::new(StringArray::from(vec![Some(","), Some(",")])) as ArrayRef),
+            ("replacement", Arc::new(StringArray::from(vec![Some("<null>"), Some("<null>")])) as ArrayRef),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ARRAY_JOIN".into(),
+            args: vec![
+                Expr::Column("items".into()),
+                Expr::Column("delimiter".into()),
+                Expr::Column("replacement".into()),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "a,<null>,b");
+        assert!(values.is_null(1));
     }
 
     #[test]
