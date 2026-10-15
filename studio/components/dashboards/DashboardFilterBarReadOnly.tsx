@@ -455,11 +455,11 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
               <>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                   <label className="chart-builder-label" style={{ fontSize: '0.75rem', margin: 0 }}>
-                    Values {editValues.length > 0 && <span style={{ color: '#2563eb', fontWeight: 600 }}>· {editValues.length}</span>}
+                    Values {editValues.length > 0 && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>· {editValues.length}</span>}
                   </label>
                   {editValues.length > 0 && (
                     <button type="button" onClick={() => setEditValues([])}
-                      style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 11 }}>
+                      style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 11 }}>
                       Clear
                     </button>
                   )}

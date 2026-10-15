@@ -28,9 +28,14 @@
  * Row and column tiles keep their overflow visible.
  *
  * A container draws its controls OUTSIDE its own box — the row's toolbar sits
- * at `top: -14px` so it straddles the tile's top edge — and both grow with
- * their children rather than to a fixed height. Clipping them would hide the
- * only toolbar a row has, which is how you delete it.
+ * at `top: -14px` so it straddles the tile's top edge — so clipping them would
+ * hide the only toolbar a row has, which is how you delete it.
+ *
+ * That is why the overlap in D-34 is NOT fixed here. A container used to grow
+ * with its children while its tile kept the height the author gave it, and the
+ * surplus then lay over whatever was below. The tile grows to fit instead — see
+ * the fit-to-content effect in DashboardCanvas.tsx — so there is no surplus to
+ * clip, and `visible` stays safe.
  */
 .tileContainer {
   overflow: visible;
@@ -130,6 +135,18 @@
  * vacated. It is an affordance rather than an action, so it does not belong in
  * the actions cluster, and bottom-left is still clear of the three resize
  * handles (`se` bottom-right, `e` right, `s` bottom-centre).
+ *
+ * Visible at rest, not on hover (D-36). Nesting was reachable only by dragging
+ * off a square that appeared under the pointer and said nothing, so nothing on
+ * the dashboard suggested a tile could go inside a row at all. The same
+ * reasoning as `.remove`: a builder's controls are the point of it. The resting
+ * opacity is the one `.dashboard-component-actions` and `.remove` already use.
+ *
+ * `max-width` is the guard that lets the grip carry words. react-grid-layout's
+ * `s` handle is 20px wide and centred on the tile's bottom edge, so a chip that
+ * reached the middle would sit over it; capping the cluster at half the tile
+ * less 20px keeps it clear even on a two-column tile (two columns measure 178px
+ * on a 1200px canvas, so the cap is 69px and the handle starts at 79px).
  */
 .tileTools {
   position: absolute;
@@ -139,24 +156,27 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  opacity: 0;
+  max-width: calc(50% - 20px);
+  opacity: 0.75;
   transition: opacity 0.15s ease;
 }
 
-/* Revealed by hover, and by keyboard focus anywhere in the tile so it is
-   reachable without a pointer. */
+/* Unmistakable once the tile is under the pointer, and reachable by keyboard
+   focus anywhere in the tile so it does not need one. */
 .tile:hover .tileTools,
 .tile:focus-within .tileTools {
   opacity: 1;
 }
 
 .nest {
-  width: 26px;
+  min-width: 26px;
   height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  gap: 5px;
+  padding: 0 6px;
+  overflow: hidden;
   font-size: 11px;
   color: var(--text-muted);
   background: var(--bg-elevated);
@@ -164,6 +184,30 @@
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+/*
+ * The destination, in words.
+ *
+ * Shown on hover rather than at rest: the icon alone is 26px and cannot reach
+ * the bottom-centre resize handle on any tile, while the label can on the
+ * narrowest ones — and hover is the moment the user is deciding what to do with
+ * that tile. It ellipsises rather than pushing the chip wider, so the cap above
+ * always holds.
+ */
+.nestLabel {
+  display: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile:hover .nestLabel,
+.tile:focus-within .nestLabel {
+  display: inline;
 }
 
 /* "Drag into a row or column." A grip, not a button: it does nothing on click,

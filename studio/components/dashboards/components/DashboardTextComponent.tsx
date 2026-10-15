@@ -12,7 +12,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HexColorPicker, HexColorInput } from 'react-colorful';
 
-// Quick-pick swatches for the text colour popover.
+// Quick-pick swatches for the text colour popover. These are the values a
+// reader stores on the block — data rather than chrome, so they keep literals.
 const COLOR_PRESETS = ['#334155', '#ef4444', '#f59e0b', '#22c55e', '#3b82f6',
   '#8b5cf6', '#ec4899', '#06b6d4', '#64748b', '#ffffff'];
 import type { DashboardComponentProps } from '../../../types/dashboard';
@@ -36,7 +37,7 @@ function parseInline(text: string, key?: string | number): React.ReactNode[] {
     else if (m[1].startsWith('`'))
       nodes.push(<code key={k} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', padding: '1px 5px', borderRadius: 3, fontFamily: 'ui-monospace,monospace', fontSize: '0.88em', color: 'var(--accent)' }}>{m[4]}</code>);
     else if (m[1].startsWith('['))
-      nodes.push(<a key={k} href={m[6]} target={m[6].startsWith('/') ? '_self' : '_blank'} rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline', fontWeight: 600 }}>{parseInline(m[5], k + 'l')}</a>);
+      nodes.push(<a key={k} href={m[6]} target={m[6].startsWith('/') ? '_self' : '_blank'} rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline', fontWeight: 600 }}>{parseInline(m[5], k + 'l')}</a>);
     last = m.index + m[0].length;
   }
   if (last < text.length) nodes.push(text.slice(last));
@@ -230,14 +231,14 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
           <div style={{
             position: 'absolute', top: 4, right: 8, zIndex: 10,
             display: 'flex', alignItems: 'center', gap: 3,
-            background: '#fff', border: '1px solid #e2e8f0',
+            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
             borderRadius: 6, padding: '2px 5px',
             boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
           }}>
             <button onClick={() => { setIsEditing(true); setTab('markdown'); }} style={hoverBtn(false)}>
               <i className="fas fa-pencil-alt" style={{ fontSize: 10 }} /> Edit
             </button>
-            <div style={{ width: 1, height: 14, background: '#e2e8f0' }} />
+            <div style={{ width: 1, height: 14, background: 'var(--border)' }} />
             <button onClick={() => setConfirmOpen(true)} style={hoverBtn(true)}>
               <i className="fas fa-trash" />
             </button>
@@ -251,14 +252,14 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
             {/* Row 1: tabs + formatting toolbar + style controls + Done */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               {/* Markdown / Preview tabs */}
-              <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: 5, padding: 2, gap: 2 }}>
+              <div style={{ display: 'flex', background: 'var(--bg-hover)', borderRadius: 5, padding: 2, gap: 2 }}>
                 {(['markdown', 'preview'] as const).map(t => (
                   <button key={t} onClick={() => setTab(t)} style={{
                     padding: '2px 9px', fontSize: 11, fontWeight: 600,
-                    background: tab === t ? '#fff' : 'transparent',
-                    border: tab === t ? '1px solid #e2e8f0' : '1px solid transparent',
+                    background: tab === t ? 'var(--bg-elevated)' : 'transparent',
+                    border: tab === t ? '1px solid var(--border)' : '1px solid transparent',
                     borderRadius: 4, cursor: 'pointer',
-                    color: tab === t ? '#1e293b' : '#64748b',
+                    color: tab === t ? 'var(--text-primary)' : 'var(--text-secondary)',
                     boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                   }}>{t === 'markdown' ? 'Markdown' : 'Preview'}</button>
                 ))}
@@ -266,14 +267,14 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
 
               {/* Formatting buttons */}
               {tab === 'markdown' && (
-                <div style={{ display: 'flex', gap: 1, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 5, padding: '1px 3px' }}>
+                <div style={{ display: 'flex', gap: 1, background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: 5, padding: '1px 3px' }}>
                   {TOOLBAR.map(tb => (
                     <button
                       key={tb.title}
                       title={tb.title}
                       onMouseDown={e => { e.preventDefault(); applyFmt(tb.fn); }}
-                      style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 10, color: '#475569' }}
-                      onMouseOver={e => { e.currentTarget.style.background = '#e2e8f0'; }}
+                      style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', borderRadius: 3, cursor: 'pointer', fontSize: 10, color: 'var(--text-secondary)' }}
+                      onMouseOver={e => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
                       onMouseOut={e  => { e.currentTarget.style.background = 'transparent'; }}
                     >
                       <i className={tb.icon} />
@@ -283,7 +284,7 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
               )}
 
               {/* Separator */}
-              <div style={{ width: 1, height: 20, background: '#e2e8f0' }} />
+              <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
 
               {/* Alignment */}
               <div style={{ display: 'flex', gap: 1 }}>
@@ -292,7 +293,7 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                     key={a.val}
                     title={a.val}
                     onClick={() => setAlignment(a.val)}
-                    style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 10, borderRadius: 3, background: alignment === a.val ? '#dbeafe' : 'transparent', border: alignment === a.val ? '1px solid #93c5fd' : '1px solid transparent', color: alignment === a.val ? '#2563eb' : '#64748b' }}
+                    style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 10, borderRadius: 3, background: alignment === a.val ? 'rgba(var(--accent-rgb), 0.10)' : 'transparent', border: alignment === a.val ? '1px solid rgba(var(--accent-rgb), 0.45)' : '1px solid transparent', color: alignment === a.val ? 'var(--accent)' : 'var(--text-secondary)' }}
                   >
                     <i className={a.icon} />
                   </button>
@@ -303,7 +304,7 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
               <select
                 value={fontSize}
                 onChange={e => setFontSize(Number(e.target.value))}
-                style={{ height: 22, fontSize: 11, border: '1px solid #e2e8f0', borderRadius: 4, padding: '0 2px', background: '#fff', color: '#475569', cursor: 'pointer' }}
+                style={{ height: 22, fontSize: 11, border: '1px solid var(--border)', borderRadius: 4, padding: '0 2px', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', cursor: 'pointer' }}
               >
                 {FONT_SIZES.map(s => <option key={s} value={s}>{s}px</option>)}
               </select>
@@ -313,22 +314,23 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                 <button
                   title="Text colour"
                   onClick={() => setShowColor(v => !v)}
-                  style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: '1px solid #e2e8f0', borderRadius: 4, cursor: 'pointer', padding: 0 }}
+                  style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer', padding: 0 }}
                 >
                   <span style={{ width: 14, height: 14, borderRadius: 3, background: effColor, border: '1px solid rgba(0,0,0,0.15)', display: 'block' }} />
                 </button>
                 {showColor && (
-                  <div className="dtc-color-pop" style={{ position: 'absolute', top: 28, left: 0, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.20)', borderRadius: 10, border: '1px solid #e2e8f0', background: '#fff', padding: 10, width: 196 }}>
+                  <div className="dtc-color-pop" style={{ position: 'absolute', top: 28, left: 0, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.20)', borderRadius: 10, border: '1px solid var(--border)', background: 'var(--bg-elevated)', padding: 10, width: 196 }}>
+                    {/* Seed/default for the picker is the stored colour, not chrome. */}
                     <HexColorPicker color={color || (isDark ? '#e2e8f0' : '#334155')} onChange={setColor} style={{ width: '100%', height: 128 }} />
                     {/* selected value + hex input */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9 }}>
                       <span style={{ width: 20, height: 20, borderRadius: 5, background: effColor, border: '1px solid rgba(0,0,0,0.15)', flexShrink: 0 }} />
-                      <span style={{ fontSize: 12, color: '#94a3b8' }}>#</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>#</span>
                       <HexColorInput
                         color={color || (isDark ? '#e2e8f0' : '#334155')}
                         onChange={setColor}
                         prefixed={false}
-                        style={{ flex: 1, minWidth: 0, fontSize: 11.5, padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: 5, textTransform: 'uppercase', color: '#334155', outline: 'none', letterSpacing: 0.5 }}
+                        style={{ flex: 1, minWidth: 0, fontSize: 11.5, padding: '4px 6px', border: '1px solid var(--border)', borderRadius: 5, textTransform: 'uppercase', color: 'var(--text-primary)', outline: 'none', letterSpacing: 0.5 }}
                       />
                     </div>
                     {/* one-click presets */}
@@ -339,14 +341,14 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                           onClick={() => setColor(c)}
                           title={c}
                           style={{ width: 20, height: 20, borderRadius: 5, background: c, cursor: 'pointer', padding: 0,
-                            border: color.toLowerCase() === c.toLowerCase() ? '2px solid #2563eb' : '1px solid rgba(0,0,0,0.15)' }}
+                            border: color.toLowerCase() === c.toLowerCase() ? '2px solid var(--accent)' : '1px solid rgba(0,0,0,0.15)' }}
                         />
                       ))}
                     </div>
                     {/* reset to theme */}
                     <button
                       onClick={() => setColor('')}
-                      style={{ marginTop: 9, width: '100%', fontSize: 11, padding: '5px 0', background: color ? '#f1f5f9' : '#e0edff', border: '1px solid ' + (color ? '#e2e8f0' : '#93c5fd'), borderRadius: 5, cursor: 'pointer', color: color ? '#475569' : '#2563eb', fontWeight: 600 }}
+                      style={{ marginTop: 9, width: '100%', fontSize: 11, padding: '5px 0', background: color ? 'var(--bg-hover)' : 'rgba(var(--accent-rgb), 0.10)', border: '1px solid ' + (color ? 'var(--border)' : 'rgba(var(--accent-rgb), 0.45)'), borderRadius: 5, cursor: 'pointer', color: color ? 'var(--text-secondary)' : 'var(--accent)', fontWeight: 600 }}
                     >
                       {color ? 'Auto (theme colour)' : '✓ Auto (theme colour)'}
                     </button>
@@ -354,10 +356,10 @@ const DashboardTextComponent: React.FC<DashboardComponentProps> = ({ item, isEdi
                 )}
               </div>
 
-              {/* Done button */}
+              {/* Done button — '#fff' on the accent fill is correct in both themes */}
               <button
                 onMouseDown={e => { e.preventDefault(); commit(); }}
-                style={{ marginLeft: 'auto', padding: '2px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+                style={{ marginLeft: 'auto', padding: '2px 12px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
               >
                 Done
               </button>
@@ -429,7 +431,7 @@ function hoverBtn(danger: boolean): React.CSSProperties {
     padding: danger ? '2px 6px' : '2px 8px',
     background: 'transparent', border: '1px solid transparent',
     borderRadius: 4, cursor: 'pointer', fontSize: 11,
-    color: danger ? '#ef4444' : '#475569', fontWeight: 500,
+    color: danger ? 'var(--danger, #ef4444)' : 'var(--text-secondary)', fontWeight: 500,
   };
 }
 

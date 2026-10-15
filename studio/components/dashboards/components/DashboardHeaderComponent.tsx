@@ -31,6 +31,8 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
   const [content,     setContent]     = useState(item.headerConfig?.content   || '');
   const [size,        setSize]        = useState(item.headerConfig?.size       || 'large');
   const [alignment,   setAlignment]   = useState<'left'|'center'|'right'>(item.headerConfig?.alignment || 'left');
+  // The header's colour is the block's own stored setting, which an author
+  // picks and can change — data rather than chrome, so it keeps a literal.
   const [color,       setColor]       = useState(item.headerConfig?.color      || '#0f172a');
   const [isEditing,   setIsEditing]   = useState(false);
   const [hovered,     setHovered]     = useState(false);
@@ -45,7 +47,7 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
     setContent(item.headerConfig?.content   || '');
     setSize(item.headerConfig?.size          || 'large');
     setAlignment(item.headerConfig?.alignment || 'left');
-    setColor(item.headerConfig?.color         || '#0f172a');
+    setColor(item.headerConfig?.color         || '#0f172a'); // stored block data, not chrome
   }, [item.headerConfig?.content, item.headerConfig?.size, item.headerConfig?.alignment, item.headerConfig?.color]);
 
   useEffect(() => {
@@ -102,7 +104,7 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
             style={{
               position: 'absolute', top: 0, right: 8, zIndex: 20,
               display: 'flex', alignItems: 'center', gap: 2,
-              background: '#fff', border: '1px solid #e2e8f0',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
               borderRadius: 7, padding: '3px 6px',
               boxShadow: '0 3px 10px rgba(0,0,0,0.10)',
             }}
@@ -116,18 +118,18 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
                 style={{
                   width: 26, height: 24,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: size === o.value ? '#eff6ff' : 'transparent',
-                  border: size === o.value ? '1px solid #93c5fd' : '1px solid transparent',
+                  background: size === o.value ? 'rgba(var(--accent-rgb), 0.10)' : 'transparent',
+                  border: size === o.value ? '1px solid rgba(var(--accent-rgb), 0.45)' : '1px solid transparent',
                   borderRadius: 4, cursor: 'pointer',
                   fontSize: 10, fontWeight: 800,
-                  color: size === o.value ? '#2563eb' : '#64748b',
+                  color: size === o.value ? 'var(--accent)' : 'var(--text-secondary)',
                 }}
               >
                 {o.label}
               </button>
             ))}
 
-            <div style={{ width: 1, height: 16, background: '#e2e8f0', margin: '0 2px' }} />
+            <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 2px' }} />
 
             {/* Alignment */}
             {ALIGNMENTS.map(a => (
@@ -138,17 +140,17 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
                 style={{
                   width: 24, height: 24,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: alignment === a.val ? '#eff6ff' : 'transparent',
-                  border: alignment === a.val ? '1px solid #93c5fd' : '1px solid transparent',
+                  background: alignment === a.val ? 'rgba(var(--accent-rgb), 0.10)' : 'transparent',
+                  border: alignment === a.val ? '1px solid rgba(var(--accent-rgb), 0.45)' : '1px solid transparent',
                   borderRadius: 4, cursor: 'pointer', fontSize: 10,
-                  color: alignment === a.val ? '#2563eb' : '#64748b',
+                  color: alignment === a.val ? 'var(--accent)' : 'var(--text-secondary)',
                 }}
               >
                 <i className={a.icon} />
               </button>
             ))}
 
-            <div style={{ width: 1, height: 16, background: '#e2e8f0', margin: '0 2px' }} />
+            <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 2px' }} />
 
             {/* Colour swatch */}
             <div ref={colorRef} style={{ position: 'relative' }}>
@@ -158,18 +160,20 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
                 style={{
                   width: 24, height: 24,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'transparent', border: '1px solid #e2e8f0',
+                  background: 'transparent', border: '1px solid var(--border)',
                   borderRadius: 4, cursor: 'pointer', padding: 0,
                 }}
               >
+                {/* the swatch shows the stored colour; its hairline is a neutral contrast ring over arbitrary user colour, so it stays literal */}
                 <span style={{ width: 14, height: 14, borderRadius: 3, background: color, border: '1px solid rgba(0,0,0,0.18)', display: 'block' }} />
               </button>
               {showColor && (
-                <div style={{ position: 'absolute', top: 28, right: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.15)', borderRadius: 8, overflow: 'hidden', border: '1px solid #e2e8f0', background: '#fff', padding: 8 }}>
+                <div style={{ position: 'absolute', top: 28, right: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.15)', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', background: 'var(--bg-elevated)', padding: 8 }}>
                   <HexColorPicker color={color} onChange={changeColor} />
+                  {/* color stays literal white: it is the foreground on an accent fill, correct in both themes */}
                   <button
                     onClick={() => { setShowColor(false); commitColor(); }}
-                    style={{ width: '100%', marginTop: 8, padding: '4px 0', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                    style={{ width: '100%', marginTop: 8, padding: '4px 0', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
                   >
                     Apply
                   </button>
@@ -177,7 +181,7 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
               )}
             </div>
 
-            <div style={{ width: 1, height: 16, background: '#e2e8f0', margin: '0 2px' }} />
+            <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 2px' }} />
 
             {/* Delete */}
             <button
@@ -187,9 +191,9 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
                 width: 24, height: 24,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: 'transparent', border: '1px solid transparent',
-                borderRadius: 4, cursor: 'pointer', color: '#ef4444', fontSize: 11,
+                borderRadius: 4, cursor: 'pointer', color: 'var(--danger, #ef4444)', fontSize: 11,
               }}
-              onMouseOver={e => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.borderColor = '#fecaca'; }}
+              onMouseOver={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.10)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.45)'; }}
               onMouseOut={e  => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; }}
             >
               <i className="fas fa-trash" />
@@ -213,7 +217,7 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
               textAlign: alignment,
               background: 'transparent',
               border: 'none',
-              borderBottom: '2px solid #2563eb',
+              borderBottom: '2px solid var(--accent)',
               outline: 'none',
               fontFamily: 'inherit',
               padding: '2px 0',
@@ -235,7 +239,7 @@ const DashboardHeaderComponent: React.FC<DashboardComponentProps> = ({ item, isE
             }}
           >
             {content || (isEditMode
-              ? <span style={{ color: '#94a3b8', fontWeight: 400, fontSize: 14 }}>Click to add header…</span>
+              ? <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 14 }}>Click to add header…</span>
               : ''
             )}
           </div>

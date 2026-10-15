@@ -165,7 +165,11 @@ interface DashboardContextState {
   // Actions - Nested container management
   findItem: (itemId: string) => DashboardLayoutItem | null;
   getItemDepth: (itemId: string) => number;
-  addItemToContainer: (containerId: string, type: ComponentType, config?: Partial<DashboardLayoutItem>) => void;
+  /**
+   * Add a new item to a container, at `index` among its children (appended
+   * when omitted) — the position a drop indicator showed the user.
+   */
+  addItemToContainer: (containerId: string, type: ComponentType, config?: Partial<DashboardLayoutItem>, index?: number) => void;
   removeItemFromContainer: (containerId: string, itemId: string) => void;
   /** Whether a drop of `itemId` into `targetContainerId` would be accepted. */
   canMoveItemToContainer: (itemId: string, targetContainerId: string) => boolean;
@@ -519,9 +523,13 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
    * @param containerId ID of the container (row/column)
    * @param type Type of component to add
    * @param config Optional configuration overrides
+   * @param index Optional insertion index among the container's children;
+   *              appended when omitted. The drop surfaces resolve this from the
+   *              pointer, so a palette entry can be dropped BETWEEN two
+   *              existing children (D-37) rather than only at the end.
    */
   const addItemToContainer = useCallback(
-    (containerId: string, type: ComponentType, config?: Partial<DashboardLayoutItem>) => {
+    (containerId: string, type: ComponentType, config?: Partial<DashboardLayoutItem>, index?: number) => {
       const container = findItem(containerId);
       if (!container) {
         console.error(`Container ${containerId} not found`);
@@ -566,7 +574,15 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         const updateContainerChildren = (items: DashboardLayoutItem[]): DashboardLayoutItem[] => {
           return items.map((item) => {
             if (item.i === containerId) {
-              const updatedChildren = [...(item.children || []), newItem];
+              const existing = item.children || [];
+              const at = index === undefined
+                ? existing.length
+                : Math.max(0, Math.min(existing.length, index));
+              const updatedChildren = [
+                ...existing.slice(0, at),
+                newItem,
+                ...existing.slice(at),
+              ];
               return {
                 ...item,
                 children: redistributeRowChildren(item, updatedChildren),
@@ -655,7 +671,11 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
    * @param itemId ID of the item to move
    * @param targetContainerId ID of the target container
    * @param index Optional insertion index among the container's children;
-   *              appended when omitted
+   *              appended when omitted. Applied AFTER the item has been lifted
+   *              out, which matters only when it is already a child of the
+   *              target: a caller reordering within one container has to drop
+   *              the index by one for any boundary below the item's current
+   *              place. `useContainerDropTarget` does exactly that.
    */
   const moveItemToContainer = useCallback(
     (itemId: string, targetContainerId: string, index?: number) => {

@@ -462,6 +462,8 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
         newLayoutItem.dividerConfig = {
           orientation: 'horizontal',
           thickness: 1,
+          // The divider's colour is the block's own stored setting a reader can
+          // change — data rather than chrome, so it keeps a literal value.
           color: '#cbd5e1',
           style: 'solid',
         };
@@ -611,7 +613,7 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
       {/* Tab content */}
       <div className="dashboard-tabs-content">
         {activeTab ? (
-          <div style={{ minHeight: 400, background: '#f8fafc', borderRadius: 8, padding: 16, position: 'relative' }}>
+          <div style={{ minHeight: 400, background: 'var(--bg-hover)', borderRadius: 8, padding: 16, position: 'relative' }}>
             {/* Add content button (edit mode only) */}
             {isEditMode && (
               <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
@@ -622,7 +624,8 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                   }}
                   style={{
                     padding: '8px 16px',
-                    background: '#2563eb',
+                    background: 'var(--accent)',
+                    // Foreground on the accent fill: white is correct in both themes.
                     color: '#ffffff',
                     border: 'none',
                     borderRadius: 6,
@@ -645,8 +648,8 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                       top: '100%',
                       right: 0,
                       marginTop: 8,
-                      background: '#ffffff',
-                      border: '1px solid #e2e8f0',
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border)',
                       borderRadius: 8,
                       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
                       minWidth: 250,
@@ -656,8 +659,8 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                     }}
                   >
                     {/* Charts section */}
-                    <div style={{ padding: '12px 16px', borderBottom: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8 }}>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
                         CHARTS
                       </div>
                       {charts.length > 0 ? (
@@ -675,10 +678,10 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                               textAlign: 'left',
                               cursor: 'pointer',
                               fontSize: 13,
-                              color: '#334155',
+                              color: 'var(--text-primary)',
                               marginBottom: 4,
                             }}
-                            onMouseOver={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                            onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
                             onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                           >
                             <i className="fas fa-chart-bar" style={{ marginRight: 8, width: 16 }} />
@@ -686,7 +689,7 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                           </button>
                         ))
                       ) : (
-                        <div style={{ fontSize: 12, color: '#94a3b8', padding: '8px 12px' }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '8px 12px' }}>
                           No charts available
                         </div>
                       )}
@@ -694,7 +697,7 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
 
                     {/* Components section */}
                     <div style={{ padding: '12px 16px' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
                         COMPONENTS
                       </div>
                       {[
@@ -715,10 +718,10 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                             textAlign: 'left',
                             cursor: 'pointer',
                             fontSize: 13,
-                            color: '#334155',
+                            color: 'var(--text-primary)',
                             marginBottom: 4,
                           }}
-                          onMouseOver={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
                           onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                         >
                           <i className={`fas ${comp.icon}`} style={{ marginRight: 8, width: 16 }} />
@@ -772,7 +775,7 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
                 )}
               </div>
             ) : (
-              <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 <i className="fas fa-layer-group" style={{ fontSize: 32, marginBottom: 12 }} />
                 <p>This tab is empty</p>
                 {isEditMode && (
@@ -784,7 +787,7 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
             )}
           </div>
         ) : (
-          <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
             No tab selected
           </div>
         )}

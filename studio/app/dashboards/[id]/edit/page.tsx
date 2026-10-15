@@ -149,14 +149,14 @@ const DashboardEditPage: React.FC = () => {
     return (
       <div className="page-shell page-shell-wide">
         <div style={{ padding: 40, textAlign: "center" }}>
-          <i className="fas fa-exclamation-circle" style={{ fontSize: 32, color: "#ef4444" }} />
-          <div style={{ marginTop: 16, color: "#64748b" }}>{error}</div>
+          <i className="fas fa-exclamation-circle" style={{ fontSize: 32, color: "var(--danger, #ef4444)" }} />
+          <div style={{ marginTop: 16, color: "var(--text-secondary)" }}>{error}</div>
           <button
             onClick={() => router.push("/dashboards")}
             style={{
               marginTop: 16,
               padding: "8px 16px",
-              background: "#2563eb",
+              background: "var(--accent)",
               color: "#ffffff",
               border: "none",
               borderRadius: 6,

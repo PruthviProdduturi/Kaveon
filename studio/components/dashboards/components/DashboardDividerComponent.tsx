@@ -21,6 +21,8 @@ const DashboardDividerComponent: React.FC<DashboardComponentProps> = ({
 }) => {
   const cfg       = item.dividerConfig;
   const lineStyle = (cfg?.style as LineStyle) || 'solid';
+  // A divider's colour is the block's own stored setting, which an author can
+  // change — data rather than chrome, so it keeps a literal default.
   const color     = cfg?.color     || '#e2e8f0';
   const thickness = cfg?.thickness ?? 1;
 
@@ -43,7 +45,7 @@ const DashboardDividerComponent: React.FC<DashboardComponentProps> = ({
           alignItems: 'center',
           padding: '0 8px',
           boxSizing: 'border-box',
-          outline: isEditMode && hovered ? '1px dashed #cbd5e1' : 'none',
+          outline: isEditMode && hovered ? '1px dashed var(--border)' : 'none',
           borderRadius: 4,
           transition: 'outline 0.1s',
         }}
@@ -68,8 +70,8 @@ const DashboardDividerComponent: React.FC<DashboardComponentProps> = ({
               display: 'flex',
               alignItems: 'center',
               gap: 4,
-              background: '#fff',
-              border: '1px solid #e2e8f0',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
               borderRadius: 6,
               padding: '3px 6px',
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
@@ -90,8 +92,8 @@ const DashboardDividerComponent: React.FC<DashboardComponentProps> = ({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    background: active ? '#eff6ff' : 'transparent',
-                    border: active ? '1px solid #bfdbfe' : '1px solid transparent',
+                    background: active ? 'rgba(var(--accent-rgb), 0.10)' : 'transparent',
+                    border: active ? '1px solid rgba(var(--accent-rgb), 0.45)' : '1px solid transparent',
                     borderRadius: 4,
                     cursor: 'pointer',
                     padding: 0,
@@ -100,13 +102,13 @@ const DashboardDividerComponent: React.FC<DashboardComponentProps> = ({
                   <div style={{
                     width: 16,
                     height: 0,
-                    borderTop: `2px ${s} ${active ? '#2563eb' : '#94a3b8'}`,
+                    borderTop: `2px ${s} ${active ? 'var(--accent)' : 'var(--text-muted)'}`,
                   }} />
                 </button>
               );
             })}
 
-            <div style={{ width: 1, height: 14, background: '#e2e8f0', margin: '0 2px' }} />
+            <div style={{ width: 1, height: 14, background: 'var(--border)', margin: '0 2px' }} />
 
             {/* Delete button */}
             <button
@@ -122,13 +124,13 @@ const DashboardDividerComponent: React.FC<DashboardComponentProps> = ({
                 border: '1px solid transparent',
                 borderRadius: 4,
                 cursor: 'pointer',
-                color: '#ef4444',
+                color: 'var(--danger, #ef4444)',
                 fontSize: 11,
                 padding: 0,
               }}
               onMouseOver={(e) => {
-                e.currentTarget.style.background = '#fef2f2';
-                e.currentTarget.style.borderColor = '#fecaca';
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.10)';
+                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.45)';
               }}
               onMouseOut={(e) => {
                 e.currentTarget.style.background = 'transparent';

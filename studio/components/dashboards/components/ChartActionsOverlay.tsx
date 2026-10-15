@@ -233,7 +233,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
             position: 'absolute',
             top: 36, right: 6,
             zIndex: 100,
-            background: '#fff',
+            background: 'var(--bg-elevated)',
             border: '1px solid var(--border)',
             borderRadius: 8,
             boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
@@ -259,14 +259,14 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                   background: 'transparent',
                   border: 'none', cursor: item.disabled ? 'default' : 'pointer',
                   fontSize: 13,
-                  color: item.danger ? '#ef4444' : item.disabled ? 'var(--text-faint)' : 'var(--text-primary)',
+                  color: item.danger ? 'var(--danger, #ef4444)' : item.disabled ? 'var(--text-faint)' : 'var(--text-primary)',
                   textAlign: 'left',
                   whiteSpace: 'nowrap',
                 }}
                 onMouseOver={(e) => { if (!item.disabled) e.currentTarget.style.background = item.danger ? 'rgba(239,68,68,0.1)' : 'var(--bg-hover)'; }}
                 onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
               >
-                <i className={item.icon} style={{ fontSize: 12, width: 14, textAlign: 'center', color: item.danger ? '#ef4444' : item.disabled ? 'var(--text-faint)' : 'var(--text-muted)' }} />
+                <i className={item.icon} style={{ fontSize: 12, width: 14, textAlign: 'center', color: item.danger ? 'var(--danger, #ef4444)' : item.disabled ? 'var(--text-faint)' : 'var(--text-muted)' }} />
                 {item.label}
               </button>
             );
@@ -365,7 +365,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                       <span style={{ fontSize: 12.5, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         <strong>{shortCol(f.column)}</strong> {f.operator} {f.value}
                       </span>
-                      <button onClick={() => removeChartFilter(f.id)} title="Remove" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: 12 }}><i className="fas fa-trash" /></button>
+                      <button onClick={() => removeChartFilter(f.id)} title="Remove" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger, #ef4444)', fontSize: 12 }}><i className="fas fa-trash" /></button>
                     </div>
                   ))}
                 </div>
@@ -395,7 +395,10 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
                 <datalist id="cf-val-options">
                   {cfValOpts.map((v, i) => <option key={i} value={v} />)}
                 </datalist>
-                <button onClick={addChartFilter} disabled={!cfCol} style={{ padding: '7px 14px', background: cfCol ? '#2563eb' : '#94a3b8', border: 'none', borderRadius: 8, color: '#fff', fontWeight: 600, fontSize: 13, cursor: cfCol ? 'pointer' : 'default' }}>Add</button>
+                {/* The disabled fill stays a literal grey: it is a background, and no
+                    surface token reads as "inert" in both themes. White on the accent
+                    fill is correct in both themes, so it stays a literal too. */}
+                <button onClick={addChartFilter} disabled={!cfCol} style={{ padding: '7px 14px', background: cfCol ? 'var(--accent)' : '#94a3b8', border: 'none', borderRadius: 8, color: '#fff', fontWeight: 600, fontSize: 13, cursor: cfCol ? 'pointer' : 'default' }}>Add</button>
               </div>
 
               {ignoreCandidates.length > 0 && (
@@ -491,7 +494,7 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-surface)', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.4)', padding: '28px 28px 24px', width: 380, maxWidth: 'calc(100vw - 32px)' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 12 }}>
               <div style={{ width: 38, height: 38, borderRadius: 10, flexShrink: 0, background: 'rgba(239,68,68,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <i className="fas fa-trash-alt" style={{ fontSize: 16, color: '#ef4444' }} />
+                <i className="fas fa-trash-alt" style={{ fontSize: 16, color: 'var(--danger, #ef4444)' }} />
               </div>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>Remove chart</div>

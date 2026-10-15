@@ -246,25 +246,25 @@
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
 }
 
-/* The chart-picker dialog paints its own light surface, so the picker inside it
-   matches that surface rather than the app theme. */
+/* The wider picker variant used inside the chart-picker dialog. The dialog is a
+   themed surface, so this follows the same tokens as .datasetSelect above. */
 .datasetSelectDialog {
   box-sizing: border-box;
   flex-shrink: 0;
   max-width: 220px;
   padding: 8px 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;
   font-family: inherit;
   outline: none;
-  background: #fff;
-  color: #334155;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .datasetSelectDialog:focus {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
