@@ -196,13 +196,19 @@ export function ConfirmModal({
             disabled={busy}
             style={{
               padding: '8px 18px',
-              background: danger ? 'var(--error)' : 'var(--accent)',
+              // Fill tokens, not ink tokens. `--error` and `--accent` were
+              // both chosen as text colours: white on dark's `--error`
+              // measures 2.77:1 and on `--accent` 2.86:1, so the confirm
+              // button -- the one that destroys something -- had the least
+              // legible label in the dialog. These two carry white at
+              // 5.74:1 and 5.17:1 in both themes.
+              background: danger ? 'var(--danger-strong)' : 'var(--accent-strong)',
               border: 'none',
               borderRadius: 7,
               cursor: busy ? 'progress' : 'pointer',
               fontSize: 13,
               fontWeight: 600,
-              color: '#fff',
+              color: 'var(--on-accent)',
               fontFamily: 'inherit',
               display: 'flex',
               alignItems: 'center',
@@ -212,10 +218,10 @@ export function ConfirmModal({
             onMouseOver={(e) => {
               if (busy) return;
               e.currentTarget.style.background = danger
-                ? 'color-mix(in srgb, var(--error) 86%, black)'
-                : 'var(--accent-dark)';
+                ? 'color-mix(in srgb, var(--danger-strong) 86%, black)'
+                : 'var(--accent-strong-deep)';
             }}
-            onMouseOut={(e) => { e.currentTarget.style.background = danger ? 'var(--error)' : 'var(--accent)'; }}
+            onMouseOut={(e) => { e.currentTarget.style.background = danger ? 'var(--danger-strong)' : 'var(--accent-strong)'; }}
           >
             {busy && <i className="fas fa-spinner fa-spin" aria-hidden="true" />}
             {confirmLabel}

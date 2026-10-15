@@ -1020,9 +1020,9 @@
 /* Edit button keeps blue */
 [data-theme="dark"] button[style*="background: #2563eb"],
 [data-theme="dark"] button[style*="background:#2563eb"] {
-  background: var(--accent) !important;
-  border-color: var(--accent) !important;
-  color: #fff !important;
+  background: var(--accent-strong) !important;
+  border-color: var(--accent-strong) !important;
+  color: var(--on-accent) !important;
 }
 
 /* ─── Star / favorite button ─── */

@@ -1,5 +1,47 @@
 # Decision log
 
+### The brand accent is an identity colour, not a label-bearing fill
+
+- **Decision (2026-10-15).** `--accent` keeps its value and its role. Two new
+  tokens carry white text instead: `--accent-strong` and `--accent-strong-deep`
+  for a brand fill, `--danger-strong` for a destructive one, with `--on-accent`
+  naming the label. All four are declared on bare `:root` and deliberately have
+  no dark-theme override, because the contrast between a label and the fill it
+  sits on does not depend on what is behind the fill.
+- **Why it was a decision and not a fix.** Every primary button in the product
+  put white on the identity accent, and no pairing of the existing tokens
+  passes: white on `--accent` measures 2.86:1 and on `--accent-dark` 4.22:1,
+  against the 4.5:1 a label needs. The gradient those buttons use runs between
+  exactly those two values, so the worst text in the interface was on the
+  control a user is most expected to press. Darkening `--accent` itself would
+  have fixed them and changed every border, focus ring and tint built from the
+  same token; putting dark ink on the accent instead, as the catalog does,
+  changes what a primary button looks like. Adding a fill token changes
+  neither.
+- **How the values were chosen.** They are the same blue, not a different one:
+  hue 208 and saturation 0.68 held fixed from `#4A9EE8`, value taken down until
+  white clears. `#3571a6` carries white at 5.17:1 and `#2d608c` at 6.64:1, so
+  the gradient passes at its lighter end, which is the end that binds. Light
+  `--danger` (`#dc2626`) already carried white at 4.83:1; dark's (`#f87171`)
+  managed 2.77:1, because that red was chosen as text on a dark ground and a
+  confirm button used it as a surface -- `#c81e1e` carries white at 5.74:1 in
+  both themes.
+- **Evidence.** 15 surfaces changed: 11 gradient sites and one flat badge in
+  `studio/styles/globals.css`, `.btn-primary` in `studio/app/globals.css`, one
+  dark-theme override in `studio/styles/dashboard.css`, and `ConfirmModal`'s
+  confirm button. Ratios were measured against the real grounds, not `#ffffff`
+  -- the earlier mistake that put `--text-muted` at 4.52:1 on paper and 4.22:1
+  on `--bg-primary`. A grep for white on an ink token across the three imported
+  sheets now returns nothing; all three parse at brace depth 0; `tsc` is clean.
+- **Consequence.** `--accent` is now for identity and non-text use -- borders,
+  rings, tints, icon glyphs on neutral ground. Anything that places text on a
+  brand or destructive fill must use the `-strong` pair and `--on-accent`, and
+  a new fill colour needs its ratio measured and recorded beside it. Still open
+  and still a brand decision: `--accent` cannot carry link text either (2.67:1
+  on `--bg-primary`), which is why `.link-button` is a bordered control rather
+  than a coloured link.
+
+
 ### Claude took the open Engine defects on architect instruction
 
 - **Decision (2026-10-15).** The architect instructed Claude to fix the Engine
