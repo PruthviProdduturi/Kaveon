@@ -407,3 +407,13 @@ cross-product. The final composite probe returns only the two matching pairs,
 and the partitioned join suite passes 45 tests with one pre-existing ignored
 case. A clean committed checkout also requires the `ScanOperator` predicate
 forwarding import, which is included in the same fix.
+
+## Clean-checkout compatibility gate — 2026-10-15
+
+A clean worktree at the release branch was compiled and tested after repairing
+the staged-source serialization defects. The workspace passed 74 core, 211
+SQL, 85 planner/runtime, 367 execution, 57 CLI, 394 server, 159 SQL, and 121
+storage tests, with only the recorded ignored cases. The gate includes
+`JSON_ARRAY_GET` (including negative indexes and `TRY`), JSON query/value
+scalar-vs-container behavior, Decimal128 JSON needles, and the composite
+partitioned-join regression.

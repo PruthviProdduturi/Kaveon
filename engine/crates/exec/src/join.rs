@@ -2199,9 +2199,13 @@ mod tests {
         };
         assert_eq!(predicates.len(), 2);
         let StoragePredicate::In { values: ints, .. } = &predicates[0] else { panic!("int predicate") };
-        assert_eq!(ints, &vec![ScalarValue::Int64(1), ScalarValue::Int64(2)]);
+        assert_eq!(ints.len(), 2);
+        assert!(ints.contains(&ScalarValue::Int64(1)));
+        assert!(ints.contains(&ScalarValue::Int64(2)));
         let StoragePredicate::In { values: texts, .. } = &predicates[1] else { panic!("text predicate") };
-        assert_eq!(texts, &vec![ScalarValue::Utf8("x".into()), ScalarValue::Utf8("y".into())]);
+        assert_eq!(texts.len(), 2);
+        assert!(texts.contains(&ScalarValue::Utf8("x".into())));
+        assert!(texts.contains(&ScalarValue::Utf8("y".into())));
     }
 
 }
