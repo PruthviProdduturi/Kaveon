@@ -74,6 +74,8 @@ main.main-lab {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
   .feature-card {
     background: var(--bg-elevated);
     border-radius: 14px;
@@ -374,6 +376,12 @@ main.main-lab {
     font-size: 0.8rem;
     color: var(--text-secondary);
   }
+/* The selector here was lost, which is what hid the break: the closing
+   brace below was silently closing `main.main-lab` instead, leaving every
+   rule from `.feature-card` down nested inside it and scoped to SQL Lab.
+   These declarations belong to the title of an empty page, which sits
+   immediately above `.page-empty-body`. */
+.page-empty-title {
   font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
