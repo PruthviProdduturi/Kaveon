@@ -62,3 +62,9 @@ The same pass found a result-boundary defect for Arrow's `Null` type. Commit
 rebuilt Docker coordinator now returns `[[null]]` for `SELECT NULL`. The full
 workspace gate was rerun after this change: all targets passed, including 389
 server tests, 148 SQL tests, and the differential sweep.
+
+The next probe found that direct typed date literals were exposed as internal
+day numbers. The projection path now preserves the `Date32` type while keeping
+the existing day-number lowering for date predicates and storage pruning. The
+SQL suite passes 149 tests, and rebuilt Docker returned `Date32` plus the ISO
+value `2026-01-01` for `SELECT DATE '2026-01-01' AS d`.
