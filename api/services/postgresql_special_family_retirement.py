@@ -174,6 +174,29 @@ def _write_new(path: Path, value: dict) -> None:
         if temporary and temporary.exists(): temporary.unlink()
 
 
+# How many rows the exact-row rollback path can put back, and therefore the
+# population above which rollback is by deterministic rebuild instead.
+#
+# This used to be declared only in `postgresql_special_family_restore` as
+# MAX_ROWS = 10_000, while `context_cache_retirement` and
+# `dlm_generation_retirement` validate reported counts up to 10_000_000_000.
+# Both numbers are right for what they govern -- these families are generated
+# artifacts and their rollback is a proven rebuild, not a row copy -- but
+# nothing said so, so the pair read as a rollback precondition that became
+# unsatisfiable exactly when the retirement was large. Declared here because
+# the retirement is what decides which path a given run leaves available, and
+# the restore imports it from here so there is one number rather than two.
+EXACT_ROW_ROLLBACK_CAPACITY = 10_000
+
+
+def rollback_path(total_rows: int) -> str:
+    """Which rollback a retirement of *total_rows* leaves available."""
+    if type(total_rows) is not int or total_rows < 0:
+        raise RuntimeError("special-family rollback path needs an exact row total")
+    return ("exact_row_restore" if total_rows <= EXACT_ROW_ROLLBACK_CAPACITY
+            else "deterministic_rebuild")
+
+
 def run(*, bundle: dict, rebuild: dict, fence_observation: dict, output_directory: Path,
         expected_counts: dict[str, int], baseline: dict, migration_evidence: dict,
         now: datetime | None = None,
@@ -256,8 +279,25 @@ def run(*, bundle: dict, rebuild: dict, fence_observation: dict, output_director
                             "table_count": len(lossless.TABLES),
                             "writes_fenced": True,
                             "outbox_pending": captured["outbox_pending"],
+                        }),
+                        # Which rollback this run leaves available, as its own
+                        # file rather than a field on the receipt above: that
+                        # receipt is the `pre_delete_baseline_recheck` gate
+                        # evidence and `postgresql_operational_evidence`
+                        # validates it against an exact key set, so an extra
+                        # field there makes it unreadable to the auditor that
+                        # consumes it. Written down at all because an operator
+                        # otherwise discovers the path by attempting the
+                        # exact-row restore and being refused mid-rollback.
+                        ("special-family-rollback.json", {
+                            "schema_version": 1,
+                            "rollback_path": rollback_path(sum(expected_counts.values())),
+                            "row_total": sum(expected_counts.values()),
+                            "exact_row_capacity": EXACT_ROW_ROLLBACK_CAPACITY,
+                            "rebuild_target_snapshot_id": rebuild["target_snapshot_id"],
                         })):
         _write_new(output_directory / name, value)
     return {"passed": True, "source_snapshot": captured["snapshot_id"],
             "watermark": captured["watermark"], "output_directory": str(output_directory),
-            "reports": ["context_cache", "dlm_generation"]}
+            "reports": ["context_cache", "dlm_generation"],
+            "rollback_path": rollback_path(sum(expected_counts.values()))}

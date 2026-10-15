@@ -5,6 +5,16 @@ import json
 from urllib.parse import urlparse
 
 MAX_RECORDS = 1_000_000
+# An object inventory is bounded by what the backup can actually enumerate, not
+# by the record bound above. `kaveondb_backup.MAX_OBJECTS` is 10,000 and
+# `adls_artifact_client.list` refuses a larger request outright, so no backup
+# this validator will ever be shown can hold more than that many objects.
+# Validating the inventory against MAX_RECORDS instead accepted a claim of up
+# to a million -- a hundred times what the producer can emit -- which meant an
+# inventory that could not possibly have come from the backup path passed as
+# valid evidence. A record is a product record and an object is a blob; they
+# are different units and only one of them has a transport ceiling.
+MAX_OBJECTS = 10_000
 MAX_ROLLBACK_OPERATIONS = 10_000
 RECORD_KEYS = {"kind", "id", "revision", "document_sha256"}
 OBJECT_KEYS = {"path", "etag", "size", "sha256"}
@@ -52,7 +62,7 @@ def validate_backup_manifest(manifest: dict) -> dict:
     if type(manifest["record_count"]) is not int or manifest["record_count"] < 0:
         raise RuntimeError("KaveonDB backup record count is invalid")
     objects = manifest["objects"]
-    if not isinstance(objects, list) or not objects or len(objects) > MAX_RECORDS:
+    if not isinstance(objects, list) or not objects or len(objects) > MAX_OBJECTS:
         raise RuntimeError("KaveonDB backup object inventory is invalid")
     paths = set()
     for item in objects:

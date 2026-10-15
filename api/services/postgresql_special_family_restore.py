@@ -10,7 +10,17 @@ from services import postgresql_special_family_retirement as retirement
 from services.postgresql_write_fence import enabled as fence_enabled
 
 SCHEMA_VERSION = 1
-MAX_ROWS = 10_000
+# The exact-row rollback path is bounded by what one transaction can put back.
+# This is NOT the bound on what a retirement may delete: `context_cache_retirement`
+# and `dlm_generation_retirement` validate reported counts up to 10_000_000_000,
+# because those families are generated artifacts whose rollback is a proven
+# deterministic rebuild rather than a row copy. The two numbers differ by design
+# and describe different paths; the retirement receipt names which one applies.
+MAX_ROWS = retirement.EXACT_ROW_ROLLBACK_CAPACITY
+# Deliberately shorter than the 3600 `kaveondb_recovery_evidence` accepts for a
+# rollback control in general: that ceiling covers every rollback, this path
+# restores at most MAX_ROWS rows.
+MAX_DURATION_SECONDS = 900
 TABLES = (*retirement.CONTEXT_TABLES, *retirement.DLM_TABLES)
 
 
@@ -130,17 +140,40 @@ def _restore_transactionally(tables, expected_schemas):
 
 
 def restore(bundle, deletion, *, expected_bundle_sha256, cutover_revision,
-            max_operations=10_000, max_duration_seconds=900, runner=None, clock=time.monotonic):
+            max_operations=MAX_ROWS, max_duration_seconds=MAX_DURATION_SECONDS, runner=None, clock=time.monotonic):
     if os.getenv("KAVEON_SPECIAL_FAMILY_RESTORE_ENABLED") != "true" or not fence_enabled():
         raise RuntimeError("special-family restore requires explicit enablement and write fence")
     if not isinstance(cutover_revision, str) or not cutover_revision:
         raise RuntimeError("special-family restore requires the exact cutover revision")
     tables, _ = validate_bundle(bundle, deletion, expected_bundle_sha256)
     operations = sum(item["row_count"] for item in tables.values())
-    if (type(max_operations) is not int or not 1 <= max_operations <= MAX_ROWS
-            or operations > max_operations or type(max_duration_seconds) is not int
-            or not 1 <= max_duration_seconds <= 900):
-        raise RuntimeError("special-family restore exceeds its rollback bound")
+    # Four different refusals used to share one sentence, "special-family
+    # restore exceeds its rollback bound", which told an operator mid-rollback
+    # nothing about which ceiling they had met or whether it was theirs to
+    # change. Two of these bounds are deliberately tighter than the ones a
+    # rollback control is validated against elsewhere, so a control can be
+    # valid in general and still be refused here -- that has to be said rather
+    # than inferred.
+    if type(max_operations) is not int or not 1 <= max_operations <= MAX_ROWS:
+        raise RuntimeError(
+            f"special-family restore accepts an operation bound between 1 and {MAX_ROWS}; "
+            "this is the exact-row rollback path and it is bounded by what one "
+            "transaction can put back, not by what the retirement was allowed to delete"
+        )
+    if operations > max_operations:
+        raise RuntimeError(
+            f"special-family restore would replay {operations} rows against a bound of "
+            f"{max_operations}. Beyond {MAX_ROWS} rows the exact-row path does not apply "
+            "and rollback is by deterministic rebuild, which the retirement proved before "
+            "it deleted anything -- see the receipt's rollback_path"
+        )
+    if type(max_duration_seconds) is not int or not 1 <= max_duration_seconds <= MAX_DURATION_SECONDS:
+        raise RuntimeError(
+            f"special-family restore accepts a duration bound between 1 and "
+            f"{MAX_DURATION_SECONDS} seconds. `kaveondb_recovery_evidence` validates a "
+            "rollback control up to 3600 because that ceiling covers every rollback; this "
+            f"path restores at most {MAX_ROWS} rows and holds itself to the shorter one"
+        )
     _, schemas, _ = _expected(deletion)
     started = clock()
     restored = (runner or _restore_transactionally)(tables, schemas)
