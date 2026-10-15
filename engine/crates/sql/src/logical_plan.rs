@@ -1050,7 +1050,20 @@ fn bind_count_star(expr: Expr) -> Expr {
 
 fn build_from_clause(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> {
     if select.from.is_empty() {
-        return Err(sql_err("SELECT requires a FROM clause"));
+        // Trino permits scalar SELECT statements without a relation, for
+        // example `SELECT 1` and `SELECT current_date`.  Represent the
+        // implicit single row as a one-element UNNEST relation so the normal
+        // projection, ordering, limit, and distributed fragment machinery can
+        // evaluate the SELECT exactly once without inventing a storage table.
+        return Ok(LogicalPlan::Unnest {
+            expressions: vec![Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![Expr::Literal(kaveon_core::ScalarValue::Int64(0))],
+            }],
+            columns: vec!["_kaveon_unit".into()],
+            with_ordinality: false,
+            ordinality_column: "_kaveon_ordinality".into(),
+        });
     }
     let mut inputs = select.from.iter();
     let first = inputs.next().expect("FROM was checked as non-empty");
@@ -6476,5 +6489,33 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn scalar_select_without_from_uses_one_implicit_row() {
+        let plan = sql_to_logical_plan("SELECT CAST(1 AS BIGINT) AS value").unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("expected projection");
+        };
+        assert_eq!(columns.len(), 1);
+        assert!(matches!(
+            *input,
+            LogicalPlan::Unnest { ref columns, .. } if columns == &["_kaveon_unit"]
+        ));
+    }
+
+    #[test]
+    fn scalar_select_set_operations_have_a_row_per_branch() {
+        let plan = sql_to_logical_plan("SELECT 1 UNION ALL SELECT 2").unwrap();
+        let LogicalPlan::Union { inputs, all } = plan else {
+            panic!("expected union");
+        };
+        assert!(all);
+        assert_eq!(inputs.len(), 2);
+        assert!(inputs.iter().all(|input| matches!(
+            input,
+            LogicalPlan::Project { input, .. }
+                if matches!(input.as_ref(), LogicalPlan::Unnest { .. })
+        )));
     }
 }

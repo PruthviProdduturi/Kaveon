@@ -18,3 +18,15 @@ The statement finished successfully with no error, returned a typed `Int64`
 The recorded Engine elapsed time was 1,524 ms. This is current-image AKS
 evidence for that compatibility shape; it does not close the broader Track 2
 external-client or unsupported-feature boundaries.
+
+## Local release follow-up
+
+The same release validation also found and fixed a compatibility gap in the
+SQL lowering path: scalar statements without `FROM` were rejected even though
+Trino accepts them. The fix represents the implicit single row as an internal
+one-element relation, preserving the normal projection and distributed
+fragment path. Focused SQL tests now cover `SELECT CAST(1 AS BIGINT)` and
+`SELECT 1 UNION ALL SELECT 2`; the rebuilt Docker coordinator returned the
+typed `Int64` value and the ordered set-operation result `[2, 1]`. This local
+evidence is a code qualification and still needs to be promoted into the next
+AKS image before it can be called an AKS qualification.
