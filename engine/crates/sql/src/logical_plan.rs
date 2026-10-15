@@ -3331,13 +3331,27 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     if let Some(over) = &func.over {
         // Aggregate FILTER has already been lowered above to a
         // null-preserving CASE argument, so window execution can reuse the
-        // same implementation as grouped aggregates.  NULL treatment and
-        // ordered-set clauses still require separate semantics.
-        if func.null_treatment.is_some() || !func.within_group.is_empty() {
+        // same implementation as grouped aggregates.  Ordered-set clauses
+        // still require separate semantics.  Value windows carry IGNORE NULLS
+        // in the internal name so the executor can apply it to the frame.
+        if !func.within_group.is_empty() {
             return Err(sql_err(
-                "window NULL treatment and WITHIN GROUP are unsupported",
+                "window WITHIN GROUP is unsupported",
             ));
         }
+        let window_name = match func.null_treatment {
+            None | Some(ast::NullTreatment::RespectNulls) => name.clone(),
+            Some(ast::NullTreatment::IgnoreNulls)
+                if matches!(name.as_str(), "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE") =>
+            {
+                format!("{name}_IGNORE_NULLS")
+            }
+            Some(ast::NullTreatment::IgnoreNulls) => {
+                return Err(sql_err(format!(
+                    "IGNORE NULLS is unsupported for window function {name}"
+                )));
+            }
+        };
         let window_distinct = matches!(
             &func.args,
             ast::FunctionArguments::List(list)
@@ -3387,9 +3401,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         };
         return Ok(Expr::WindowFunction {
             name: if window_distinct {
-                format!("{name}_DISTINCT")
+                format!("{window_name}_DISTINCT")
             } else {
-                name
+                window_name
             },
             args,
             partition_by,
@@ -5723,6 +5737,24 @@ mod tests {
         let frame = frame.as_ref().expect("frame should be Some");
         assert_eq!(frame.start, WindowFrameBound::UnboundedPreceding);
         assert_eq!(frame.end, WindowFrameBound::UnboundedFollowing);
+    }
+
+    #[test]
+    fn lowers_window_ignore_nulls_for_value_functions() {
+        let plan = sql_to_logical_plan(
+            "SELECT FIRST_VALUE(value) IGNORE NULLS OVER (ORDER BY id) FROM events",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        assert!(matches!(
+            window_exprs.as_slice(),
+            [Expr::WindowFunction { name, .. }] if name == "FIRST_VALUE_IGNORE_NULLS"
+        ));
     }
 
     #[test]
