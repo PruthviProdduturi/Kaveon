@@ -1280,6 +1280,8 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
 fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> Result<LogicalPlan> {
     for join in joins {
         let right = table_factor_to_plan(&join.relation, ctes)?;
+        let left_qualifier = join_relation_qualifier(&left);
+        let right_qualifier = join_relation_qualifier(&right);
         let (join_type, constraint) = match &join.join_operator {
             ast::JoinOperator::Inner(c) => (JoinType::Inner, Some(c)),
             ast::JoinOperator::LeftOuter(c) => (JoinType::Left, Some(c)),
@@ -1291,6 +1293,30 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
         let condition = match constraint {
             None | Some(ast::JoinConstraint::None) => None,
             Some(ast::JoinConstraint::On(expr)) => Some(ast_expr_to_expr(expr)?),
+            Some(ast::JoinConstraint::Using(columns)) => {
+                let left_qualifier = left_qualifier.ok_or_else(|| {
+                    sql_err("JOIN USING requires a single base relation on the left")
+                })?;
+                let right_qualifier = right_qualifier.ok_or_else(|| {
+                    sql_err("JOIN USING requires a single base relation on the right")
+                })?;
+                let predicates = columns
+                    .iter()
+                    .map(|column| {
+                        let name = column.value.clone();
+                        Expr::BinaryOp {
+                            left: Box::new(Expr::Column(format!("{left_qualifier}.{name}"))),
+                            op: BinaryOp::Eq,
+                            right: Box::new(Expr::Column(format!("{right_qualifier}.{name}"))),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                predicates
+                    .into_iter()
+                    .reduce(|left, right| Expr::And(Box::new(left), Box::new(right)))
+                    .ok_or_else(|| sql_err("JOIN USING requires at least one column"))
+                    .map(Some)?
+            }
             Some(other) => return Err(sql_err(format!("unsupported join constraint: {other:?}"))),
         };
         if join_type != JoinType::Cross && condition.is_none() {
@@ -1330,6 +1356,22 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
         }
     }
     Ok(left)
+}
+
+/// Return the qualifier used by a simple relation.  `USING` can be lowered
+/// without catalog metadata when both sides are base relations; a composite
+/// left side needs name resolution against its complete output schema and is
+/// kept explicit until that binder exists.
+fn join_relation_qualifier(plan: &LogicalPlan) -> Option<String> {
+    match plan {
+        LogicalPlan::Scan { table, alias, .. } => Some(
+            alias
+                .clone()
+                .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
+        ),
+        LogicalPlan::Filter { input, .. } => join_relation_qualifier(input),
+        _ => None,
+    }
 }
 
 fn is_equality_join_condition(expr: &Expr) -> bool {
@@ -4770,6 +4812,37 @@ mod tests {
         };
         assert_eq!(join_type, JoinType::Cross);
         assert!(condition.is_none());
+    }
+
+    #[test]
+    fn lowers_join_using_to_qualified_equality_keys() {
+        let plan = sql_to_logical_plan(
+            "SELECT u.id, o.amount FROM users u JOIN orders o USING (id)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("unexpected plan: {plan:?}")
+        };
+        let LogicalPlan::Join {
+            join_type: JoinType::Inner,
+            condition: Some(Expr::BinaryOp { left, op, right }),
+            ..
+        } = *input
+        else {
+            panic!("JOIN USING should lower to an inner equality join")
+        };
+        assert_eq!(op, BinaryOp::Eq);
+        assert_eq!(*left, Expr::Column("u.id".into()));
+        assert_eq!(*right, Expr::Column("o.id".into()));
+    }
+
+    #[test]
+    fn rejects_using_over_a_composite_left_relation_until_bound() {
+        let error = sql_to_logical_plan(
+            "SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("single base relation on the left"));
     }
 
     #[test]

@@ -1201,6 +1201,35 @@ fn distributed_grouping_sets_match_the_local_result() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// `JOIN ... USING` must reach the same qualified equality keys through the
+/// fragment planner as it does through the node-local planner.  The query
+/// projects explicit columns so the currently documented duplicate-key output
+/// boundary is not hidden by a wildcard projection.
+#[test]
+fn distributed_join_using_matches_the_local_result() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-using-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT u.user_id, p.locale FROM events u JOIN users p USING (user_id) ORDER BY 1 LIMIT 10";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-join-using", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths() {
     let directory =
@@ -1707,6 +1736,8 @@ fn events_catalog(directory: &std::path::Path) -> CatalogManager {
     .with_schema("events");
     let meta = write(directory, "events.parquet", &batch(&events(), true));
     catalog.register_table("events", meta).unwrap();
+    let users_meta = write(directory, "users.parquet", &batch(&users(), true));
+    catalog.register_table("events", users_meta).unwrap();
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
     manager
