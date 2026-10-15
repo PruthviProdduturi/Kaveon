@@ -18,7 +18,7 @@ snapshot, not a session diary.
 | # | Capability | Status | What is already true | Completion gate |
 |---:|---|---|---|---|
 | 1 | Worker discovery and scheduling | **Complete (bounded)** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Reopen for additional topologies or endurance evidence; the declared three-worker topology is qualified. |
-| 2 | Hash exchange and repartition | **Active** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, and AKS object-store fault recovery exist. | Sustained network and cloud-storage pressure under the release workload, plus the remaining item-2 pressure and endurance evidence. |
+| 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
 | 3 | Distributed joins | Open | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, and bounded spill exist. | Distributed outer-join equivalence, skew, disk exhaustion, and measured join-spill qualification. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. | Larger-scale cluster run with p95 latency, skew behavior, and final-merge spill evidence. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
@@ -34,23 +34,25 @@ snapshot, not a session diary.
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
 | 16 | Sustained distributed soak | Open | Focused correctness and failure tests exist. | Mixed workload soak with throughput, p95 latency, memory, spill, retry, and failure counts retained. |
 
-## Active item: 2 — hash exchange and repartition
+## Active item: 3 — distributed joins
 
-The next evidence package must include sustained exchange and cloud-storage
-pressure, cancellation, quota behavior, orphan-spool checks, commands, raw
-results, and a short qualification report under `docs/qualification/`.
+The next evidence package must include distributed outer-join equivalence,
+skew behavior, disk-exhaustion handling, measured join-spill behavior,
+commands, raw results, and a short qualification report under
+`docs/qualification/`.
 
 The worker-discovery gate is now complete for the declared three-worker
 topology. The qualification package includes Docker and AKS scheduling runs,
 forced pod-loss retry, grouped skew/failure injection, repeated pressure, and
-graceful node-drain retry. Item 2 is the active work item.
+graceful node-drain retry. Item 2 is now qualified for the declared
+three-worker bounded gate; item 3 is the active work item.
 
 Current exchange evidence includes the scheduler and stage-runtime suites,
 three-node Docker and AKS runs, exact multi-worker exchange, cancellation
 cleanup, worker replacement, grouped skew/failure injection, repeated pressure,
 and graceful node-drain retry. These reports qualify worker discovery and
-scheduling for the declared three-worker topology; they do not qualify the
-exchange pressure gate now active below.
+scheduling for the declared three-worker topology. The broader topology and
+endurance work remains open.
 
 The bounded ADLS-backed soak
 `docs/qualification/track1-aks-exchange-soak-2026-10-15.md` completed 416/416
@@ -60,7 +62,8 @@ also passed a 900-second ADLS-backed soak with two-way concurrency: 1,180/1,180
 exact requests, zero failures, zero unexpected restarts, and zero retained
 exchange/spill files. Evidence is retained in
 `docs/qualification/track1-aks-current-image-soak-900-2026-10-15.md` and its
-raw JSON report. The soak does not close the separate fault and pressure gates.
+raw JSON report. Together with the fault, quota, and object-store reports
+below, this closes the declared bounded exchange pressure gate.
 The current-image fault/pressure qualification
 `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15.md`
 passed concurrent exact results, active-query cancellation, forced worker-loss
@@ -77,7 +80,8 @@ The complete workspace suite is recorded in
 `docs/qualification/track1-track2-workspace-suite-2026-10-15.md`: 1,457 tests
 passed with zero failures on the release source. This strengthens the local
 implementation evidence but does not substitute for the remaining distributed
-pressure and endurance gates on AKS.
+join, aggregate, window, ordering, connector, upgrade, and full mixed-workload
+endurance gates on AKS.
 
 The explicit object-store fault and orphan-spool qualification is recorded in
 `docs/qualification/track1-aks-storage-fault-2026-10-15.md` and its raw JSON

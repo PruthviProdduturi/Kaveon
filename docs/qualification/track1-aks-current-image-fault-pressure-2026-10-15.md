@@ -31,5 +31,7 @@ The raw report is retained in
 A separate graceful node-drain attempt is retained privately in the run
 artifacts. It restored the worker and exact result but did not expose a retry
 attempt in the query record, so it is not counted as a retry qualification.
-Object-store service fault injection, orphan-spool recovery after an external
-storage failure, and longer endurance remain open.
+Object-store service fault injection and orphan-spool recovery after an
+external storage failure are qualified separately in
+`track1-aks-storage-fault-2026-10-15.md`. Longer mixed-workload endurance and
+broader topology qualification remain open.
