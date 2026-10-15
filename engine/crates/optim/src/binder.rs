@@ -212,6 +212,7 @@ impl Binder<'_> {
                 self.catalog.resolve_table(&TableReference::parse(table))?;
                 Ok(Bound::plain(plan))
             }
+            LogicalPlan::Unnest { .. } => Ok(Bound::plain(plan)),
             LogicalPlan::Filter { input, predicate } => {
                 let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
@@ -470,8 +471,7 @@ impl Binder<'_> {
                 // grouped build side has no matching key. The aggregate
                 // emits no group for that key, so use a left join and turn
                 // the null-extended count into SQL's required zero.
-                let correlated_count =
-                    !lateral.is_empty() && contains_count_aggregate(&right.plan);
+                let correlated_count = !lateral.is_empty() && contains_count_aggregate(&right.plan);
                 if correlated_count {
                     right.plan = coalesce_count_projection(right.plan);
                 }
@@ -1293,6 +1293,33 @@ impl Binder<'_> {
                     joined: false,
                 }
             }
+            LogicalPlan::Unnest {
+                column,
+                with_ordinality,
+                ..
+            } => Scope {
+                columns: if *with_ordinality {
+                    vec![
+                        Column {
+                            qualifier: None,
+                            name: column.clone(),
+                            physical: column.clone(),
+                        },
+                        Column {
+                            qualifier: None,
+                            name: "ordinality".to_owned(),
+                            physical: "ordinality".to_owned(),
+                        },
+                    ]
+                } else {
+                    vec![Column {
+                        qualifier: None,
+                        name: column.clone(),
+                        physical: column.clone(),
+                    }]
+                },
+                joined: false,
+            },
             LogicalPlan::Join { left, right, .. } => self.join_scope(left, right),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. }
@@ -1706,9 +1733,9 @@ fn correlated_projection_matches(plan: &LogicalPlan, inner: Option<&str>) -> boo
         },
         _ => None,
     });
-    first.zip(source).is_some_and(|(first, source)| {
-        first.rsplit('.').next() == source.rsplit('.').next()
-    })
+    first
+        .zip(source)
+        .is_some_and(|(first, source)| first.rsplit('.').next() == source.rsplit('.').next())
 }
 
 fn is_aggregate(name: &str) -> bool {
@@ -1734,12 +1761,19 @@ fn coalesce_count_projection(plan: LogicalPlan) -> LogicalPlan {
                 .into_iter()
                 .map(|column| match column {
                     Expr::Alias { expr, name } if name.starts_with("__kaveon_scalar_") => {
-                        let Expr::Function { name: function, args } = *expr else {
+                        let Expr::Function {
+                            name: function,
+                            args,
+                        } = *expr
+                        else {
                             return Expr::Alias { expr, name };
                         };
                         if !function.eq_ignore_ascii_case("COUNT") || args.len() != 1 {
                             return Expr::Alias {
-                                expr: Box::new(Expr::Function { name: function, args }),
+                                expr: Box::new(Expr::Function {
+                                    name: function,
+                                    args,
+                                }),
                                 name,
                             };
                         }
@@ -2411,7 +2445,13 @@ mod tests {
             panic!("correlated IN should lower to a residual semi join");
         };
         assert_eq!(right_key, column("__kaveon_corr_0"));
-        assert!(matches!(residual, Some(Expr::BinaryOp { op: BinaryOp::Gt, .. })));
+        assert!(matches!(
+            residual,
+            Some(Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            })
+        ));
         let LogicalPlan::Project { columns, .. } = *right else {
             panic!("the subquery projects the key and residual column");
         };

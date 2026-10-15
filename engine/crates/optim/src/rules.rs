@@ -98,6 +98,7 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             residual,
         },
         scan @ LogicalPlan::Scan { .. } => scan,
+        unnest @ LogicalPlan::Unnest { .. } => unnest,
     }
 }
 
@@ -324,6 +325,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 residual,
             }
         }
+        unnest @ LogicalPlan::Unnest { .. } => unnest,
     }
 }
 

@@ -9638,6 +9638,7 @@ fn collect_scan_predicates(
                 collect_scan_predicates(input, predicates);
             }
         }
+        LogicalPlan::Unnest { .. } => {}
     }
 }
 
@@ -9706,6 +9707,7 @@ fn collect_join_statistics_tables(
             collect_join_statistics_tables(right, tables);
         }
         LogicalPlan::Scan { .. } => {}
+        LogicalPlan::Unnest { .. } => {}
     }
 }
 
@@ -12118,6 +12120,7 @@ fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
         }
         LogicalPlan::Union { inputs, .. } => inputs.iter().all(general_distributed_eligible),
         LogicalPlan::Scan { .. } => true,
+        LogicalPlan::Unnest { .. } => true,
     }
 }
 
@@ -12723,6 +12726,7 @@ fn distributed_scan_input(plan: &LogicalPlan) -> bool {
         | LogicalPlan::Intersect { .. }
         | LogicalPlan::Except { .. } => false,
         LogicalPlan::SemiJoin { .. } | LogicalPlan::AntiJoin { .. } => false,
+        LogicalPlan::Unnest { .. } => true,
     }
 }
 

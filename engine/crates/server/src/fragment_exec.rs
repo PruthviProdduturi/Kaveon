@@ -482,6 +482,15 @@ fn compile_node(
             };
             Ok(Box::new(ScanOperator::new(source, None)?))
         }
+        FragmentOperator::Unnest {
+            expression,
+            column,
+            with_ordinality,
+        } => Ok(Box::new(kaveon_exec::unnest::UnnestOperator::new(
+            expression,
+            column.clone(),
+            *with_ordinality,
+        )?)),
         FragmentOperator::ExchangeInput(input) => exchanges.open(&input.exchange_id),
         FragmentOperator::Filter { predicate } => {
             let mut operator = FilterOperator::new(
@@ -1926,7 +1935,9 @@ fn expression_column(expression: &Expr) -> Result<String> {
 
 fn sort_expressions(keys: &[kaveon_core::SortSpec]) -> Vec<SortExpr> {
     keys.iter()
-        .map(|key| SortExpr::new(key.expression.clone(), key.ascending).with_nulls_first(key.nulls_first))
+        .map(|key| {
+            SortExpr::new(key.expression.clone(), key.ascending).with_nulls_first(key.nulls_first)
+        })
         .collect()
 }
 

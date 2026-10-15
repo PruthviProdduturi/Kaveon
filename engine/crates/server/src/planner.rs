@@ -180,6 +180,7 @@ pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
             qualify_tables(left, catalog, schema);
             qualify_tables(right, catalog, schema);
         }
+        LogicalPlan::Unnest { .. } => {}
     }
 }
 
@@ -209,6 +210,7 @@ pub fn scan_tables(plan: &LogicalPlan) -> Vec<String> {
                     collect(input, out);
                 }
             }
+            LogicalPlan::Unnest { .. } => {}
         }
     }
     let mut out = Vec::new();
@@ -503,6 +505,17 @@ impl ExecutableFragmentBuilder<'_> {
 
     fn build(&mut self, plan: &LogicalPlan) -> Result<StageId> {
         match plan {
+            LogicalPlan::Unnest {
+                expression,
+                column,
+                with_ordinality,
+            } => Ok(self.add_fragment(FragmentDraft::leaf(
+                FragmentOperator::Unnest {
+                    expression: expression.clone(),
+                    column: column.clone(),
+                    with_ordinality: *with_ordinality,
+                },
+            ))),
             LogicalPlan::Scan { table, columns, .. } => {
                 let reference = TableReference::parse(table);
                 let resolved = self.catalog.resolve_table(&reference)?;
@@ -906,11 +919,10 @@ impl ExecutableFragmentBuilder<'_> {
                         vec![draft.root],
                     );
                 }
-                let mut target_draft = FragmentDraft::leaf(FragmentOperator::ExchangeInput(
-                    ExchangeInput {
+                let mut target_draft =
+                    FragmentDraft::leaf(FragmentOperator::ExchangeInput(ExchangeInput {
                         exchange_id: left_exchange.id,
-                    },
-                ));
+                    }));
                 let right_input = FragmentNodeId(1);
                 target_draft.nodes.push(FragmentNode {
                     id: right_input,
@@ -1014,7 +1026,9 @@ impl ExecutableFragmentBuilder<'_> {
                     .into(),
             ));
         }
-        if distribution == JoinDistribution::BroadcastRight || (keys.is_empty() && residual.is_some()) {
+        if distribution == JoinDistribution::BroadcastRight
+            || (keys.is_empty() && residual.is_some())
+        {
             let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
             return self.attach_broadcast_join(
                 left_stage,
@@ -1407,6 +1421,10 @@ struct StageGraphBuilder {
 impl StageGraphBuilder {
     fn build(&mut self, plan: &LogicalPlan) -> Result<StageId> {
         match plan {
+            LogicalPlan::Unnest { .. } => {
+                let stage = self.add_exchange_stage("Unnest", BTreeMap::new(), 1, 0);
+                Ok(stage)
+            }
             LogicalPlan::Aggregate {
                 input, group_by, ..
             } => {
@@ -1629,18 +1647,14 @@ impl StageGraphBuilder {
                 // coordinator-only set operation.  Expressions, mismatched
                 // aliases, and SELECT * keep the conservative single-task
                 // path because their output identity is not safely known.
-                let partitioning = set_operation_partitioning(
-                    left,
-                    right,
-                    self.exchange_partition_count,
-                )
-                .unwrap_or(Partitioning::Single);
+                let partitioning =
+                    set_operation_partitioning(left, right, self.exchange_partition_count)
+                        .unwrap_or(Partitioning::Single);
                 let task_count = match partitioning {
                     Partitioning::Single => 1,
                     _ => self.exchange_partition_count,
                 };
-                let target =
-                    self.add_exchange_stage(operator, physical.attributes, task_count, 2);
+                let target = self.add_exchange_stage(operator, physical.attributes, task_count, 2);
                 self.add_exchange(left_stage, target, partitioning.clone());
                 self.add_exchange(right_stage, target, partitioning);
                 Ok(target)
@@ -1789,11 +1803,13 @@ fn semijoin_key_column(plan: &LogicalPlan, key: &Expr) -> Option<String> {
         return expression_column(key).ok();
     }
     match plan {
-        LogicalPlan::Project { input: _, columns } => columns.first().and_then(|column| match column {
-            Expr::Column(name) => Some(name.clone()),
-            Expr::Alias { expr, .. } => expression_column(expr).ok(),
-            _ => None,
-        }),
+        LogicalPlan::Project { input: _, columns } => {
+            columns.first().and_then(|column| match column {
+                Expr::Column(name) => Some(name.clone()),
+                Expr::Alias { expr, .. } => expression_column(expr).ok(),
+                _ => None,
+            })
+        }
         LogicalPlan::Filter { input, .. }
         | LogicalPlan::Limit { input, .. }
         | LogicalPlan::Offset { input, .. }
@@ -1899,6 +1915,19 @@ fn build_plan_tree(
         ),
         LogicalPlan::Distinct { input } => ("Distinct", BTreeMap::new(), Some(input.as_ref())),
         LogicalPlan::Window { input, .. } => ("Window", BTreeMap::new(), Some(input.as_ref())),
+        LogicalPlan::Unnest {
+            expression,
+            column,
+            with_ordinality,
+        } => (
+            "Unnest",
+            BTreeMap::from([
+                ("expression".to_owned(), format!("{expression:?}")),
+                ("column".to_owned(), column.clone()),
+                ("with_ordinality".to_owned(), with_ordinality.to_string()),
+            ]),
+            None,
+        ),
         LogicalPlan::Union { .. } => ("Union", BTreeMap::new(), None),
         LogicalPlan::Intersect { .. } => ("Intersect", BTreeMap::new(), None),
         LogicalPlan::Except { .. } => ("Except", BTreeMap::new(), None),
@@ -1980,6 +2009,18 @@ fn plan_query_with_predicate(
     pins: &SourcePins,
 ) -> Result<PlannedQuery> {
     match plan {
+        LogicalPlan::Unnest {
+            expression,
+            column,
+            with_ordinality,
+        } => Ok(PlannedQuery {
+            operator: Box::new(kaveon_exec::unnest::UnnestOperator::new(
+                expression,
+                column.clone(),
+                *with_ordinality,
+            )?),
+            scan_metrics: Vec::new(),
+        }),
         LogicalPlan::Scan { table, columns, .. } => {
             let reference = TableReference::parse(table);
             let resolved = catalog.resolve_table(&reference)?;
@@ -2415,7 +2456,10 @@ fn plan_query_with_predicate(
             } else {
                 crate::fragment_exec::distinct_operator(operator, memory)?
             };
-            Ok(PlannedQuery { operator, scan_metrics })
+            Ok(PlannedQuery {
+                operator,
+                scan_metrics,
+            })
         }
 
         LogicalPlan::Window {
@@ -3433,16 +3477,24 @@ mod tests {
         assert_eq!(spec.join_type, FragmentJoinType::Left);
         assert_eq!(spec.left_keys, vec![Expr::Column("i.id".into())]);
         assert_eq!(spec.right_keys, vec![Expr::Column("c.id".into())]);
-        assert!(matches!(spec.residual, Some(Expr::BinaryOp { op: BinaryOp::Gt, .. })));
+        assert!(matches!(
+            spec.residual,
+            Some(Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn routes_residual_only_outer_join_to_broadcast_stage() {
         let graph = graph("SELECT * FROM items i LEFT JOIN customers c ON i.id > c.id");
-        assert!(graph
-            .stages
-            .iter()
-            .any(|stage| stage.plan.operator == "BroadcastHashJoin"));
+        assert!(
+            graph
+                .stages
+                .iter()
+                .any(|stage| stage.plan.operator == "BroadcastHashJoin")
+        );
     }
 
     #[test]
@@ -3629,27 +3681,22 @@ mod tests {
 
     #[test]
     fn semi_and_anti_joins_partition_or_fallback_for_unhashable_keys() {
-        for (sql, expected_type) in [
-            (
-                "SELECT id FROM items WHERE id IN (SELECT id FROM customers WHERE id > 1)",
-                FragmentJoinType::Semi,
-            ),
-        ] {
+        for (sql, expected_type) in [(
+            "SELECT id FROM items WHERE id IN (SELECT id FROM customers WHERE id > 1)",
+            FragmentJoinType::Semi,
+        )] {
             let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
             qualify_tables(&mut plan, "test", "default");
             let plan = kaveon_optim::rules::push_filter_down(plan);
             let plan = kaveon_optim::rules::push_projection_down(plan);
             let fixture = fixture();
             let graph = build_stage_graph("query-1", &plan, 4).unwrap();
-            let target = graph
-                .stages
-                .iter()
-                .find(|stage| {
-                    stage.plan.children.iter().any(|child| {
-                        child.operator == "PartitionedSemiJoin"
-                            || child.operator == "PartitionedAntiJoin"
-                    })
-                });
+            let target = graph.stages.iter().find(|stage| {
+                stage.plan.children.iter().any(|child| {
+                    child.operator == "PartitionedSemiJoin"
+                        || child.operator == "PartitionedAntiJoin"
+                })
+            });
             if target.is_none() {
                 assert!(graph.exchanges.iter().any(|exchange| {
                     exchange.target_stage == StageId(0)
@@ -3685,9 +3732,10 @@ mod tests {
             let probe = fragments
                 .values()
                 .find(|fragment| {
-                    fragment.nodes.iter().any(|node| {
-                        matches!(node.operator, FragmentOperator::HashJoin(_))
-                    })
+                    fragment
+                        .nodes
+                        .iter()
+                        .any(|node| matches!(node.operator, FragmentOperator::HashJoin(_)))
                 })
                 .expect("partitioned semijoin fragment");
             let join = probe
