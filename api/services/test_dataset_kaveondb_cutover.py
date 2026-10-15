@@ -74,7 +74,11 @@ def test_update_replaces_selected_semantics_and_uses_revision_cas():
 @patch.dict("os.environ", {"KAVEONDB_READ_AUTHORITY_FAMILIES": "datasets"}, clear=False)
 def test_delete_uses_revision_cas_and_engine_reference_validation():
     mutations = []
-    with patch.object(datasets.product_store, "read", return_value={"revision": 8, "document": _document()}), \
+    # No compiled DLM context: the dataset is the only record in the commit.
+    reads = {"dataset": {"revision": 8, "document": _document()}, "dlm_definition": None}
+    with patch.object(datasets.product_store, "read",
+                      side_effect=lambda kind, *_a, **_k: reads[kind]), \
+         patch.object(datasets.product_store, "list_records", return_value=[]), \
          patch.object(datasets.product_store, "transact", side_effect=lambda values, *_: mutations.extend(values) or {}), \
          patch.object(datasets.db, "transaction", side_effect=AssertionError("PostgreSQL reached")):
         assert datasets.delete_dataset("71", "owner@example.com") is True

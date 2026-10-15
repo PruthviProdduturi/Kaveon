@@ -34,6 +34,23 @@ class ChartPostgresSchemaTests(unittest.TestCase):
         self.assertEqual(items[0]["dataset_id"], "7")
         self.assertEqual(items[0]["query_config"]["groupby"], ["borough"])
 
+    def test_each_layout_reports_its_own_modification_time(self):
+        """The two PostgreSQL layouts spell it differently and only the legacy
+        spelling was read, so on the modern layout every chart came back with
+        `updated_at: null` — no date on the Library card, and nothing for the
+        client's recently-modified order to sort by — while the KaveonDB path
+        reported the real time for the same chart."""
+        modern = {"id": "chart-1", "name": "Trips", "dataset_id": 7, "config": "{}",
+                  "created_at": "2026-01-01T00:00:00Z",
+                  "modified_at": "2026-02-02T00:00:00Z", "modified_by": "ana@example.com"}
+        self.assertEqual(charts._adapt(modern, "modern")["updated_at"],
+                         "2026-02-02T00:00:00Z")
+        legacy = {"id": "7", "name": "Trips", "query_config": "{}", "viz_config": "{}",
+                  "created_at": "2026-01-01T00:00:00Z",
+                  "updated_at": "2026-02-02T00:00:00Z", "updated_by": "ana@example.com"}
+        self.assertEqual(charts._adapt(legacy, "legacy")["updated_at"],
+                         "2026-02-02T00:00:00Z")
+
     def test_authenticated_point_read_observes_shadow_without_changing_response(self):
         row = {
             "id": "chart-1", "name": "Trips", "dataset_id": 7, "chart_type": "bar",

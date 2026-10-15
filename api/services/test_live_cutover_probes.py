@@ -41,8 +41,27 @@ def test_write_fence_executes_read_and_requires_rejection_per_family(monkeypatch
         attempted.append(sql);fence.assert_allowed(sql,"postgresql")
     monkeypatch.setattr(probes.db,"execute",execute)
     result=probes.write_fence("api@abc")
-    assert len(attempted)==len(gate.AUTHORITY_FAMILIES)
+    # Every table of every family, not one per family. Only `tables[0]` used
+    # to be probed, so ten of the authority tables were never touched while
+    # the receipt claimed the whole family — a fence regression on any of them
+    # read as a pass.
+    every_table=[table for tables in gate.AUTHORITY_FAMILIES.values() for table in tables]
+    assert len(attempted)==len(every_table)
+    assert {sql.split(" ")[2] for sql in attempted}==set(every_table)
     assert len(result["family_probes"])==len(gate.AUTHORITY_FAMILIES)
+
+
+def test_a_fence_regression_on_a_non_first_table_is_not_a_pass(monkeypatch):
+    """The whole point of probing past `tables[0]`."""
+    monkeypatch.setenv("METADATA_DB_TYPE","postgresql");monkeypatch.setenv(fence.ENVIRONMENT_KEY,"true")
+    monkeypatch.setattr(probes.db,"query",lambda *_:{"rows":[{"x":1}]})
+    leaky="user_ai_keys"
+    def execute(sql):
+        if leaky in sql:return None
+        fence.assert_allowed(sql,"postgresql")
+    monkeypatch.setattr(probes.db,"execute",execute)
+    with pytest.raises(RuntimeError,match=f"allowed ai_configuration.{leaky}"):
+        probes.write_fence("api@abc")
 
 
 def test_write_fence_fails_if_any_mutation_reaches_database(monkeypatch):

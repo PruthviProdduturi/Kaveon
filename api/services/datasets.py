@@ -18,6 +18,16 @@ VALID_VISIBILITY = {"private", "internal", "published"}
 MAX_DATASET_COMPONENTS = 10_000
 MAX_DATASET_DOCUMENT_BYTES = 4 * 1024 * 1024
 
+# How many compiled DLM runs one dataset's delete carries with it.
+#
+# The delete is a single product transaction, and `product_store.transact`
+# accepts between 1 and 100 mutations; the definition and the dataset itself
+# take two of them. A dataset with more compiled versions than this is
+# reported rather than attempted, because `transact` would otherwise refuse
+# the whole group with "a product transaction requires between 1 and 100
+# mutations" and say nothing about which dataset or why.
+MAX_DLM_RUN_CASCADE = 98
+
 _name_index_cache: tuple[float, dict[str, str]] | None = None
 _name_index_lock = threading.Lock()
 
@@ -769,6 +779,64 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
     return get_dataset_by_id(dataset_id)
 
 
+def _compiled_dlm_cascade(dataset_id: str, actor: str) -> list:
+    """The deletes that must accompany this dataset's own, references first.
+
+    The product catalog derives typed references from each record's document
+    and refuses to delete a record another record still points at. Compiled
+    DLM context is two such records: a ``dlm_definition`` whose own ID must
+    equal the dataset ID and which references the dataset, and one
+    ``dlm_run`` per compiled version, each referencing that definition
+    (``engine/crates/server/src/transaction_api.rs`` derives both). So a
+    dataset that had ever been compiled could not be deleted at all — the
+    Engine answered
+
+        invalid transaction: product record 'dlm_definition/<id>'
+        references missing 'dataset/<id>'
+
+    — which reached the Studio as a failure to delete the dataset with
+    nothing to say that its DLM context was what held it.
+
+    Unlike a chart over the same dataset, these are not someone's content to
+    be asked about: nobody chose them, nobody can clear them from the UI, and
+    they describe a dataset that is about to stop existing. So the delete
+    clears them rather than refusing, the way a favorite or a recents entry is
+    cleared.
+
+    Returned in reference order — every run, then the definition — and meant
+    for the same transaction as the dataset itself, so there is never a moment
+    in which a run names a definition that is gone.
+    """
+    runs: list[tuple[str, int]] = []
+    for record in product_store.list_records("dlm_run", actor, "Admin"):
+        document = record.get("document")
+        if not isinstance(document, dict) \
+                or str(document.get("definition_id") or "") != str(dataset_id):
+            continue
+        identity, revision = str(record.get("id") or ""), record.get("revision")
+        if not identity or type(revision) is not int or revision < 1:
+            raise RuntimeError("KaveonDB returned an invalid DLM run delete state")
+        runs.append((identity, revision))
+    if len(runs) > MAX_DLM_RUN_CASCADE:
+        raise RuntimeError(
+            f"Dataset {dataset_id} has {len(runs)} compiled DLM runs, more than "
+            f"the {MAX_DLM_RUN_CASCADE} one delete can carry"
+        )
+    mutations = [
+        product_store.ProductMutation("delete", "dlm_run", identity,
+                                      expected_revision=revision)
+        for identity, revision in sorted(runs)
+    ]
+    definition = product_store.read("dlm_definition", str(dataset_id), actor, "Admin")
+    if definition is not None:
+        revision = definition.get("revision")
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError("KaveonDB returned an invalid DLM definition delete state")
+        mutations.append(product_store.ProductMutation(
+            "delete", "dlm_definition", str(dataset_id), expected_revision=revision))
+    return mutations
+
+
 def delete_dataset(dataset_id: str, user_id: str) -> bool:
     if product_read_authority.enabled("datasets"):
         current = product_store.read("dataset", dataset_id, user_id, "Admin")
@@ -777,10 +845,11 @@ def delete_dataset(dataset_id: str, user_id: str) -> bool:
         revision = current.get("revision")
         if type(revision) is not int or revision < 1:
             raise RuntimeError("KaveonDB returned invalid dataset revision state")
-        product_store.transact([
-            product_store.ProductMutation("delete", "dataset", dataset_id,
-                                          expected_revision=revision)
-        ], user_id, "Analyst")
+        product_store.transact(
+            _compiled_dlm_cascade(dataset_id, user_id) + [
+                product_store.ProductMutation("delete", "dataset", dataset_id,
+                                              expected_revision=revision)
+            ], user_id, "Analyst")
         return True
     did = int(dataset_id)
     with db.transaction() as transaction:

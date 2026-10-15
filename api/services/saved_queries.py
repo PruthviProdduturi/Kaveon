@@ -139,9 +139,14 @@ def update_saved_query(query_id: str, data: dict, user_id: str) -> Optional[dict
         updated.update({"id": str(query_id), "modified_by": user_id, "updated_at": now.isoformat()})
         product_store.transact([product_store.ProductMutation(
             "update", "saved_query", str(query_id), updated, revision)], user_id, "Editor")
-        return {"id": str(query_id), "name": updated.get("name"), "description": updated.get("description"),
-                "sql": updated.get("sql"), "created_at": updated.get("created_at"),
-                "updated_at": updated.get("updated_at"), "created_by": user_id, "favorite": False}
+        # Read the record back rather than describing it from here. The
+        # hand-built answer this replaced asserted `favorite: False` on every
+        # save, so renaming a pinned query reported it as unpinned, and it had
+        # to be kept in step by hand with whatever the read path returns.
+        saved = get_by_id(str(query_id), user_id)
+        if saved is None:
+            raise RuntimeError("KaveonDB did not return the updated saved query")
+        return saved
     updates, params, i = [], [], 0
 
     if "name" in data:

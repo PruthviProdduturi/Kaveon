@@ -481,5 +481,54 @@ class WhoIsWarmedFor(_Fixture):
                          [("owner@example.test", "Admin")])
 
 
+class ListingIdentityTests(unittest.TestCase):
+    """The token a recheck compares has to see everything the listing reports.
+
+    It used to be four fields — identity, `generation`, modification time, and
+    the caller's favorite — resting on the stated fact that the store advances
+    a record's generation on every write. The store does; the listing does not
+    carry it (`list_documents` returns `dict(document)`), so that field was
+    always empty and the token was three fields. The chart and dashboard
+    writers deliberately preserve `updated_at` on a preview-only write, so a
+    capture produced an identical token and `has_thumbnail` stayed false in
+    the listing until a write invalidated the cache.
+    """
+
+    def test_a_field_that_moves_without_updated_at_changes_the_token(self):
+        before = [{"id": "c-1", "updated_at": "2026-10-01T00:00:00Z",
+                   "favorite": False}]
+        after = [{"id": "c-1", "updated_at": "2026-10-01T00:00:00Z",
+                  "favorite": False, "thumbnail": "data:image/png;base64,AAA",
+                  "thumbnail_updated_at": "2026-10-02T00:00:00Z"}]
+        self.assertNotEqual(warm_reads._listing_identity(before),
+                            warm_reads._listing_identity(after))
+
+    def test_an_unchanged_listing_keeps_its_token(self):
+        documents = [{"id": "c-1", "updated_at": "2026-10-01T00:00:00Z",
+                      "thumbnail": "data:image/png;base64,AAA"},
+                     {"id": "c-2", "updated_at": "2026-09-01T00:00:00Z"}]
+        self.assertEqual(warm_reads._listing_identity(documents),
+                         warm_reads._listing_identity([dict(item) for item in documents]))
+
+    def test_a_replaced_preview_of_the_same_size_still_moves_the_token(self):
+        """Its capture stamp moves with it, which is what the token reads —
+        the bytes themselves are a quarter-megabyte and are not hashed."""
+        before = [{"id": "c-1", "thumbnail": "data:image/png;base64,AAA",
+                   "thumbnail_updated_at": "2026-10-01T00:00:00Z"}]
+        after = [{"id": "c-1", "thumbnail": "data:image/png;base64,BBB",
+                  "thumbnail_updated_at": "2026-10-02T00:00:00Z"}]
+        self.assertNotEqual(warm_reads._listing_identity(before),
+                            warm_reads._listing_identity(after))
+
+    def test_the_favorite_and_the_order_are_both_part_of_the_token(self):
+        base = {"id": "c-1", "updated_at": "2026-10-01T00:00:00Z"}
+        self.assertNotEqual(
+            warm_reads._listing_identity([{**base, "favorite": False}]),
+            warm_reads._listing_identity([{**base, "favorite": True}]))
+        other = {"id": "c-2", "updated_at": "2026-09-01T00:00:00Z"}
+        self.assertNotEqual(warm_reads._listing_identity([base, other]),
+                            warm_reads._listing_identity([other, base]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -125,7 +125,14 @@ def _adapt(row: dict, layout: str) -> dict:
         "sql_text": None,
         "visibility": row.get("visibility") or "internal",
         "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
+        # The two PostgreSQL layouts name the modification time differently —
+        # `updated_at` on the legacy one, `modified_at` on the modern one —
+        # and only the legacy spelling was read. So on the modern layout every
+        # chart reported `updated_at: null` while the KaveonDB path reported
+        # the real time: the Library card showed no modification date and the
+        # client's recently-modified order collapsed to arbitrary. Resolved by
+        # layout, exactly as `modified_by` below already was.
+        "updated_at": row.get("updated_at") if layout == "legacy" else row.get("modified_at"),
         "created_by": row.get("created_by"),
         "owner": row.get("created_by"),
         "modified_by": (row.get("updated_by") if layout == "legacy" else row.get("modified_by")) or row.get("created_by"),
