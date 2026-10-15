@@ -2207,7 +2207,7 @@ fn build_order_by(
         let nulls_first = ob.nulls_first.unwrap_or(!asc);
         items.push((expr, asc, nulls_first));
     }
-    let (plan, visible) = bind_order_keys_to_projection(plan, &mut items);
+    let (plan, visible) = bind_order_keys_to_projection(plan, &mut items)?;
     Ok((
         LogicalPlan::Sort {
             input: Box::new(plan),
@@ -2224,12 +2224,12 @@ fn build_order_by(
 fn bind_order_keys_to_projection(
     plan: LogicalPlan,
     keys: &mut [OrderKey],
-) -> (LogicalPlan, Option<Vec<Expr>>) {
+) -> Result<(LogicalPlan, Option<Vec<Expr>>)> {
     let LogicalPlan::Project { input, mut columns } = plan else {
-        return (plan, None);
+        return Ok((plan, None));
     };
     if columns.iter().any(|column| matches!(column, Expr::Star)) {
-        return (LogicalPlan::Project { input, columns }, None);
+        return Ok((LogicalPlan::Project { input, columns }, None));
     }
     let output_names = |columns: &[Expr]| {
         columns
@@ -2249,26 +2249,29 @@ fn bind_order_keys_to_projection(
         // sort is planned; leaving it as a literal would silently produce an
         // unsorted result.
         if let Expr::Literal(ScalarValue::Int64(ordinal)) = key {
-            if let Some(position) = ordinal
+            let position = ordinal
                 .checked_sub(1)
                 .and_then(|value| usize::try_from(value).ok())
-                .filter(|position| *position < columns.len())
-            {
-                let selected = columns[position].clone();
-                let name = match selected {
-                    Expr::Alias { name, .. } => name,
-                    Expr::Column(name) => name,
-                    other => {
-                        let name = format!("expr_{position}");
-                        columns[position] = Expr::Alias {
-                            expr: Box::new(other),
-                            name: name.clone(),
-                        };
-                        name
-                    }
-                };
-                *key = Expr::Column(name);
+                .ok_or_else(|| sql_err("ORDER BY position must be greater than zero"))?;
+            if position >= columns.len() {
+                return Err(sql_err(format!(
+                    "ORDER BY position {ordinal} is not in the select list"
+                )));
             }
+            let selected = columns[position].clone();
+            let name = match selected {
+                Expr::Alias { name, .. } => name,
+                Expr::Column(name) => name,
+                other => {
+                    let name = format!("expr_{position}");
+                    columns[position] = Expr::Alias {
+                        expr: Box::new(other),
+                        name: name.clone(),
+                    };
+                    name
+                }
+            };
+            *key = Expr::Column(name);
             continue;
         }
         if let Expr::Column(name) = key {
@@ -2345,7 +2348,7 @@ fn bind_order_keys_to_projection(
             })
             .collect::<Vec<_>>()
     });
-    (LogicalPlan::Project { input, columns }, visible)
+    Ok((LogicalPlan::Project { input, columns }, visible))
 }
 
 fn build_limit_offset(
@@ -4059,6 +4062,17 @@ mod tests {
             panic!("sort");
         };
         assert_eq!(order_by, vec![(Expr::Column("n".into()), false, true)]);
+    }
+
+    #[test]
+    fn order_by_rejects_invalid_select_ordinals() {
+        for (sql, message) in [
+            ("SELECT k FROM t ORDER BY 0", "greater than zero"),
+            ("SELECT k FROM t ORDER BY 2", "not in the select list"),
+        ] {
+            let error = sql_to_logical_plan(sql).unwrap_err();
+            assert!(error.to_string().contains(message), "{sql}: {error}");
+        }
     }
 
     #[test]
