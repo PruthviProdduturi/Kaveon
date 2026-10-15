@@ -3974,7 +3974,10 @@ fn trino_percent_decode(encoded: &str) -> Result<String, String> {
     while index < bytes.len() {
         match bytes[index] {
             b'+' => decoded.push(b' '),
-            b'%' if index + 2 < bytes.len() => {
+            b'%' => {
+                if index + 2 >= bytes.len() {
+                    return Err("invalid percent-encoded header value".to_owned());
+                }
                 let high = (bytes[index + 1] as char)
                     .to_digit(16)
                     .ok_or_else(|| "invalid percent-encoded header value".to_owned())?
@@ -20609,6 +20612,14 @@ mod streamed_root_tests {
 
         headers.insert("x-trino-prepared-statement", "name=%ZZ".parse().unwrap());
         let error = trino_prepared_queries(&headers).expect_err("invalid encoding");
+        assert!(error.contains("percent-encoded"), "{error}");
+
+        headers.insert("x-trino-prepared-statement", "name=%".parse().unwrap());
+        let error = trino_prepared_queries(&headers).expect_err("truncated encoding");
+        assert!(error.contains("percent-encoded"), "{error}");
+
+        headers.insert("x-trino-prepared-statement", "name=%A".parse().unwrap());
+        let error = trino_prepared_queries(&headers).expect_err("short encoding");
         assert!(error.contains("percent-encoded"), "{error}");
     }
 
