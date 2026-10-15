@@ -398,3 +398,12 @@ sort fallback for unsorted or non-integer inputs. The new executor regression
 (`merges_sorted_integer_batches_with_k_way_heads`) passed alongside the server
 suite (`394/394`). This reduces coordinator-side candidate sorting work; it
 does not change the stated single-coordinator ordered-stream boundary.
+
+## Composite partitioned-join qualification — 2026-10-15
+
+The partitioned executor now has an exact-result regression for a two-column
+inner join where independent runtime `IN` projections would retain a false
+cross-product. The final composite probe returns only the two matching pairs,
+and the partitioned join suite passes 45 tests with one pre-existing ignored
+case. A clean committed checkout also requires the `ScanOperator` predicate
+forwarding import, which is included in the same fix.

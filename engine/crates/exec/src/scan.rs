@@ -2,7 +2,7 @@ use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, BatchSource, KaveonError, Result, ScalarValue};
+use kaveon_core::{BatchOperator, BatchSource, KaveonError, Result, ScalarValue, StoragePredicate};
 use std::sync::Arc;
 
 pub struct ScanOperator {

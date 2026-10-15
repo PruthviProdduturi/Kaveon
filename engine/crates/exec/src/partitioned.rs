@@ -16,7 +16,7 @@ use arrow::{
 };
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool,
-    Result, StoragePredicate,
+    Result,
 };
 
 use crate::{
@@ -3507,6 +3507,54 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_composite_join_preserves_exact_pairs_after_runtime_pushdown() {
+        use arrow::array::{Int32Array, StringArray};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("kind", DataType::Utf8, true),
+        ]));
+        let make_input = |ids: Vec<Option<i32>>, kinds: Vec<Option<&str>>| {
+            Box::new(Input {
+                schema: Arc::clone(&schema),
+                batches: VecDeque::from([
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int32Array::from(ids)),
+                            Arc::new(StringArray::from(kinds)),
+                        ],
+                    )
+                    .unwrap(),
+                ]),
+            }) as Box<dyn BatchOperator>
+        };
+        let pool = QueryMemoryPool::new("partitioned-composite-runtime-filter", 4 * 1024 * 1024)
+            .unwrap();
+        let mut join = PartitionedHashJoin::new(
+            make_input(vec![Some(1), Some(1), Some(2), None], vec![Some("y"), Some("x"), Some("z"), Some("x")]),
+            make_input(vec![Some(1), Some(2)], vec![Some("x"), Some("z")]),
+            JoinType::Inner,
+            vec![("id".into(), "id".into()), ("kind".into(), "kind".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill(),
+            4,
+        )
+        .unwrap();
+        let mut rows = Vec::new();
+        while let Some(batch) = join.next_batch().unwrap() {
+            let ids = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            let kinds = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
+            rows.extend((0..batch.num_rows()).map(|row| (ids.value(row), kinds.value(row).to_owned())));
+        }
+        rows.sort();
+        assert_eq!(rows, vec![(1, "x".to_owned()), (2, "z".to_owned())]);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn partitioned_semi_join_uses_runtime_filter_but_anti_keeps_absent_keys() {
         for kind in [JoinType::Semi, JoinType::Anti] {
             let left = vec![Some(1), Some(2), Some(3), None];
@@ -4530,3 +4578,4 @@ mod tests {
         assert_eq!(spill.snapshot().current_bytes, 0);
     }
 }
+
