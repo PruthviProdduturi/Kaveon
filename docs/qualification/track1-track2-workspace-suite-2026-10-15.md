@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification
 
 **Date:** 2026-10-15  
-**Source:** `origin/dev` at `6cb7ba4b`
+**Source:** `origin/dev` at `c41f728a`
 
 The complete Rust workspace test command was run from `engine/`:
 
@@ -9,10 +9,12 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --no-fail-fast --quiet
 ```
 
-The command completed with **1,457 passed, 6 ignored, and 0 failed** across
+The command completed with **1,470 passed, 6 ignored, and 0 failed** across
 the workspace test binaries. The server suite included the long differential
 sweep across Parquet encodings and execution paths; that sweep completed
-successfully.
+successfully. The current component counts are 74 core, 211 SQL, 85
+planner/runtime, 368 execution, 57 CLI, 394 server, 160 additional SQL, and
+121 storage tests.
 
 This is repository-level evidence only. It does not close the Track 1 cloud
 gates: an injected object-store outage, orphan-spool recovery during that
