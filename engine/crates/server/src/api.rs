@@ -20654,6 +20654,54 @@ mod streamed_root_tests {
         assert_eq!(output_json["data"][0][0], serde_json::json!("value"));
         assert_eq!(output_json["data"][0][4], serde_json::json!("bigint"));
 
+        // Repeated positional placeholders are distinct sequential slots.
+        // Exercise that contract through the route, including metadata
+        // planning through transparent ORDER BY/LIMIT wrappers.
+        let repeated_name = format!("repeated_{}", Uuid::new_v4().simple());
+        let repeated = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!(
+                "PREPARE {repeated_name} FROM SELECT CAST(? AS BIGINT) AS total FROM numbers ORDER BY CAST(? AS BIGINT) LIMIT 1"
+            )),
+        )
+        .await;
+        assert_eq!(repeated.status(), StatusCode::OK);
+
+        let repeated_input = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("DESCRIBE INPUT {repeated_name}")),
+        )
+        .await;
+        assert_eq!(repeated_input.status(), StatusCode::OK);
+        let repeated_input_body = axum::body::to_bytes(repeated_input.into_body(), usize::MAX)
+            .await
+            .expect("repeated describe input body");
+        let repeated_input_json: serde_json::Value =
+            serde_json::from_slice(&repeated_input_body).expect("repeated describe input JSON");
+        assert_eq!(repeated_input_json["data"].as_array().unwrap().len(), 2);
+        assert_eq!(repeated_input_json["data"][0][0], serde_json::json!(0));
+        assert_eq!(repeated_input_json["data"][1][0], serde_json::json!(1));
+
+        let repeated_output = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("DESCRIBE OUTPUT {repeated_name}")),
+        )
+        .await;
+        assert_eq!(repeated_output.status(), StatusCode::OK);
+        let repeated_output_body = axum::body::to_bytes(repeated_output.into_body(), usize::MAX)
+            .await
+            .expect("repeated describe output body");
+        let repeated_output_json: serde_json::Value =
+            serde_json::from_slice(&repeated_output_body).expect("repeated describe output JSON");
+        assert_eq!(repeated_output_json["data"][0][0], serde_json::json!("total"));
+        assert_eq!(repeated_output_json["data"][0][4], serde_json::json!("bigint"));
+
         let executed = submit_trino_statement_parts(
             std::sync::Arc::clone(&state),
             owner.clone(),
