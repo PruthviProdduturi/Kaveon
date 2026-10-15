@@ -123,4 +123,3 @@ The local differential spill gate is also covered by
 the partitioned-join spill tests in the workspace suite. Those tests prove
 exact local spill/replay and cleanup; they do not substitute for the AKS
 high-cardinality and disk-pressure gate.
-
