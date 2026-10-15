@@ -2210,6 +2210,7 @@ fn build_projection(
 ) -> Result<LogicalPlan> {
     let mut columns = Vec::new();
     let mut is_star = false;
+    let mut has_qualified_star = false;
 
     for item in projection {
         match item {
@@ -2228,13 +2229,20 @@ fn build_projection(
                 columns.push(Expr::Star);
             }
             ast::SelectItem::QualifiedWildcard(_, _) => {
-                is_star = true;
-                columns.push(Expr::Star);
+                if let ast::SelectItem::QualifiedWildcard(name, _) = item {
+                    has_qualified_star = true;
+                    columns.push(Expr::Column(format!("{}.*", name)));
+                }
             }
         }
     }
 
-    if is_star && columns.len() == 1 && !has_aggregates && !contains_using_join(&plan) {
+    if is_star
+        && !has_qualified_star
+        && columns.len() == 1
+        && !has_aggregates
+        && !contains_using_join(&plan)
+    {
         return Ok(plan);
     }
 
