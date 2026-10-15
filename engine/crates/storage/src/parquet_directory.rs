@@ -1842,8 +1842,8 @@ impl ObjectDirectoryReader {
                 values: Vec::new(),
                 sizes: Vec::new(),
             };
-            files.retain_mut(|scan| {
-                match fold_predicate(&predicate, &layout, &scan.values) {
+            files.retain_mut(
+                |scan| match fold_predicate(&predicate, &layout, &scan.values) {
                     Folded::Known(SqlBool::False | SqlBool::Null) => false,
                     Folded::Known(SqlBool::True) => true,
                     Folded::Unknown => {
@@ -1862,8 +1862,8 @@ impl ObjectDirectoryReader {
                         });
                         true
                     }
-                }
-            });
+                },
+            );
         }
         for scan in files {
             let mut reader =
@@ -3027,20 +3027,15 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(fixture(store.as_ref()));
         let container = format!("runtime-filter-{}", uuid_like());
-        let mut source = ObjectDirectoryReader::new(
-            store,
-            "memory",
-            &container,
-            Path::from("table"),
-        )
-        .read_blocking()
-        .unwrap();
-        assert!(source
-            .apply_runtime_filter(
-                "x",
-                &[ScalarValue::Int64(1), ScalarValue::Int64(104)],
-            )
-            .unwrap());
+        let mut source =
+            ObjectDirectoryReader::new(store, "memory", &container, Path::from("table"))
+                .read_blocking()
+                .unwrap();
+        assert!(
+            source
+                .apply_runtime_filter("x", &[ScalarValue::Int64(1), ScalarValue::Int64(104)],)
+                .unwrap()
+        );
         assert_eq!(values(&mut source), vec![1, 104]);
     }
 
@@ -3096,9 +3091,11 @@ mod tests {
         assert_eq!(snapshot.files_pruned_by_partition, 0);
 
         let mut runtime_partition = reader().read_blocking().unwrap();
-        assert!(runtime_partition
-            .apply_runtime_filter("region", &[ScalarValue::Utf8("us".into())])
-            .unwrap());
+        assert!(
+            runtime_partition
+                .apply_runtime_filter("region", &[ScalarValue::Utf8("us".into())])
+                .unwrap()
+        );
         assert_eq!(values(&mut runtime_partition), vec![3]);
 
         // A projection orders keys and file columns as asked.

@@ -1181,23 +1181,17 @@ fn drain(operator: &mut dyn BatchOperator) -> Vec<RecordBatch> {
 /// distributed planner/compiler boundary rather than only the local operator.
 #[test]
 fn distributed_multi_array_unnest_matches_trino_padding() {
-    let directory =
-        std::env::temp_dir().join(format!("kaveon-unnest-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("kaveon-unnest-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement =
-        "SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY['a', 'b']) WITH ORDINALITY AS t(id, label, ord) ORDER BY ord";
+    let statement = "SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY['a', 'b']) WITH ORDINALITY AS t(id, label, ord) ORDER BY ord";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-unnest", 16 << 20).unwrap();
     let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
         .unwrap_or_else(|error| panic!("{statement}: {error}"));
     assert_eq!(
         canonical_rows(&batches, true),
-        vec![
-            "1\u{1f}a\u{1f}1",
-            "2\u{1f}b\u{1f}2",
-            "3\u{1f}NULL\u{1f}3",
-        ]
+        vec!["1\u{1f}a\u{1f}1", "2\u{1f}b\u{1f}2", "3\u{1f}NULL\u{1f}3",]
     );
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
@@ -1217,7 +1211,10 @@ fn distributed_unnest_with_offset_is_zero_based() {
     let pool = QueryMemoryPool::new("distributed-unnest-offset", 16 << 20).unwrap();
     let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
         .unwrap_or_else(|error| panic!("{statement}: {error}"));
-    assert_eq!(canonical_rows(&batches, true), vec!["10\u{1f}0", "20\u{1f}1"]);
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["10\u{1f}0", "20\u{1f}1"]
+    );
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
@@ -1231,8 +1228,7 @@ fn distributed_grouping_sets_match_the_local_result() {
         std::env::temp_dir().join(format!("kaveon-grouping-sets-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement =
-        "SELECT region, platform, COUNT(*) AS n FROM events GROUP BY GROUPING SETS ((region), (platform)) ORDER BY 3 DESC, 1";
+    let statement = "SELECT region, platform, COUNT(*) AS n FROM events GROUP BY GROUPING SETS ((region), (platform)) ORDER BY 3 DESC, 1";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-grouping-sets", 32 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
@@ -1285,8 +1281,7 @@ fn distributed_composite_join_using_matches_the_local_result() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement =
-        "SELECT u.user_id, u.region, p.country FROM events u JOIN events p USING (user_id, region) ORDER BY 1, 2, 3 LIMIT 20";
+    let statement = "SELECT u.user_id, u.region, p.country FROM events u JOIN events p USING (user_id, region) ORDER BY 1, 2, 3 LIMIT 20";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-composite-using", 32 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
@@ -1333,8 +1328,10 @@ fn distributed_join_using_wildcard_suppresses_the_right_key() {
 
 #[test]
 fn distributed_join_qualified_wildcard_keeps_only_left_columns() {
-    let directory =
-        std::env::temp_dir().join(format!("kaveon-join-qualified-star-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-qualified-star-{}",
+        uuid::Uuid::new_v4()
+    ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     let statement = "SELECT u.* FROM events u JOIN users p USING (user_id)";
@@ -1358,10 +1355,8 @@ fn distributed_join_qualified_wildcard_keeps_only_left_columns() {
 
 #[test]
 fn distributed_outer_using_wildcard_matches_local_coalescing() {
-    let directory = std::env::temp_dir().join(format!(
-        "kaveon-join-outer-using-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-outer-using-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     for statement in [

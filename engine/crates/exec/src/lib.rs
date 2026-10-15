@@ -19,6 +19,6 @@ pub mod setop;
 pub mod sort;
 pub mod spill;
 pub mod topn;
-pub mod unnest;
 pub mod union;
+pub mod unnest;
 pub mod window;

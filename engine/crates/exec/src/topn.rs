@@ -330,9 +330,7 @@ fn try_integer_batch_top_n(
                     let row = cursors[batch];
                     (row < values.len()).then_some((batch, row))
                 })
-                .min_by(|left, right| {
-                    compare_keys(keys[left.0][left.1], keys[right.0][right.1])
-                });
+                .min_by(|left, right| compare_keys(keys[left.0][left.1], keys[right.0][right.1]));
             let Some((batch, row)) = next else { break };
             merged.push((batch, row));
             cursors[batch] += 1;
@@ -344,9 +342,8 @@ fn try_integer_batch_top_n(
             .enumerate()
             .flat_map(|(batch, values)| (0..values.len()).map(move |row| (batch, row)))
             .collect::<Vec<_>>();
-        references.sort_by(|left, right| {
-            compare_keys(keys[left.0][left.1], keys[right.0][right.1])
-        });
+        references
+            .sort_by(|left, right| compare_keys(keys[left.0][left.1], keys[right.0][right.1]));
         references.truncate(limit);
         references
     };
@@ -559,14 +556,7 @@ mod tests {
 
     #[test]
     fn typed_unsigned_single_key_topn_matches_arrow() {
-        let values = Arc::new(UInt64Array::from(vec![
-            0,
-            u64::MAX,
-            4,
-            4,
-            17,
-            2,
-        ]));
+        let values = Arc::new(UInt64Array::from(vec![0, u64::MAX, 4, 4, 17, 2]));
         let columns = vec![SortColumn {
             values: values.clone(),
             options: Some(SortOptions {

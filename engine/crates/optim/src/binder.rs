@@ -617,12 +617,8 @@ impl Binder<'_> {
         else {
             return None;
         };
-        let left = self
-            .scope_of(left)
-            .qualified_by(relation_qualifier(left));
-        let right = self
-            .scope_of(right)
-            .qualified_by(relation_qualifier(right));
+        let left = self.scope_of(left).qualified_by(relation_qualifier(left));
+        let right = self.scope_of(right).qualified_by(relation_qualifier(right));
         let join_type = match plan {
             LogicalPlan::Join { join_type, .. } => *join_type,
             _ => unreachable!("using_wildcard_columns matched a join"),
@@ -659,11 +655,7 @@ impl Binder<'_> {
         Some(columns)
     }
 
-    fn qualified_wildcard_columns(
-        &self,
-        plan: &LogicalPlan,
-        qualifier: &str,
-    ) -> Option<Vec<Expr>> {
+    fn qualified_wildcard_columns(&self, plan: &LogicalPlan, qualifier: &str) -> Option<Vec<Expr>> {
         let scope = self.scope_of(plan);
         let columns = scope
             .columns

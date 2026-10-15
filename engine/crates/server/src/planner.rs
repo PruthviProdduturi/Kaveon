@@ -511,15 +511,15 @@ impl ExecutableFragmentBuilder<'_> {
                 with_ordinality,
                 ordinality_column,
                 ordinality_start,
-            } => Ok(self.add_fragment(FragmentDraft::leaf(
-                FragmentOperator::Unnest {
+            } => Ok(
+                self.add_fragment(FragmentDraft::leaf(FragmentOperator::Unnest {
                     expressions: expressions.clone(),
                     columns: columns.clone(),
                     with_ordinality: *with_ordinality,
                     ordinality_column: ordinality_column.clone(),
                     ordinality_start: *ordinality_start,
-                },
-            ))),
+                })),
+            ),
             LogicalPlan::Scan { table, columns, .. } => {
                 let reference = TableReference::parse(table);
                 let resolved = self.catalog.resolve_table(&reference)?;
@@ -3519,10 +3519,12 @@ mod tests {
     #[test]
     fn plans_constant_array_unnest_as_a_leaf_stage() {
         let graph = graph("SELECT * FROM UNNEST(ARRAY[1, 2]) AS t(value)");
-        assert!(graph
-            .stages
-            .iter()
-            .any(|stage| stage.plan.operator == "Unnest"));
+        assert!(
+            graph
+                .stages
+                .iter()
+                .any(|stage| stage.plan.operator == "Unnest")
+        );
     }
 
     #[test]
