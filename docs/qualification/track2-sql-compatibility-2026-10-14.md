@@ -224,3 +224,10 @@ partition-local candidate merging, multi-column and NULL ordering, schema
 validation, and bounded spill behavior. It does not close the Track 1 global
 ORDER BY gate: final ordered results still merge at one coordinator, so a
 fully parallel ordered stream and its deployment qualification remain open.
+
+The merge path now detects worker batches that are already ordered on a single
+integer key and performs a bounded k-way head merge, while retaining the full
+sort fallback for unsorted or non-integer inputs. The new executor regression
+(`merges_sorted_integer_batches_with_k_way_heads`) passed alongside the server
+suite (`394/394`). This reduces coordinator-side candidate sorting work; it
+does not change the stated single-coordinator ordered-stream boundary.
