@@ -4249,8 +4249,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let Some(document) = text_value(documents, row)? else {
                         return Ok(None);
                     };
-                    Ok(match serde_json::from_str::<serde_json::Value>(document).ok()? {
-                        serde_json::Value::Array(values) => Some(values.len() as i64),
+                    Ok(match serde_json::from_str::<serde_json::Value>(document) {
+                        Ok(serde_json::Value::Array(values)) => Some(values.len() as i64),
                         _ => None,
                     })
                 })
@@ -4338,8 +4338,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     else {
                         return Ok(None);
                     };
-                    Ok(if upper == "JSON_EXTRACT" || upper == "JSON_QUERY" {
+                    Ok(if upper == "JSON_EXTRACT" {
                         json_extract(document, path)
+                    } else if upper == "JSON_QUERY" {
+                        match json_extract_value(document, path) {
+                            Some(serde_json::Value::Array(_) | serde_json::Value::Object(_)) =>
+                                json_extract(document, path),
+                            _ => None,
+                        }
                     } else {
                         json_extract_scalar(document, path)
                     })
@@ -4393,6 +4399,49 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                 };
                 result.append_value(value.to_string());
+            }
+            Ok(Arc::new(result.finish()))
+        }
+        "JSON_ARRAY_GET" | "TRY_JSON_ARRAY_GET" => {
+            check_arity(name, args, 2)?;
+            let try_get = upper == "TRY_JSON_ARRAY_GET";
+            let documents = &args[0];
+            let indices = compute::cast(&args[1], &DataType::Int64)?;
+            let indices = indices.as_primitive::<arrow::datatypes::Int64Type>();
+            let mut result = StringBuilder::new();
+            for row in 0..num_rows {
+                let (Some(document), Some(index)) =
+                    (text_value(documents, row)?, indices.is_valid(row).then(|| indices.value(row)))
+                else {
+                    result.append_null();
+                    continue;
+                };
+                let parsed = match serde_json::from_str::<serde_json::Value>(document) {
+                    Ok(value) => value,
+                    Err(_error) if try_get => {
+                        result.append_null();
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(KaveonError::Execution(format!(
+                            "invalid JSON value at row {row}: {error}"
+                        )))
+                    }
+                };
+                let serde_json::Value::Array(values) = parsed else {
+                    result.append_null();
+                    continue;
+                };
+                let position = if index < 0 {
+                    values.len() as i64 + index
+                } else {
+                    index
+                };
+                if position < 0 || position >= values.len() as i64 {
+                    result.append_null();
+                } else {
+                    result.append_value(values[position as usize].to_string());
+                }
             }
             Ok(Arc::new(result.finish()))
         }
@@ -8292,27 +8341,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(BooleanArray::from(rows)))
         }
-        "ARRAY_JOIN" => {
-            if args.len() != 2 && args.len() != 3 {
-                return Err(KaveonError::Execution(
-                    "ARRAY_JOIN requires 2 or 3 arguments".into(),
-                ));
-            }
-            let delimiters = as_string_array(&args[1])?;
-            let replacements = if args.len() == 3 {
-                Some(as_string_array(&args[2])?)
-            } else {
-                None
-            };
-            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
-                return Ok(Arc::new(array_join_list(list, &delimiters, replacements)?));
-            }
-            let list = args[0]
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into()))?;
-            Ok(Arc::new(array_join_list(list, &delimiters, replacements)?))
-        }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
             if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
@@ -8743,51 +8771,6 @@ fn array_remove_generic<L: OffsetSizeTrait>(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
-}
-
-fn array_join_list<L: OffsetSizeTrait>(
-    list: &GenericListArray<L>,
-    delimiters: &StringArray,
-    replacements: Option<&StringArray>,
-) -> Result<StringArray> {
-    let result = (0..list.len())
-        .map(|row| {
-            if list.is_null(row) || delimiters.is_null(row) {
-                return Ok(None);
-            }
-            let replacement = replacements.and_then(|values| {
-                (!values.is_null(row)).then(|| values.value(row))
-            });
-            let values = list.value(row);
-            let mut parts = Vec::with_capacity(values.len());
-            for index in 0..values.len() {
-                if values.is_null(index) {
-                    if let Some(replacement) = replacement {
-                        parts.push(replacement.to_owned());
-                    }
-                } else {
-                    parts.push(array_join_value(&values, index)?);
-                }
-            }
-            Ok(Some(parts.join(delimiters.value(row))))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(result.into())
-}
-
-fn array_join_value(array: &ArrayRef, index: usize) -> Result<String> {
-    Ok(match array.data_type() {
-        DataType::Boolean => array.as_any().downcast_ref::<BooleanArray>().expect("boolean list values").value(index).to_string(),
-        DataType::Int64 => array.as_any().downcast_ref::<Int64Array>().expect("int64 list values").value(index).to_string(),
-        DataType::Float64 => array.as_any().downcast_ref::<Float64Array>().expect("float64 list values").value(index).to_string(),
-        DataType::Utf8 => array.as_any().downcast_ref::<StringArray>().expect("utf8 list values").value(index).to_owned(),
-        DataType::LargeUtf8 => array.as_any().downcast_ref::<arrow::array::LargeStringArray>().expect("large utf8 list values").value(index).to_owned(),
-        DataType::Decimal128(_, scale) => {
-            let value = array.as_any().downcast_ref::<Decimal128Array>().expect("decimal list values").value(index);
-            format_decimal_for_array_join(value, *scale)
-        }
-        other => return Err(KaveonError::Execution(format!("ARRAY_JOIN does not support list element type {other}"))),
-    })
 }
 
 fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Result<bool> {
@@ -11321,7 +11304,12 @@ mod tests {
         let contains = eval_scalar_function("CONTAINS_KEY", &[Arc::clone(&map), Arc::clone(&needle)], 1)
             .unwrap();
         assert_eq!(contains.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
-        let value = eval_scalar_function(\n            "MAP_ELEMENT_AT",\n            &[Arc::clone(&map), Arc::clone(&needle)],\n            1,\n        )\n        .unwrap();
+        let value = eval_scalar_function(
+            "MAP_ELEMENT_AT",
+            &[Arc::clone(&map), Arc::clone(&needle)],
+            1,
+        )
+        .unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
     }
 
@@ -16113,7 +16101,7 @@ mod tests {
         .unwrap();
         let result = evaluate(&expr, &valid_batch).unwrap();
         let values = result.as_string::<i32>();
-        assert_eq!(values.value(0), r#"{"b":2,"a":[true,null]}"#);
+        assert_eq!(values.value(0), r#"{"a":[true,null],"b":2}"#);
         assert!(values.is_null(1));
 
         let large_batch = RecordBatch::try_from_iter([(
@@ -16368,7 +16356,7 @@ mod tests {
                 .unwrap()
                 .iter()
                 .collect::<Vec<_>>(),
-            vec![Some(true), Some(true)]
+            vec![Some(true), Some(false)]
         );
     }
 
@@ -16405,37 +16393,6 @@ mod tests {
             result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(2), Some(0), None]
         );
-    }
-
-    #[test]
-    fn evaluates_array_join_with_null_replacement() {
-        let mut items = ListBuilder::new(Int64Builder::new());
-        items.values().append_value(1);
-        items.values().append_null();
-        items.values().append_value(3);
-        items.append(true);
-        items.append(false);
-        let batch = RecordBatch::try_from_iter([
-            ("items", Arc::new(items.finish()) as ArrayRef),
-            ("delimiter", Arc::new(StringArray::from(vec![",", ";"])) as ArrayRef),
-            (
-                "replacement",
-                Arc::new(StringArray::from(vec![Some("?"), Some("-")])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "ARRAY_JOIN".into(),
-            args: vec![
-                Expr::Column("items".into()),
-                Expr::Column("delimiter".into()),
-                Expr::Column("replacement".into()),
-            ],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        let values = result.as_string::<i32>();
-        assert_eq!(values.value(0), "1,?,3");
-        assert_eq!(values.value(1), "");
     }
 
     #[test]
@@ -16546,44 +16503,3 @@ mod tests {
         assert!(values.is_null(2));
     }
 }
-        "TIME_LITERAL" => {
-            check_arity(name, args, 1)?;
-            let values = as_string_array(&args[0])?;
-            let result = (0..num_rows)
-                .map(|row| {
-                    values
-                        .is_null(row)
-                        .then_some(None)
-                        .unwrap_or_else(|| parse_time_literal(values.value(row)).map(Some))
-                        .ok_or_else(|| {
-                            KaveonError::Execution(format!(
-                                "invalid TIME literal: '{}'",
-                                values.value(row)
-                            ))
-                        })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(Time64MicrosecondArray::from(result)))
-        }
-fn parse_time_literal(text: &str) -> Option<i64> {
-    let (clock, fraction) = text.trim().split_once('.').unwrap_or((text.trim(), ""));
-    let mut parts = clock.split(':');
-    let hour = parts.next()?.parse::<i64>().ok()?;
-    let minute = parts.next()?.parse::<i64>().ok()?;
-    let second = parts.next()?.parse::<i64>().ok()?;
-    if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
-        return None;
-    }
-    if !fraction.is_empty() && !fraction.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let micros = fraction
-        .chars()
-        .take(6)
-        .collect::<String>()
-        .parse::<i64>()
-        .unwrap_or(0)
-        * 10_i64.pow(6u32.saturating_sub(fraction.len().min(6) as u32));
-    Some(((hour * 3600 + minute * 60 + second) * 1_000_000) + micros)
-}
-

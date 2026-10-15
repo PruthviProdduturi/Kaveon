@@ -3487,6 +3487,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                     args: inner_args,
                 })
             }
+            Expr::Function {
+                name: inner_name,
+                args: inner_args,
             } if inner_args.len() == 2
                 && inner_name.eq_ignore_ascii_case("JSON_ARRAY_GET") =>
             {
