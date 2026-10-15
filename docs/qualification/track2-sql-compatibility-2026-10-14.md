@@ -67,6 +67,15 @@ an explicit JSON null, false for a missing path, and SQL NULL for NULL inputs.
 The focused executor regression covers all four cases. Invalid or unsupported
 paths remain conservative NULL results under the existing JSON path contract.
 
+## ARRAY_JOIN qualification — 2026-10-15
+
+`ARRAY_JOIN(array, delimiter[, null_replacement])` now handles regular and
+large UTF-8 arrays, skips null elements by default, applies the optional
+replacement text when provided, and preserves NULL array/delimiter rows. The
+focused executor regression covers joined values, null replacement, and a
+NULL array row. Non-text arrays remain explicitly unsupported until their
+coercion contract is qualified.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
