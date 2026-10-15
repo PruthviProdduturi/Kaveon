@@ -8444,6 +8444,15 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
                 .expect("boolean JSON needle")
                 .value(row),
         ),
+        DataType::Int8 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<Int8Array>().expect("int8 JSON needle").value(row) as i64,
+        )),
+        DataType::Int16 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<Int16Array>().expect("int16 JSON needle").value(row) as i64,
+        )),
+        DataType::Int32 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<Int32Array>().expect("int32 JSON needle").value(row) as i64,
+        )),
         DataType::Int64 => serde_json::Value::Number(serde_json::Number::from(
             array
                 .as_any()
@@ -8451,6 +8460,31 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
                 .expect("int64 JSON needle")
                 .value(row),
         )),
+        DataType::UInt8 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<UInt8Array>().expect("uint8 JSON needle").value(row) as u64,
+        )),
+        DataType::UInt16 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<UInt16Array>().expect("uint16 JSON needle").value(row) as u64,
+        )),
+        DataType::UInt32 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<UInt32Array>().expect("uint32 JSON needle").value(row) as u64,
+        )),
+        DataType::UInt64 => serde_json::Value::Number(serde_json::Number::from(
+            array.as_any().downcast_ref::<UInt64Array>().expect("uint64 JSON needle").value(row),
+        )),
+        DataType::Float32 => {
+            let number = array
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("float32 JSON needle")
+                .value(row) as f64;
+            let Some(number) = serde_json::Number::from_f64(number) else {
+                return Err(KaveonError::Execution(
+                    "JSON_ARRAY_CONTAINS does not accept NaN or infinity needles".into(),
+                ));
+            };
+            serde_json::Value::Number(number)
+        }
         DataType::Float64 => {
             let number = array
                 .as_any()
@@ -16270,6 +16304,21 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap()
             .value(0));
+
+        let numeric_batch = RecordBatch::try_from_iter([
+            ("document", Arc::new(StringArray::from(vec![Some(r#"[1,2,3]"#)])) as ArrayRef),
+            ("needle", Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef),
+        ])
+        .unwrap();
+        let numeric_result = evaluate(
+            &Expr::Function {
+                name: "JSON_ARRAY_CONTAINS".into(),
+                args: vec![Expr::Column("document".into()), Expr::Column("needle".into())],
+            },
+            &numeric_batch,
+        )
+        .unwrap();
+        assert!(numeric_result.as_boolean().value(0));
     }
 
     #[test]
