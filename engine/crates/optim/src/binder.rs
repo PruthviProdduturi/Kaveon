@@ -575,8 +575,10 @@ impl Binder<'_> {
     }
 
     /// Expand an unqualified wildcard over a USING join. SQL exposes the
-    /// join key once, using the left relation's position and name; an ON
-    /// join keeps both columns because it has no `using_columns` metadata.
+    /// join key once, using the left relation's position for inner/left
+    /// joins, the right value for a right join, and COALESCE for a full join;
+    /// an ON join keeps both columns because it has no `using_columns`
+    /// metadata.
     fn using_wildcard_columns(&self, plan: &LogicalPlan) -> Option<Vec<Expr>> {
         let LogicalPlan::Join {
             left,
@@ -593,10 +595,31 @@ impl Binder<'_> {
         let right = self
             .scope_of(right)
             .qualified_by(relation_qualifier(right));
+        let join_type = match plan {
+            LogicalPlan::Join { join_type, .. } => *join_type,
+            _ => unreachable!("using_wildcard_columns matched a join"),
+        };
         let mut columns = left
             .columns
             .into_iter()
-            .map(|column| Expr::Column(column.physical))
+            .map(|column| {
+                if !using_columns.iter().any(|name| name == &column.name) {
+                    return Expr::Column(column.physical);
+                }
+                let right_key = right
+                    .columns
+                    .iter()
+                    .find(|candidate| candidate.name == column.name)
+                    .map(|candidate| Expr::Column(candidate.physical.clone()));
+                match (join_type, right_key) {
+                    (JoinType::Right, Some(right_key)) => right_key,
+                    (JoinType::Full, Some(right_key)) => Expr::Function {
+                        name: "COALESCE".to_owned(),
+                        args: vec![Expr::Column(column.physical), right_key],
+                    },
+                    _ => Expr::Column(column.physical),
+                }
+            })
             .collect::<Vec<_>>();
         columns.extend(
             right
@@ -2096,6 +2119,29 @@ mod tests {
             column,
             Expr::Column(name) if name.starts_with("c.")
         )));
+    }
+
+    #[test]
+    fn right_using_wildcard_uses_the_right_join_key() {
+        let plan = bound("SELECT * FROM customer c RIGHT JOIN customer d USING (c_custkey)");
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert_eq!(columns[0], column("d.c_custkey"));
+    }
+
+    #[test]
+    fn full_using_wildcard_coalesces_the_join_key() {
+        let plan = bound("SELECT * FROM customer c FULL JOIN customer d USING (c_custkey)");
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "COALESCE"
+                    && args == &vec![column("c.c_custkey"), column("d.c_custkey")]
+        ));
     }
 
     #[test]
