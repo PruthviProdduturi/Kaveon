@@ -173,3 +173,14 @@ errors, SHOW SESSION/SHOW FUNCTIONS, PREPARE/EXECUTE/DEALLOCATE ownership,
 DESCRIBE INPUT/OUTPUT, typed scalar/array/map bindings, and the session
 context headers. It is a server-side protocol qualification; a sweep from
 external Trino JDBC/CLI clients remains an explicit open gate.
+
+## Runtime-filter qualification boundary
+
+The bounded build-side runtime-filter path was rerun with
+`cargo test -p kaveon-exec runtime_filter --quiet`: **2 passed, 0 failed**.
+The filter is applied before hash probing for eligible inner and semi joins,
+with typed integer/date/text key coverage. It intentionally does not claim
+scan-level Parquet/Delta pruning: storage predicates are fixed when a source
+is constructed, so a future source-level filter interface must preserve
+snapshot consistency and exact outer/anti-join semantics before that gate can
+close.
