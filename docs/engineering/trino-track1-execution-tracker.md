@@ -17,8 +17,8 @@ snapshot, not a session diary.
 
 | # | Capability | Status | What is already true | Completion gate |
 |---:|---|---|---|---|
-| 1 | Worker discovery and scheduling | **Active** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Run the same correctness corpus on each supported multi-worker topology and retain scheduling, retry, skew, and failure evidence. |
-| 2 | Hash exchange and repartition | Open | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, and deterministic multi-column partitioning exist. | Sustained network and cloud-storage pressure, cancellation, quota, and orphan-spool evidence on the release image. |
+| 1 | Worker discovery and scheduling | **Complete (bounded)** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Reopen for additional topologies or endurance evidence; the declared three-worker topology is qualified. |
+| 2 | Hash exchange and repartition | **Active** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, and deterministic multi-column partitioning exist. | Sustained network and cloud-storage pressure, cancellation, quota, and orphan-spool evidence on the release image. |
 | 3 | Distributed joins | Open | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, and bounded spill exist. | Distributed outer-join equivalence, skew, disk exhaustion, and measured join-spill qualification. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. | Larger-scale cluster run with p95 latency, skew behavior, and final-merge spill evidence. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
@@ -34,60 +34,28 @@ snapshot, not a session diary.
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
 | 16 | Sustained distributed soak | Open | Focused correctness and failure tests exist. | Mixed workload soak with throughput, p95 latency, memory, spill, retry, and failure counts retained. |
 
-## Active item: 1 — worker discovery and scheduling
+## Active item: 2 — hash exchange and repartition
 
-The next evidence package must include:
+The next evidence package must include sustained exchange and cloud-storage
+pressure, cancellation, quota behavior, orphan-spool checks, commands, raw
+results, and a short qualification report under `docs/qualification/`.
 
-1. The supported worker topologies and their exact image/commit identifiers.
-2. A repeated local or containerized correctness corpus against the local executor.
-3. Assignment, lease, retry, requeue, and stale-attempt results for each topology.
-4. Skew and cancellation observations, including cleanup of abandoned tasks.
-5. Commands, raw results, and a short qualification report under
-   `docs/qualification/`.
+The worker-discovery gate is now complete for the declared three-worker
+topology. The qualification package includes Docker and AKS scheduling runs,
+forced pod-loss retry, grouped skew/failure injection, repeated pressure, and
+graceful node-drain retry. Item 2 is the active work item.
 
-After that evidence is reviewed, change item 1 to `Complete`, move item 2 to
-`Active`, and update this matrix in place.
+Current exchange evidence includes the scheduler and stage-runtime suites,
+three-node Docker and AKS runs, exact multi-worker exchange, cancellation
+cleanup, worker replacement, grouped skew/failure injection, repeated pressure,
+and graceful node-drain retry. These reports qualify worker discovery and
+scheduling for the declared three-worker topology; they do not qualify the
+exchange pressure gate now active below.
 
-Current evidence: the scheduler and stage-runtime focused suites pass (16
-tests total) on the current commit. The Docker report
-`docs/qualification/track1-worker-scheduling-docker-2026-10-14.md` records a
-three-node Compose run, and the AKS report
-`docs/qualification/track1-worker-scheduling-aks-2026-10-14.md` records the
-production topology: three workers discovered with one catalog snapshot, a
-three-way 504-million-row scan and exchange, a final merge, and exact platform
-counts. These runs close the basic multi-worker assignment and stage-dependency
-evidence. The bounded AKS fault-pressure report
-`docs/qualification/engine-aks-fault-pressure-2026-10-14.md` additionally
-records worker loss, replacement retry, cancellation cleanup, concurrent exact
-results, and bounded pressure on the same three-worker image. A dedicated skew
-qualification and the remaining stale-attempt/lease and failure-path evidence
-are still required before item 1 can move to Complete. The rerun summary is
-`docs/qualification/track1-aks-fault-pressure-rerun-2026-10-14.md`; it records
-the cancellation-harness correction and a passing live result. The focused
-scheduler gate report
-`docs/qualification/track1-scheduler-gates-2026-10-14.md` records skew-tail
-steal, retry, stale-attempt, and lease-return unit evidence; the live rerun
-records worker loss and replacement retry. The live skew observation
-`docs/qualification/track1-aks-skew-observation-2026-10-14.md` records a 29.3x
-data imbalance with bounded worker timing and exact results; it does not claim
-a general skew-splitting optimizer. Item 1 remains Active until a controlled
-live skew/failure injection and repeated lease evidence are retained together
-on the release image; the current reports define that final gate but do not
-close it.
-
-The newer live rerun
-`docs/qualification/track1-aks-fault-pressure-2026-10-15.md` independently
-passes the three-worker loss, retry, cancellation, concurrent exact-result,
-and bounded-pressure checks on the current cluster. The combined grouped
-workload and forced-loss qualification
-`docs/qualification/track1-aks-skew-fault-2026-10-15.md` also passes and closes
-the declared live skew/failure-injection evidence gate for this image. Item 1
-remains Active because node-drain did not produce an observed lease retry and
-coordinator failover and broader topology coverage are still open. The repeated
-pod-loss qualification
-`docs/qualification/track1-aks-repeat-fault-2026-10-15.md` passes all seven
-checks with three pressure rounds and provides repeat retry evidence; it does
-not substitute for graceful node-drain lease evidence or endurance soak.
+The positive graceful node-drain result is retained in
+`docs/qualification/track1-aks-node-drain-skew-2026-10-15.md`; repeated pod-loss
+evidence is retained in
+`docs/qualification/track1-aks-repeat-fault-2026-10-15.md`.
 
 ## Validation commands
 
