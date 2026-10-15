@@ -6316,6 +6316,32 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     None,
                 )?);
             }
+            let indices = compute::cast(&args[1], &DataType::Int64)?;
+            let indices = indices.as_primitive::<Int64Type>();
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                let mut positions = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    if indices.is_null(row) {
+                        positions.push(None);
+                        continue;
+                    }
+                    let index = indices.value(row);
+                    if list.is_null(row) || index == 0 {
+                        positions.push(None);
+                        continue;
+                    }
+                    let start = list.value_offsets()[row];
+                    let end = list.value_offsets()[row + 1];
+                    let length = end - start;
+                    let offset = if index > 0 { index - 1 } else { length + index };
+                    positions.push((0..length).contains(&offset).then_some(start + offset));
+                }
+                return Ok(compute::take(
+                    list.values().as_ref(),
+                    &Int64Array::from(positions),
+                    None,
+                )?);
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -6324,8 +6350,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         "ELEMENT_AT currently supports ARRAY/List values only".into(),
                     )
                 })?;
-            let indices = compute::cast(&args[1], &DataType::Int64)?;
-            let indices = indices.as_primitive::<Int64Type>();
             let mut positions = Vec::with_capacity(num_rows);
             for row in 0..num_rows {
                 if indices.is_null(row) {
@@ -15424,6 +15448,52 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(30), Some(30)]
+        );
+    }
+
+    #[test]
+    fn element_at_supports_large_list_values() {
+        let mut builder = LargeListBuilder::new(Int64Builder::new());
+        for values in [&[10, 20, 30][..], &[40, 50][..]] {
+            for value in values {
+                builder.values().append_value(*value);
+            }
+            builder.append(true);
+        }
+        let batch = RecordBatch::try_from_iter([(
+            "items",
+            Arc::new(builder.finish()) as ArrayRef,
+        )])
+        .unwrap();
+        let first = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![
+                    Expr::Column("items".into()),
+                    Expr::Literal(ScalarValue::Int64(1)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            first.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(10), Some(40)]
+        );
+        let last = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![
+                    Expr::Column("items".into()),
+                    Expr::Literal(ScalarValue::Int64(-1)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            last.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(30), Some(50)]
         );
     }
 
