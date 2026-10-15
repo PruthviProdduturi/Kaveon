@@ -83,8 +83,11 @@ workload and forced-loss qualification
 `docs/qualification/track1-aks-skew-fault-2026-10-15.md` also passes and closes
 the declared live skew/failure-injection evidence gate for this image. Item 1
 remains Active because node-drain did not produce an observed lease retry and
-repeated lease/endurance evidence, coordinator failover, and broader topology
-coverage are still open.
+coordinator failover and broader topology coverage are still open. The repeated
+pod-loss qualification
+`docs/qualification/track1-aks-repeat-fault-2026-10-15.md` passes all seven
+checks with three pressure rounds and provides repeat retry evidence; it does
+not substitute for graceful node-drain lease evidence or endurance soak.
 
 ## Validation commands
 
