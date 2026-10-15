@@ -206,16 +206,35 @@ _YOY = re.compile(r"\b(?:year[\s-]over[\s-]year|yoy|year[\s-]on[\s-]year)\b|"
 _EXPLICIT_VS = re.compile(
     r"\b(?P<a>[A-Z][a-z]+\s+\d{4}|\d{4}-\d{2}|\d{4})\s+(?:vs\.?|versus|compared\s+to)\s+"
     r"(?P<b>[A-Z][a-z]+\s+\d{4}|[A-Z][a-z]+|\d{4}-\d{2}|\d{4})\b", re.I)
-_SHARE = re.compile(r"\b(?:share\s+of|percentage\s+of|percent\s+of|what\s+(?:share|percentage|percent)|"
-                    r"as\s+a\s+(?:share|percentage|percent)|proportion\s+of|%\s+of)\b", re.I)
+# "per cent" is the same word as "percent", spelled apart. Without it the
+# share reading was lost and `_RATIO` claimed the question instead: "what per
+# cent of energy consumption is in India" read "per" as a ratio with "cent" as
+# the denominator, resolved neither measure, and fell through to the plain
+# total -- the slice's own number, offered as the answer to a percentage.
+_SHARE = re.compile(r"\b(?:share\s+of|percentage\s+of|percent\s+of|per\s+cent\s+of|"
+                    r"what\s+(?:share|percentage|percent|per\s+cent)|"
+                    r"as\s+a\s+(?:share|percentage|percent|per\s+cent)|proportion\s+of|%\s+of)\b", re.I)
+# "a divided by b" is the ratio "a per b" written out. The division had no
+# spelling here at all, so "energy consumption divided by population" matched
+# no derived class and the "by" of "divided by" was read as a grouping cue --
+# the question came back as "No dimension matches the requested breakdown".
 _RATIO = re.compile(r"\b(?P<num>[\w ]+?)\s+per\s+(?P<den>[\w ]+?)\b|"
-                    r"\bratio\s+of\s+(?P<num2>[\w ]+?)\s+to\s+(?P<den2>[\w ]+?)\b", re.I)
+                    r"\bratio\s+of\s+(?P<num2>[\w ]+?)\s+to\s+(?P<den2>[\w ]+?)\b|"
+                    r"\b(?P<num3>[\w ]+?)\s+divided\s+by\s+(?P<den3>[\w ]+?)\b", re.I)
 _WITHIN = re.compile(r"\b(?:in|for|within|per)\s+each\s+(?P<outer>[\w ]+?)\s*$|"
                      r"\bby\s+(?P<outer2>[\w ]+?)\s*$", re.I)
+# How many values of a dimension clear a threshold. "What percentage of
+# countries have more than 1000" asks the same thing as "how many countries
+# have more than 1000": the count against the total. Only "how many" was
+# spelled here, so the percentage form was claimed by `_SHARE` instead.
 _EXISTENCE = re.compile(
-    r"\bhow\s+many\s+(?P<dim>[\w ]+?)\s+(?:have|has|had|with)\b.*?"
+    r"\b(?:how\s+many|what\s+(?:percentage|percent|per\s+cent|share|proportion|fraction)\s+of)\s+"
+    r"(?P<dim>[\w ]+?)\s+(?:have|has|had|with)\b.*?"
     r"(?P<cmp>more\s+than|greater\s+than|at\s+least|over|above|fewer\s+than|less\s+than|under|below|at\s+most|exactly)\s+"
     r"(?P<value>[\d.,]+)", re.I)
+# The lead-in that asks for that count as a proportion rather than a count.
+_EXISTENCE_AS_SHARE = re.compile(
+    r"\bwhat\s+(?:percentage|percent|per\s+cent|share|proportion|fraction)\s+of\b", re.I)
 _VAGUE = re.compile(r"\b(?:current|currently|latest|right\s+now|today'?s?|now|"
                     r"how\s+(?:are|is)\s+(?:we|it|things)|how'?s\s+it\s+going|"
                     r"what'?s\s+(?:the\s+)?(?:state|status)|where\s+do\s+we\s+stand|"
@@ -259,19 +278,26 @@ def detect_derived(question: str, *, has_time: bool, dimensions: Sequence[str],
         return Intent("year_over_year")
     if has_time and (_VS_PREVIOUS.search(question) or _EXPLICIT_VS.search(question)):
         return Intent("comparison_period", {"explicit": _EXPLICIT_VS.search(question) is not None})
-    if _SHARE.search(question):
-        return Intent("share_of_total")
+    # Existence before share. Both read "what percentage of countries have more
+    # than 1000", and existence is the stricter match -- it needs a dimension
+    # phrase, a comparison word AND a number, where share needs only the
+    # lead-in. Read as a share, that question answered "Energy consumption is
+    # 100.0% of Energy consumption": the measure divided by itself, because the
+    # question named no slice for a share to be of.
     existence = _EXISTENCE.search(question)
     if existence:
         return Intent("existence", {
             "dimension_phrase": existence.group("dim").strip(),
             "comparison": _COMPARISONS[existence.group("cmp").lower().replace("  ", " ")],
             "threshold": float(existence.group("value").replace(",", "")),
+            "as_share": _EXISTENCE_AS_SHARE.search(question) is not None,
         })
+    if _SHARE.search(question):
+        return Intent("share_of_total")
     ratio = _RATIO.search(question)
     if ratio and len(measures) > 1:
-        numerator = (ratio.group("num") or ratio.group("num2") or "").strip()
-        denominator = (ratio.group("den") or ratio.group("den2") or "").strip()
+        numerator = (ratio.group("num") or ratio.group("num2") or ratio.group("num3") or "").strip()
+        denominator = (ratio.group("den") or ratio.group("den2") or ratio.group("den3") or "").strip()
         if numerator and denominator:
             return Intent("ratio", {"numerator_phrase": numerator, "denominator_phrase": denominator})
     within = re.search(r"\b(?:in|for|within)\s+each\s+(?P<outer>[\w ]+?)\s*$", question, re.I)
@@ -333,6 +359,12 @@ def _scalar(result: Optional[dict]) -> Optional[float]:
 
 
 def fmt(value: Any) -> str:
+    """A measured value as a reader sees it, and an em dash where there is no
+    value. `str(None)` put the literal word "None" into answer sentences --
+    "Energy by country: Albania 10, Algeria None" and "Energy is None of
+    None" -- which reads as a value rather than as its absence."""
+    if value is None:
+        return "—"
     number = _number(value)
     if number is None:
         return str(value)
@@ -482,7 +514,7 @@ def compose_top_n_within(result: dict, *, metric: str, outer: str, inner: str,
 
 
 def compose_existence(result: dict, *, metric: str, dimension: str, comparison: str,
-                      threshold: float) -> Dict[str, Any]:
+                      threshold: float, as_share: bool = False) -> Dict[str, Any]:
     """How many values of a dimension clear a threshold — counted from the
     breakdown, with the ones that do listed."""
     rows = result.get("rows") or []
@@ -495,6 +527,10 @@ def compose_existence(result: dict, *, metric: str, dimension: str, comparison: 
     sentence = BY_NAME["existence"].sentence.format(
         count=len(matching), total=len(rows), dimension=dimension, metric=metric,
         comparison=_COMPARISON_WORDS.get(comparison, comparison), threshold=fmt(threshold))
+    # The question asked for the count as a proportion, so the proportion is
+    # said rather than left for the reader to divide.
+    if as_share and rows:
+        sentence += f" That is {fmt_percent(percent(float(len(matching)), float(len(rows))))}."
     if matching:
         sentence += " " + ", ".join(f"{row[0]} ({fmt(row[-1])})" for row in matching[:5]) + "."
     return {
