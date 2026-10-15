@@ -70,6 +70,17 @@ operations, grouping sets, windows and QUALIFY, arrays/maps/rows, JSON paths,
 prepared statements and typed parameters, metadata statements, global ordering
 and limits, and local/distributed exact-result execution.
 
+## Correlated subquery boundary — 2026-10-15
+
+The server differential sweep exercises the bounded correlated shapes that the
+binder lowers to executable joins: keyed `EXISTS`, `NOT EXISTS`, `IN`, and
+`NOT IN` with residual predicates, plus correlated scalar `MIN`/`MAX` and
+`COUNT` filters. Each case is compared across node-local and three-fragment
+execution over the same Parquet inputs. This is qualified coverage for those
+shapes, not a general Apply implementation. Correlated `LIMIT`, `OFFSET`,
+`UNION`, multi-level outer references, and lateral/derived relation forms
+remain explicitly outside the contract and continue to fail closed.
+
 ## JSON_FORMAT qualification — 2026-10-15
 
 `JSON_FORMAT(json)` now canonicalizes the Engine's validated UTF-8 JSON
