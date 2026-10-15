@@ -75,6 +75,12 @@ live skew/failure injection and repeated lease evidence are retained together
 on the release image; the current reports define that final gate but do not
 close it.
 
+The newer live rerun
+`docs/qualification/track1-aks-fault-pressure-2026-10-15.md` independently
+passes the three-worker loss, retry, cancellation, concurrent exact-result,
+and bounded-pressure checks on the current cluster. It strengthens the failure
+evidence but does not close the separate skew-splitting and repeated-lease gate.
+
 ## Validation commands
 
 Run from `engine/`:
