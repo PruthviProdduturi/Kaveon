@@ -360,6 +360,34 @@ impl Binder<'_> {
                 let order_by = order_by
                     .into_iter()
                     .map(|(key, ascending, nulls_first)| {
+                        // `sql_to_logical_plan` resolves ordinal ORDER BY
+                        // keys while the projection still contains `*`.
+                        // A USING join expands that wildcard during binding,
+                        // so resolve any ordinal that survived lowering
+                        // against the now-bound output scope. Leaving it as
+                        // a literal would make every row tie and lets local
+                        // and distributed sort paths choose different rows
+                        // under LIMIT.
+                        let key = match key {
+                            Expr::Literal(kaveon_core::ScalarValue::Int64(ordinal)) => {
+                                let position = ordinal
+                                    .checked_sub(1)
+                                    .and_then(|value| usize::try_from(value).ok())
+                                    .ok_or_else(|| {
+                                        KaveonError::Sql(
+                                            "ORDER BY position must be greater than zero"
+                                                .to_owned(),
+                                        )
+                                    })?;
+                                let column = scope.columns.get(position).ok_or_else(|| {
+                                    KaveonError::Sql(format!(
+                                        "ORDER BY position {ordinal} is not in the select list"
+                                    ))
+                                })?;
+                                Expr::Column(column.physical.clone())
+                            }
+                            key => key,
+                        };
                         self.bind_expr(key, &scope, input.aggregate_input.as_ref())
                             .map(|key| (key, ascending, nulls_first))
                     })
