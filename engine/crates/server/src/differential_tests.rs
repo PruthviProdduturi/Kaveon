@@ -1346,8 +1346,8 @@ fn distributed_outer_using_wildcard_matches_local_coalescing() {
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     for statement in [
-        "SELECT * FROM events u RIGHT JOIN users p USING (user_id)",
-        "SELECT * FROM events u FULL JOIN users p USING (user_id)",
+        "SELECT * FROM events u RIGHT JOIN users p USING (user_id) ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 LIMIT 20",
+        "SELECT * FROM events u FULL JOIN users p USING (user_id) ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 LIMIT 20",
     ] {
         let plan = bound_plan(statement, &manager);
         let pool = QueryMemoryPool::new("distributed-outer-using", 32 << 20).unwrap();

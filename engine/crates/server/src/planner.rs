@@ -707,7 +707,12 @@ impl ExecutableFragmentBuilder<'_> {
             LogicalPlan::Limit { input, count } => self.build_single_exchange(
                 input,
                 FragmentOperator::Limit { limit: *count },
-                Some(FragmentOperator::Limit { limit: *count }),
+                // A generic LIMIT cannot be applied independently on each
+                // partition: an outer projection may carry a hidden ORDER
+                // BY key, which prevents the TopN recognizer from matching.
+                // Keep the limit after the global exchange until that shape
+                // has a dedicated TopN representation.
+                None,
             ),
             LogicalPlan::Offset { input, count } => {
                 self.build_single_exchange(input, FragmentOperator::Offset { offset: *count }, None)
@@ -1470,7 +1475,6 @@ impl StageGraphBuilder {
                 let operator = if matches!(plan, LogicalPlan::Sort { .. }) {
                     "FinalSort"
                 } else {
-                    self.wrap_stage(source, "PartialLimit", physical.attributes.clone());
                     "FinalLimit"
                 };
                 let target = self.add_exchange_stage(operator, physical.attributes, 1, 1);
