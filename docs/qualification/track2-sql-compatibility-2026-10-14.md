@@ -111,6 +111,11 @@ The focused SQL suite now passes 157 tests. The server backpressure test had
 one transient race during the first full run; its isolated rerun and five
 consecutive repetitions passed before this change was accepted.
 
+The post-change server regression suite was then rerun cleanly: all 389 tests
+passed in 121.94 seconds, including the differential sweep. The full
+workspace gate remains the release qualification command and must be rerun
+after the next cross-crate change.
+
 After the typed-time change, the complete workspace gate was rerun on the
 current tree and passed with zero failures: server `389/389`, SQL `151/151`,
 execution `351/351` with four pre-existing ignored benchmark tests, and all
