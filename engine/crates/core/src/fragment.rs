@@ -46,6 +46,7 @@ pub enum FragmentOperator {
         expression: Expr,
         column: String,
         with_ordinality: bool,
+        ordinality_column: String,
     },
     ExchangeInput(ExchangeInput),
     Filter {

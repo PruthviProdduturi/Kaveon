@@ -19,7 +19,12 @@ pub struct UnnestOperator {
 }
 
 impl UnnestOperator {
-    pub fn new(expression: &Expr, column: impl Into<String>, ordinality: bool) -> Result<Self> {
+    pub fn new(
+        expression: &Expr,
+        column: impl Into<String>,
+        ordinality: bool,
+        ordinality_column: impl Into<String>,
+    ) -> Result<Self> {
         let empty = RecordBatch::try_new_with_options(
             Arc::new(Schema::empty()),
             Vec::new(),
@@ -57,9 +62,10 @@ impl UnnestOperator {
             }
         };
         let column = column.into();
+        let ordinality_column = ordinality_column.into();
         let mut fields = vec![Field::new(column, element_type, true)];
         if ordinality {
-            fields.push(Field::new("ordinality", DataType::Int64, false));
+            fields.push(Field::new(ordinality_column.clone(), DataType::Int64, false));
         }
         Ok(Self {
             schema: Arc::new(Schema::new(fields)),
@@ -104,10 +110,11 @@ mod tests {
                 Expr::Literal(kaveon_core::ScalarValue::Int64(9)),
             ],
         };
-        let mut operator = UnnestOperator::new(&expression, "value", true).unwrap();
+        let mut operator = UnnestOperator::new(&expression, "value", true, "n").unwrap();
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.schema().field(0).data_type(), &DataType::Int64);
+        assert_eq!(batch.schema().field(1).name(), "n");
         assert_eq!(batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().values(), &[4, 9]);
         assert_eq!(batch.column(1).as_any().downcast_ref::<Int64Array>().unwrap().values(), &[1, 2]);
         assert!(operator.next_batch().unwrap().is_none());

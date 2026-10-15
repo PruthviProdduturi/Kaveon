@@ -509,11 +509,13 @@ impl ExecutableFragmentBuilder<'_> {
                 expression,
                 column,
                 with_ordinality,
+                ordinality_column,
             } => Ok(self.add_fragment(FragmentDraft::leaf(
                 FragmentOperator::Unnest {
                     expression: expression.clone(),
                     column: column.clone(),
                     with_ordinality: *with_ordinality,
+                    ordinality_column: ordinality_column.clone(),
                 },
             ))),
             LogicalPlan::Scan { table, columns, .. } => {
@@ -1919,12 +1921,14 @@ fn build_plan_tree(
             expression,
             column,
             with_ordinality,
+            ordinality_column,
         } => (
             "Unnest",
             BTreeMap::from([
                 ("expression".to_owned(), format!("{expression:?}")),
                 ("column".to_owned(), column.clone()),
                 ("with_ordinality".to_owned(), with_ordinality.to_string()),
+                ("ordinality_column".to_owned(), ordinality_column.clone()),
             ]),
             None,
         ),
@@ -2013,11 +2017,13 @@ fn plan_query_with_predicate(
             expression,
             column,
             with_ordinality,
+            ordinality_column,
         } => Ok(PlannedQuery {
             operator: Box::new(kaveon_exec::unnest::UnnestOperator::new(
                 expression,
                 column.clone(),
                 *with_ordinality,
+                ordinality_column.clone(),
             )?),
             scan_metrics: Vec::new(),
         }),
