@@ -93,6 +93,13 @@ covers keys containing punctuation such as `customer-name` for
 `JSON_QUERY`, `JSON_VALUE`, and `JSON_EXISTS`; broader SQL/JSON modes and
 returning/error clauses remain open.
 
+## Large UTF-8 JSON input qualification — 2026-10-15
+
+`JSON_FORMAT` and `JSON_ARRAY_GET` now accept both Arrow `Utf8` and
+`LargeUtf8` document inputs through the same row-local JSON contract. The
+focused regression covers canonical output and NULL preservation for a large
+string array; path and returning-mode boundaries remain unchanged.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records

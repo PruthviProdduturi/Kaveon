@@ -4259,15 +4259,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_ARRAY_GET" => {
             check_arity(name, args, 2)?;
-            let documents = as_string_array(&args[0])?;
+            let documents = &args[0];
             let indices = compute::cast(&args[1], &DataType::Int64)?;
             let indices = indices.as_primitive::<Int64Type>();
             let result: StringArray = (0..num_rows)
                 .map(|row| {
-                    if documents.is_null(row) || indices.is_null(row) {
+                    let Some(document) = text_value(documents, row)? else {
+                        return Ok(None);
+                    };
+                    if indices.is_null(row) {
                         return Ok(None);
                     }
-                    let document = serde_json::from_str::<serde_json::Value>(documents.value(row))
+                    let document = serde_json::from_str::<serde_json::Value>(document)
                         .map_err(|_| {
                             KaveonError::Execution(format!("invalid JSON value at row {row}"))
                         })?;
@@ -4396,14 +4399,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_FORMAT" => {
             check_arity(name, args, 1)?;
-            let documents = as_string_array(&args[0])?;
+            let documents = &args[0];
             let mut result = StringBuilder::new();
             for row in 0..num_rows {
-                if documents.is_null(row) {
+                let Some(document) = text_value(documents, row)? else {
                     result.append_null();
                     continue;
-                }
-                let document = documents.value(row);
+                };
                 let value = serde_json::from_str::<serde_json::Value>(document).map_err(|_| {
                     KaveonError::Execution(format!("invalid JSON value at row {row}"))
                 })?;
@@ -16037,6 +16039,20 @@ mod tests {
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), r#"{"b":2,"a":[true,null]}"#);
         assert!(values.is_null(1));
+
+        let large_batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(LargeStringArray::from(vec![Some(r#"{ "n": 7 }"#), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let large_expr = Expr::Function {
+            name: "JSON_FORMAT".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let large_result = evaluate(&large_expr, &large_batch).unwrap();
+        let large_values = large_result.as_string::<i32>();
+        assert_eq!(large_values.value(0), r#"{"n":7}"#);
+        assert!(large_values.is_null(1));
     }
 
     #[test]
