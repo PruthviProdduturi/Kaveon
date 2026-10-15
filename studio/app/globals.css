@@ -14,8 +14,13 @@
 
   --text-primary: #1a1a2e;
   --text-secondary: #4a5568;
-  --text-muted: #7a8599;
-  --text-faint: #b0b8c4;
+  /* Same measurement as the dark pair below: #7a8599 was 3.72:1 on white and
+     #b0b8c4 was 2.00:1, so the catalog's date columns missed the 4.5:1
+     body-text threshold in BOTH themes and faint was unreadable in both.
+     Darkened along the existing slate hue rather than greyed, so the palette
+     is unchanged in character. */
+  --text-muted: #6c778b;
+  --text-faint: #8d95a1;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
@@ -37,8 +42,19 @@
 
   --text-primary: #ececec;
   --text-secondary: #a0a0a0;
-  --text-muted: #6b6b6b;
-  --text-faint: #444444;
+  /* Measured against the surfaces these actually sit on rather than chosen by
+     eye. #6b6b6b reached 2.99:1 on an elevated card and #444444 reached
+     1.63:1 — so a date in a muted column was below the 4.5:1 body-text
+     threshold, and anything marked faint was not quietened but invisible,
+     which is how a timestamp came to read as part of the background.
+
+     4.5:1 for muted, because it carries real values a reader needs: the
+     catalog's "changed" and "measured" columns are muted. 3:1 for faint,
+     because it marks a figure the source has moved past and must read as
+     de-emphasised rather than absent. The hierarchy is unchanged —
+     primary > secondary > muted > faint still holds. */
+  --text-muted: #8c8c8c;
+  --text-faint: #6e6e6e;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
