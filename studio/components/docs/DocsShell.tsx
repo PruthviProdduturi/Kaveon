@@ -155,7 +155,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
     <div className="docs-grid">
       <aside className="docs-sidebar"><Link href="/docs" className="docs-section-title">Documentation</Link>{Search({})}{Nav()}</aside>
       <main className="docs-main" id="docs-content">
-        {meta && <div className="docs-context"><nav className="docs-breadcrumb" aria-label="Breadcrumb"><Link href="/docs">Docs</Link><span aria-hidden="true">/</span><span>{meta.group}</span><span aria-hidden="true">/</span><span aria-current="page">{meta.title}</span></nav><div className="docs-page-meta"><span className={`status ${meta.status.toLowerCase()}`}>{meta.status}</span><span>Verified {meta.lastVerified}</span></div></div>}
+        {meta && <div className="docs-context"><nav className="docs-breadcrumb" aria-label="Breadcrumb"><Link href="/docs">Docs</Link><span aria-hidden="true">/</span><span>{meta.group}</span><span aria-hidden="true">/</span><span aria-current="page">{meta.title}</span></nav><div className="docs-page-meta"><span className={`status ${meta.status.toLowerCase()}`}>{meta.status}</span>{meta.lastVerified ? <span>Verified {meta.lastVerified}</span> : null}</div></div>}
         <div className="docs-content" ref={contentRef}>{children}</div>
       </main>
       <aside className="docs-toc" aria-label="On this page">{toc.length > 0 && <><div className="docs-toc-label">On this page</div>{toc.map((item) => <a key={item.id} href={`#${item.id}`} className={`${item.level === 3 ? "lvl3" : ""}${activeId === item.id ? " active" : ""}`}>{item.text}</a>)}</>}</aside>

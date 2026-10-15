@@ -3,7 +3,22 @@ export type DocsItem = {
   href: `/docs${string}`;
   description: string;
   keywords?: readonly string[];
-  status?: "Stable" | "Beta" | "Alpha" | "Reference";
+  /**
+   * Required, so that adding a page is adding a claim about its maturity
+   * rather than inheriting one. This used to be optional with `"Stable"` as
+   * the fallback, which meant 25 of 39 pages asserted stability because
+   * nobody had said otherwise -- `/docs/sql-compatibility`, whose own
+   * description reads "See what the alpha Engine can execute", displayed
+   * Stable. The values here follow the maturity each pillar is documented at:
+   * Engine alpha, CLI beta, Studio and DLM shipping.
+   */
+  status: "Stable" | "Beta" | "Alpha" | "Reference";
+  /**
+   * The date someone last checked this page against the product. Absent means
+   * exactly that and renders nothing: there used to be a single hardcoded
+   * fallback date, so every undeclared page displayed "Verified September 2,
+   * 2026" for a verification that had not happened.
+   */
   lastVerified?: string;
 };
 
@@ -19,76 +34,76 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     label: "Getting Started",
     pinned: true,
     items: [
-      { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"] },
-      { title: "Quickstart", href: "/docs/quickstart", description: "Connect data and build a first chart.", keywords: ["install", "start"] },
-      { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions." },
+      { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"], status: "Stable" },
+      { title: "Quickstart", href: "/docs/quickstart", description: "Connect data and build a first chart.", keywords: ["install", "start"], status: "Stable" },
+      { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions.", status: "Stable" },
     ],
   },
   {
     label: "Platform",
     items: [
-      { title: "Architecture", href: "/docs/architecture", description: "Current platform structure and data flow." },
-      { title: "API Reference", href: "/docs/api-reference", description: "Find platform and Engine API surfaces.", keywords: ["rest", "endpoint"] },
-      { title: "Connector Matrix", href: "/docs/connectors", description: "Compare source registration, execution, and DLM support.", keywords: ["mysql", "postgresql", "fabric", "trino"] },
+      { title: "Architecture", href: "/docs/architecture", description: "Current platform structure and data flow.", status: "Stable" },
+      { title: "API Reference", href: "/docs/api-reference", description: "Find platform and Engine API surfaces.", keywords: ["rest", "endpoint"], status: "Stable" },
+      { title: "Connector Matrix", href: "/docs/connectors", description: "Compare source registration, execution, and DLM support.", keywords: ["mysql", "postgresql", "fabric", "trino"], status: "Stable" },
     ],
   },
   {
     label: "Studio",
     items: [
-      { title: "Kaveon Studio", href: "/docs/studio", description: "The governed workspace for chat, SQL, catalogs, charts, and dashboards.", keywords: ["studio", "chat", "sql", "catalog"] },
-      { title: "SQL Lab", href: "/docs/sql-lab", description: "Explore data with the query editor." },
-      { title: "Chart Builder", href: "/docs/charts", description: "Create reusable interactive visualizations." },
-      { title: "Dashboards", href: "/docs/dashboards", description: "Compose and publish analytical canvases." },
-      { title: "Semantic Datasets", href: "/docs/datasets", description: "Define reusable metrics and dimensions." },
-      { title: "Data Sources", href: "/docs/data-sources", description: "Connect and manage databases.", keywords: ["connector"] },
+      { title: "Kaveon Studio", href: "/docs/studio", description: "The governed workspace for chat, SQL, catalogs, charts, and dashboards.", keywords: ["studio", "chat", "sql", "catalog"], status: "Stable" },
+      { title: "SQL Lab", href: "/docs/sql-lab", description: "Explore data with the query editor.", status: "Stable" },
+      { title: "Chart Builder", href: "/docs/charts", description: "Create reusable interactive visualizations.", status: "Stable" },
+      { title: "Dashboards", href: "/docs/dashboards", description: "Compose and publish analytical canvases.", status: "Stable" },
+      { title: "Semantic Datasets", href: "/docs/datasets", description: "Define reusable metrics and dimensions.", status: "Stable" },
+      { title: "Data Sources", href: "/docs/data-sources", description: "Connect and manage databases.", keywords: ["connector"], status: "Stable" },
     ],
   },
   {
     label: "Intelligence",
     items: [
-      { title: "Data Language Model", href: "/docs/dlm", description: "Understand Kaveon's compiled semantic layer.", keywords: ["dlm"] },
-      { title: "DLM · NL→SQL", href: "/docs/nl-to-sql", description: "Turn questions into deterministic queries.", keywords: ["natural language", "dlm"] },
-      { title: "Freshness Algorithm", href: "/docs/freshness", description: "Route between context and live data." },
+      { title: "Data Language Model", href: "/docs/dlm", description: "Understand Kaveon's compiled semantic layer.", keywords: ["dlm"], status: "Stable" },
+      { title: "DLM · NL→SQL", href: "/docs/nl-to-sql", description: "Turn questions into deterministic queries.", keywords: ["natural language", "dlm"], status: "Stable" },
+      { title: "Freshness Algorithm", href: "/docs/freshness", description: "Route between context and live data.", status: "Stable" },
     ],
   },
   {
     label: "Engine",
     items: [
-      { title: "Kaveon Engine", href: "/docs/engine", description: "Run the alpha Rust query engine.", keywords: ["rust", "parquet", "cli"] },
+      { title: "Kaveon Engine", href: "/docs/engine", description: "Run the alpha Rust query engine.", keywords: ["rust", "parquet", "cli"], status: "Alpha" },
       { title: "Engine Architecture", href: "/docs/engine/architecture", description: "Understand processes, crates, startup, and boundaries.", keywords: ["coordinator", "worker", "startup"], status: "Alpha", lastVerified: "September 4, 2026" },
       { title: "Engine SQL", href: "/docs/engine/sql", description: "Track committed SQL semantics and integration gates.", keywords: ["sql", "function", "window"], status: "Alpha", lastVerified: "September 4, 2026" },
       { title: "Distributed Runtime", href: "/docs/engine/distributed", description: "Follow stages, fragments, tasks, exchange, retry, and cancellation.", keywords: ["stage", "fragment", "exchange"], status: "Alpha", lastVerified: "September 4, 2026" },
       { title: "Storage & Catalogs", href: "/docs/engine/storage", description: "Read Parquet/Delta and understand native metadata.", keywords: ["parquet", "delta", "catalog"], status: "Alpha", lastVerified: "September 4, 2026" },
       { title: "Engine Memory", href: "/docs/memory", description: "Understand admission, reservations, spill, and current safety boundaries.", keywords: ["memory", "spill", "admission"], status: "Alpha", lastVerified: "September 4, 2026" },
-      { title: "SQL Compatibility", href: "/docs/sql-compatibility", description: "See what the alpha Engine can execute.", keywords: ["order by", "aggregate", "operator"] },
+      { title: "SQL Compatibility", href: "/docs/sql-compatibility", description: "See what the alpha Engine can execute.", keywords: ["order by", "aggregate", "operator"], status: "Alpha" },
     ],
   },
   {
     label: "CLI",
     items: [
       { title: "Overview", href: "/docs/cli", description: "Install, authenticate, query, inspect and automate from a terminal.", keywords: ["cli", "shell", "terminal", "sql"], status: "Beta", lastVerified: "October 9, 2026" },
-      { title: "Install & connect", href: "/docs/cli/install", description: "Install the client and connect locally, remotely, or to AKS.", keywords: ["install", "aks", "auth"] },
-      { title: "Interactive commands", href: "/docs/cli/commands", description: "Use the shell, inspect sessions, browse metadata, and cancel work.", keywords: ["commands", "shell", "cancel"] },
-      { title: "SQL & catalog administration", href: "/docs/cli/sql", description: "Run SQL and manage catalogs, schemas, tables, statistics, and layouts.", keywords: ["sql", "catalog", "schema", "analyze"] },
-      { title: "Automation & output", href: "/docs/cli/automation", description: "Run batches, choose deterministic formats, and integrate the CLI into CI.", keywords: ["scripts", "csv", "jsonl", "automation"] },
+      { title: "Install & connect", href: "/docs/cli/install", description: "Install the client and connect locally, remotely, or to AKS.", keywords: ["install", "aks", "auth"], status: "Beta" },
+      { title: "Interactive commands", href: "/docs/cli/commands", description: "Use the shell, inspect sessions, browse metadata, and cancel work.", keywords: ["commands", "shell", "cancel"], status: "Beta" },
+      { title: "SQL & catalog administration", href: "/docs/cli/sql", description: "Run SQL and manage catalogs, schemas, tables, statistics, and layouts.", keywords: ["sql", "catalog", "schema", "analyze"], status: "Beta" },
+      { title: "Automation & output", href: "/docs/cli/automation", description: "Run batches, choose deterministic formats, and integrate the CLI into CI.", keywords: ["scripts", "csv", "jsonl", "automation"], status: "Beta" },
     ],
   },
   {
     label: "Deploy & Operate",
     items: [
-      { title: "Install & deploy", href: "/docs/installation", description: "Choose Docker, VM, AKS, or optional Vercel hosting and install the platform.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "vercel"] },
-      { title: "Deployment topology", href: "/docs/deployment", description: "Understand runtime placement, networking, storage, and cutover boundaries.", keywords: ["topology", "azure", "aks"] },
-      { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"] },
-      { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"] },
-      { title: "Troubleshooting", href: "/docs/troubleshooting", description: "Diagnose authentication, database, and Engine issues.", keywords: ["cors", "proxy", "logs"] },
-      { title: "Upgrades", href: "/docs/upgrades", description: "Plan upgrades under the current pre-1.0 policy.", keywords: ["version", "migration", "rollback"] },
-      { title: "Releases", href: "/docs/releases", description: "Release channels and changelog requirements.", keywords: ["changelog", "engine-dev"] },
+      { title: "Install & deploy", href: "/docs/installation", description: "Choose Docker, VM, AKS, or optional Vercel hosting and install the platform.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "vercel"], status: "Stable" },
+      { title: "Deployment topology", href: "/docs/deployment", description: "Understand runtime placement, networking, storage, and cutover boundaries.", keywords: ["topology", "azure", "aks"], status: "Stable" },
+      { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"], status: "Stable" },
+      { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"], status: "Stable" },
+      { title: "Troubleshooting", href: "/docs/troubleshooting", description: "Diagnose authentication, database, and Engine issues.", keywords: ["cors", "proxy", "logs"], status: "Stable" },
+      { title: "Upgrades", href: "/docs/upgrades", description: "Plan upgrades under the current pre-1.0 policy.", keywords: ["version", "migration", "rollback"], status: "Stable" },
+      { title: "Releases", href: "/docs/releases", description: "Release channels and changelog requirements.", keywords: ["changelog", "engine-dev"], status: "Stable" },
     ],
   },
   {
     label: "Research",
     items: [
-      { title: "Papers & Patents", href: "/docs/research", description: "Read the technical papers and patent disclosure.", keywords: ["whitepaper", "adaptive routing", "curation"] },
+      { title: "Papers & Patents", href: "/docs/research", description: "Read the technical papers and patent disclosure.", keywords: ["whitepaper", "adaptive routing", "curation"], status: "Reference" },
       { title: "Kaveon vs Trino", href: "/docs/research/trino", description: "Compare architecture, execution maturity, and proof requirements.", keywords: ["trino", "distributed sql", "benchmark"], status: "Reference", lastVerified: "September 4, 2026" },
       { title: "Engine vs Fabric SQL", href: "/docs/research/fabric-sql-endpoint", description: "Compare Kaveon Engine with the Fabric Lakehouse SQL analytics endpoint.", keywords: ["fabric", "sql analytics endpoint", "onelake"], status: "Reference", lastVerified: "September 4, 2026" },
       { title: "Kaveon vs HTAP platforms", href: "/docs/research/htap-platforms", description: "Compare Snowflake Unistore, Databricks LTAP, TiDB X, and Fabric on engines, storage authority, licensing, and maturity.", keywords: ["htap", "unistore", "lakebase", "ltap", "tidb", "transactional"], status: "Reference", lastVerified: "September 10, 2026" },
@@ -106,7 +121,5 @@ export function docsMeta(href: string) {
   return {
     group: group.label,
     ...item,
-    status: item.status ?? (href === "/docs/engine" ? "Alpha" : href === "/docs/research" ? "Reference" : "Stable"),
-    lastVerified: item.lastVerified ?? "September 2, 2026",
-  };
+  } as const;
 }

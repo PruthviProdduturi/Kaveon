@@ -1523,6 +1523,7 @@ main.main-lab {
 }
 
 .save-query-input,
+.dataset-input,
 .save-query-textarea {
   width: 100%;
   border-radius: 4px;
@@ -1539,6 +1540,7 @@ main.main-lab {
 }
 
 .save-query-input:focus,
+.dataset-input:focus,
 .save-query-textarea:focus {
   outline: none;
   border-color: var(--lens-primary);
@@ -5955,3 +5957,77 @@ main.main-wide {
 }
 /* Muted, not faint: still part of an identifier, so still legible. */
 .system-catalog__prefix { color: var(--text-muted); }
+
+
+/* ---------------------------------------------------------------------------
+   Classes the markup has always asked for and no stylesheet ever defined.
+
+   `.card` is the container class in ten places -- the chart builder's panes,
+   the dataset form, every empty state -- and no rule for it existed in any of
+   the three imported sheets, nor in the history of either. So those elements
+   were not mis-styled, they were unstyled: no surface, no border, no padding,
+   sitting flat on the page background with their contents against the page
+   itself. Same for the four below it.
+
+   Matched to what the house already does rather than decided afresh.
+   `.home-panel` is the nearest existing analogue and this follows it, with two
+   departures: its border is a hardcoded light `rgba`, which would draw a pale
+   line on a dark surface, so this uses `var(--border)`; and its drop shadow is
+   for the home page's layered look, which reads wrong on a full-height flex
+   pane, so there is none here. The border carries the edge.
+   --------------------------------------------------------------------------- */
+.card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+
+/* Always worn with `.card`, so this is only what an empty state differs by.
+   It holds `.page-empty-title` and `.page-empty-body`, which are centred
+   copy, and wants the room to look deliberate rather than unfinished. */
+.page-empty-card {
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+}
+
+/* A quiet bordered control, not a coloured link, for two reasons. Both uses
+   are pagination -- Previous and Next beside "Page 1 of 4" -- which reads as a
+   button; and neither accent token can carry link text on the light grounds:
+   `--accent` is 2.67:1 on `--bg-primary` and `--accent-dark` is 3.94:1, both
+   short of 4.5:1. Colouring it would have shipped a fresh contrast failure
+   into the gap that is still a brand decision. `--accent-dark` DOES carry the
+   focus ring, which needs 3:1 and gets 3.94:1 on light and 4.25:1 on dark.
+   Both uses are `disabled` at a boundary, so that state is styled, and
+   disabled controls are exempt from the text-contrast minimum. */
+.link-button {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.link-button:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  border-color: var(--border-hover);
+}
+
+.link-button:focus-visible {
+  outline: 2px solid var(--accent-dark);
+  outline-offset: 2px;
+}
+
+.link-button:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+/* The wrapper around one labelled field, carrying the spacing its siblings
+   currently carry as an inline `marginBottom: 16`. */
+.save-query-field-container {
+  display: block;
+  margin-bottom: 1rem;
+}
