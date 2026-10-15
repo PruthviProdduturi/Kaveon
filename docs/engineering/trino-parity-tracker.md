@@ -1117,7 +1117,8 @@ header-based selection and result paging are covered. It also sends repeated
 positional placeholders through the route and verifies both input slots plus
 output metadata through `ORDER BY` and `LIMIT` wrappers. This proves the
 supported lifecycle boundary, including the compatibility route's cancellation
-path, without overstating it as full Trino wire protocol compatibility.
+path and `nextUri`/`partialCancelUri` response links, without overstating it as
+full Trino wire protocol compatibility.
 
 The same route supports `SHOW SESSION LIKE 'pattern'`, applying Trino wildcard
 semantics to the supported settings and rejecting malformed patterns explicitly.
