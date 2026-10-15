@@ -1,6 +1,25 @@
 use arrow::datatypes::DataType;
 use serde::{Deserialize, Serialize};
 
+mod i128_as_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &i128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<i128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse::<i128>().map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ScalarValue {
     Null,
@@ -9,6 +28,7 @@ pub enum ScalarValue {
     Float64(f64),
     Utf8(String),
     Decimal128 {
+        #[serde(with = "i128_as_string")]
         value: i128,
         precision: u8,
         scale: i8,
@@ -304,5 +324,17 @@ mod coercion_tests {
                 value: ScalarValue::Float64(24.0),
             }
         );
+    }
+
+    #[test]
+    fn decimal_scalar_json_uses_exact_string_wire_value() {
+        let value = ScalarValue::Decimal128 {
+            value: 120,
+            precision: 3,
+            scale: 2,
+        };
+        let json = serde_json::to_value(&value).unwrap();
+        assert_eq!(json["Decimal128"]["value"], "120");
+        assert_eq!(serde_json::from_value::<ScalarValue>(json).unwrap(), value);
     }
 }
