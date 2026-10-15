@@ -43,6 +43,15 @@ contract. The focused expression suite passes 144 tests with one ignored
 benchmark case; broader JSON coercion and path semantics remain open in the
 matrix.
 
+## JSON_ARRAY_GET qualification — 2026-10-15
+
+`JSON_ARRAY_GET(json_array, index)` now supports zero-based and negative
+indexes over the Engine's validated UTF-8 JSON representation. Missing
+positions, non-array documents, and SQL NULL inputs produce NULL; returned
+objects, arrays, and JSON null values retain canonical JSON text. The focused
+expression regression covers object, scalar, negative-index, out-of-range, and
+NULL behavior. Full JSON coercion and path semantics remain open.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
