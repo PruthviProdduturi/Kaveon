@@ -1122,6 +1122,9 @@ full Trino wire protocol compatibility.
 
 The same route supports `SHOW SESSION LIKE 'pattern'`, applying Trino wildcard
 semantics to the supported settings and rejecting malformed patterns explicitly.
+The matcher also honors backslash-escaped `%` and `_`, so literal session and
+function names containing wildcard characters can be selected without a false
+match.
 
 The current local validation baseline is green on the same checkout: the full
 `kaveon-server` suite passed **380 tests**, and the full CLI suite passed **211

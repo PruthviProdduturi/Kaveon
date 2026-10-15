@@ -3795,16 +3795,42 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
 }
 
 fn trino_like(value: &str, pattern: &str) -> bool {
+    enum LikeToken {
+        AnyMany,
+        AnyOne,
+        Literal(u8),
+    }
+
     let value = value.to_ascii_lowercase();
     let pattern = pattern.to_ascii_lowercase();
+    // Trino's LIKE patterns use a backslash to quote `%` and `_`. Tokenize
+    // that escape before matching so a quoted wildcard is a literal and a
+    // trailing backslash remains matchable as a literal character.
+    let mut tokens = Vec::with_capacity(pattern.len());
+    let mut pattern = pattern.as_bytes().iter().copied();
+    while let Some(token) = pattern.next() {
+        if token == b'\\' {
+            tokens.push(LikeToken::Literal(pattern.next().unwrap_or(b'\\')));
+        } else if token == b'%' {
+            tokens.push(LikeToken::AnyMany);
+        } else if token == b'_' {
+            tokens.push(LikeToken::AnyOne);
+        } else {
+            tokens.push(LikeToken::Literal(token));
+        }
+    }
     let (mut vi, mut pi, mut star, mut checkpoint) = (0usize, 0usize, None, 0usize);
     let value = value.as_bytes();
-    let pattern = pattern.as_bytes();
     while vi < value.len() {
-        if pi < pattern.len() && (pattern[pi] == b'_' || pattern[pi] == value[vi]) {
+        let literal_matches = match tokens.get(pi) {
+            Some(LikeToken::AnyOne) => true,
+            Some(LikeToken::Literal(expected)) => *expected == value[vi],
+            _ => false,
+        };
+        if literal_matches {
             vi += 1;
             pi += 1;
-        } else if pi < pattern.len() && pattern[pi] == b'%' {
+        } else if matches!(tokens.get(pi), Some(LikeToken::AnyMany)) {
             star = Some(pi);
             pi += 1;
             checkpoint = vi;
@@ -3816,10 +3842,10 @@ fn trino_like(value: &str, pattern: &str) -> bool {
             return false;
         }
     }
-    while pi < pattern.len() && pattern[pi] == b'%' {
+    while matches!(tokens.get(pi), Some(LikeToken::AnyMany)) {
         pi += 1;
     }
-    pi == pattern.len()
+    pi == tokens.len()
 }
 
 #[cfg(test)]
@@ -21150,6 +21176,10 @@ mod streamed_root_tests {
         assert!(trino_show_functions_pattern("SHOW FUNCTIONS LIKE sum").is_err());
         assert!(trino_like("approx_count_distinct", "approx%"));
         assert!(!trino_like("sum", "count%"));
+        assert!(trino_like("result%cache", r"result\%cache"));
+        assert!(!trino_like("resultXcache", r"result\%cache"));
+        assert!(trino_like("result_cache", r"result\_cache"));
+        assert!(trino_like(r"result\", r"result\"));
         let response = trino_functions_response(None);
         let body = axum::body::to_bytes(response.into_body(), 256 * 1024)
             .await
