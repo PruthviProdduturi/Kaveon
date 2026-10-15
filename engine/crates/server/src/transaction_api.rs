@@ -2092,7 +2092,9 @@ fn bind_transaction_parameters(
         }
         if character == ':'
             && input.get(index + 1) != Some(&':')
-            && input.get(index + 1).is_some_and(|next| transaction_identifier_start(*next))
+            && input
+                .get(index + 1)
+                .is_some_and(|next| transaction_identifier_start(*next))
         {
             let mut end = index + 2;
             while end < input.len() && transaction_identifier_continue(input[end]) {
@@ -2115,7 +2117,8 @@ fn bind_transaction_parameters(
     if saw_question && positional.len() > question_position {
         return Err(format!(
             "{} positional values were supplied but only {} '?' placeholders are used",
-            positional.len(), question_position
+            positional.len(),
+            question_position
         ));
     }
     if saw_dollar && positional.len() > highest_dollar {
@@ -2132,7 +2135,9 @@ fn bind_transaction_parameters(
         .map(|name| name.to_ascii_lowercase())
         .find(|name| !used_named.contains(name))
     {
-        return Err(format!("named parameter :{unused} was supplied but is not used by the SQL"));
+        return Err(format!(
+            "named parameter :{unused} was supplied but is not used by the SQL"
+        ));
     }
     Ok(output)
 }
@@ -3326,21 +3331,28 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         let snapshot = catalog.read_current().await.unwrap();
-        assert!(snapshot
-            .product_record(ProductRecordKind::Dataset, "one")
-            .unwrap()
-            .is_some());
-        assert!(snapshot
-            .product_record(ProductRecordKind::Dataset, "two")
-            .unwrap()
-            .is_some());
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "one")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "two")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
     fn transaction_parameter_binder_preserves_literals_comments_and_arrays() {
         let bound = bind_transaction_parameters(
             "INSERT INTO product.datasets (id, document_json) VALUES ($1, $2) -- :ignored\n",
-            &[serde_json::json!("ds-1"), serde_json::json!("{\"name\":\"$3\"}")],
+            &[
+                serde_json::json!("ds-1"),
+                serde_json::json!("{\"name\":\"$3\"}"),
+            ],
             &HashMap::new(),
         )
         .unwrap();
@@ -3372,14 +3384,42 @@ mod tests {
     #[test]
     fn transaction_parameter_binder_rejects_missing_extra_and_mixed_values() {
         for (sql, positional, named, expected) in [
-            ("SELECT $2", vec![serde_json::json!(1)], HashMap::new(), "parameter $2 is not bound"),
-            ("SELECT ?", vec![serde_json::json!(1), serde_json::json!(2)], HashMap::new(), "only 1 '?' placeholders"),
-            ("SELECT :name", vec![], HashMap::new(), "named parameter :name is not bound"),
-            ("SELECT $1", vec![serde_json::json!(1)], HashMap::from([(String::from("unused"), serde_json::json!(2))]), "named parameter :unused"),
-            ("SELECT ? + $1", vec![serde_json::json!(1)], HashMap::new(), "cannot mix"),
+            (
+                "SELECT $2",
+                vec![serde_json::json!(1)],
+                HashMap::new(),
+                "parameter $2 is not bound",
+            ),
+            (
+                "SELECT ?",
+                vec![serde_json::json!(1), serde_json::json!(2)],
+                HashMap::new(),
+                "only 1 '?' placeholders",
+            ),
+            (
+                "SELECT :name",
+                vec![],
+                HashMap::new(),
+                "named parameter :name is not bound",
+            ),
+            (
+                "SELECT $1",
+                vec![serde_json::json!(1)],
+                HashMap::from([(String::from("unused"), serde_json::json!(2))]),
+                "named parameter :unused",
+            ),
+            (
+                "SELECT ? + $1",
+                vec![serde_json::json!(1)],
+                HashMap::new(),
+                "cannot mix",
+            ),
         ] {
             let error = bind_transaction_parameters(sql, &positional, &named).unwrap_err();
-            assert!(error.contains(expected), "{error} did not contain {expected}");
+            assert!(
+                error.contains(expected),
+                "{error} did not contain {expected}"
+            );
         }
     }
 
@@ -3393,7 +3433,10 @@ mod tests {
             SqlTransactionRequest {
                 sql: "INSERT INTO product.datasets (id, document_json) VALUES ($1, $2)".into(),
                 transaction_id: Some(begun.transaction_id.clone()),
-                parameters: vec![serde_json::json!("bound"), serde_json::json!("{\"ok\":true}")],
+                parameters: vec![
+                    serde_json::json!("bound"),
+                    serde_json::json!("{\"ok\":true}"),
+                ],
                 named_parameters: HashMap::new(),
             },
         )

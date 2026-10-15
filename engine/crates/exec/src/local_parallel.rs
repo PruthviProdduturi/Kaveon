@@ -544,7 +544,10 @@ enum Dispatch {
 
 enum SourcePartitioner {
     Arrow(HashPartitioner),
-    Encoded { column: usize, selector: ThreadSelector },
+    Encoded {
+        column: usize,
+        selector: ThreadSelector,
+    },
 }
 
 impl SourcePartitioner {
@@ -565,9 +568,10 @@ impl SourcePartitioner {
                         return Err(error("encoded grouped key cannot be null"));
                     }
                     let worker = selector.thread_of(values.value(row));
-                    indices[worker].append_value(u32::try_from(row).map_err(|_| {
-                        error("record batch exceeds Arrow UInt32 row capacity")
-                    })?);
+                    indices[worker]
+                        .append_value(u32::try_from(row).map_err(|_| {
+                            error("record batch exceeds Arrow UInt32 row capacity")
+                        })?);
                 }
                 indices
                     .into_iter()
@@ -632,8 +636,7 @@ impl ParallelPartials {
             && matches!(
                 std::env::var("KAVEON_PARTIAL_ROUND_ROBIN").as_deref(),
                 Ok("1") | Ok("true") | Ok("on")
-            )
-        {
+            ) {
             Dispatch::Keyed {
                 keys: Vec::new(),
                 fold_low_cardinality: false,
@@ -976,7 +979,8 @@ impl ParallelPartials {
                                     )?))
                                 }
                                 Dispatch::BroadcastPartitionedEncoded { key } => {
-                                    let column = crate::expr_eval::resolve_column_index(&schema, key)?;
+                                    let column =
+                                        crate::expr_eval::resolve_column_index(&schema, key)?;
                                     Some(SourcePartitioner::Encoded {
                                         column,
                                         selector: ThreadSelector::new(senders.len()),
@@ -1057,7 +1061,7 @@ impl ParallelPartials {
                 }
                 (
                     Dispatch::BroadcastPartitioned { .. }
-                        | Dispatch::BroadcastPartitionedEncoded { .. },
+                    | Dispatch::BroadcastPartitionedEncoded { .. },
                     _,
                 ) => {
                     return Err(error("partitioned source dispatch reached local source"));

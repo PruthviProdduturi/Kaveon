@@ -1,4 +1,8 @@
-use std::{cmp::Ordering, collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
@@ -284,15 +288,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
     };
     if matches!(
         name.as_str(),
-        "LAG"
-            | "LEAD"
-            | "FIRST_VALUE"
-            | "LAST_VALUE"
-            | "NTH_VALUE"
-            | "SUM"
-            | "AVG"
-            | "MIN"
-            | "MAX"
+        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" | "SUM" | "AVG" | "MIN" | "MAX"
     ) && col.is_none()
     {
         return Err(error(format!("{name} requires a value argument")));
@@ -356,7 +352,10 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                             let Some(next) = candidate else {
                                 break;
                             };
-                            if col.as_ref().is_some_and(|column| !column.is_null(rows[next])) {
+                            if col
+                                .as_ref()
+                                .is_some_and(|column| !column.is_null(rows[next]))
+                            {
                                 remaining -= 1;
                             }
                         }
@@ -375,15 +374,8 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                     };
                     indices[row] = source;
                 }
-                "COUNT"
-                | "SUM"
-                | "AVG"
-                | "MIN"
-                | "MAX"
-                | "FIRST_VALUE"
-                | "LAST_VALUE"
-                | "NTH_VALUE" =>
-                {
+                "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "FIRST_VALUE" | "LAST_VALUE"
+                | "NTH_VALUE" => {
                     let (start, end) =
                         frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
                     let selected = if distinct {
@@ -419,9 +411,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                         }
                         "FIRST_VALUE" => indices[row] = selected.first().map(|&i| i as u32),
                         "LAST_VALUE" => indices[row] = selected.last().map(|&i| i as u32),
-                        "NTH_VALUE" => {
-                            indices[row] = selected.get(nth - 1).map(|&i| i as u32)
-                        }
+                        "NTH_VALUE" => indices[row] = selected.get(nth - 1).map(|&i| i as u32),
                         _ => aggregate_results.push((
                             row,
                             aggregate(aggregate_name, col.as_ref().unwrap(), &selected)?,
@@ -958,7 +948,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             percent_rank,
-            vec![Some(0.0), Some(0.0), Some(0.4), Some(0.6), Some(0.8), Some(1.0)]
+            vec![
+                Some(0.0),
+                Some(0.0),
+                Some(0.4),
+                Some(0.6),
+                Some(0.8),
+                Some(1.0)
+            ]
         );
         let cume_dist = evaluate_window(&expression("CUME_DIST", None), &input)
             .unwrap()
@@ -967,8 +964,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             cume_dist,
-            vec![Some(2.0 / 6.0), Some(2.0 / 6.0), Some(3.0 / 6.0), Some(4.0 / 6.0),
-                Some(5.0 / 6.0), Some(1.0)]
+            vec![
+                Some(2.0 / 6.0),
+                Some(2.0 / 6.0),
+                Some(3.0 / 6.0),
+                Some(4.0 / 6.0),
+                Some(5.0 / 6.0),
+                Some(1.0)
+            ]
         );
         let mut nth_value = expression("NTH_VALUE", frame(Rows, UnboundedPreceding, CurrentRow));
         if let Expr::WindowFunction { args, .. } = &mut nth_value {
@@ -981,7 +984,10 @@ mod tests {
         let nullable = batch(vec![None, Some(1), None, Some(2)]);
         assert_eq!(
             ints(
-                expression("FIRST_VALUE_IGNORE_NULLS", frame(Rows, UnboundedPreceding, CurrentRow)),
+                expression(
+                    "FIRST_VALUE_IGNORE_NULLS",
+                    frame(Rows, UnboundedPreceding, CurrentRow)
+                ),
                 &nullable,
             ),
             vec![Some(1), Some(1), Some(1), Some(1)]
@@ -1076,7 +1082,10 @@ mod tests {
                 Field::new("region", key.data_type().clone(), false),
                 Field::new("amount", DataType::Int64, false),
             ])),
-            vec![Arc::new(key), Arc::new(Int64Array::from(vec![1, 10, 2, 20]))],
+            vec![
+                Arc::new(key),
+                Arc::new(Int64Array::from(vec![1, 10, 2, 20])),
+            ],
         )
         .unwrap();
         let expr = Expr::WindowFunction {
