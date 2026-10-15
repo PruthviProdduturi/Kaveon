@@ -100,6 +100,15 @@ returning/error clauses remain open.
 focused regression covers canonical output and NULL preservation for a large
 string array; path and returning-mode boundaries remain unchanged.
 
+## TRY JSON compatibility qualification — 2026-10-15
+
+`TRY(JSON_FORMAT(...))` and `TRY(JSON_ARRAY_GET(...))` now lower through
+explicit row-local safe evaluators, matching the existing `TRY(JSON_PARSE(...))`
+contract. Malformed documents return NULL instead of aborting the statement;
+valid values and ordinary out-of-range array accesses retain their normal
+results. The focused SQL and executor suites cover planner lowering and
+execution behavior.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
