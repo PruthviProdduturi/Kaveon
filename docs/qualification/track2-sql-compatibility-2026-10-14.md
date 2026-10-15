@@ -491,3 +491,18 @@ partitioned-join regression.
 The focused JSON regression also covers a `LargeUtf8` document with an
 `Int32` index, confirming that scalar index coercion does not depend on a
 64-bit input column.
+
+## Current differential rerun — 2026-10-15
+
+The server differential corpus was rerun from the current source with:
+
+```powershell
+cargo test -p kaveon-server --bin kaveon-server differential_tests --quiet
+```
+
+All **19 differential cases passed** with zero failures. This includes the
+aggregate `FILTER (WHERE ...)` cases, windowed filtered aggregates, joins,
+subqueries, set operations, ordering, arrays, maps, JSON, and typed literal
+paths across the local and distributed execution variants. This is current
+repository evidence; the remaining cloud and broader external-client gates
+stay open in the parity matrix.
