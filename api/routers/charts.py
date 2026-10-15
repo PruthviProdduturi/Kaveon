@@ -11,6 +11,7 @@ import services.charts as svc
 import services.thumbnails as thumbnails
 import services.favorites as fav_svc
 import services.user_recents as recents_svc
+from routers import reference_guard
 
 router = APIRouter()
 NO_CACHE = {
@@ -18,6 +19,22 @@ NO_CACHE = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+
+
+def _chart_references(dashboard: dict) -> set[str]:
+    """The chart ids one dashboard document names.
+
+    `chart_revisions` is what the Engine derives the dashboard's references
+    from, so it is the authority on which charts the catalog will refuse to
+    delete; `charts` is read as well so a document written before that field
+    existed still accounts for its tiles.
+    """
+    revisions = dashboard.get("chart_revisions")
+    named = set(revisions) if isinstance(revisions, dict) else set()
+    charts = dashboard.get("charts")
+    if isinstance(charts, (list, tuple)):
+        named |= {str(item) for item in charts if item is not None}
+    return {str(item) for item in named}
 
 
 @router.get("/charts")
@@ -128,6 +145,23 @@ def delete_chart(chart_id: str, ctx: UserContext = Depends(require_user_context)
         raise HTTPException(status_code=404, detail="Chart not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this chart")
+    # A dashboard names every chart on it as a reference (its
+    # `chart_revisions`), so a chart on any dashboard could not be deleted at
+    # all: the catalog refused the transaction and the caller was handed the
+    # Engine's own words — a 502 quoting `product record 'dashboard/<id>'
+    # references missing 'chart/<id>'`. Clearing the reference is not this
+    # request's business either, because removing a tile edits someone else's
+    # dashboard. So the delete is refused with the dashboards named, which is
+    # something the caller can act on. Counted at system scope: a dashboard
+    # the caller cannot see still blocks the delete, and is counted without
+    # being named.
+    total, names = reference_guard.dependents(
+        "dashboards", lambda document: str(chart_id) in _chart_references(document),
+        actor=ctx.email, role=ctx.role)
+    if total:
+        raise HTTPException(status_code=409, detail=reference_guard.message(
+            total, names, "dashboard",
+            "Remove this chart from them before deleting it."))
     # References first, then the record.
     #
     # A recents entry and a favorite each NAME this chart as a reference in

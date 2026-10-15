@@ -80,6 +80,24 @@ class ServeChartBody(BaseModel):
     filters: List[ChartFilter] = []
 
 
+def _assert_dataset_visible(dataset_id: str, ctx: UserContext) -> dict:
+    """The dataset this request names, read as the caller, or 404.
+
+    Two routes below name a dataset by id and then hand it to a DLM operation
+    that reads the dataset without an identity — `incremental_refresh` — or
+    rebuilds it at `role="Admin"` — `_trigger_background_rebuild`. Neither
+    applied the caller's visibility, so an Analyst could name any id and have
+    a private dataset belonging to someone else recompiled, its row counts and
+    distinct values landing in a context artifact, from the id alone. The
+    authorization is the same read every other dataset route performs, and it
+    happens before the delegation rather than inside it.
+    """
+    dataset = dlm.datasets_svc.get_dataset_by_id(str(dataset_id), ctx.email, ctx.role)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return dataset
+
+
 @router.post("/datasets/{dataset_id}/dlm/generate")
 def generate(dataset_id: str, force: bool = Query(default=False),
              ctx: UserContext = Depends(require_min_role("Analyst"))):
@@ -266,6 +284,7 @@ def incremental_refresh(dataset_id: str,
                         ctx: UserContext = Depends(require_min_role("Analyst"))):
     """Incrementally refresh DLM answers for new data — delta-merge for additive
     metrics, full recompute when delta is too large or metrics are non-additive."""
+    _assert_dataset_visible(dataset_id, ctx)
     result = dlm.incremental_refresh(dataset_id)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason", "refresh_failed"))
@@ -293,6 +312,7 @@ def notify_data_change(dataset_id: str = Query(...),
                        ctx: UserContext = Depends(require_min_role("Analyst"))):
     """Webhook for data pipelines: call after loading new data to trigger an
     immediate DLM rebuild instead of waiting for the next sweep or user ask."""
+    _assert_dataset_visible(dataset_id, ctx)
     dlm.invalidate_caches(dataset_id)
     triggered = dlm._trigger_background_rebuild(dataset_id, ctx.email)
     return {"ok": True, "dataset_id": dataset_id, "rebuild_triggered": triggered}

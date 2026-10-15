@@ -40,13 +40,23 @@ class SetupRetirementTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(raised.exception.detail["code"], "postgresql_retired")
 
+    def test_the_neon_migration_route_is_gone(self):
+        """`POST /admin/fix-datasource-refs` rewrote `database_name` from
+        'neondb' to 'kaveon' for a migration off a provider the platform no
+        longer uses, and nothing in the product or the docs called it. It was an
+        unparameterised UPDATE on `datasets` reachable by any administrator."""
+        self.assertFalse(hasattr(setup, "fix_datasource_refs"))
+        self.assertNotIn(
+            "/admin/fix-datasource-refs",
+            [route.path for route in setup.router.routes],
+        )
+
     def test_admin_mutations_are_fenced_before_side_effects(self):
         request = SetupConnectionBody(db_type="postgresql", database="metadata", host="localhost")
         calls = (
             lambda: setup.admin_test_metadata(request, ctx={}),
             lambda: setup.admin_update_metadata(request, ctx={}),
             lambda: setup.admin_start_fresh(ctx={}),
-            lambda: setup.fix_datasource_refs(ctx={}),
         )
         with patch.object(setup, "_probe", side_effect=AssertionError("PostgreSQL reached")), \
              patch.object(setup, "_upsert_env", side_effect=AssertionError("config mutation reached")), \

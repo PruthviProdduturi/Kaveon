@@ -305,9 +305,26 @@ def delete_data_source(ds_id: str, ctx=Depends(require_min_role("Admin"))):
         record_id=f"data-{int(ds_id)}"
         current=product_read_authority.read_document("sources",record_id,ctx.email,"Admin")
         if not current: raise HTTPException(404,"Data source not found")
-        favorites=product_read_authority.list_documents("favorites",ctx.email,"Admin") if product_read_authority.enabled("favorites") else []
-        if any(item.get("object_type")=="source" and item.get("object_id")==record_id for item in favorites):
-            raise HTTPException(409,"Remove data-source favorites before deletion")
+        # A favorite names this source as a reference in the product catalog,
+        # and the catalog refuses to delete a record another record still
+        # points at. This used to answer 409 "Remove data-source favorites
+        # before deletion" — but a favorite belongs to whoever made it, and
+        # there is no route by which an administrator can remove another
+        # user's favorite, so a source anyone had ever favorited could not be
+        # deleted by anybody and the instruction named an action nobody could
+        # take. Cleared here instead, as the chart and dashboard deletes
+        # clear theirs: a bounded cross-owner fanout, each owner's record
+        # written as that owner. A failure is raised rather than swallowed,
+        # because proceeding would only produce the catalog's rejection one
+        # line later.
+        from services import favorites as favorites_svc
+        try:
+            favorites_svc.remove_favorite_all_users("source", record_id)
+        except Exception as error:
+            raise HTTPException(
+                502,
+                f"Could not clear this data source's favorites, so it was not deleted: {error}",
+            ) from error
         source_cutover_mutations.delete(record_id,ctx.email)
         try: source_secret_store.SourceSecretStore().delete(str(current.get("secret_ref")))
         except source_secret_store.SourceSecretError: pass

@@ -1,5 +1,6 @@
 """Setup router — /api/v1/setup + /api/v1/admin/metadata."""
 
+import logging
 import os
 import re
 import sys
@@ -12,6 +13,10 @@ from middleware.permissions import require_min_role
 from services import postgresql_retirement_runtime, system_catalog
 
 router = APIRouter()
+# Setup runs before anything else is configured, so what it reports has to
+# reach the deployed log pipeline rather than stdout, and must not carry a
+# driver message that can quote a host, a database or a credential.
+logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = _REPO_ROOT.parent.parent / ".env"
@@ -87,6 +92,16 @@ def _read_env_vars() -> dict:
         "host":     os.environ.get("METADATA_HOST") or "",
         "port":     os.environ.get("METADATA_PORT") or "",
     }
+
+
+# What `/setup/status` says about a failed probe. It is an unauthenticated
+# route, so each message describes the class of failure and nothing about where
+# the server is or what it answered.
+_STATUS_MESSAGES = {
+    "timeout": "The metadata database did not answer in time.",
+    "auth_failed": "The metadata database rejected the configured credentials.",
+    "connection_failed": "The metadata database could not be reached.",
+}
 
 
 def _to_setup_errors(error_type: str, message: str) -> list:
@@ -191,7 +206,9 @@ def setup_status():
         except (IndexError, TypeError):
             pass
         if cnt is None or int(cnt) == 0:
-            return {"status": "schema_missing", "endpoint": endpoint, "database": database}
+            # Unauthenticated, so the location stays server-side here too; the
+            # administrator sees it on `/api/v1/admin/metadata`.
+            return {"status": "schema_missing"}
         return {"status": "ok"}
     except Exception as e:
         err_msg = str(e)
@@ -201,9 +218,22 @@ def setup_status():
             error_type = "auth_failed"
         else:
             error_type = "connection_failed"
+        # This route carries no authentication — the Studio reads it before a
+        # session exists, to decide whether to show the setup wizard — so what
+        # it returns is public. It used to classify the driver's message and
+        # then hand the message itself back, along with the endpoint and the
+        # database name: on a self-hosted install any anonymous caller learnt
+        # the metadata server's host, port, database and user from a failed
+        # probe. The classification is the useful part and is kept; the
+        # location and the raw message are not published. `/api/v1/setup/test`
+        # and `/api/v1/admin/metadata/*` still report the probe's own message
+        # to the person actually configuring the connection.
+        logger.warning("setup_status_probe_failed error_type=%s type=%s",
+                       error_type, type(e).__name__)
         return {
-            "status": error_type, "endpoint": endpoint, "database": database,
-            "errors": _to_setup_errors(error_type, err_msg),
+            "status": error_type,
+            "errors": _to_setup_errors(error_type, _STATUS_MESSAGES.get(
+                error_type, "The metadata database could not be reached.")),
         }
 
 
@@ -277,7 +307,7 @@ def setup_initialize(data: SetupConnectionBody):
     try:
         _upsert_env(env_updates)
     except Exception as e:
-        print(f"[Setup] Failed to update .env: {e}")
+        logger.warning("setup_env_write_failed type=%s", type(e).__name__)
 
     # Apply to live environment
     for k, v in env_updates.items():
@@ -287,7 +317,7 @@ def setup_initialize(data: SetupConnectionBody):
         import time as _t
         import os as _os
         _t.sleep(0.6)
-        print("[Setup] Restarting API to apply new metadata database configuration…")
+        logger.info("setup_restart reason=metadata_initialized")
         _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
@@ -412,7 +442,7 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
     try:
         _upsert_env(env_updates)
     except Exception as e:
-        print(f"[Setup] Failed to update .env: {e}")
+        logger.warning("setup_env_write_failed type=%s", type(e).__name__)
 
     for k, v in env_updates.items():
         os.environ[k] = v
@@ -421,7 +451,7 @@ def admin_update_metadata(data: SetupConnectionBody, ctx=Depends(require_min_rol
         import time as _t
         import os as _os
         _t.sleep(0.6)
-        print("[Setup] Restarting API after admin metadata reconfiguration…")
+        logger.info("setup_restart reason=metadata_reconfigured")
         _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
@@ -472,7 +502,7 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
                 )
             ENV_PATH.write_text(content, "utf-8")
     except Exception as e:
-        print(f"[Setup] start-fresh: failed to update .env: {e}")
+        logger.warning("setup_start_fresh_env_write_failed type=%s", type(e).__name__)
 
     # Clear from the live process environment
     for key in _KEYS_TO_CLEAR:
@@ -482,26 +512,8 @@ def admin_start_fresh(ctx=Depends(require_min_role("Admin"))):
         import time as _t
         import os as _os
         _t.sleep(0.4)
-        print("[Setup] Restarting API after Start Fresh…")
+        logger.info("setup_restart reason=start_fresh")
         _os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
     return {"success": True, "message": "Configuration cleared. Kaveon is restarting…"}
-
-
-@router.post("/admin/fix-datasource-refs")
-def fix_datasource_refs(ctx=Depends(require_min_role("Admin"))):
-    """One-time fix: update dataset database_name from 'neondb' to 'kaveon' after migration."""
-    _assert_external_metadata_enabled()
-    meta_db = pool._live_meta_db()
-    p = pool.get_connection_pool(meta_db)
-    conn = p.get_connection()
-    try:
-        result = conn.execute_query(
-            "UPDATE datasets SET database_name = %s WHERE database_name = %s",
-            ["kaveon", "neondb"],
-        )
-        count = result.get("row_count", 0)
-        return {"status": "ok", "updated": count}
-    finally:
-        p.return_connection(conn)

@@ -60,13 +60,20 @@ def health():
             },
             "timestamp": now,
         }
-    except Exception as e:
+    except Exception:
+        # `/api/health` carries no authentication — it is what the container
+        # platform probes — so it must not echo the driver's message. A
+        # psycopg or pyodbc connection failure names the host, the port, the
+        # database and the user it tried, and that was being handed to any
+        # anonymous caller. The KaveonDB branch above already reports the
+        # failure without its details; this is the same.
         return JSONResponse(
             status_code=503,
             content={
                 "status": "degraded",
                 "checks": {
-                    "metadata_db": {"connected": False, "message": str(e), "latency_ms": 0, "last_check": now},
+                    "metadata_db": {"connected": False, "message": "Metadata database probe failed",
+                                    "latency_ms": 0, "last_check": now},
                     "data_warehouse": {"connected": True, "latency_ms": 0, "last_check": now},
                     "azure_ad": {"connected": True, "latency_ms": 0, "last_check": now},
                 },

@@ -41,6 +41,7 @@ class EngineChartSqlTests(unittest.TestCase):
         self.assertEqual(result, {
             "columns": ["city", "trips"], "rows": [["Manhattan", 42]],
             "query_id": "query-1", "duration_ms": 12, "approx": False,
+            "truncated": False,
         })
         # A statement with no distinct count runs under the Engine's own
         # defaults; no settings object is sent for it at all.
@@ -474,6 +475,7 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
         self.assertEqual(answer, {
             "columns": ["region", "A"], "rows": [["Europe", 3], ["Asia", 2]],
             "query_id": "query-1", "duration_ms": 150, "approx": False,
+            "truncated": False,
         })
 
     def test_the_route_never_leaks_the_substituted_sum_and_count(self):
@@ -485,6 +487,7 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
             "columns": ["surface", "Avg Latency (ms)"],
             "rows": [["Chat", 3.0], ["API", 2.5]],
             "query_id": "query-1", "duration_ms": 150, "approx": False,
+            "truncated": False,
         })
 
 
