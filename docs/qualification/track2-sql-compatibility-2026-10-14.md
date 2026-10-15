@@ -116,6 +116,14 @@ addition to ordinary `Utf8`. Valid documents retain their text representation,
 malformed values follow the existing strict/TRY behavior, and SQL NULL remains
 NULL. The focused executor regression covers all three row states.
 
+## Large UTF-8 JSON path qualification — 2026-10-15
+
+JSON extraction, `JSON_EXISTS`, `JSON_SIZE`, `JSON_ARRAY_LENGTH`, and
+`JSON_ARRAY_CONTAINS` now accept both `Utf8` and `LargeUtf8` documents; path
+arguments for extraction, existence, and size accept both widths as well. A
+large-document and large-path `JSON_VALUE` regression covers quoted keys and
+scalar output. The JSON coercion and returning-mode boundaries remain open.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
