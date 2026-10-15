@@ -1855,6 +1855,42 @@ _FOLLOW_UP_RE = re.compile(
     r"|\b(?:that|those|these|it|them|the same)\b", re.I)
 _FUZZY_CUTOFF = 0.85
 
+# A request to RE-PRESENT the answer already on screen: "give me a chart",
+# "can you make a world map chart", "show that as a bar".
+#
+# These are follow-ups with none of the connectives or pronouns `_FOLLOW_UP_RE`
+# looks for, so they were treated as new questions and re-routed -- and the
+# words they are made of are the telemetry dataset's own metrics. That dataset
+# measures `charts_created`, `queries_run` and `dashboards`, so "chart" scores
+# against it at the x3 metric weight, and after two questions about COVID,
+# "can you make a world map chart" answered
+# `SELECT SUM(charts_created) FROM events.daily_user_activity` and timed out
+# against a billion rows.
+#
+# Adding "chart" to the routing noise list would have been the wrong fix: that
+# dataset's subject genuinely IS charts, and "how many charts were created last
+# week" must still reach it. What separates the two is the REQUEST FORM -- an
+# imperative to produce a picture, rather than a question about a quantity --
+# so that is what this matches, and "how many charts..." does not match it.
+_PRESENTATION_REQUEST = re.compile(
+    r"^\s*(?:can|could|would|will|please|pls)?\s*(?:you\s+)?"
+    r"(?:make|give|show|draw|plot|render|chart|graph|map|visuali[sz]e|turn|convert|display)\b"
+    r".*\b(?:chart|graph|plot|map|table|dashboard|visuali[sz]ation|bar|line|pie|donut|scatter)\b"
+    r"|\bas\s+a\s+(?:bar|line|pie|donut|scatter|map|table|chart|graph)\b",
+    re.I,
+)
+
+
+def _asks_only_to_redraw(question: str) -> bool:
+    """Whether the question asks for a different presentation of the answer
+    already given, rather than for different data.
+
+    Deliberately narrow: it needs a request to produce something AND the name
+    of a presentation. "how many charts were created" matches neither half, so
+    a genuine question about chart counts still routes on its own merits.
+    """
+    return bool(_PRESENTATION_REQUEST.search(question or ""))
+
 
 def _compiled_datasets() -> List[Dict[str, Any]]:
     """The datasets that have a ready DLM artifact, newest first — what a vague
@@ -2013,6 +2049,29 @@ def _names_metric(phrase_tokens: set, metrics: List[dict],
         if want & (_name_tokens(name, m_alias) - _GENERIC_METRIC_TOKENS):
             return True
     return False
+
+
+# Phrases that scope a question to everything rather than splitting it.
+#
+# The dimension words are deliberately absent: "across all countries" DOES want
+# a row per country, and only the bare world/globe forms are scope. See the use
+# site in the resolver — the same word carries both meanings, and what follows
+# it is the only thing that separates them.
+_WHOLE_SCOPE = re.compile(
+    r"\b(?:across|around|in|for|over)\s+the\s+(?:whole\s+)?(?:world|globe|planet)\b"
+    r"|\bworld\s?wide\b"
+    r"|\bglobally\b"
+    r"|\boverall\b"
+    r"|\bin\s+total\b"
+    r"|\baltogether\b",
+    re.I,
+)
+
+
+def _asks_for_the_whole(question: str) -> bool:
+    """Whether the question scopes to everything rather than asking for a
+    breakdown. "across the world" is scope; "across countries" is grouping."""
+    return bool(_WHOLE_SCOPE.search(question or ""))
 
 
 def _group_by_candidates(question: str, dims: List[dict],
@@ -2193,8 +2252,14 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                 "hint": "That is SQL. Run it in SQL Lab; Chat answers questions in plain language.",
                 "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
     routed = route(question, limit=1)
+    # A request to redraw the answer counts as a follow-up even with none of
+    # the connectives or pronouns `_FOLLOW_UP_RE` looks for: it is asking for
+    # the same data in a different shape, so the conversation's dataset is the
+    # answer and the router's opinion about its wording is not.
+    redraw = _asks_only_to_redraw(question)
     follow_up = bool(frame and frame.get("dataset_id")) and (
-        not routed or str(routed[0]["dataset_id"]) == str(frame["dataset_id"]) or bool(_FOLLOW_UP_RE.search(question)))
+        not routed or str(routed[0]["dataset_id"]) == str(frame["dataset_id"])
+        or bool(_FOLLOW_UP_RE.search(question)) or redraw)
     if not routed and not follow_up:
         # A vague-but-answerable question ("what is current usage", "how are we
         # doing") names nothing the router can score. It is still answerable
@@ -2216,7 +2281,9 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                 return {"ok": False, "reason": "out_of_scope", "datasets": _dataset_names(),
                         "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
             return {"ok": False, "reason": "no_dataset"}
-    dataset_id = str(frame["dataset_id"]) if (follow_up and (not routed or bool(_FOLLOW_UP_RE.search(question)))) else str(routed[0]["dataset_id"])
+    dataset_id = (str(frame["dataset_id"])
+                  if (follow_up and (not routed or bool(_FOLLOW_UP_RE.search(question)) or redraw))
+                  else str(routed[0]["dataset_id"]))
     routed_entry = routed[0] if routed and str(routed[0]["dataset_id"]) == dataset_id else {"dataset_id": dataset_id, "score": 1.0}
     ds = _dataset_by_id(dataset_id)
     if not ds:
@@ -2416,7 +2483,18 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                 group_col = _match_any_dim(question, dims, d_alias)
     # If "by <metric>" was parsed but didn't match a dimension, also try
     # matching a dimension anywhere in the question (e.g. "top models by ELO")
+    # "across" is a grouping cue in "deaths across countries" and a SCOPE cue
+    # in "deaths across the world" — the first asks for a row per country, the
+    # second asks for one number. Reading both as grouping answered "total
+    # number of covid deaths across the world" with fifty rows titled "Deaths
+    # by country", and then offered to narrow it down to a top 10.
+    #
+    # So a whole-population phrase cancels the cue. These say "all of it",
+    # never "one per": the world and the globe as places rather than columns,
+    # and the adverbs that mean the same.
     wanted_groupby = bool(re.search(r"\b(?:by|per|across|for each)\b", question, re.I))
+    if wanted_groupby and _asks_for_the_whole(question):
+        wanted_groupby = False
     if not group_col and wanted_groupby:
         group_col = _match_any_dim(question, dims, d_alias, exclude=metric_words)
     if not group_col and follow_up and frame and frame.get("group_col") and not wanted_groupby:
