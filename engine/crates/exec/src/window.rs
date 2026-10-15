@@ -341,12 +341,39 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                     } as i64;
                 }
                 "LAG" | "LEAD" => {
-                    let source = if name == "LAG" {
-                        pos.checked_sub(offset)
+                    let source = if ignore_nulls {
+                        let mut candidate = Some(pos);
+                        let mut remaining = offset;
+                        while remaining > 0 {
+                            let Some(current) = candidate else {
+                                break;
+                            };
+                            candidate = if name == "LAG" {
+                                current.checked_sub(1)
+                            } else {
+                                current.checked_add(1).filter(|&i| i < rows.len())
+                            };
+                            let Some(next) = candidate else {
+                                break;
+                            };
+                            if col.as_ref().is_some_and(|column| !column.is_null(rows[next])) {
+                                remaining -= 1;
+                            }
+                        }
+                        if remaining == 0 {
+                            candidate.map(|index| rows[index] as u32)
+                        } else {
+                            None
+                        }
                     } else {
-                        pos.checked_add(offset).filter(|&i| i < rows.len())
+                        let source = if name == "LAG" {
+                            pos.checked_sub(offset)
+                        } else {
+                            pos.checked_add(offset).filter(|&i| i < rows.len())
+                        };
+                        source.map(|index| rows[index] as u32)
                     };
-                    indices[row] = source.map(|i| rows[i] as u32);
+                    indices[row] = source;
                 }
                 "COUNT"
                 | "SUM"
@@ -950,6 +977,18 @@ mod tests {
         assert_eq!(
             ints(nth_value, &input),
             vec![None, Some(1), Some(1), Some(1), Some(1), Some(1)]
+        );
+        let nullable = batch(vec![None, Some(1), None, Some(2)]);
+        assert_eq!(
+            ints(
+                expression("FIRST_VALUE_IGNORE_NULLS", frame(Rows, UnboundedPreceding, CurrentRow)),
+                &nullable,
+            ),
+            vec![Some(1), Some(1), Some(1), Some(1)]
+        );
+        assert_eq!(
+            ints(expression("LAG_IGNORE_NULLS", None), &nullable),
+            vec![Some(2), None, Some(2), Some(1)]
         );
         let mut lag = expression("LAG", None);
         if let Expr::WindowFunction { args, .. } = &mut lag {
