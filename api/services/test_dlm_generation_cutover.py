@@ -163,5 +163,91 @@ class DlmGenerationCutoverTests(unittest.TestCase):
         transact.assert_not_called()
 
 
+class SupersededRunRetirementTests(unittest.TestCase):
+    """One record per recompile accumulated forever in a family that is read
+    by LISTING it, and `product_store.list_records` answers 503 past 1,000.
+    `read` only ever serves the highest-version ready run at the definition's
+    current revision, so the rest were dead weight heading for that ceiling.
+    """
+
+    def _run(self, version, status="ready", definition_revision=1, revision=2):
+        return (version, f"7-v{version}", revision,
+                {"definition_id": "7", "definition_revision": definition_revision,
+                 "status": status, "artifact": None})
+
+    def test_older_generations_past_the_keep_window_are_retired(self):
+        runs = [self._run(version) for version in range(1, 6)]
+        doomed = cutover.superseded_runs(runs, 1)
+        # v5 is the top version (possibly in flight) and v4 is the one kept
+        # generation; v1-v3 come down, oldest first.
+        self.assertEqual([record_id for _, record_id, _, _ in doomed],
+                         ["7-v1", "7-v2", "7-v3"])
+
+    def test_a_run_pinned_to_a_superseded_definition_is_retired(self):
+        runs = [self._run(1, definition_revision=1), self._run(2, definition_revision=1),
+                self._run(3, definition_revision=2)]
+        doomed = cutover.superseded_runs(runs, 2)
+        # v1 and v2 are pinned to a definition revision the dataset has moved
+        # past, so neither can ever be served again whatever its version; v3
+        # is the top version and is kept.
+        self.assertEqual([record_id for _, record_id, _, _ in doomed],
+                         ["7-v1", "7-v2"])
+
+    def test_the_top_version_is_never_retired_even_while_building(self):
+        """A concurrent publication takes `highest + 1`, so one that has
+        committed its `building` run and not yet its `ready` update always
+        holds the top version here. Retiring it would make that second commit
+        fail with its immutable bytes already written."""
+        runs = [self._run(1), self._run(2), self._run(3, status="building",
+                                                      revision=1)]
+        doomed = cutover.superseded_runs(runs, 1)
+        self.assertNotIn("7-v3", [record_id for _, record_id, _, _ in doomed])
+        # And it comes down one publication later, once it is no longer the top.
+        later = runs + [self._run(4)]
+        self.assertIn("7-v3", [record_id for _, record_id, _, _
+                               in cutover.superseded_runs(later, 1)])
+
+    def test_the_retirement_is_bounded(self):
+        runs = [self._run(version) for version in range(1, cutover.MAX_RUN_PRUNE + 40)]
+        self.assertEqual(len(cutover.superseded_runs(runs, 1)), cutover.MAX_RUN_PRUNE)
+
+    def test_nothing_to_retire_stages_no_transaction(self):
+        with patch.object(cutover.product_store, "transact") as transact:
+            self.assertEqual(cutover._retire_superseded_runs([], 1, "owner"), 0)
+        transact.assert_not_called()
+
+    def test_a_failed_retirement_is_reported_apart_from_having_nothing_to_do(self):
+        """A zero would have conflated an installation where this never
+        succeeds — one heading for the listing ceiling — with the ordinary
+        steady state."""
+        runs = [self._run(version) for version in range(1, 6)]
+        with patch.object(cutover.product_store, "transact",
+                          side_effect=RuntimeError("revision moved")):
+            self.assertIsNone(cutover._retire_superseded_runs(runs, 1, "owner"))
+
+    def test_the_publication_retires_after_the_generation_is_readable(self):
+        dataset = {"revision": 1, "document": {"created_by": "owner"}}
+        runs = [self._run(version) for version in range(1, 6)]
+        order = []
+        with patch.object(cutover.product_store, "read",
+                          side_effect=[dataset, {"revision": 1, "document":
+                                                 {"dataset_id": "7", "dataset_revision": 1}}]), \
+             patch.object(cutover.product_store, "list_records",
+                          return_value=[{"id": record_id, "revision": revision,
+                                         "document": document}
+                                        for _, record_id, revision, document in runs]), \
+             patch.object(cutover.dlm_compiled_artifact, "publish",
+                          return_value={"path": "dlm/7/v6/compiled.json",
+                                        "sha256": "d" * 64, "bytes": 10, "version": 6}), \
+             patch.object(cutover.product_store, "transact",
+                          side_effect=lambda values, *_: order.append(
+                              [(item.operation, item.kind) for item in values])):
+            result = cutover.publish(payload(), "owner")
+        self.assertEqual(result["runs_retired"], 3)
+        # The ready update lands before anything is retired.
+        self.assertEqual(order[1], [("update", "dlm_run")])
+        self.assertEqual(order[2], [("delete", "dlm_run")] * 3)
+
+
 if __name__ == "__main__":
     unittest.main()

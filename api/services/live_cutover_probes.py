@@ -53,13 +53,25 @@ def write_fence(deployment_revision: str) -> dict:
     readonly=db.query("SELECT 1 AS retirement_fence_read_probe")
     if not isinstance(readonly,dict) or not readonly.get("rows"):
         raise RuntimeError("PostgreSQL read probe failed while fenced")
+    # Every table of every family, not just the first of each.
+    #
+    # The receipt is per family and `postgresql_special_family_retirement`
+    # accepts one probe per family as complete proof of the fence, but only
+    # `tables[0]` was ever probed: of the authority surface's tables, ten were
+    # never touched — `user_ai_keys`, `dataset_columns`, `dataset_metrics`,
+    # `context_answer_cache`, `dlm_value_index`, `dlm_router`, `dlm_answers`,
+    # `dlm_sketch`, `chat_messages`. A fence regression on any of them was
+    # reported as a pass for the whole family. A family's `passed` now means
+    # what the gate reads it as: every one of its tables refused the write.
     probes=[]
     for family,tables in sorted(gate.AUTHORITY_FAMILIES.items()):
-        statement=f"DELETE FROM {tables[0]} WHERE 1 = 0"
-        try:
-            db.execute(statement)
-        except fence.PostgreSQLWriteFencedError:
-            probes.append({"family":family,"passed":True})
-        else:
-            raise RuntimeError(f"PostgreSQL write fence allowed {family}")
+        if not tables:
+            raise RuntimeError(f"PostgreSQL write fence has no table to probe for {family}")
+        for table in tables:
+            try:
+                db.execute(f"DELETE FROM {table} WHERE 1 = 0")
+            except fence.PostgreSQLWriteFencedError:
+                continue
+            raise RuntimeError(f"PostgreSQL write fence allowed {family}.{table}")
+        probes.append({"family":family,"passed":True})
     return {"deployment_revision":deployment_revision,"readonly_probe_passed":True,"family_probes":probes}

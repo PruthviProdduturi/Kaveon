@@ -85,33 +85,45 @@ def discover(actor: str, mode: str) -> Optional[Dict[str, Any]]:
         return {"failed": f"{type(error).__name__}: {str(error)[:200]}"}
 
 
-def _stale_datasets(engine) -> tuple[int, List[Dict[str, Any]]]:
+def _stale_datasets(engine) -> tuple[int, List[Dict[str, Any]], List[str]]:
     """Every compiled dataset whose source has moved since it was compiled.
 
     Freshness is read under the sweep's own identity, and the whole listing is
     taken before the first rebuild: a rebuild publishes a new artifact, and
     enumerating as we go would then be deciding what to check from a catalog
     the job is itself changing.
+
+    Returns ``(checked, stale, unreadable)``. ``checked`` counts only the
+    datasets whose freshness was actually determined — it used to be
+    incremented before the check, so a dataset nothing could be learned about
+    was reported as one that had been checked. With the coordinator
+    unreachable every check raised, nothing came back stale, and the job
+    printed "context current: 47 datasets checked, nothing to recompile" and
+    exited zero: a green schedule over a deployment whose every recorded row
+    count and date range was going quietly out of date. The ones that could
+    not be read are named instead, and the caller decides what that is worth.
     """
-    examined = 0
+    checked = 0
     stale: List[Dict[str, Any]] = []
+    unreadable: List[str] = []
     for artifact in engine._serving_artifacts():
         dataset_id = str((artifact or {}).get("dataset_id") or "")
         if not dataset_id:
             continue
-        examined += 1
         try:
             freshness = engine.check_freshness(dataset_id)
         except Exception:
             # One unreadable dataset is not a reason to leave the others
             # stale, and the reason it was unreadable belongs in the log.
             logger.exception("freshness check failed for dataset %s", dataset_id)
+            unreadable.append(dataset_id)
             continue
+        checked += 1
         if freshness.get("fresh") or freshness.get("recommendation") != "rebuild":
             continue
         stale.append({"dataset_id": dataset_id, "score": freshness.get("score"),
                       "reason": freshness.get("reason")})
-    return examined, stale
+    return checked, stale, unreadable
 
 
 def sweep(actor: str, role: str = "Admin") -> Dict[str, Any]:
@@ -128,7 +140,7 @@ def sweep(actor: str, role: str = "Admin") -> Dict[str, Any]:
     state = engine._RetirementServingState(actor, role)
     token = engine._RETIREMENT_SERVING.set(state)
     try:
-        examined, stale = _stale_datasets(engine)
+        checked, stale, unreadable = _stale_datasets(engine)
     finally:
         engine._RETIREMENT_SERVING.reset(token)
 
@@ -148,7 +160,7 @@ def sweep(actor: str, role: str = "Admin") -> Dict[str, Any]:
             continue
         rebuilt.append(dataset_id)
 
-    return {"checked": examined,
+    return {"checked": checked, "unreadable": unreadable,
             "stale": [entry["dataset_id"] for entry in stale],
             "rebuilt": rebuilt, "failed": failed}
 
@@ -173,8 +185,10 @@ def main() -> int:
     # Before the sweep: a table registered now is compiled by the sweep that
     # follows, in this run.
     found = discover(actor, discovery_mode())
+    discovery_failed = False
     if found is not None:
         if found.get("failed"):
+            discovery_failed = True
             print(f"table discovery failed: {found['failed']}")
         else:
             print(f"table discovery: {len(found['registered'])} registered, "
@@ -185,15 +199,24 @@ def main() -> int:
                      if found['registered'] or found['undecidable'] else ""))
 
     result = sweep(actor)
+    unreadable = result["unreadable"]
+    if unreadable:
+        # Said out loud and reflected in the exit code. A dataset whose
+        # freshness could not be determined is not a dataset found current,
+        # and the whole sweep answering this way is what an unreachable
+        # coordinator looks like.
+        print(f"freshness undetermined for {len(unreadable)} dataset(s): "
+              + ", ".join(unreadable[:20]))
     if not result["stale"]:
         print(f"context current: {result['checked']} datasets checked, nothing to recompile")
-        return 0
-    print(f"recompiled {len(result['rebuilt'])} of {len(result['stale'])} stale datasets: "
-          f"{json.dumps(result, default=str)}")
+    else:
+        print(f"recompiled {len(result['rebuilt'])} of {len(result['stale'])} stale datasets: "
+              f"{json.dumps(result, default=str)}")
     # A failure is reported as one. The CronJob's backoff is what retries it,
-    # and a job that exited zero after failing to recompile would make a
+    # and a job that exited zero after failing to recompile — or after failing
+    # to look, whether at the lake or at a dataset's freshness — would make a
     # permanently stale dataset invisible.
-    return 1 if result["failed"] else 0
+    return 1 if result["failed"] or unreadable or discovery_failed else 0
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ from fastapi import HTTPException
 
 from routers import charts as charts_router
 from routers import dashboards as dashboards_router
-from services import favorites
+from services import datasets, favorites
 
 
 CTX = SimpleNamespace(email="owner@example.com", role="Admin")
@@ -115,6 +115,67 @@ class FavoriteFanoutTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "fanout bound"):
                 favorites.remove_favorite_all_users("chart", "chart-1")
         transact.assert_not_called()
+
+
+class CompiledDlmCascadeTests(unittest.TestCase):
+    """A dataset's compiled DLM context is deleted with it, references first.
+
+    A `dlm_definition` references its dataset and a `dlm_run` references that
+    definition, so the catalog refused to delete a dataset that had ever been
+    compiled. Unlike a chart, these records are derived rather than authored:
+    nobody can clear them from the UI, so the delete clears them — in one
+    transaction, runs before the definition before the dataset.
+    """
+
+    def _runs(self, count, definition_id="71"):
+        return [{"id": f"{definition_id}-v{index + 1}", "revision": 2,
+                 "document": {"definition_id": definition_id,
+                              "definition_revision": 1, "status": "ready",
+                              "artifact": {"path": "p", "sha256": "a" * 64}}}
+                for index in range(count)]
+
+    def _delete(self, runs, definition):
+        reads = {"dataset": {"revision": 8, "document": {"id": "71"}},
+                 "dlm_definition": definition}
+        with patch("services.product_read_authority.enabled", return_value=True), \
+             patch.object(datasets.product_store, "read",
+                          side_effect=lambda kind, *a, **k: reads[kind]), \
+             patch.object(datasets.product_store, "list_records", return_value=runs), \
+             patch.object(datasets.product_store, "transact") as transact, \
+             patch.object(datasets.db, "transaction",
+                          side_effect=AssertionError("PostgreSQL reached")):
+            result = datasets.delete_dataset("71", "owner@example.com")
+        return result, transact
+
+    def test_runs_then_definition_then_dataset_in_one_transaction(self):
+        result, transact = self._delete(self._runs(2), {"revision": 3})
+        self.assertTrue(result)
+        transact.assert_called_once()
+        staged = [(item.kind, item.record_id, item.expected_revision)
+                  for item in transact.call_args.args[0]]
+        self.assertEqual(staged, [
+            ("dlm_run", "71-v1", 2), ("dlm_run", "71-v2", 2),
+            ("dlm_definition", "71", 3), ("dataset", "71", 8),
+        ])
+        self.assertTrue(all(item.operation == "delete"
+                            for item in transact.call_args.args[0]))
+
+    def test_another_dataset_s_runs_are_left_alone(self):
+        _, transact = self._delete(self._runs(2, definition_id="99"), None)
+        staged = [(item.kind, item.record_id) for item in transact.call_args.args[0]]
+        self.assertEqual(staged, [("dataset", "71")])
+
+    def test_the_cascade_is_bounded(self):
+        """Past the bound `transact` would refuse the whole group for its size
+        and name neither the dataset nor the reason."""
+        with self.assertRaisesRegex(RuntimeError, "compiled DLM runs"):
+            self._delete(self._runs(datasets.MAX_DLM_RUN_CASCADE + 1), {"revision": 3})
+
+    def test_an_invalid_run_revision_is_not_deleted_around(self):
+        broken = self._runs(1)
+        broken[0]["revision"] = 0
+        with self.assertRaisesRegex(RuntimeError, "DLM run delete state"):
+            self._delete(broken, {"revision": 3})
 
 
 if __name__ == "__main__":

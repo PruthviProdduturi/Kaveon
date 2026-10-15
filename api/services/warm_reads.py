@@ -51,6 +51,7 @@ that exits it immediately — starts no threads.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -191,28 +192,48 @@ _LISTINGS = revalidating_cache.RevalidatingCache(
 )
 
 
+# A Library preview is a data URI of up to a quarter-megabyte, and the record
+# stamps when each one was captured. So the token below stands the stamp and
+# the byte count in for the bytes rather than hashing them on every recheck.
+_PREVIEW_FIELDS = ("thumbnail", "thumbnail_dark")
+
+
 def _listing_identity(documents: List[dict]) -> str:
     """What this listing says, as one token the next recheck can compare.
 
-    Taken over each record's identity, the generation and modification it
-    reports, and whether this reader has favorited it — not over the whole
-    document, so a recheck that finds nothing moved keeps the answer it
-    already holds rather than rebuilding it.
+    Taken over everything the listing reports, because that is what has to be
+    true of it: if the token matches, the held answer is still an accurate
+    description of the family, and if it does not, the fresh one replaces it.
 
-    What it rests on is that the store advances a record's generation on every
-    write, which is what its compare-and-set commit does. The favorite is in
-    here because it is the one field of a Library card that moves without the
-    record moving: it comes from the caller's own favorites listing, which
-    ``list_documents`` reads alongside the family.
+    It used to be taken over four fields — identity, generation, modification
+    time, and the caller's favorite — on the stated grounds that "the store
+    advances a record's generation on every write". The store does; the
+    listing does not carry it. ``product_read_authority.list_documents``
+    returns ``dict(document)``, so the record envelope's generation never
+    reaches here and ``document.get("generation")`` was always empty: the
+    token's whole foundation was a field that is never present.
+
+    What was left could not see a write that deliberately preserves
+    ``updated_at`` — and the chart and dashboard writers deliberately do
+    exactly that for a preview-only write, so that rendering a chart does not
+    jump it to the top of the recently-modified order. A capture therefore
+    produced an identical token, the recheck kept the answer it already held,
+    and ``has_thumbnail`` stayed false in the listing until something
+    invalidated the cache. Nothing does but a write.
+
+    Hashing the whole document costs no round trip and no rebuild — the fresh
+    documents are already in hand by the time this is called — so there was
+    never anything to buy by narrowing it.
     """
     digest = hashlib.sha256()
     for document in documents:
-        digest.update("\0".join((
-            str(document.get("id") or document.get("source_id") or ""),
-            str(document.get("generation") or ""),
-            str(document.get("updated_at") or document.get("modified_at") or ""),
-            str(document.get("favorite") or ""),
-        )).encode("utf-8"))
+        material = {key: value for key, value in document.items()
+                    if key not in _PREVIEW_FIELDS}
+        for key in _PREVIEW_FIELDS:
+            if key in document:
+                material[f"{key}#bytes"] = len(document.get(key) or "")
+        digest.update(json.dumps(material, sort_keys=True, separators=(",", ":"),
+                                 default=str, ensure_ascii=False).encode("utf-8"))
         digest.update(b"\x1e")
     return digest.hexdigest()
 

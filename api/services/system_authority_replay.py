@@ -45,6 +45,13 @@ FAMILY_TABLES: dict[str, tuple[str, ...]] = {
 # identifier here.
 _TABLE_TO_FAMILY = {table: family for family, tables in FAMILY_TABLES.items() for table in tables}
 
+# The one 502 that means "this typed table does not exist yet" rather than
+# "the Engine could not be reached or refused us". `engine_system_store`
+# raises it verbatim when the bridge answers a 404, which is what a first
+# replay meets; see where it is caught below for why the status alone is not
+# enough to tell them apart.
+_ABSENT_TARGET_PAGE = "KaveonDB returned an invalid system row page"
+
 # Generated DLM indexes and answer rows are rebuildable artifacts.  They can
 # contain very large JSON payloads and are retired through the immutable ADLS
 # artifact/rebuild evidence path, rather than copied into the typed control
@@ -173,6 +180,17 @@ def replay_table(
                 "skipped": source_count, "disposition": "rebuildable"}
 
     rows = snapshot_table(table, query=query)
+    # How many rows the source actually held, taken before anything narrows
+    # `rows`. The batch path below rebinds it to the few rows left needing
+    # row-by-row reconciliation — and does so after emptying `target_cache`,
+    # which the rebinding filters on, so the list it produced was always
+    # empty. The report then said `source_count: 0` beside `written: 500000`
+    # for every large history table, and `replay_family` summed that zero.
+    # The parity predicate a retirement gate enforces is
+    # `source_count == target_count`, which `0 == 0` satisfies: a replay of
+    # half a million rows could certify itself against a target it never
+    # looked at.
+    source_count = len(rows)
     column_types = _table_columns(rows)
     written = 0
     skipped = 0
@@ -193,10 +211,19 @@ def replay_table(
         try:
             page = engine_system_store.list_rows(table, actor, "Admin", limit=1000)
         except HTTPException as error:
-            # A first replay has no typed table yet; the Engine reports that
-            # as an invalid empty page. Other transport/auth failures remain
-            # fatal and must not be mistaken for an empty target.
-            if error.status_code != 502:
+            # A first replay has no typed table yet; the Engine answers 404
+            # and `engine_system_store.list_rows` reports that as an invalid
+            # page. Match that one message, not the bare status: every
+            # transport and authorization failure the bridge raises is ALSO a
+            # 502 — "Engine is unavailable" for any httpx error, "Engine
+            # rejected the bridge credential" for a 401 or 403, "Engine
+            # rejected the request" for anything else upstream. So the status
+            # check that used to stand here swallowed a network blip, a TLS
+            # failure and a rejected token into an empty target, which is
+            # exactly the hazard the note below warns against: it forces the
+            # blind batch-create path and certifies a replay against a target
+            # nothing ever read.
+            if error.status_code != 502 or str(error.detail) != _ABSENT_TARGET_PAGE:
                 raise
             page = {"rows": []}
             target_page_unavailable = True
@@ -381,7 +408,8 @@ def replay_table(
         if last_error is not None:
             raise RuntimeError(f"replay create failed for {table}:{record_id}") from last_error
         written += 1
-    return {"family": _TABLE_TO_FAMILY[table], "table": table, "source_count": len(rows),
+    return {"family": _TABLE_TO_FAMILY[table], "table": table,
+            "source_count": source_count,
             "written": written, "updated": updated, "skipped": skipped}
 
 

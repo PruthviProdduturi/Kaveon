@@ -1,11 +1,38 @@
 """Query Generator — port of queryGenerator.service.ts."""
 
+import logging
 import re
 import threading
 import warnings
 from typing import Dict, List, Optional, Tuple
 
+logger = logging.getLogger(__name__)
+
 _dialect = threading.local()
+
+
+def _unbuildable(builder: str, params: dict, error: BaseException) -> None:
+    """Record that generation RAISED rather than declining the configuration.
+
+    Both builders below wrap several hundred lines in one handler and answer
+    None, and `routers/sql.py` turns None into a flat 400 "Failed to generate
+    SQL from configuration". A configuration the generator deliberately cannot
+    express returns None at an explicit guard and that 400 is the right answer
+    — but so did any fault inside the builder, with nothing recorded anywhere,
+    so a chart that would not render gave the operator exactly as much to go
+    on as the user: one sentence, no cause.
+
+    The record names the fault and the shape that produced it, and nothing
+    else. The configuration's values are user data and the statement being
+    assembled would carry them, so neither is logged — the parameter names,
+    the datasource kind and the dialect are enough to find the case again.
+    """
+    logger.warning(
+        "%s_failed type=%s db_type=%s engine_source=%s params=%s",
+        builder, type(error).__name__,
+        (params.get("db_type") or "fabric_sql"), bool(params.get("engine_source")),
+        ",".join(sorted(str(key) for key in params)),
+    )
 
 
 def normalize_column_name(raw: str) -> str:
@@ -919,7 +946,8 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
         parts = [p for p in [select_clause, from_clause, join_clause, where_clause, group_by_clause, order_by_clause, limit_clause] if p]
         return " ".join(parts)
 
-    except Exception:
+    except Exception as error:
+        _unbuildable("chart_preview_query", params, error)
         return None
 
 
@@ -1181,5 +1209,6 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
         )
         return {"sql": sql, "keyColumn": key_column, "filteringTier": tier}
 
-    except Exception:
+    except Exception as error:
+        _unbuildable("distinct_filter_values_query", params, error)
         return None

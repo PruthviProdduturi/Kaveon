@@ -162,6 +162,33 @@ KAVEON_APP_ROLES = [
 ]
 
 
+# The most this will repeat of an upstream error body.
+MAX_GRAPH_REASON_CHARS = 300
+
+
+def _graph_reason(body: str) -> str:
+    """The one sentence of a Microsoft Graph error that is ours to repeat.
+
+    `routers/auth_config.py` turns a ValueError from here straight into an
+    HTTP 400 detail, and the whole undecoded Graph body used to go into it:
+    `innerError`, `request-id`, `client-request-id`, the timestamp, and the
+    echoed request. None of that is actionable for the person who pressed the
+    button, and it is our tenant's internals in a response body — so only
+    `error.message` is repeated, bounded, and a body that is not Graph's own
+    shape is described rather than quoted.
+    """
+    import json as _json
+    try:
+        message = _json.loads(body).get("error", {}).get("message")
+    except (ValueError, AttributeError):
+        message = None
+    if not isinstance(message, str) or not message.strip():
+        return "Microsoft Graph returned an error with no readable message."
+    message = " ".join(message.split())
+    return (message if len(message) <= MAX_GRAPH_REASON_CHARS
+            else message[:MAX_GRAPH_REASON_CHARS] + "…")
+
+
 def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> dict:
     """
     Create the 4 Kaveon App Roles in the Azure AD App Registration using a
@@ -199,7 +226,8 @@ def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> d
                 "You need to be an Owner of the App Registration to auto-create roles. "
                 "Ask your Azure AD admin, or copy the manifest below and add the roles manually."
             )
-        raise ValueError(f"Failed to query app registrations ({e.code}): {body}")
+        raise ValueError(
+            f"Failed to query app registrations ({e.code}): {_graph_reason(body)}")
 
     app_list = apps_data.get("value", [])
     if not app_list:
@@ -252,11 +280,8 @@ def setup_azure_app_roles(graph_token: str, client_id: str, tenant_id: str) -> d
                 "Ask your Azure AD admin to grant you Owner access, or copy the manifest below "
                 "and ask them to add the roles manually."
             )
-        try:
-            msg = _json.loads(body).get("error", {}).get("message", body)
-        except Exception:
-            msg = body
-        raise ValueError(f"Failed to update App Roles ({e.code}): {msg}")
+        raise ValueError(
+            f"Failed to update App Roles ({e.code}): {_graph_reason(body)}")
 
     return {
         "success": True,

@@ -110,17 +110,35 @@ class SweepRecompilesWhatHasChanged(unittest.TestCase):
         self.assertEqual([g["dataset_id"] for g in engine.generated], ["136", "144"])
 
     def test_an_unreadable_freshness_check_is_skipped_not_fatal(self):
+        """Skipped, but counted as unread rather than as checked.
+
+        `checked` used to be incremented before the check, so a dataset
+        nothing could be learned about was reported as one that had been
+        checked. With the coordinator unreachable every check raises, nothing
+        comes back stale, and the job printed "N datasets checked, nothing to
+        recompile" and exited zero over a deployment going quietly stale."""
         # 136 has no freshness entry, so checking it raises.
         engine = _Engine([{"dataset_id": "136"}, {"dataset_id": "144"}], {"144": STALE})
         result = self._run(engine)
-        self.assertEqual(result["checked"], 2)
+        self.assertEqual(result["checked"], 1)
+        self.assertEqual(result["unreadable"], ["136"])
         self.assertEqual(result["stale"], ["144"])
         self.assertEqual(result["rebuilt"], ["144"])
+
+    def test_a_sweep_that_could_check_nothing_does_not_report_success(self):
+        """What an unreachable coordinator looks like: every check raises."""
+        engine = _Engine([{"dataset_id": "136"}, {"dataset_id": "144"}], {})
+        result = self._run(engine)
+        self.assertEqual(result["checked"], 0)
+        self.assertEqual(result["unreadable"], ["136", "144"])
+        with patch.object(job, "sweep_identity", return_value="sweep@kaveon.io"),              patch.object(job, "discovery_mode", return_value="off"),              patch.object(job, "sweep", return_value=result):
+            self.assertEqual(job.main(), 1, "an undetermined sweep is not a pass")
 
     def test_nothing_stale_recompiles_nothing(self):
         engine = _Engine([{"dataset_id": "136"}], {"136": FRESH})
         result = self._run(engine)
-        self.assertEqual(result, {"checked": 1, "stale": [], "rebuilt": [], "failed": []})
+        self.assertEqual(result, {"checked": 1, "unreadable": [], "stale": [],
+                                  "rebuilt": [], "failed": []})
         self.assertEqual(engine.generated, [])
 
 
@@ -143,14 +161,14 @@ class SweepRefusesWithoutAPrincipal(unittest.TestCase):
 class ExitStatusSaysWhatHappened(unittest.TestCase):
     def test_a_run_with_nothing_to_do_succeeds(self):
         with patch.object(job, "sweep_identity", return_value="sweep@kaveon.io"), \
-             patch.object(job, "sweep", return_value={"checked": 9, "stale": [],
+             patch.object(job, "sweep", return_value={"checked": 9, "unreadable": [], "stale": [],
                                                       "rebuilt": [], "failed": []}):
             self.assertEqual(job.main(), 0)
 
     def test_a_failed_recompile_fails_the_run(self):
         with patch.object(job, "sweep_identity", return_value="sweep@kaveon.io"), \
              patch.object(job, "sweep", return_value={
-                 "checked": 9, "stale": ["136"], "rebuilt": [],
+                 "checked": 9, "unreadable": [], "stale": ["136"], "rebuilt": [],
                  "failed": [{"dataset_id": "136", "error": "out of memory"}]}):
             # A permanently stale dataset must not be invisible behind a zero
             # exit: the CronJob's history is where this is noticed.
@@ -194,9 +212,11 @@ class DiscoveryIsOffUnlessAsked(unittest.TestCase):
         self.assertIn("listing refused", outcome["failed"])
 
         with patch.object(job, "sweep_identity", return_value="sweep@kaveon.io"),              patch.object(job, "discovery_mode", return_value="register"),              patch("services.lake_discovery.discover",
-                   side_effect=RuntimeError("listing refused")),              patch.object(job, "sweep", return_value={"checked": 1, "stale": [],
+                   side_effect=RuntimeError("listing refused")),              patch.object(job, "sweep", return_value={"checked": 1, "unreadable": [], "stale": [],
                                                       "rebuilt": [], "failed": []}) as swept:
-            self.assertEqual(job.main(), 0)
+            # The sweep still runs — discovery must not be able to stop it —
+            # but a job that could not look at the lake is not a green job.
+            self.assertEqual(job.main(), 1)
         swept.assert_called_once()
 
     def test_discovery_runs_before_the_sweep(self):
@@ -207,7 +227,8 @@ class DiscoveryIsOffUnlessAsked(unittest.TestCase):
                           side_effect=lambda *a, **k: order.append("discover") or
                           {"registered": [], "found": [], "undecidable": [], "unreadable": []}),              patch.object(job, "sweep",
                           side_effect=lambda *a, **k: order.append("sweep") or
-                          {"checked": 1, "stale": [], "rebuilt": [], "failed": []}):
+                          {"checked": 1, "unreadable": [], "stale": [],
+                           "rebuilt": [], "failed": []}):
             job.main()
         self.assertEqual(order, ["discover", "sweep"])
 

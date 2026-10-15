@@ -133,5 +133,57 @@ class ProductReadAuthorityTests(unittest.TestCase):
             self.assertEqual(
                 authority.list_documents("query_history", "bob@example.com", "Viewer"), [])
 
+    def test_an_owner_scoped_favouritable_family_reports_its_favorite(self):
+        """``saved_queries`` is owner-scoped AND favouritable, so the point read
+        and the listing have to agree about the pin. The owner-scoped branch
+        used to return before the marker was attached: the read paid for the
+        favorite lookup and then dropped it, so a query the Library showed as
+        pinned came back from ``GET`` with no ``favorite`` key at all."""
+        document = {"id": "q-1", "name": "Weekly", "sql": "SELECT 1",
+                    "created_by": "alice@example.com", "updated_at": "2026-01-01"}
+        for pinned in (True, False):
+            with self.subTest(pinned=pinned), \
+                 patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "saved_queries"}, clear=True), \
+                 patch.object(authority.product_store, "read",
+                              side_effect=lambda kind, *a, **k:
+                                  ({"document": {"user_email": "alice@example.com"}} if pinned else None)
+                                  if kind == "favorite" else {"document": document}):
+                result = authority.read_document(
+                    "saved_queries", "q-1", "alice@example.com", "Viewer")
+                self.assertIs(result["favorite"], pinned)
+
+    def test_the_point_read_and_the_listing_agree_about_the_pin(self):
+        document = {"id": "q-1", "name": "Weekly", "sql": "SELECT 1",
+                    "created_by": "alice@example.com", "updated_at": "2026-01-01"}
+        favorites = [{"document": {"user_email": "alice@example.com",
+                                   "object_type": "saved_query", "object_id": "q-1"}}]
+        with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "saved_queries"}, clear=True), \
+             patch.object(authority.product_store, "read",
+                          side_effect=lambda kind, *a, **k:
+                              {"document": favorites[0]["document"]} if kind == "favorite"
+                              else {"document": document}), \
+             patch.object(authority.product_store, "list_records",
+                          side_effect=lambda kind, *a, **k:
+                              favorites if kind == "favorite" else [{"document": document}]):
+            point = authority.read_document(
+                "saved_queries", "q-1", "alice@example.com", "Viewer")
+            listed = authority.list_documents(
+                "saved_queries", "alice@example.com", "Viewer")
+        self.assertEqual(point["favorite"], listed[0]["favorite"])
+        self.assertTrue(point["favorite"])
+
+    def test_a_non_favouritable_owner_family_is_unchanged(self):
+        """A theme or a history row has no pin, and must not acquire one."""
+        with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "user_themes"}, clear=True), \
+             patch.object(authority.product_store, "read",
+                          side_effect=lambda kind, *a, **k: {"document": {
+                              "user_email": "alice@example.com", "theme_color": "#101010"}}
+                          if kind == "user_theme" else
+                          (_ for _ in ()).throw(AssertionError("favorite read"))):
+            result = authority.read_document(
+                "user_themes", "alice@example.com", "alice@example.com", "Viewer")
+        self.assertNotIn("favorite", result)
+
+
 if __name__ == "__main__":
     unittest.main()

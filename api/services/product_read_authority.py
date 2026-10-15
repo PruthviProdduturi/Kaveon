@@ -66,6 +66,22 @@ def favorite_record_id(family: str, actor: str, record_id: str) -> str:
     ).hexdigest()
 
 
+def _favorite_of(family: str, actor: str, record_id: str, document: dict,
+                 favorited: bool) -> bool:
+    """Whether *actor* has favorited the record *document* actually describes.
+
+    The marker read alongside the record was derived from the reference the
+    caller asked for. A record whose document names a different identity than
+    the key it was read under would make that derivation wrong, so it is read
+    again against what the document says rather than reported from the wrong
+    key.
+    """
+    if str(document.get("id")) == str(record_id):
+        return favorited
+    favorite_id = favorite_record_id(family, actor, str(document.get("id")))
+    return product_store.read("favorite", favorite_id, actor, "Admin") is not None
+
+
 def read_document(
     family: str,
     record_id: str,
@@ -106,15 +122,32 @@ def read_document(
     document = target.get("document") if isinstance(target, dict) else None
     if not isinstance(document, dict):
         raise ProductReadAuthorityError(f"KaveonDB returned an invalid {family} document")
+    # A favorite that was read is reported, whichever branch answers.
+    #
+    # ``saved_queries`` is both owner-scoped and favouritable, and the
+    # owner-scoped branch below used to return before the marker was attached:
+    # the read paid for the favorite lookup and then dropped it, so one saved
+    # query came back with no ``favorite`` key at all while the listing of the
+    # same queries carried one. A card that said pinned in the Library said
+    # nothing when opened.
+    def answer(value: dict) -> dict:
+        result = dict(value)
+        if family in _FAVOURABLE_FAMILIES:
+            result["favorite"] = (
+                _favorite_of(family, actor, record_id, value, favorited)
+                if wants_favorite else False
+            )
+        return result
+
     if family in _OWNER_FAMILIES:
         owner = document.get("user_email", document.get("created_by"))
         if role != "Admin" and owner != actor:
             return None
-        return dict(document)
+        return answer(document)
     if family in {"sources", "dlm_definitions", "dlm_runs", "activity"}:
         if family == "activity" and role != "Admin" and document.get("user_email") != actor:
             return None
-        return dict(document)
+        return answer(document)
     visibility = document.get("visibility") or "internal"
     owner = document.get("created_by") or document.get("owner")
     permitted = (
@@ -125,16 +158,7 @@ def read_document(
     )
     if actor is not None and not permitted:
         return None
-    result = dict(document)
-    # The favorite above was derived from the reference the caller asked for.
-    # A record whose document names a different identity than the key it was
-    # read under would make that derivation wrong, so it is read again against
-    # what the document actually says rather than reported from the wrong key.
-    if wants_favorite and str(document.get("id")) != str(record_id):
-        favorite_id = favorite_record_id(family, actor, str(document.get("id")))
-        favorited = product_store.read("favorite", favorite_id, actor, "Admin") is not None
-    result["favorite"] = favorited
-    return result
+    return answer(document)
 
 
 def list_documents(family: str, actor: str, role: str, *,

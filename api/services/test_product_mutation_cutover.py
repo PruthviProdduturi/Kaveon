@@ -28,9 +28,19 @@ def test_saved_query_mutations_use_revision_cas_without_postgres(monkeypatch):
     assert created["id"] == "query-1"
     assert transact.call_args.args[0][0].operation == "create"
 
-    monkeypatch.setattr("services.product_store.read", lambda *_: {
-        "revision": 7, "document": {"id": "query-1", "name": "Q", "sql": "SELECT 1",
-                                      "created_by": "owner", "created_at": "2026-01-01"}})
+    # The update commits, then reads the record back rather than describing it
+    # from the mutation, so the stored document is what this returns.
+    stored = {"revision": 7, "document": {"id": "query-1", "name": "Q", "sql": "SELECT 1",
+                                          "created_by": "owner", "created_at": "2026-01-01"}}
+
+    def _read(kind, *_args, **_kwargs):
+        if kind == "favorite":
+            return None
+        return stored
+
+    monkeypatch.setattr("services.product_store.read", _read)
+    transact.side_effect = lambda values, *_: stored["document"].update(
+        values[0].document or {}) or {}
     updated = saved_queries.update_saved_query("query-1", {"sql": "SELECT 2"}, "owner")
     mutation = transact.call_args.args[0][0]
     assert (mutation.operation, mutation.expected_revision, updated["sql"]) == ("update", 7, "SELECT 2")
