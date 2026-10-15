@@ -143,6 +143,15 @@ exact JSON number before comparison, so values such as `12.34` and `-0.50` do
 not pass through a binary floating-point conversion. Decimal256 and other
 unsupported needle types remain rejected explicitly.
 
+## Workspace regression gate — 2026-10-15
+
+The post-change workspace gate at commit `3d2085cb` passed with 74 core tests,
+211 SQL tests (one ignored), 84 planner/runtime tests, 356 execution tests
+(four ignored), 57 CLI tests, 394 server tests, 158 additional SQL tests, and
+121 storage tests (one ignored). The focused Decimal128 expression regression
+and the 19-test server differential suite also passed. This is repository
+evidence; multi-worker cloud qualification remains a separate Track 1 gate.
+
 ## Composite runtime-filter qualification — 2026-10-15
 
 Composite inner and semi joins now expose independent build-key `IN`
