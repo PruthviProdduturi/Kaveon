@@ -45,8 +45,17 @@
 
 .switch { width: 42px; height: 24px; border-radius: 12px; border: 0; cursor: pointer; position: relative; background: var(--border); transition: background .15s; flex-shrink: 0 }
 .switch[aria-checked="true"] { background: var(--accent) }
+/* The knob is white in both themes on purpose: it reads as a physical thing
+   moving along the track, and the track behind it is --border when off and
+   --accent when on, both of which it stays visible against. */
 .switch i { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 9px; background: #fff; transition: left .15s }
 .switch[aria-checked="true"] i { left: 21px }
+
+/* One focus ring for every control on these screens, in the same vocabulary
+   the Catalog uses, so a keyboard reader can see where they are. */
+.switch:focus-visible, .ghost:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 .progress { height: 6px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; margin-top: 10px }
 .progressFill { display: block; height: 100%; background: var(--accent); transition: width .3s }

@@ -16,10 +16,12 @@ interface SettingsSectionProps {
   loading?: boolean;
   loadingMessage?: string;
   error?: string | null;
+  /** Offered beside a failed read, so recovery does not mean reloading the browser. */
+  onRetry?: () => void;
   children?: ReactNode;
 }
 
-export function SettingsSection({ icon, title, subtitle, pills, action, loading, loadingMessage, error, children }: SettingsSectionProps) {
+export function SettingsSection({ icon, title, subtitle, pills, action, loading, loadingMessage, error, onRetry, children }: SettingsSectionProps) {
   return (
     <div className={s.stack}>
       <section className={s.card}>
@@ -36,11 +38,25 @@ export function SettingsSection({ icon, title, subtitle, pills, action, loading,
               )}
             </div>
           </div>
-          {action && !error && <div>{action}</div>}
+          {/* The header action is what a section is for — registering a
+              database, adding a source — and it does not depend on the read
+              that lists them. Hidden on error, a failed list also took away
+              the ability to add the first entry. */}
+          {action && <div>{action}</div>}
         </div>
       </section>
       {loading ? <p className={s.note}>{loadingMessage || "Loading…"}</p>
-        : error ? <div className={s.locked} role="alert"><b>Something went wrong</b>{error}</div>
+        : error ? (
+          <div className={s.locked} role="status">
+            <b>This could not be read</b>
+            {error}
+            {onRetry && (
+              <div style={{ marginTop: 12 }}>
+                <button type="button" className={s.ghost} onClick={onRetry}>Try again</button>
+              </div>
+            )}
+          </div>
+        )
         : children}
     </div>
   );

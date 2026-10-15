@@ -307,7 +307,20 @@ function EffectiveCard({ version }: { version: number }) {
             <table className={g.table}>
               <thead><tr><th>Catalog</th><th>Granted</th><th>As {ROLE_LABEL.reader}</th><th>As {ROLE_LABEL.analyst}</th><th className="num">Revision</th></tr></thead>
               <tbody>
-                {doc.grants.length === 0 && <tr><td colSpan={5} className={g.empty}>{doc.principal} has no grant: as a non-administrator they see no catalog.</td></tr>}
+                {/* With the store off no grant can exist, so an empty list is a
+                    fact about the coordinator, not about this person. Stated as
+                    a finding about them it reads as a decision somebody made.
+                    `store_enabled` is what the server sends to tell the two
+                    apart, and it was being ignored. */}
+                {doc.grants.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className={g.empty}>
+                      {doc.store_enabled
+                        ? `${doc.principal} has no grant: as a non-administrator they see no catalog.`
+                        : "The KaveonDB transaction store is not configured on this coordinator, so no grant can be recorded or read for anybody. This is not a finding about this principal."}
+                    </td>
+                  </tr>
+                )}
                 {doc.grants.map(grant => (
                   <tr key={grant.catalog}>
                     <td>{grant.catalog}{!grant.registered && <span className={g.detail}> · not registered</span>}</td>
@@ -391,7 +404,19 @@ function ImportCard({ onChanged }: { onChanged: () => void }) {
             <table className={g.table}>
               <thead><tr><th>Principal</th><th>Role seen</th><th>Catalog</th><th>Access</th></tr></thead>
               <tbody>
-                {proposal.proposed.length === 0 && <tr><td colSpan={4} className={g.empty}>Nothing to record: every principal the ledger has seen already holds a grant on every catalog, or the ledger is empty.</td></tr>}
+                {/* With the ledger off there is nothing to propose from, so the
+                    row must not claim every principal is already granted — the
+                    note above says the ledger is disabled and this row
+                    contradicted it. */}
+                {proposal.proposed.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className={g.empty}>
+                      {proposal.ledger_enabled
+                        ? "Nothing to record: every principal the ledger has seen already holds a grant on every catalog, or the ledger is empty."
+                        : "Nothing can be proposed while the audit ledger is disabled on this coordinator."}
+                    </td>
+                  </tr>
+                )}
                 {proposal.proposed.map(row => (
                   <tr key={`${row.catalog}/${row.principal}`}><td className="mono">{row.principal}</td><td>{row.role_seen}</td><td>{row.catalog}</td><td>{row.access}</td></tr>
                 ))}

@@ -51,11 +51,22 @@ import s from "./catalog.module.css";
 export default function CatalogOverviewPage() {
   const { isEditor } = useRole();
   const [adding, setAdding] = useState(false);
+  // A registration changes what this page counts, and the sheet writes to the
+  // Engine rather than to anything this page holds. Closing it therefore
+  // re-reads: the card for the catalog that was added to kept reporting the
+  // schema count from before the schema existed, which reads as a control
+  // that did nothing.
+  const [reload, setReload] = useState(0);
 
   return (
     <>
-      <CatalogIndex onAdd={isEditor ? () => setAdding(true) : undefined} />
-      {adding && <RegisterSheet kind="schema" onClose={() => setAdding(false)} />}
+      <CatalogIndex reload={reload} onAdd={isEditor ? () => setAdding(true) : undefined} />
+      {adding && (
+        <RegisterSheet
+          kind="schema"
+          onClose={() => { setAdding(false); setReload(count => count + 1); }}
+        />
+      )}
     </>
   );
 }
@@ -63,7 +74,7 @@ export default function CatalogOverviewPage() {
 /** One listed catalog: the registry row, and the Engine definition behind it. */
 interface Registered { source: EngineSource; definition: CatalogDefinition }
 
-function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
+function CatalogIndex({ onAdd, reload = 0 }: { onAdd?: () => void; reload?: number }) {
   const { isAdmin } = useRole();
   // The same read the rail made, through the shell, so the two cannot differ
   // and the page costs no second request for it.
@@ -89,7 +100,7 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
         }
       });
     return () => { alive = false; };
-  }, []);
+  }, [reload]);
 
   /** The registry joined to the Engine, by the catalog name both sides hold. */
   const joined = useMemo(() => {
@@ -128,7 +139,7 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
       [id, await fetchSchemaDefinitions(id).catch(() => null)] as const))
       .then(pairs => { if (alive) setSchemas(Object.fromEntries(pairs)); });
     return () => { alive = false; };
-  }, [idKey]);
+  }, [idKey, reload]);
 
   const totalSchemas = useMemo(
     () => (listed ?? []).reduce((sum, entry) => sum + (schemas[entry.definition.id]?.length ?? 0), 0),

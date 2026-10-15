@@ -187,10 +187,18 @@ function shapeLine(shape: EngineTable["shape"] | null | undefined): string | nul
  */
 const massKey = (sort: Sort): "rows" | "bytes" => (sort.key === "rows" ? "rows" : "bytes");
 
-export function Inventory({ catalogName, schemaName, action }: {
+export function Inventory({ catalogName, schemaName, action, reloadToken = 0 }: {
   catalogName?: string; schemaName?: string;
   /** The one thing this list can be missing, offered beside the list itself. */
   action?: React.ReactNode;
+  /**
+   * Bumped by the page when something it owns has registered a schema or a
+   * table. The registration sheet writes to the Engine, and this list reads
+   * the Engine's table definitions directly rather than through the rail's
+   * tree — so without this the sheet closed on a list that did not yet hold
+   * what had just been added, which reads as a control that did nothing.
+   */
+  reloadToken?: number;
 }) {
   const { isAdmin, isEditor } = useRole();
   // The registry decides what this list measures. The Engine's definitions
@@ -336,6 +344,17 @@ export function Inventory({ catalogName, schemaName, action }: {
   // registry resolves first, so the list is never drawn over a set of
   // catalogs it then has to take rows back out of.
   useEffect(() => { void load(false); }, [load]);
+
+  // A registration made by the page that owns this list re-reads it. The
+  // sheet writes to the Engine and this list reads the Engine's table
+  // definitions directly, so without this it closed on a list that did not
+  // yet hold what had just been added.
+  const seenToken = useRef(reloadToken);
+  useEffect(() => {
+    if (reloadToken === seenToken.current) return;
+    seenToken.current = reloadToken;
+    void load(false);
+  }, [reloadToken, load]);
 
   // A registry that did not answer is the reason there is nothing to measure,
   // and the page says so. Reading as a lake holding nothing would be the

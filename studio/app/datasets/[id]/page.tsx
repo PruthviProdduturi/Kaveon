@@ -11,6 +11,7 @@ import { useRouter, useParams } from "next/navigation";
 import { useRecents } from "../../../hooks/useRecents";
 import { useRole } from "../../../hooks/useRole";
 import { useDlmArtifact } from "../../../hooks/useDlmArtifact";
+import { UnknownPanel, reasonFromStatus, unknownText } from "../../../components/Reading";
 import s from "./dataset.module.css";
 
 export const dynamic = 'force-dynamic';
@@ -416,7 +417,16 @@ export default function DatasetDetailPage() {
   const { canCreate, canWrite, whyNoWrite } = useRole();
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /**
+   * A failed read of the dataset, with the status kept. The three cases read
+   * differently and were all rendered as one "Problem loading dataset": a 404
+   * is the control plane answering that this dataset is not there, a 403 is
+   * this role, and a 502/503/504 is a read that did not happen at all — which
+   * is a fact about the server, not about the dataset.
+   */
+  const [error, setError] = useState<{ status: number | null; message: string } | null>(null);
+  /** Bumped by the unknown panel's retry, so the read can be made again. */
+  const [retry, setRetry] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -506,7 +516,13 @@ export default function DatasetDetailPage() {
           headers,
         });
         if (!res.ok) {
-          throw new Error(`Failed to load dataset: ${res.status}`);
+          const body = await res.json().catch(() => null) as { detail?: unknown } | null;
+          const detail = typeof body?.detail === "string" ? body.detail : null;
+          setError({
+            status: res.status,
+            message: detail ?? `The server returned ${res.status}.`,
+          });
+          return;
         }
         const data = await res.json() as DatasetDetail & { is_favorite?: boolean };
 
@@ -518,15 +534,15 @@ export default function DatasetDetailPage() {
         setDataset(mappedData);
         addRecent({ id: String(mappedData.id), label: mappedData.name, href: `/datasets/${datasetId}`, type: "dataset" });
       } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : "Unknown error";
-        setError(message);
+        // Transport, not status: the request never reached a response.
+        setError({ status: null, message: e instanceof Error ? e.message : "The request did not complete." });
       } finally {
         setIsLoading(false);
       }
     };
 
     void load();
-  }, [isAuthenticated, datasetId, userEmail, addRecent]);
+  }, [isAuthenticated, datasetId, userEmail, addRecent, retry]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -582,9 +598,21 @@ export default function DatasetDetailPage() {
             tablesUsed: tablesUsed,
           }),
         });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.detail || data.error || `Preview query failed (HTTP ${res.status})`);
+        // A gateway that is restarting answers HTML, not JSON, and the parse
+        // threw here — so the reader was shown their own browser's
+        // "Unexpected token '<'" in place of what had happened. The body is
+        // read defensively, and where the status says KaveonDB was not
+        // reached at all the line says that rather than reporting this
+        // dataset's statement as the thing that failed.
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) {
+          const detail = typeof data?.detail === "string" ? data.detail
+            : typeof data?.error === "string" ? data.error
+            : null;
+          const reason = reasonFromStatus(res.status);
+          throw new Error(reason
+            ? unknownText({ what: "KaveonDB", says: "what this dataset holds", reason, detail })
+            : detail ?? `The preview statement did not complete (HTTP ${res.status}).`);
         }
 
         const apiColumns: string[] = Array.isArray(data.columns) ? data.columns : [];
@@ -905,15 +933,29 @@ export default function DatasetDetailPage() {
         )}
       </header>
 
-      {error && (
+      {/* A 404 and a 403 are the control plane answering, and they are
+          findings: this dataset is not there, or this role may not read it.
+          Anything else is this page failing to ask, which is not a finding
+          about the dataset and must not be reported as one. */}
+      {error && (error.status === 404 || error.status === 403 ? (
         <div className={s.card}>
           <div className={s.bar}>
             <i className={`fas fa-circle-exclamation ${s.barIcon}`} aria-hidden="true" />
-            <span className={s.barName}>Problem loading dataset</span>
+            <span className={s.barName}>
+              {error.status === 404 ? "No such dataset" : "Not available to your role"}
+            </span>
           </div>
-          <p className={`${s.note} ${s.noteError}`}>{error}</p>
+          <p className={`${s.note} ${s.noteError}`}>{error.message}</p>
         </div>
-      )}
+      ) : (
+        <UnknownPanel
+          what={`Dataset ${datasetId ?? ""}`.trim()}
+          says="what it holds"
+          reason={reasonFromStatus(error.status)}
+          detail={error.message}
+          onRetry={() => setRetry(count => count + 1)}
+        />
+      ))}
 
       {!error && (
         <>
@@ -1017,15 +1059,27 @@ export default function DatasetDetailPage() {
                           ? "fas fa-sort-up column-sort-icon"
                           : "fas fa-sort-down column-sort-icon";
 
+                        // Sorting lives on a button inside the head, not on
+                        // the cell. A `th` with an onClick is reachable by
+                        // pointer only — no tab stop, no Enter, and nothing
+                        // announced — so the one control on this grid was
+                        // unavailable to anybody not using a mouse. The
+                        // Catalog's own sort heads are built this way.
                         return (
                           <th
                             key={col}
                             align="left"
-                            onClick={() => handlePreviewSort(colIndex)}
                             className={isSorted ? "sorted" : undefined}
+                            aria-sort={isSorted ? (previewSortDirection === "asc" ? "ascending" : "descending") : "none"}
                           >
-                            <span className="column-header-label">{col}</span>
-                            <i className={sortIconClass} aria-hidden="true" />
+                            <button
+                              type="button"
+                              className={s.sortHead}
+                              onClick={() => handlePreviewSort(colIndex)}
+                            >
+                              <span className="column-header-label">{col}</span>
+                              <i className={sortIconClass} aria-hidden="true" />
+                            </button>
                           </th>
                         );
                       })}

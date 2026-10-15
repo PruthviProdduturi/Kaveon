@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
@@ -9,6 +9,7 @@ import { SettingsSection } from "../SettingsSection";
 import s from "../settings.module.css";
 import { Pagination } from "../../../components/Pagination";
 import { SOURCE_TYPE_META, SOURCE_TYPES } from "../../../components/DataSourceIcons";
+import { reasonFromStatus, unknownText } from "../../../components/Reading";
 
 function SourceTypeBadge({ type }: { type: string }) {
   const meta = SOURCE_TYPE_META[type];
@@ -30,7 +31,14 @@ interface DataSource {
   id: number;
   name: string;
   type: string;
-  connection_string: string;
+  /**
+   * Never present. `api/routers/data_sources._PUBLIC_FIELDS` withholds the
+   * endpoint deliberately — it may carry credentials — so this is always
+   * undefined in the browser. It was typed as a required string, which is why
+   * a column and a search both read it and the edit form seeded a required
+   * input from it.
+   */
+  connection_string?: undefined;
   database_name?: string;
   region: "WW" | "EU";
   description?: string;
@@ -38,8 +46,14 @@ interface DataSource {
   created_at?: string;
   updated_at?: string;
   is_active: boolean;
-  is_favorite?: number; // 1 if favorite, 0 if not
-  table_count?: number; // Number of tables in this data source
+  /** 1/0 from the SQL path, true/false from the KaveonDB path — read as truthy. */
+  is_favorite?: number | boolean;
+  /**
+   * Tables in this source, as the list endpoint reports it. It answers 0 both
+   * for a source it did not count and for one holding nothing — the cutover
+   * path returns 0 for every source — so 0 is not a measurement.
+   */
+  table_count?: number;
 }
 
 export default function DataSourcesPage() {
@@ -81,7 +95,18 @@ export default function DataSourcesPage() {
       const response = await msalFetch(`${API_BASE}/api/v1/data-sources`, {
         headers: userEmail ? { 'x-user-email': userEmail } : undefined
       });
-      if (!response.ok) throw new Error("Failed to load data sources");
+      if (!response.ok) {
+        // The status is what separates a server that was never told about a
+        // data plane from one that is restarting, and "Failed to load data
+        // sources" said neither. The sentence is the product's own.
+        setError(unknownText({
+          what: "The registered databases",
+          says: "which databases are registered",
+          reason: reasonFromStatus(response.status),
+          detail: response.status === 403 ? "Your role does not include this." : null,
+        }));
+        return;
+      }
       const data = await response.json();
       const sources = data.dataSources || [];
       setDataSources(sources);
@@ -93,7 +118,11 @@ export default function DataSourcesPage() {
       });
       setTableCounts(counts);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load data sources");
+      setError(unknownText({
+        what: "The registered databases",
+        says: "which databases are registered",
+        detail: err instanceof Error ? err.message : null,
+      }));
     } finally {
       setLoading(false);
     }
@@ -109,7 +138,10 @@ export default function DataSourcesPage() {
       return;
     }
 
-    const isFavorite = ds.is_favorite === 1;
+    // The two read paths answer 1/0 and true/false for this one fact, and a
+    // strict `=== 1` was false for every KaveonDB-backed source: the star never
+    // appeared and the toggle could only ever add, never remove.
+    const isFavorite = !!ds.is_favorite;
     const newFavoriteValue = isFavorite ? 0 : 1;
 
     // Optimistic update - update UI immediately
@@ -119,7 +151,7 @@ export default function DataSourcesPage() {
           return { ...source, is_favorite: newFavoriteValue };
         }
         // If setting a new favorite, clear other favorites (only one favorite allowed)
-        if (newFavoriteValue === 1 && source.is_favorite === 1) {
+        if (newFavoriteValue === 1 && source.is_favorite) {
           return { ...source, is_favorite: 0 };
         }
         return source;
@@ -249,10 +281,11 @@ export default function DataSourcesPage() {
     }
   };
 
+  // Name and description only: the endpoint is not returned to the browser, so
+  // a search over it could never match and the box quietly claimed otherwise.
   const filtered = dataSources.filter(ds =>
     !search || ds.name.toLowerCase().includes(search.toLowerCase()) ||
-    (ds.description ?? "").toLowerCase().includes(search.toLowerCase()) ||
-    (ds.connection_string ?? "").toLowerCase().includes(search.toLowerCase())
+    (ds.description ?? "").toLowerCase().includes(search.toLowerCase())
   );
   const handleSearch = (q: string) => { setSearch(q); setPage(1); };
   const PAGE_SIZE = 20;
@@ -281,6 +314,7 @@ export default function DataSourcesPage() {
         loading={loading}
         loadingMessage="Reading registered databases"
         error={error}
+        onRetry={() => void loadDataSources()}
       >
         {!loading && !error && dataSources.length === 0 ? (
           // The old copy here read "No data sources yet - add your first
@@ -316,8 +350,8 @@ export default function DataSourcesPage() {
             {contextMessage && (
               <div style={{
                 padding: "0.75rem 1rem", borderRadius: 8, marginBottom: "1rem",
-                background: "rgba(16,185,129,0.08)", color: "var(--success)",
-                border: "1px solid rgba(16,185,129,0.3)",
+                background: "color-mix(in srgb, var(--success) 8%, transparent)", color: "var(--success)",
+                border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)",
                 display: "flex", alignItems: "center", gap: "0.75rem", fontSize: 13,
               }}>
                 <i className="fas fa-check-circle" />
@@ -344,32 +378,45 @@ export default function DataSourcesPage() {
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                           <strong>{ds.name}</strong>
-                          {ds.is_favorite === 1 && <i className="fas fa-star" style={{ color: "#f59e0b", fontSize: "0.85rem" }} title="Favorite data source" />}
+                          {!!ds.is_favorite && <i className="fas fa-star" style={{ color: "var(--warning)", fontSize: "0.85rem" }} title="Favorite data source" />}
                         </div>
                         {ds.description && <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>{ds.description}</div>}
                       </td>
                       <td><SourceTypeBadge type={ds.type} /></td>
-                      <td className="muted" style={{ fontSize: 12, fontFamily: "monospace", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ds.connection_string}</td>
+                      {/* The endpoint is stored encrypted and is never returned
+                          to the browser, so this cell was blank on every row of
+                          a column headed "Endpoint". It says why instead. */}
+                      <td className="muted" style={{ fontSize: 12, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          title="Stored encrypted on the server and never sent to the browser.">
+                        Not shown
+                      </td>
                       <td className="muted" style={{ fontSize: 13 }}>{ds.database_name || "—"}</td>
                       <td>
-                        <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "rgba(59,130,246,0.12)" : "rgba(245,158,11,0.12)", color: ds.region === "WW" ? "var(--accent)" : "var(--warning, #92400e)" }}>
+                        <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.region === "WW" ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "var(--bg-hover)", color: ds.region === "WW" ? "var(--accent)" : "var(--text-secondary)" }}>
                           {ds.region}
                         </span>
                       </td>
                       <td>
-                        <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "rgba(16,185,129,0.12)" : "var(--bg-hover)", color: ds.is_active ? "var(--success)" : "var(--text-muted)" }}>
+                        <span style={{ padding: "0.2rem 0.5rem", borderRadius: 6, fontSize: "0.75rem", fontWeight: 600, background: ds.is_active ? "color-mix(in srgb, var(--success) 12%, transparent)" : "var(--bg-hover)", color: ds.is_active ? "var(--success)" : "var(--text-muted)" }}>
                           {ds.is_active ? "Active" : "Inactive"}
                         </span>
                       </td>
+                      {/* A count the server did not take comes back as 0, the
+                          same value a source holding nothing would give — and
+                          it was written in success green as "0 tables", which
+                          is a measurement this page never made. Only a figure
+                          above zero is reported, and it is reported in the
+                          table's own ink: a count is not a success. */}
                       <td className="muted" style={{ fontSize: 13 }}>
-                        {tableCounts[ds.id] !== undefined ? (
-                          tableCounts[ds.id] !== null ? <span style={{ fontWeight: 600, color: "var(--success)" }}>{tableCounts[ds.id]} tables</span> : <span style={{ color: "var(--text-muted)" }}>—</span>
-                        ) : <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--lens-primary)" }} />}
+                        {tableCounts[ds.id] === undefined
+                          ? <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--accent)" }} aria-label="Reading" />
+                          : tableCounts[ds.id] ? <span style={{ fontWeight: 600 }}>{tableCounts[ds.id]} tables</span>
+                          : <span style={{ color: "var(--text-muted)" }} title="No table count was taken for this source.">—</span>}
                       </td>
                       <td className="actions-cell">
                         <div className="row-actions">
-                          <button type="button" className="action-icon-btn" title={ds.is_favorite === 1 ? "Remove favorite" : "Set as favorite"} onClick={e => toggleFavorite(ds, e)} style={{ color: ds.is_favorite === 1 ? "#f59e0b" : undefined }}>
-                            <i className={ds.is_favorite === 1 ? "fas fa-star" : "far fa-star"} />
+                          <button type="button" className="action-icon-btn" aria-label={ds.is_favorite ? `Remove ${ds.name} from favorites` : `Set ${ds.name} as the favorite`} title={ds.is_favorite ? "Remove favorite" : "Set as favorite"} onClick={e => toggleFavorite(ds, e)} style={{ color: ds.is_favorite ? "var(--warning)" : undefined }}>
+                            <i className={ds.is_favorite ? "fas fa-star" : "far fa-star"} aria-hidden="true" />
                           </button>
                           <button type="button" className="action-icon-btn" title={ds.is_active ? "Deactivate" : "Activate"} onClick={e => toggleDataSource(ds, e)}>
                             <i className={`fas fa-${ds.is_active ? "pause" : "play"}-circle`} />
@@ -415,10 +462,17 @@ interface AddDataSourceModalProps {
 function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess }: AddDataSourceModalProps) {
   const { account } = useAuth();
   const isEditing = !!dataSource && !isCopying;
+  const titleId = useId();
+  const dialog = useRef<HTMLDivElement>(null);
+  // Focus moves into the dialog on open, so Escape reaches the handler below
+  // and a keyboard reader is not left behind the overlay.
+  useEffect(() => { dialog.current?.focus(); }, []);
   const [formData, setFormData] = useState({
     name: isCopying ? `${dataSource?.name} (Copy)` : (dataSource?.name || ""),
     type: dataSource?.type || "Fabric SQL AEP",
-    connection_string: dataSource?.connection_string || "",
+    // Always empty: the API withholds the stored endpoint. On an edit this
+    // field therefore means "replace it", not "this is what it is".
+    connection_string: "",
     database_name: dataSource?.database_name || "",
     region: (dataSource?.region || "WW") as "WW" | "EU",
     description: dataSource?.description || "",
@@ -436,18 +490,38 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
         ? `${API_BASE}/api/v1/data-sources/${dataSource.id}`
         : `${API_BASE}/api/v1/data-sources`;
 
+      // The stored endpoint never reaches the browser, so this form cannot
+      // show it and must not claim to. Left blank on an edit, the field is
+      // omitted and the server leaves the endpoint as it stands — it writes
+      // `connection_string` only when the key is present. Sending the empty
+      // string instead would have been refused outright, and sending a
+      // retyped guess would re-encrypt it over credentials the operator
+      // could not read and therefore could not reproduce.
+      const body: Record<string, unknown> = { ...formData };
+      if (isEditing && !formData.connection_string.trim()) delete body.connection_string;
+
       const response = await msalFetch(url, {
         method: isEditing ? "PATCH" : "POST",
         headers: {
           "Content-Type": "application/json",
           "x-user-email": account?.email || account?.username || "",
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to ${isEditing ? 'update' : 'create'} data source`);
+        // FastAPI answers `{"detail": ...}`. Reading `message` discarded every
+        // reason the server gave and showed the generic fallback instead.
+        const errorBody = await response.json().catch(() => null) as { detail?: unknown; message?: unknown } | null;
+        const detail = errorBody?.detail;
+        const text = typeof detail === "string" ? detail
+          : Array.isArray(detail)
+            ? detail.map(item => (item && typeof item === "object" && typeof (item as { msg?: unknown }).msg === "string"
+                ? (item as { msg: string }).msg : null)).filter(Boolean).join(" ") || null
+            : typeof (detail as { message?: unknown } | undefined)?.message === "string"
+              ? (detail as { message: string }).message
+              : typeof errorBody?.message === "string" ? errorBody.message : null;
+        throw new Error(text || `Failed to ${isEditing ? 'update' : 'create'} data source (HTTP ${response.status}).`);
       }
 
       onSuccess();
@@ -464,12 +538,21 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
         style={{
           position: 'fixed',
           inset: 0,
+          // A scrim, not chrome: it dims whatever is behind it, so it is the
+          // same black in both themes rather than a themed surface.
           background: 'rgba(0, 0, 0, 0.5)',
           zIndex: 1000,
         }}
         onClick={onClose}
+        aria-hidden="true"
       />
       <div
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onKeyDown={event => { if (event.key === "Escape" && !saving) { event.stopPropagation(); onClose(); } }}
         style={{
           position: 'fixed',
           top: '50%',
@@ -496,7 +579,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
             borderBottom: "1px solid var(--border)",
           }}
         >
-          <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600 }}>
+          <h2 id={titleId} style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600 }}>
             {isEditing ? 'Edit Data Source' : isCopying ? 'Copy Data Source' : 'Add Data Source'}
           </h2>
           <button
@@ -520,17 +603,22 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
           </button>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+        {/* The form is the dialog's flex child, so the body below it has a
+            bounded height and actually scrolls. As a plain block child, its
+            `flex: 1` resolved against nothing: the form grew past the
+            dialog's 90vh and `overflow: hidden` clipped the footer, leaving
+            Cancel and Update unreachable on a short viewport. */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, minHeight: 0 }}>
             {error && (
               <div
                 style={{
                   padding: '1rem',
                   borderRadius: '8px',
                   marginBottom: '1.5rem',
-                  background: "rgba(239,68,68,0.08)",
-                  color: "var(--error)",
-                  border: "1px solid rgba(239,68,68,0.3)",
+                  background: "color-mix(in srgb, var(--danger) 8%, transparent)",
+                  color: "var(--danger)",
+                  border: "1px solid color-mix(in srgb, var(--danger) 30%, transparent)",
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.75rem',
@@ -589,17 +677,29 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
 
             <div className="chart-builder-field">
               <label className="chart-builder-label">
-                <span>{SOURCE_TYPE_META[formData.type]?.endpointLabel ?? "Endpoint"} *</span>
+                <span>
+                  {SOURCE_TYPE_META[formData.type]?.endpointLabel ?? "Endpoint"}
+                  {isEditing ? "" : " *"}
+                </span>
               </label>
               <input
                 type="text"
                 className="chart-builder-input"
                 style={{ fontFamily: 'monospace' }}
-                placeholder={SOURCE_TYPE_META[formData.type]?.endpointPlaceholder ?? ""}
+                placeholder={isEditing
+                  ? "Unchanged"
+                  : SOURCE_TYPE_META[formData.type]?.endpointPlaceholder ?? ""}
                 value={formData.connection_string}
                 onChange={(e) => setFormData({ ...formData, connection_string: e.target.value })}
-                required
+                required={!isEditing}
+                aria-describedby={isEditing ? "endpoint-note" : undefined}
               />
+              {isEditing && (
+                <p className="muted" id="endpoint-note" style={{ marginTop: 6, fontSize: 12 }}>
+                  The stored endpoint is held encrypted and is not shown here. Leave this blank to
+                  keep it; type a new one only to replace it.
+                </p>
+              )}
             </div>
 
             <div className="chart-builder-field">
@@ -622,7 +722,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                 <span>Region</span>
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span style={{ fontSize: 13, padding: "0.3rem 0.75rem", borderRadius: 7, background: "rgba(59,130,246,0.12)", color: "var(--accent)", border: "1px solid rgba(59,130,246,0.3)", fontWeight: 600 }}>
+                <span style={{ fontSize: 13, padding: "0.3rem 0.75rem", borderRadius: 7, background: "color-mix(in srgb, var(--accent) 12%, transparent)", color: "var(--accent)", border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)", fontWeight: 600 }}>
                   WW — Worldwide
                 </span>
                 <span style={{ fontSize: 12, color: "var(--text-muted)" }}>EU coming soon</span>

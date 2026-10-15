@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "../../../contexts/ThemeContext";
 import s from "../settings.module.css";
 
@@ -9,10 +9,14 @@ const BANNER_KEY = "kaveon-context-banner";
 
 export default function PreferencesPage() {
   const { theme, toggleTheme } = useTheme();
-  const [banner, setBanner] = useState(() => {
-    if (typeof window === "undefined") return true;
-    try { return localStorage.getItem(BANNER_KEY) !== "hidden"; } catch { return true; }
-  });
+  // Read after mount, not during render. Read during render, the server
+  // rendered the switch as on and a browser that had hidden the banner
+  // rendered it as off, which is a hydration mismatch on the one attribute
+  // that says what the control's state is.
+  const [banner, setBanner] = useState(true);
+  useEffect(() => {
+    try { setBanner(localStorage.getItem(BANNER_KEY) !== "hidden"); } catch { /* default stands */ }
+  }, []);
 
   const setBannerPref = (on: boolean) => {
     setBanner(on);

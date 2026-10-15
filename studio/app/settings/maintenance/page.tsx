@@ -8,6 +8,7 @@ import {
 	isDue, isRunningElsewhere, parseTimestamp, readInterval, readRun,
 	startPass, stopPass, subscribe, writeInterval,
 } from "../../../utils/previewRefresh";
+import { unknownText } from "../../../components/Reading";
 import g from "../governance/governance.module.css";
 import s from "../settings.module.css";
 
@@ -220,8 +221,16 @@ function usePass(pass: PassId, blocked: boolean) {
 			setProblem(null);
 		} catch {
 			if (!mountedRef.current) return;
-			setRecords([]);
-			setProblem(`The ${COPY[pass].noun} list could not be loaded.`);
+			// Not an empty Library. Stored as `[]`, `ready` went true and the
+			// card reported "Previews stored — 0 of 0", "Outstanding captures
+			// — 0" and "There are no dashboards to preview" over a Library the
+			// page had simply failed to read — the figures and the verdict both
+			// made out of a request that did not answer.
+			setRecords(null);
+			setProblem(unknownText({
+				what: "The Library",
+				says: `which ${COPY[pass].plural} have previews`,
+			}));
 		}
 	}, [pass]);
 
@@ -283,7 +292,7 @@ function usePass(pass: PassId, blocked: boolean) {
 	}, [pass]);
 
 	return {
-		pass, run, live, elsewhere, blocked, intervalDays, problem, scheduled,
+		pass, run, live, elsewhere, blocked, intervalDays, problem, scheduled, reload,
 		total: records?.length ?? 0, stored, pending: pending.length,
 		ready: records !== null, begin, chooseInterval,
 		stop: useCallback(() => stopPass(pass), [pass]),
@@ -347,6 +356,10 @@ function statusLine(pass: Pass): string | null {
 		return `The last run captured ${run.total - run.failed} of ${run.total}; ${run.failed} could not be stored.`
 			+ (run.detail ? ` ${run.detail}` : "");
 	}
+	// A read that did not answer is finished and unknown, so the card must not
+	// sit in "Reading the Library…" either, and must not fall through to the
+	// counts below — which are counts of nothing read.
+	if (pass.problem) return null;
 	if (!ready) return "Reading the Library…";
 	if (!pass.total) return `There are no ${copy.plural} to preview.`;
 	if (!pending) return "Every preview is current.";
@@ -439,7 +452,12 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 				</div>
 			) : null}
 
-			{pass.problem ? <p className={g.problem}>{pass.problem}</p> : null}
+			{pass.problem ? (
+				<div className={s.cardFoot}>
+					<p className={s.note} role="status">{pass.problem}</p>
+					<button type="button" className={s.ghost} onClick={() => void pass.reload()}>Try again</button>
+				</div>
+			) : null}
 
 			<div className={s.schedule}>
 				<div>

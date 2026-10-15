@@ -138,7 +138,7 @@
    twist and kind columns those names sit after. */
 .treeNote { padding: 7px 8px; font-size: var(--fs-micro); line-height: 1.45; color: var(--text-muted) }
 .treeNote.level1 { padding-left: 66px } .treeNote.level2 { padding-left: 80px }
-.treeErr { color: var(--error) }
+.treeErr { color: var(--danger) }
 .rail { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: var(--rail-top) 0 0 }
 
 /* One control size across the page, and the same one the Library header uses:
@@ -440,8 +440,11 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 
 .sortBtn { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer }
 .sortBtn i { font-size: 9px; color: var(--text-faint); visibility: hidden }
-.sortBtn:hover { color: var(--text-primary) }
-.sortBtn:hover i { visibility: visible }
+.sortBtn:hover, .sortBtn:focus-visible { color: var(--text-primary) }
+/* The caret is the only sign that a head sorts. Shown on hover alone it was
+   invisible to anybody arriving by keyboard, who could focus the control and
+   still not know what it did. */
+.sortBtn:hover i, .sortBtn:focus-visible i { visibility: visible }
 .sortOn { color: var(--text-primary); font-weight: 600 }
 .sortOn i { visibility: visible; color: var(--text-secondary) }
 
@@ -511,7 +514,7 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 .ansBase { color: var(--text-muted) }
 .ansStale { color: var(--warning) }
 .ansNone { color: var(--text-faint) }
-.ansBad { color: var(--error) }
+.ansBad { color: var(--danger) }
 /* The cell carries the reading for a pointer even when it shows no words. */
 td.cAnswer { cursor: help }
 
@@ -526,7 +529,7 @@ td.cAnswer { cursor: help }
 /* The reading the row's last cell drew as a rule, written out here in the one
    place that has room for it, ahead of the sentence that explains it. */
 .factLead { color: var(--text-primary); font-weight: 600; margin-right: 7px }
-.factBad { color: var(--error) !important }
+.factBad { color: var(--danger) !important }
 .digest { margin-left: 8px; font: var(--fs-micro) var(--mono); color: var(--text-faint) }
 .aside { display: block; font-size: var(--fs-micro); line-height: 1.55; color: var(--text-muted) }
 .detailActions { display: flex; gap: 8px; flex-wrap: wrap }
@@ -546,7 +549,7 @@ td.cAnswer { cursor: help }
 .formBtn:disabled { color: var(--text-faint); cursor: not-allowed }
 .formBlurb { margin: 0; font-size: var(--fs-micro); line-height: 1.55; color: var(--text-muted) }
 .outcomeOk { margin: 12px 0 0; font: var(--fs-micro)/1.55 var(--mono); color: var(--success); overflow-wrap: anywhere }
-.outcomeBad { margin: 12px 0 0; font: var(--fs-micro)/1.55 var(--mono); color: var(--error); overflow-wrap: anywhere }
+.outcomeBad { margin: 12px 0 0; font: var(--fs-micro)/1.55 var(--mono); color: var(--danger); overflow-wrap: anywhere }
 
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap }
 
@@ -631,7 +634,7 @@ td.cAnswer { cursor: help }
 
 .note { padding: 10px 12px; font-size: var(--fs-row); color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px }
 .note b { color: var(--text-primary) }
-.noteErr { border-color: rgba(239, 68, 68, .35); color: var(--error) }
+.noteErr { border-color: color-mix(in srgb, var(--danger) 35%, transparent); color: var(--danger) }
 
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 56px 24px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border); border-radius: 14px }
 .emptyTitle { margin: 0; font: 600 var(--fs-title)/1.3 Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
@@ -764,14 +767,14 @@ td.cAnswer { cursor: help }
 .segment button:hover { color: var(--text-primary) }
 .segment button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm) }
 
-.fieldErr { font-size: 12px; color: var(--error) }
+.fieldErr { font-size: 12px; color: var(--danger) }
 
 .result { padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); display: flex; flex-direction: column; gap: 8px }
 .resultOk { border-color: rgba(16, 185, 129, .4) }
-.resultErr { border-color: rgba(239, 68, 68, .4) }
+.resultErr { border-color: color-mix(in srgb, var(--danger) 40%, transparent) }
 .resultHead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600 }
 .resultOk .resultHead { color: var(--success) }
-.resultErr .resultHead { color: var(--error) }
+.resultErr .resultHead { color: var(--danger) }
 .resultFacts { display: flex; gap: 20px; flex-wrap: wrap; align-items: baseline }
 .resultStat { font: 600 22px/1 var(--mono); letter-spacing: -.02em; color: var(--text-primary); display: inline-flex; align-items: baseline; gap: 6px }
 .resultStat small { font: 500 12px Inter, sans-serif; color: var(--text-muted); letter-spacing: 0 }
@@ -783,10 +786,18 @@ td.cAnswer { cursor: help }
 .spin { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0 }
 @keyframes spin { to { transform: rotate(360deg) } }
 
-.danger { color: var(--error); border-color: rgba(239, 68, 68, .35) }
-.danger:hover { color: var(--error); background: rgba(239, 68, 68, .06); border-color: rgba(239, 68, 68, .5) }
-.dangerSolid { background: var(--error); border-color: var(--error); color: #fff }
-.dangerSolid:hover { color: #fff; background: #dc2626 }
+.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent) }
+.danger:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 6%, transparent); border-color: color-mix(in srgb, var(--danger) 50%, transparent) }
+/* The destructive confirm button. Its label was white on #ef4444 — 3.76:1,
+   under the 4.5:1 body-text threshold, on the one control in the product that
+   deletes something. The fill is the theme's own danger token, and the ink
+   follows the fill rather than the theme: white on light's #dc2626 is 4.71:1,
+   while dark's #f87171 is lightened to serve as TEXT on a dark ground and
+   carries white at only 2.77:1 — against the page's own dark ink it is
+   7.59:1. So dark flips the label instead of keeping an unreadable white. */
+.dangerSolid { background: var(--danger); border-color: var(--danger); color: #fff }
+:global([data-theme="dark"]) .dangerSolid { color: var(--bg-primary) }
+.dangerSolid:hover { background: color-mix(in srgb, var(--danger) 88%, #000) }
 
 .confirmBackdrop { position: fixed; inset: 0; z-index: 950; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, .4); backdrop-filter: blur(2px) }
 .confirm { width: 420px; max-width: calc(100vw - 32px); padding: 22px 24px 20px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); font-family: Inter, sans-serif }
