@@ -62,14 +62,18 @@ records worker loss, replacement retry, cancellation cleanup, concurrent exact
 results, and bounded pressure on the same three-worker image. A dedicated skew
 qualification and the remaining stale-attempt/lease and failure-path evidence
 are still required before item 1 can move to Complete. The rerun summary is
-`docs/qualification/track1-aks-fault-pressure-rerun-2026-10-14.md`; it also
-records the cancellation-harness correction and a passing live result. The focused scheduler
-gate report `docs/qualification/track1-scheduler-gates-2026-10-14.md` records
-the corresponding skew-tail steal, retry, and stale-attempt unit evidence; a
-live AKS fault-injection run is now retained in the rerun report. The live
-skew observation `docs/qualification/track1-aks-skew-observation-2026-10-14.md`
-records a 29.3x data imbalance with bounded worker timing and exact results;
-it does not claim a general skew-splitting optimizer.
+`docs/qualification/track1-aks-fault-pressure-rerun-2026-10-14.md`; it records
+the cancellation-harness correction and a passing live result. The focused
+scheduler gate report
+`docs/qualification/track1-scheduler-gates-2026-10-14.md` records skew-tail
+steal, retry, stale-attempt, and lease-return unit evidence; the live rerun
+records worker loss and replacement retry. The live skew observation
+`docs/qualification/track1-aks-skew-observation-2026-10-14.md` records a 29.3x
+data imbalance with bounded worker timing and exact results; it does not claim
+a general skew-splitting optimizer. Item 1 remains Active until a controlled
+live skew/failure injection and repeated lease evidence are retained together
+on the release image; the current reports define that final gate but do not
+close it.
 
 ## Validation commands
 
