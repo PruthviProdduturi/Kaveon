@@ -1267,7 +1267,7 @@ fn distributed_composite_join_using_matches_the_local_result() {
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     let statement =
-        "SELECT u.user_id, u.event_date, p.country FROM events u JOIN events p USING (user_id, event_date) ORDER BY 1, 2, 3 LIMIT 20";
+        "SELECT u.user_id, u.region, p.country FROM events u JOIN events p USING (user_id, region) ORDER BY 1, 2, 3 LIMIT 20";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-composite-using", 32 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
