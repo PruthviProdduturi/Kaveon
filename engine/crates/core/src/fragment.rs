@@ -47,6 +47,7 @@ pub enum FragmentOperator {
         columns: Vec<String>,
         with_ordinality: bool,
         ordinality_column: String,
+        ordinality_start: i64,
     },
     ExchangeInput(ExchangeInput),
     Filter {

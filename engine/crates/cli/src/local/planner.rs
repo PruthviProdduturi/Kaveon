@@ -40,11 +40,13 @@ fn plan_with_predicate(
             columns,
             with_ordinality,
             ordinality_column,
+            ordinality_start,
         } => Ok(Box::new(UnnestOperator::new(
             expressions,
             columns.clone(),
             *with_ordinality,
             ordinality_column.clone(),
+            *ordinality_start,
         )?)),
         LogicalPlan::Scan { table, columns, .. } => {
             let reference = TableReference::parse(table);
