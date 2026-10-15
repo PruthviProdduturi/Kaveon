@@ -8553,6 +8553,17 @@ async fn build_cube_on_workers(
             cube.groupings.push(grouping);
         }
     }
+    // Keep distributed cube artifacts in the same deterministic grouping
+    // order as the local builder. Worker waves may finish singles, totals,
+    // and pairs in a different order, but snapshots and downstream diffs
+    // should not depend on execution order.
+    let declared_order = shape.groupings();
+    cube.groupings.sort_by_key(|grouping| {
+        declared_order
+            .iter()
+            .position(|axes| axes == &grouping.axes)
+            .unwrap_or(usize::MAX)
+    });
     let document = cube
         .check_limit(max_cells)
         .map_err(|error| SubStatementError::Failed {
