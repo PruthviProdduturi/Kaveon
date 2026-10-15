@@ -74,6 +74,12 @@ retry gate. The live quota probe
 high-cardinality exchange with HTTP 507 and retained zero exchange files after
 restoration of the production limits.
 
+The complete workspace suite is recorded in
+`docs/qualification/track1-track2-workspace-suite-2026-10-15.md`: 1,457 tests
+passed with zero failures on the release source. This strengthens the local
+implementation evidence but does not substitute for the still-open
+object-store fault and orphan-spool gates on AKS.
+
 The positive graceful node-drain result is retained in
 `docs/qualification/track1-aks-node-drain-skew-2026-10-15.md`; repeated pod-loss
 evidence is retained in
