@@ -3342,7 +3342,10 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         let window_name = match func.null_treatment {
             None | Some(ast::NullTreatment::RespectNulls) => name.clone(),
             Some(ast::NullTreatment::IgnoreNulls)
-                if matches!(name.as_str(), "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE") =>
+                if matches!(
+                    name.as_str(),
+                    "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" | "LAG" | "LEAD"
+                ) =>
             {
                 format!("{name}_IGNORE_NULLS")
             }
