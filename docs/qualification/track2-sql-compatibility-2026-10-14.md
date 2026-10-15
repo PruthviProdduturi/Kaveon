@@ -25,6 +25,15 @@ node scripts/validate-docs.mjs
 
 Documentation validation passed: 159 Markdown files, 39 routes, and 9 SVGs.
 
+## Workspace gate rerun — 2026-10-15
+
+After the JSON path and scalar-array compatibility changes, the complete
+workspace gate passed with zero failures. The current run includes 394 server
+tests (with the long differential sweep), 158 SQL tests, 356 execution tests
+with four ignored benchmark cases, and 121 storage tests with one ignored
+case. The repository documentation validator also passed with 159 Markdown
+files, 39 routes, and 9 SVGs.
+
 ## Current qualified local surface
 
 The current tests cover the implemented Trino-shaped surface including core
