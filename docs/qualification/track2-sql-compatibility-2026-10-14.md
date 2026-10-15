@@ -138,6 +138,11 @@ scalar output. The JSON coercion and returning-mode boundaries remain open.
 existing NaN/infinity rejection. The focused executor regression adds an
 `Int32` probe alongside the existing 64-bit and text cases.
 
+Decimal128 needles are accepted as well. Their Arrow scale is rendered as an
+exact JSON number before comparison, so values such as `12.34` and `-0.50` do
+not pass through a binary floating-point conversion. Decimal256 and other
+unsupported needle types remain rejected explicitly.
+
 ## Composite runtime-filter qualification — 2026-10-15
 
 Composite inner and semi joins now expose independent build-key `IN`

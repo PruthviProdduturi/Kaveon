@@ -8498,6 +8498,20 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
             };
             serde_json::Value::Number(number)
         }
+        DataType::Decimal128(_, scale) => {
+            let value = array
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .expect("decimal128 JSON needle")
+                .value(row);
+            let text = format_decimal_for_array_join(value, *scale);
+            let number = serde_json::from_str::<serde_json::Number>(&text).map_err(|error| {
+                KaveonError::Execution(format!(
+                    "JSON_ARRAY_CONTAINS could not encode decimal needle {text}: {error}"
+                ))
+            })?;
+            serde_json::Value::Number(number)
+        }
         DataType::Utf8 => serde_json::Value::String(
             array
                 .as_any()
@@ -16319,6 +16333,43 @@ mod tests {
         )
         .unwrap();
         assert!(numeric_result.as_boolean().value(0));
+    }
+
+    #[test]
+    fn evaluates_json_array_contains_for_decimal_needles() {
+        let mut needle = Decimal128Array::from(vec![Some(1234_i128), Some(-50_i128)]);
+        needle = needle.with_precision_and_scale(10, 2).unwrap();
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"[12.34, -0.5]"#),
+                    Some(r#"[12.34]"#),
+                ])) as ArrayRef,
+            ),
+            ("needle", Arc::new(needle) as ArrayRef),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "JSON_ARRAY_CONTAINS".into(),
+                args: vec![
+                    Expr::Column("document".into()),
+                    Expr::Column("needle".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(true)]
+        );
     }
 
     #[test]
