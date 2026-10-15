@@ -4216,6 +4216,37 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "JSON_ARRAY_GET" => {
+            check_arity(name, args, 2)?;
+            let documents = as_string_array(&args[0])?;
+            let indices = compute::cast(&args[1], &DataType::Int64)?;
+            let indices = indices.as_primitive::<Int64Type>();
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if documents.is_null(row) || indices.is_null(row) {
+                        return Ok(None);
+                    }
+                    let document = serde_json::from_str::<serde_json::Value>(documents.value(row))
+                        .map_err(|_| {
+                            KaveonError::Execution(format!("invalid JSON value at row {row}"))
+                        })?;
+                    let serde_json::Value::Array(values) = document else {
+                        return Ok(None);
+                    };
+                    let index = indices.value(row);
+                    let position = if index < 0 {
+                        values.len().checked_sub(index.unsigned_abs() as usize)
+                    } else {
+                        usize::try_from(index).ok()
+                    };
+                    Ok(position
+                        .and_then(|position| values.get(position))
+                        .map(serde_json::Value::to_string))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
         "JSON_ARRAY_CONTAINS" => {
             check_arity(name, args, 2)?;
             let documents = as_string_array(&args[0])?;
@@ -15803,6 +15834,34 @@ mod tests {
         assert_eq!(values.value(1), "null");
         assert!(values.is_null(2));
         assert!(values.is_null(3));
+    }
+
+    #[test]
+    fn evaluates_json_array_get_with_negative_indexes_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"["a", {"x": 1}, null]"#),
+                    Some(r#"[1, 2]"#),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "index",
+                Arc::new(Int64Array::from(vec![1, -1, 0])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_ARRAY_GET".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("index".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), r#"{"x":1}"#);
+        assert_eq!(values.value(1), "2");
+        assert!(values.is_null(2));
     }
 
     #[test]
