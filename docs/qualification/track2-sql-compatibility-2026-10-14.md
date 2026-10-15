@@ -208,3 +208,19 @@ They fold exact keys over each file's partition values first, prune files whose
 path cannot match, and add only the remaining physical-column residual to each
 remote decoder. A focused directory regression selects only the first and last
 keys from the fixture. Cloud snapshot qualification remains open.
+
+## Workspace qualification follow-up (2026-10-15)
+
+The current integrated workspace gate completed with exit code `0`:
+
+- server: `394 passed, 0 failed` (including the differential sweep);
+- SQL: `158 passed, 0 failed`;
+- execution: `352 passed, 0 failed, 4 ignored`;
+- storage: `121 passed, 0 failed, 1 ignored`;
+- all remaining workspace targets passed.
+
+The focused TopN executor suite also passed `15/15`. This verifies exact
+partition-local candidate merging, multi-column and NULL ordering, schema
+validation, and bounded spill behavior. It does not close the Track 1 global
+ORDER BY gate: final ordered results still merge at one coordinator, so a
+fully parallel ordered stream and its deployment qualification remain open.
