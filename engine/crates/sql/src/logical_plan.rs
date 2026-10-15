@@ -1146,7 +1146,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     });
                 let ordinality_column = alias
                     .as_ref()
-                    .and_then(|alias| alias.columns.get(1))
+                    .and_then(|alias| alias.columns.get(expressions.len()))
                     .map(|column| column.name.value.clone())
                     .unwrap_or_else(|| "ordinality".to_owned());
                 return Ok(LogicalPlan::Unnest {
@@ -1261,7 +1261,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 });
             let ordinality_column = alias
                 .as_ref()
-                .and_then(|alias| alias.columns.get(1))
+                .and_then(|alias| alias.columns.get(expressions.len()))
                 .map(|column| column.name.value.clone())
                 .unwrap_or_else(|| "ordinality".to_owned());
             Ok(LogicalPlan::Unnest {

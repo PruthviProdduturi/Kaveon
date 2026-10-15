@@ -1156,13 +1156,13 @@ fn distributed_multi_array_unnest_matches_trino_padding() {
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     let statement =
-        "SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY['a', 'b']) WITH ORDINALITY AS t(id, label, ord)";
+        "SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY['a', 'b']) WITH ORDINALITY AS t(id, label, ord) ORDER BY ord";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-unnest", 16 << 20).unwrap();
     let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
         .unwrap_or_else(|error| panic!("{statement}: {error}"));
     assert_eq!(
-        canonical_rows(&batches, false),
+        canonical_rows(&batches, true),
         vec![
             "1\u{1f}a\u{1f}1",
             "2\u{1f}b\u{1f}2",
