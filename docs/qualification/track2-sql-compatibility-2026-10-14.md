@@ -55,3 +55,8 @@ row and `SELECT 1 UNION ALL SELECT 2 ORDER BY n DESC` as `2, 1`. The full
 workspace gate was rerun after the change and all targets passed. This closes
 that specific compatibility gap; recursive CTEs, broader lateral forms, and
 the other boundaries in the matrix remain open.
+
+The same pass found a result-boundary defect for Arrow's `Null` type. Commit
+`3d34d2e1` maps it to JSON `null` instead of the Arrow debug string
+`NullArray(1)`. The focused regression and all 389 server tests pass, and the
+rebuilt Docker coordinator now returns `[[null]]` for `SELECT NULL`.
