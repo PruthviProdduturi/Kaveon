@@ -134,3 +134,11 @@ reported a changed cube-grouping payload. These failures are outside the
 VALUES/TIME changes and are retained as open workspace gates rather than being
 counted as parity evidence. The full workspace command must be rerun from a
 clean, integrated tree before Track 2 is called qualified.
+
+The distributed cube regression was then isolated to artifact ordering: worker
+waves persisted single-axis groupings before the rolled-up total, while the
+local builder emits the declared shape order. The coordinator now canonicalizes
+grouping order before persistence. The targeted regression passed, followed by
+the complete server suite: `393/393` tests passed, including the differential
+sweep. This validates deterministic cube artifacts without changing the
+remaining Track 1 cloud-pressure and operational gates.
