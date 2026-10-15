@@ -76,6 +76,14 @@ NULL array/delimiter rows. The focused executor regression covers text and
 integer values, null replacement, and a NULL array row. Nested values remain
 explicitly unsupported until their coercion contract is qualified.
 
+## Quoted JSON path keys qualification — 2026-10-15
+
+The JSON path reader now accepts quoted bracket keys, including escaped
+characters, alongside dotted object keys and numeric array subscripts. This
+covers keys containing punctuation such as `customer-name` for
+`JSON_QUERY`, `JSON_VALUE`, and `JSON_EXISTS`; broader SQL/JSON modes and
+returning/error clauses remain open.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records

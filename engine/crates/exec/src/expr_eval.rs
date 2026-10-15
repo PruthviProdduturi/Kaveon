@@ -8533,6 +8533,35 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
             continue;
         }
         if let Some(after_open) = remainder.strip_prefix('[') {
+            if let Some(quote @ ('\'' | '"')) = after_open.chars().next() {
+                let mut key = String::new();
+                let mut escaped = false;
+                let mut close = None;
+                for (offset, character) in after_open[quote.len_utf8()..].char_indices() {
+                    if escaped {
+                        key.push(character);
+                        escaped = false;
+                        continue;
+                    }
+                    if character == '\\' {
+                        escaped = true;
+                        continue;
+                    }
+                    if character == quote {
+                        let end = quote.len_utf8() + offset + character.len_utf8();
+                        if after_open[end..].starts_with(']') {
+                            close = Some(end);
+                            break;
+                        }
+                        return None;
+                    }
+                    key.push(character);
+                }
+                let close = close?;
+                segments.push(Segment::Key(key));
+                remainder = &after_open[close + 1..];
+                continue;
+            }
             let close = after_open.find(']')?;
             let index = after_open[..close].parse::<usize>().ok()?;
             segments.push(Segment::Index(index));
@@ -15866,6 +15895,26 @@ mod tests {
         let value_values = value_result.as_string::<i32>();
         assert!(value_values.is_null(0));
         assert!(value_values.is_null(1));
+
+        let quoted_batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![Some(
+                    r#"{"customer-name":{"id":42}}"#,
+                )])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![Some("$['customer-name'].id")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let quoted = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let quoted_result = evaluate(&quoted, &quoted_batch).unwrap();
+        assert_eq!(quoted_result.as_string::<i32>().value(0), "42");
     }
 
     #[test]
