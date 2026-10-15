@@ -66,7 +66,7 @@ differential sweep passed without failures.
 
 The current tests cover the implemented Trino-shaped surface including core
 SELECT semantics, joins and semi/anti joins, CTEs and derived relations, set
-operations, grouping sets, windows and QUALIFY, arrays/maps/rows, JSON paths,
+operations, grouping sets and metadata functions, `COUNT_IF`, windows and QUALIFY, arrays/maps/rows, JSON paths,
 prepared statements and typed parameters, metadata statements, global ordering
 and limits (including `FETCH … WITH TIES`), grouping metadata functions, and
 local/distributed exact-result execution.
