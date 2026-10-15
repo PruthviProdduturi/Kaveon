@@ -50,7 +50,9 @@ After that evidence is reviewed, change item 1 to `Complete`, move item 2 to
 
 Current evidence: the scheduler and stage-runtime focused suites pass (16
 tests total) on the current commit. This is local evidence only; it does not
-close the multi-topology gate.
+close the multi-topology gate. A container qualification cannot run yet because
+the local Docker daemon is unavailable (`docker info` cannot reach the Linux
+engine); no container result is being counted as evidence.
 
 ## Validation commands
 
