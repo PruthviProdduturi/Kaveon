@@ -3498,6 +3498,15 @@ mod tests {
     }
 
     #[test]
+    fn plans_constant_array_unnest_as_a_leaf_stage() {
+        let graph = graph("SELECT * FROM UNNEST(ARRAY[1, 2]) AS t(value)");
+        assert!(graph
+            .stages
+            .iter()
+            .any(|stage| stage.plan.operator == "Unnest"));
+    }
+
+    #[test]
     fn count_distinct_partitions_the_distinct_rows_across_workers() {
         let sql = "SELECT id, COUNT(DISTINCT id) FROM items GROUP BY id";
         let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
