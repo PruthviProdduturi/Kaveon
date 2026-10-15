@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { msalFetch } from "../utils/msalFetch";
 import { KaveonLoading } from "./KaveonLoading";
+import { UnknownPanel, reasonFromStatus, type ReadFailure } from "./Reading";
 
 interface DataSource { id: string | number; name: string; engine?: string; database_name?: string; }
 interface Dataset { id: string | number; name?: string; database_name?: string; table_name?: string; description?: string | null; }
@@ -32,7 +33,21 @@ function compact(n?: number | null): string {
 
 const COL_LABELS = ["Data Sources", "Datasets", "Semantic Layer", "Dashboards"];
 const COL_ICONS = ["fa-server", "fa-database", "fa-bolt", "fa-table-cells-large"];
-const COL_COLORS = ["#3b82f6", "#8b5cf6", "#f59e0b", "#10b981"];
+/**
+ * One wayfinding colour per stage of the graph, deliberate literals because
+ * they are categorical and there is no token for a lineage stage. Measured
+ * against the light surface they sit on (`--bg-surface` #fdfcfa) as the 3px
+ * node rail and as the column-header icon on its own 9% tint:
+ *
+ *   blue   #3b82f6  3.58:1 rail / 3.23:1 icon  — passes the 3:1 UI threshold
+ *   purple #8b5cf6  4.13:1 rail / 3.68:1 icon  — passes
+ *   amber  #f59e0b  2.11:1 rail / 1.97:1 icon  — FAILED, now #d97706 at 3.11:1 / 4.63:1
+ *   green  #10b981  2.47:1 rail / 2.27:1 icon  — FAILED, now #059669 at 3.67:1 / 3.29:1
+ *
+ * Both replacements are one step down the same hue ramp, so the palette keeps
+ * its character; all four clear 4.4:1 or better on the dark surface (#1e1e1e).
+ */
+const COL_COLORS = ["#3b82f6", "#8b5cf6", "#d97706", "#059669"];
 
 const NODE_W = 200;
 const NODE_H = 64;
@@ -48,10 +63,19 @@ export function LineageView() {
   const [nodes, setNodes] = useState<LineageNode[]>([]);
   const [edges, setEdges] = useState<LineageEdge[]>([]);
   const [hovered, setHovered] = useState<string | null>(null);
+  /**
+   * A read that did not answer. Every one of the five reads below fell back to
+   * an empty list, so a graph built from five refusals was indistinguishable
+   * from a graph built from five empty answers — and the page said "No lineage
+   * data found. Create datasets and dashboards…", instructing the reader to
+   * build things that already exist. `components/Reading` holds the rule.
+   */
+  const [failure, setFailure] = useState<ReadFailure | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const build = useCallback(async () => {
     setLoading(true);
+    setFailure(null);
     try {
       const [srcRes, dsRes, dashRes, dlmRes, chartRes] = await Promise.all([
         msalFetch("/api/v1/data-sources/active"),
@@ -69,6 +93,22 @@ export function LineageView() {
       const datasets: Dataset[] = dsRes.ok ? await dsRes.json().then((d: { result?: Dataset[] } | Dataset[]) => Array.isArray(d) ? d : d.result || []) : [];
       const dashboards: Dashboard[] = dashRes.ok ? await dashRes.json().then((d: { result?: Dashboard[] } | Dashboard[]) => Array.isArray(d) ? d : d.result || []) : [];
       const dlmCoverage: DlmCoverage[] = dlmRes.ok ? await dlmRes.json().then((d: { datasets?: DlmCoverage[] } | DlmCoverage[]) => Array.isArray(d) ? d : d.datasets || []) : [];
+
+      // The graph's spine is datasets and dashboards: with neither read, there
+      // is nothing to draw and nothing known about what should have been
+      // drawn. That is an unknown, not an empty graph.
+      if (!dsRes.ok && !dashRes.ok) {
+        setFailure({
+          what: "The lineage graph's sources",
+          says: "how data flows between them",
+          reason: reasonFromStatus(dsRes.status) ?? reasonFromStatus(dashRes.status),
+          detail: `Datasets answered ${dsRes.status} and dashboards answered ${dashRes.status}.`,
+        });
+        setNodes([]);
+        setEdges([]);
+        setLoading(false);
+        return;
+      }
 
       const dlmMap = new Map(dlmCoverage.map((d) => [String(d.dataset_id), d]));
 
@@ -166,7 +206,13 @@ export function LineageView() {
 
       setNodes(ns);
       setEdges(es);
-    } catch { /* ignore */ }
+    } catch {
+      // A thrown read is as unknown as a refused one, and was swallowed into
+      // the same confident empty state.
+      setFailure({ what: "The lineage graph's sources", says: "how data flows between them" });
+      setNodes([]);
+      setEdges([]);
+    }
     setLoading(false);
   }, []);
 
@@ -198,6 +244,10 @@ export function LineageView() {
 
   if (loading) {
     return <KaveonLoading message="Building lineage" fullScreen={false} />;
+  }
+
+  if (failure) {
+    return <UnknownPanel {...failure} title="Lineage could not be read" onRetry={() => void build()} />;
   }
 
   if (nodes.length === 0) {
@@ -259,13 +309,28 @@ export function LineageView() {
             const dimmed = hovered && !connectedSet.has(n.id);
             const isHovered = hovered === n.id;
             const clickable = n.type === "dataset" || n.type === "dashboard";
+            const label = n.sublabel ? `${n.label} — ${n.sublabel}` : n.label;
             return (
+              /* A node was a click target and a hover target on a bare <g>: no
+                 tab stop, no key handler, and the highlight that explains what
+                 connects to what was reachable only with a pointer. Focus now
+                 does what hover does, Enter and Space do what a click does,
+                 and only the nodes that actually navigate take a tab stop. */
               <g
                 key={n.id}
                 transform={`translate(${pos.x},${pos.y})`}
+                role={clickable ? "link" : "img"}
+                aria-label={clickable ? `${label} — open` : label}
+                tabIndex={clickable ? 0 : undefined}
                 onMouseEnter={() => setHovered(n.id)}
                 onMouseLeave={() => setHovered(null)}
+                onFocus={() => setHovered(n.id)}
+                onBlur={() => setHovered(null)}
                 onClick={() => nodeClick(n)}
+                onKeyDown={(e) => {
+                  if (!clickable) return;
+                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nodeClick(n); }
+                }}
                 style={{ cursor: clickable ? "pointer" : "default", transition: "opacity 0.15s" }}
                 opacity={dimmed ? 0.25 : 1}
               >

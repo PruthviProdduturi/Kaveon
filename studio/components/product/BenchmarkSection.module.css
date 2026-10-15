@@ -49,8 +49,10 @@
   border-color: rgba(255, 255, 255, 0.09);
 }
 
+/* The accent at 0.5 alpha composites to #2a5479 over this ground: 2.49:1, under
+   the 3:1 a focus indicator needs. 0.7 of the same accent reaches 3.86:1. */
 .tab:focus-visible {
-  outline: 3px solid rgba(74, 158, 232, 0.5);
+  outline: 3px solid rgba(74, 158, 232, 0.7);
   outline-offset: 3px;
 }
 
@@ -79,10 +81,19 @@
   gap: 1px;
 }
 
+/* Measured on the three grounds a tab actually has -- #0a0a0a under
+   rgba(255,255,255,.02) at rest (#0d0d0d), .05 hovered (#1b1b1b) and .08
+   selected (#1e1e1e). #777 read 4.34:1 and #555 read 2.61:1 at rest and worse
+   on the other two, so an unselected tab's name and its statement count were
+   both under the 4.5:1 these sizes need on a public page. #c9d3df -- the tone
+   the method prose already uses for emphasis -- reaches 12.8:1, and the pinned
+   muted tone 4.85:1 on the darkest-text ground; anything dimmer than that
+   fails once the selected background lifts. Literals rather than new tokens
+   because this section pins its own dark palette (see the file header). */
 .tabTitle {
   font-size: 13px;
   font-weight: 600;
-  color: #777;
+  color: #c9d3df;
 }
 
 .tabSelected .tabTitle {
@@ -91,7 +102,7 @@
 
 .tabDesc {
   font-size: 11px;
-  color: #555;
+  color: var(--text-muted);
 }
 
 .srOnly {
@@ -207,8 +218,9 @@
   border-bottom-color: #4a9ee8;
 }
 
+/* 0.7 alpha for the same 3:1 focus-indicator reason as the tabs above. */
 .fact dd a:focus-visible {
-  outline: 3px solid rgba(74, 158, 232, 0.5);
+  outline: 3px solid rgba(74, 158, 232, 0.7);
   outline-offset: 3px;
   border-radius: 3px;
 }

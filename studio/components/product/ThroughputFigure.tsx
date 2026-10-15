@@ -144,6 +144,9 @@ export function ThroughputFigure({ figure }: { figure: ThroughputData }) {
           {groups.map((g, k) => {
             const gx = groupX(k);
             const n = g.rounds.length;
+            // A round that produced no rate draws no mark, so the count under the
+            // group must say so rather than claim marks the figure does not show.
+            const rated = g.rounds.filter((r) => r.executions_per_second !== null).length;
             return (
               <g key={g.clients}>
                 {g.median_executions_per_second !== null && (
@@ -175,7 +178,9 @@ export function ThroughputFigure({ figure }: { figure: ThroughputData }) {
                   );
                 })}
                 <text className={styles.thresholdLabel} x={gx} y={height - mb + 20} textAnchor="middle" aria-hidden="true">{g.clients} clients</text>
-                <text className={styles.tick} x={gx} y={height - mb + 36} textAnchor="middle" aria-hidden="true">{n} round{n === 1 ? "" : "s"}</text>
+                <text className={styles.tick} x={gx} y={height - mb + 36} textAnchor="middle" aria-hidden="true">
+                  {rated === n ? `${n} round${n === 1 ? "" : "s"}` : `${rated} of ${n} rounds`}
+                </text>
               </g>
             );
           })}

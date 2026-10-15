@@ -4,27 +4,45 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { DOCS_ITEMS, DOCS_NAV, docsMeta } from "./manifest";
+import { unknownText } from "../Reading";
 
 type Section = { title: string; page: string; href: string; text: string };
+/** The index and how much of it is actually there: a page that would not load is counted, never silently dropped. */
+type Index = { sections: Section[]; unread: number; total: number };
 const slugify = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-");
 
-async function buildIndex(signal: AbortSignal): Promise<Section[]> {
+async function buildIndex(signal: AbortSignal): Promise<Index> {
+  let unread = 0;
   const pages = await Promise.all(DOCS_ITEMS.map(async (item) => {
-    const response = await fetch(item.href, { signal });
-    if (!response.ok) return [];
-    const documentNode = new DOMParser().parseFromString(await response.text(), "text/html");
-    const root = documentNode.querySelector(".docs-prose");
-    if (!root) return [];
-    return Array.from(root.querySelectorAll<HTMLElement>("h1, h2, h3")).map((heading) => {
-      const parts = [heading.textContent ?? ""];
-      let node = heading.nextElementSibling;
-      while (node && !/^H[1-3]$/.test(node.tagName)) { parts.push(node.textContent ?? ""); node = node.nextElementSibling; }
-      const id = heading.id || slugify(heading.textContent ?? "");
-      return { title: heading.textContent ?? item.title, page: item.title, href: `${item.href}${id ? `#${id}` : ""}`, text: parts.join(" ") };
-    });
+    try {
+      const response = await fetch(item.href, { signal });
+      if (!response.ok) { unread += 1; return []; }
+      const documentNode = new DOMParser().parseFromString(await response.text(), "text/html");
+      const root = documentNode.querySelector(".docs-prose");
+      if (!root) { unread += 1; return []; }
+      return Array.from(root.querySelectorAll<HTMLElement>("h1, h2, h3")).map((heading) => {
+        const parts = [heading.textContent ?? ""];
+        let node = heading.nextElementSibling;
+        while (node && !/^H[1-3]$/.test(node.tagName)) { parts.push(node.textContent ?? ""); node = node.nextElementSibling; }
+        const id = heading.id || slugify(heading.textContent ?? "");
+        return { title: heading.textContent ?? item.title, page: item.title, href: `${item.href}${id ? `#${id}` : ""}`, text: parts.join(" ") };
+      });
+    } catch (error) {
+      // One unreachable page must not take the whole index down with it; it is
+      // counted and the reader is told the index is partial.
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      unread += 1;
+      return [];
+    }
   }));
-  return pages.flat();
+  return { sections: pages.flat(), unread, total: DOCS_ITEMS.length };
 }
+
+/* Inline rather than in docs.css: tokens only, so it reads correctly in both themes. */
+const retryStyle: React.CSSProperties = {
+  padding: 0, border: 0, background: "none", color: "var(--accent)",
+  font: "inherit", textDecoration: "underline", cursor: "pointer",
+};
 
 function excerpt(text: string, query: string) {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -42,6 +60,7 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
   const [activeId, setActiveId] = useState("");
   const [query, setQuery] = useState("");
   const [indexState, setIndexState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [unread, setUnread] = useState({ unread: 0, total: 0 });
   const [mobileOpen, setMobileOpen] = useState(false);
   const meta = docsMeta(pathname);
 
@@ -69,8 +88,12 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!query.trim() || indexState !== "idle") return;
     const controller = new AbortController(); setIndexState("loading");
-    buildIndex(controller.signal).then((index) => { indexRef.current = index; setIndexState("ready"); })
-      .catch((error: unknown) => { if (!(error instanceof DOMException && error.name === "AbortError")) setIndexState("error"); });
+    buildIndex(controller.signal).then((index) => {
+      indexRef.current = index.sections;
+      setUnread({ unread: index.unread, total: index.total });
+      // Nothing readable at all is a failed read, not an empty result set.
+      setIndexState(index.unread === index.total ? "error" : "ready");
+    }).catch((error: unknown) => { if (!(error instanceof DOMException && error.name === "AbortError")) setIndexState("error"); });
   }, [query, indexState]);
 
   useEffect(() => { setMobileOpen(false); setQuery(""); }, [pathname]);
@@ -84,13 +107,25 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
     }).filter((result) => result.score >= tokens.length).sort((a, b) => b.score - a.score).slice(0, 10);
   }, [query, indexState]);
 
+  // Called, not rendered as <Search />: declared inside the component, its
+  // identity changes every render, so rendering it as an element remounts the
+  // subtree on each keystroke -- the search input loses focus after one
+  // character and open nav groups snap shut. Calling it keeps the markup
+  // inline and the input mounted.
   const Search = ({ mobile = false }: { mobile?: boolean }) => <div className="docs-search-wrap">
     <label className="docs-visually-hidden" htmlFor={mobile ? "docs-search-mobile" : "docs-search"}>Search all documentation</label>
     <input id={mobile ? "docs-search-mobile" : "docs-search"} className="docs-search" type="search" placeholder="Search all documentation…" value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" />
     {query && <div className="docs-search-results" role="region" aria-label="Search results" aria-live="polite">
       {indexState === "loading" && <div className="docs-search-state">Indexing documentation…</div>}
-      {indexState === "error" && <div className="docs-search-state">Search is temporarily unavailable.</div>}
-      {indexState === "ready" && !results.length && <div className="docs-search-state">No matching sections</div>}
+      {indexState === "error" && <div className="docs-search-state">
+        {unknownText({ what: "The documentation index", says: "whether anything matches" })}{" "}
+        <button type="button" onClick={() => setIndexState("idle")} style={retryStyle}>Try again</button>
+      </div>}
+      {indexState === "ready" && !results.length && unread.unread === 0 && <div className="docs-search-state">No matching sections</div>}
+      {indexState === "ready" && unread.unread > 0 && <div className="docs-search-state">
+        {unknownText({ what: `${unread.unread} of ${unread.total} documentation pages`, says: "whether they match" })}{" "}
+        <button type="button" onClick={() => setIndexState("idle")} style={retryStyle}>Index again</button>
+      </div>}
       {results.map((result) => <Link key={result.href} href={result.href} className="docs-search-result"><span>{result.title}</span><small>{result.page}</small><p>{excerpt(result.text, query)}</p></Link>)}
     </div>}
   </div>;
@@ -116,9 +151,9 @@ export function DocsShell({ children }: { children: React.ReactNode }) {
   return <div className="docs-root">
     <a className="docs-skip" href="#docs-content">Skip to documentation</a>
     <header className="docs-mobile-header"><Link href="/docs" className="docs-section-title">Documentation</Link><button type="button" aria-expanded={mobileOpen} aria-controls="docs-mobile-panel" onClick={() => setMobileOpen((open) => !open)}>{mobileOpen ? "Close" : "Menu"}</button></header>
-    {mobileOpen && <div className="docs-mobile-panel" id="docs-mobile-panel"><Search mobile /><Nav /></div>}
+    {mobileOpen && <div className="docs-mobile-panel" id="docs-mobile-panel">{Search({ mobile: true })}{Nav()}</div>}
     <div className="docs-grid">
-      <aside className="docs-sidebar"><Link href="/docs" className="docs-section-title">Documentation</Link><Search /><Nav /></aside>
+      <aside className="docs-sidebar"><Link href="/docs" className="docs-section-title">Documentation</Link>{Search({})}{Nav()}</aside>
       <main className="docs-main" id="docs-content">
         {meta && <div className="docs-context"><nav className="docs-breadcrumb" aria-label="Breadcrumb"><Link href="/docs">Docs</Link><span aria-hidden="true">/</span><span>{meta.group}</span><span aria-hidden="true">/</span><span aria-current="page">{meta.title}</span></nav><div className="docs-page-meta"><span className={`status ${meta.status.toLowerCase()}`}>{meta.status}</span><span>Verified {meta.lastVerified}</span></div></div>}
         <div className="docs-content" ref={contentRef}>{children}</div>

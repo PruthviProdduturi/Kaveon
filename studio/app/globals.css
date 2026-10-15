@@ -19,8 +19,17 @@
      body-text threshold in BOTH themes and faint was unreadable in both.
      Darkened along the existing slate hue rather than greyed, so the palette
      is unchanged in character. */
-  --text-muted: #6c778b;
-  --text-faint: #8d95a1;
+  /* Measured against the grounds these actually sit on, not against white.
+     The first pass measured both on #ffffff, where muted reads 4.52:1 and
+     passes -- but almost nothing in the product sits on pure white. On
+     `--bg-primary` (#f8f7f5), the page behind everything, it was 4.22:1 and on
+     `--bg-surface` 4.41:1, so the token that carries dates, counts and
+     secondary figures was under the body-text threshold nearly everywhere it
+     is used. Three separate sweeps reported it independently. Both values now
+     clear their target on the DARKEST light ground, which is the one that
+     binds. */
+  --text-muted: #677286;
+  --text-faint: #88909c;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);

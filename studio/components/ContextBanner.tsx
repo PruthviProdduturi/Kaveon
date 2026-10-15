@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
-import { UnknownLine } from "./Reading";
+import { refusalMessage } from "../utils/demoQuota";
+import { UnknownLine, reasonFromStatus, type ReadReason } from "./Reading";
 
 /**
  * Fixed "available context" banner — shows which datasets have a compiled DLM,
@@ -62,46 +63,86 @@ function shortDate(s?: string | null): string | null {
   return m ? m[1] : String(s).trim().slice(0, 12);
 }
 
-const PREF_KEY = "kaveon-context-banner";
+/**
+ * Where this preference lives, exported so there is one spelling of it.
+ *
+ * The same string was written out again in the preferences page, which is the
+ * only other thing that reads or writes it — two literals for one key, either
+ * of which could be corrected without the other and silently decouple the
+ * switch from the strip it controls. Importing it is now the only way to name
+ * it; see the note filed with this change for the duplicate still standing in
+ * `app/settings/preferences/page.tsx`, which is outside this sweep's files.
+ */
+export const CONTEXT_BANNER_PREF_KEY = "kaveon-context-banner";
+
+/** A read that did not answer, kept apart from a read that answered with nothing. */
+interface Unread { reason: ReadReason | null; detail: string }
+
+function readDismissed(): boolean {
+  if (typeof window === "undefined") return false;
+  try { return localStorage.getItem(CONTEXT_BANNER_PREF_KEY) === "hidden"; } catch { return false; }
+}
 
 export function ContextBanner() {
   const [items, setItems] = useState<CoverageItem[] | null>(null);
   /** Set only when the read itself did not answer; never when it answered with nothing. */
-  const [unread, setUnread] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(PREF_KEY) === "hidden";
-  });
+  const [unread, setUnread] = useState<Unread | null>(null);
+  const [dismissed, setDismissed] = useState(readDismissed);
   const [hover, setHover] = useState<{ item: CoverageItem; x: number; y: number } | null>(null);
+
+  // The preference was read once, at mount, and never again — so a browser
+  // with this page open in one tab and Preferences in another kept showing a
+  // strip the reader had just switched off, until that tab was reloaded.
+  // `storage` is the event the other document's write raises; a window
+  // regaining focus re-reads as well, which covers a write this document did
+  // not hear about.
+  useEffect(() => {
+    const reread = () => setDismissed(readDismissed());
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === CONTEXT_BANNER_PREF_KEY) reread();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", reread);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", reread);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const res = await msalFetch("/api/v1/dlm/coverage");
+        const body: unknown = await res.json().catch(() => null);
+        if (!alive) return;
         if (!res.ok) {
-          // A refusal and a restart are different facts, and the status is the
-          // only thing that separates them here. Neither is an empty list.
-          if (alive) {
-            setUnread(res.status === 403
-              ? "Your role does not include reading compiled context."
-              : res.status >= 500
-                ? `The server answered ${res.status}.`
-                : `The request was answered with ${res.status}.`);
-          }
+          // A refusal and a restart are different facts, and neither is an
+          // empty list. What the server itself said is preferred over a
+          // sentence written here: this used to tell a reader their role did
+          // not permit the read on any 403, including the ones the API
+          // explains, and threw that explanation away.
+          setUnread({
+            reason: reasonFromStatus(res.status),
+            detail: refusalMessage(body, `The server answered ${res.status}.`),
+          });
           return;
         }
-        const data = await res.json();
         // A body that is not a dataset list is not an empty dataset list.
-        if (!alive) return;
-        if (Array.isArray(data?.datasets)) setItems(data.datasets);
-        else setUnread("The server answered with something other than a coverage listing.");
+        const datasets = (body as { datasets?: unknown } | null)?.datasets;
+        if (Array.isArray(datasets)) setItems(datasets as CoverageItem[]);
+        else setUnread({ reason: "invalid_listing", detail: "" });
       } catch {
-        if (alive) setUnread("The Kaveon API could not be reached from this browser.");
+        if (alive) setUnread({ reason: null, detail: "The Kaveon API could not be reached from this browser." });
       }
     })();
     return () => { alive = false; };
   }, []);
+
+  const dismiss = () => {
+    setDismissed(true);
+    try { localStorage.setItem(CONTEXT_BANNER_PREF_KEY, "hidden"); } catch { /* preference is best effort */ }
+  };
 
   if (dismissed) return null;
 
@@ -127,9 +168,13 @@ export function ContextBanner() {
     border: "1px solid var(--border)", background: "rgba(var(--accent-rgb),0.06)",
     flexShrink: 0, whiteSpace: "nowrap", maxWidth: "100%",
   };
+  // The literals were the light theme's green and amber, so the only part of
+  // this strip that carries a state did not follow the theme. The status tokens
+  // are defined for both grounds; the word beside each dot, on the pill's
+  // hover card, is what actually reports the state, since a 6px dot cannot.
   const dot = (ok: boolean): React.CSSProperties => ({
     width: 6, height: 6, borderRadius: 999,
-    background: ok ? "#22c55e" : "#f59e0b", flexShrink: 0,
+    background: ok ? "var(--success)" : "var(--warning)", flexShrink: 0,
   });
   const closeBtn: React.CSSProperties = {
     position: "absolute", right: 10, top: 8,
@@ -147,10 +192,11 @@ export function ContextBanner() {
         <span style={label}><i className="fas fa-database" /> Context</span>
         <UnknownLine
           what="Compiled context" says="which datasets can be asked about here"
-          detail={unread}
+          reason={unread.reason}
+          detail={unread.detail || null}
         />
-        <button style={closeBtn} title="Dismiss" onClick={() => { setDismissed(true); localStorage.setItem(PREF_KEY, "hidden"); }}>
-          <i className="fas fa-times" />
+        <button type="button" style={closeBtn} title="Hide this strip" aria-label="Hide the context strip" onClick={dismiss}>
+          <i className="fas fa-times" aria-hidden="true" />
         </button>
       </div>
     );
@@ -174,8 +220,8 @@ export function ContextBanner() {
       <div style={wrap}>
         <span style={label}><i className="fas fa-database" /> Context</span>
         <span>No context compiled yet — open a dataset and <b>Generate DLM</b> to make it queryable here.</span>
-        <button style={closeBtn} title="Dismiss" onClick={() => { setDismissed(true); localStorage.setItem(PREF_KEY, "hidden"); }}>
-          <i className="fas fa-times" />
+        <button type="button" style={closeBtn} title="Hide this strip" aria-label="Hide the context strip" onClick={dismiss}>
+          <i className="fas fa-times" aria-hidden="true" />
         </button>
       </div>
     );
@@ -186,16 +232,27 @@ export function ContextBanner() {
       <span style={label}>
         <i className="fas fa-database" /> Context ready
       </span>
+      {/* These were spans with mouse handlers, so everything the hover card
+          holds — the date range, the filter values, the metrics, and the only
+          statement of whether a dataset is ready — was reachable by pointer
+          hover alone. A button carries the same handlers plus focus and blur,
+          so the keyboard and the tab order reach it; on a touch device the tap
+          that focuses it opens the card. */}
       {ready.map((d) => {
+        const open = (element: HTMLElement) => {
+          const r = element.getBoundingClientRect();
+          setHover({ item: d, x: r.left, y: r.bottom + 6 });
+        };
         return (
-          <span
+          <button
+            type="button"
             key={d.dataset_id}
-            style={{ ...pill, cursor: "help" }}
-            onMouseEnter={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setHover({ item: d, x: r.left, y: r.bottom + 6 });
-            }}
+            style={{ ...pill, cursor: "help", font: "inherit", color: "inherit", textAlign: "left" }}
+            aria-expanded={hover?.item.dataset_id === d.dataset_id}
+            onMouseEnter={(e) => open(e.currentTarget)}
             onMouseLeave={() => setHover(null)}
+            onFocus={(e) => open(e.currentTarget)}
+            onBlur={() => setHover(null)}
           >
             <span style={dot(d.status === "ready")} />
             {/* The strip says what can be asked about, in as few words as it
@@ -205,13 +262,13 @@ export function ContextBanner() {
                 that do matter off the end of the row. It is still on the
                 hover card for anyone who wants it. */}
             <b style={{ color: "var(--text-primary)" }}>{d.name ?? `#${d.dataset_id}`}</b>
-            <span>· {compact(d.row_count)} rows</span>
+            <span>· {compact(d.row_count)} {d.row_count === 1 ? "row" : "rows"}</span>
             {(d.values_indexed ?? 0) > 0 && <span>· {compact(d.values_indexed)} values</span>}
-          </span>
+          </button>
         );
       })}
-      <button style={closeBtn} title="Dismiss" onClick={() => { setDismissed(true); localStorage.setItem(PREF_KEY, "hidden"); }}>
-        <i className="fas fa-times" />
+      <button type="button" style={closeBtn} title="Hide this strip" aria-label="Hide the context strip" onClick={dismiss}>
+        <i className="fas fa-times" aria-hidden="true" />
       </button>
 
       {hover && <HoverCard item={hover.item} x={hover.x} y={hover.y} />}
@@ -225,8 +282,11 @@ function HoverCard({ item, x, y }: { item: CoverageItem; x: number; y: number })
   const card: React.CSSProperties = {
     position: "fixed", left: Math.min(x, (typeof window !== "undefined" ? window.innerWidth : 1200) - 340), top: y,
     zIndex: 60, width: 320, maxWidth: "92vw",
-    background: "var(--bg-elevated, #1a1a1a)", border: "1px solid var(--border)",
-    borderRadius: 10, boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+    // `--bg-elevated` and `--shadow-lg` are both defined in both themes, so
+    // the literal fallback and the literal shadow were dark-theme values that
+    // could only ever be wrong on the light one.
+    background: "var(--bg-elevated)", border: "1px solid var(--border)",
+    borderRadius: 10, boxShadow: "var(--shadow-lg)",
     padding: 12, fontSize: 12, color: "var(--text-secondary)",
     textAlign: "left", whiteSpace: "normal", cursor: "default",
   };
@@ -234,13 +294,29 @@ function HoverCard({ item, x, y }: { item: CoverageItem; x: number; y: number })
     display: "inline-block", padding: "1px 7px", borderRadius: 999, marginRight: 4, marginBottom: 4,
     background: "rgba(var(--accent-rgb),0.1)", color: "var(--text-primary)", fontSize: 11,
   };
-  const head: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-faint)", margin: "10px 0 4px" };
+  // 10.5px section headings at faint measured 3.02:1 light and 3.01:1 dark;
+  // they name what follows, so they are read, not skimmed past.
+  const head: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-muted)", margin: "10px 0 4px" };
   return (
     <div style={card}>
-      <div style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: 13 }}>{item.name}</div>
-      <div style={{ marginTop: 3, color: "var(--text-faint)" }}>
-        {compact(item.row_count)} rows · {item.columns_count ?? "—"} columns · {compact(item.values_indexed)} indexed values
+      <div style={{ fontWeight: 700, color: "var(--text-primary)", fontSize: 13 }}>{item.name ?? `#${item.dataset_id}`}</div>
+      {/* `--text-faint` is set to a deliberate 3:1 for a figure the source has
+          moved past; these are current figures a reader is being asked to act
+          on, and at 12px they measured 3.02:1 light and 3.01:1 dark. Muted is
+          the tone for a value that still counts: 4.52:1 and 4.56:1. */}
+      <div style={{ marginTop: 3, color: "var(--text-muted)" }}>
+        {compact(item.row_count)} {item.row_count === 1 ? "row" : "rows"} · {item.columns_count ?? "—"} columns · {compact(item.values_indexed)} indexed values
         {dr?.min && dr?.max ? ` · ${shortDate(dr.min)} → ${shortDate(dr.max)}` : ""}
+      </div>
+      {/* The dot on the pill was the only place a dataset's compile state was
+          reported, and it reported it in colour alone. It is stated here in
+          words, and a state the server did not report is not read as ready. */}
+      <div style={{ marginTop: 3, color: "var(--text-muted)" }}>
+        {item.status === "ready"
+          ? "Compiled and ready to be asked about."
+          : item.status
+            ? `Compile state: ${item.status}. Some answers may not be available yet.`
+            : "The server did not report a compile state for this dataset."}
       </div>
 
       {dims.length > 0 && (

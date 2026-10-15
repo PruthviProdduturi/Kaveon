@@ -68,7 +68,17 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const checkedRef = useRef(false);
 
   useEffect(() => {
-    if (!isAuthenticated) setIsSetupOk(null);
+    if (!isAuthenticated) {
+      setIsSetupOk(null);
+      // The latch has to come off with the answer it guards. It did not, so a
+      // session that went unauthenticated and came back — a refetch that
+      // momentarily fails, a sign-out and sign-in without a page load — left
+      // `isSetupOk` null for the rest of the session. Null is "the check has
+      // not come back", and the pages that read it wait on it: Favorites and
+      // Workspace activity never leave their spinner, and Home never reads
+      // its sessions or its catalogue.
+      checkedRef.current = false;
+    }
   }, [isAuthenticated]);
 
   useEffect(() => {
@@ -78,6 +88,12 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     void (async () => {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/setup/status`);
+        // Only a response that answered may produce a verdict. A refusal or a
+        // gateway error has no `status` field, so reading one out of it
+        // resolved to `false` — "this installation reports itself as not set
+        // up" — and Favorites then told the reader the system of record was
+        // not configured on a server that had merely declined the question.
+        if (!res.ok) { setIsSetupOk(true); return; }
         const data: SetupData = await res.json();
         setIsSetupOk(data.status === "ok");
       } catch {
