@@ -1145,6 +1145,34 @@ fn drain(operator: &mut dyn BatchOperator) -> Vec<RecordBatch> {
     batches
 }
 
+/// A multi-array UNNEST must preserve Trino's row shape through the fragment
+/// path: shorter arrays are padded with NULL and ordinality counts the output
+/// rows after padding. This is a leaf relation, but it still exercises the
+/// distributed planner/compiler boundary rather than only the local operator.
+#[test]
+fn distributed_multi_array_unnest_matches_trino_padding() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-unnest-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT * FROM UNNEST(ARRAY[1, 2, 3], ARRAY['a', 'b']) WITH ORDINALITY AS t(id, label, ord)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, false),
+        vec![
+            "1\u{1f}a\u{1f}1",
+            "2\u{1f}b\u{1f}2",
+            "3\u{1f}NULL\u{1f}3",
+        ]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths() {
     let directory =
