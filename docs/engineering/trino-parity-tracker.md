@@ -39,7 +39,7 @@ evidence passes against exact-result references.
 |---|---|---|---|
 | Core SELECT surface | Implemented | WHERE, projection, CASE, casts, GROUP BY, bounded GROUPING SETS/CUBE/ROLLUP lowering, HAVING, ORDER BY (including select ordinals), LIMIT/OFFSET, DISTINCT, NULL semantics, date/time and decimal paths. | Broader differential corpus against the pinned Trino version. |
 | CTEs and derived tables | Implemented | Non-recursive CTEs and derived relations bind through the normal optimizer. | Recursive CTE support remains open. |
-| Joins and subqueries | Partial | Equi/residual joins, EXISTS, IN/NOT IN, and bounded scalar aggregate/projection forms are supported. | Correlated non-aggregate, multi-row scalar, and deeper Apply/lateral shapes. |
+| Joins and subqueries | Partial | Equi/residual joins, `JOIN ... USING (...)` for two base relations, EXISTS, IN/NOT IN, and bounded scalar aggregate/projection forms are supported. USING is lowered to qualified equality keys; duplicate-key suppression and composite/lateral left inputs remain open. | Correlated non-aggregate, multi-row scalar, duplicate-column-correct USING output, and deeper Apply/lateral shapes. |
 | Set operations | Implemented | UNION, INTERSECT, EXCEPT, including ALL forms, with exact local/distributed tests. | Additional complex-type differential cases. |
 | Windows and QUALIFY | Partial | ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, aggregate windows, frames, and the qualified QUALIFY shape. | Full modifier and distributed-window corpus. |
 | Arrays | Partial | Typed numeric, text, boolean, temporal, decimal, nested-list, and bounded array-function paths. | Remaining complex element and full Trino function coverage. |
