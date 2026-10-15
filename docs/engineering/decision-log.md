@@ -1,5 +1,76 @@
 # Decision log
 
+### Claude took the open Engine defects on architect instruction
+
+- **Decision (2026-10-15).** The architect instructed Claude to fix the Engine
+  defects that had been handed to Codex and were still open: D-42, D-51, D-39,
+  D-25 and the Engine half of D-8 and D-3. `CLAUDE.md` assigns essentially all
+  Engine crates to Codex, so this crosses that boundary and is recorded here
+  because the contract requires a crossing to be recorded in the commit or the
+  decision log rather than assumed.
+- **Evidence.** D-42 was the reason it could not wait: `u8 as char` in
+  `normalize_bracket_identifiers` is a Latin-1 conversion, so every non-ASCII
+  character in every statement was corrupted, and because product records are
+  written as SQL literals it was corrupting stored data once per write and
+  compounding on each rewrite. It had been handed over twice with measurements
+  and was still live. Commits: `00417e6e` (D-42), `e698da5f` (D-3, D-8),
+  `cec6a098` (D-51, D-39, D-25).
+- **Consequence.** The Engine crates now carry changes neither engineer owns
+  alone, so the next Engine change must read those commits rather than assume
+  the crate is untouched. Only the files each change needed were committed; the
+  nineteen files holding Codex's uncommitted work were left exactly as found,
+  and in `crates/sql/src/parser.rs` only Claude's own hunks were staged so an
+  unrelated rustfmt wrap of Codex's stayed in the working tree. Two things are
+  deliberately NOT done: repairing the data D-42 already corrupted, which needs
+  a pass that counts the Latin-1 layers per value and must run after the parser
+  fix is deployed or it would be re-corrupted; and collapsing a cube build's
+  statement-per-cuboid, which needs `GROUPING SETS` in the sql and exec crates.
+
+### Cube pairs are planned from observed counts, not declared caps
+
+- **Decision (2026-10-15).** Admit a two-axis cuboid on the product of the
+  counts the build actually observed, not the product of the dimensions'
+  declared caps.
+- **Evidence.** Under the cap rule a pair qualified only when
+  `cap_left x cap_right` fit `CUBE_PAIR_MAX_CELLS` (1,000,000), and a dimension
+  with no declared cap takes `DEFAULT_DIMENSION_CAP` of 10,000 — so every pair
+  was planned at 100,000,000 cells and none ever qualified. On the
+  1,017,865,653-row `events.daily_user_activity` this meant single-axis
+  groupings answered in 0.55-0.78 s while the first execution of each distinct
+  pair cost 116-123 s, with only repeats fast from the result cache.
+  `platform x license` is twelve cells and was never built.
+- **Consequence.** That table's build goes from twelve statements to sixty-six:
+  one scan per cuboid at build time against about two minutes on the first view
+  of every pair. It breaks even in the worst case and wins whenever a pair is
+  viewed outside a result-cache window. The remaining lever for a cheaper build
+  is multi-grouping aggregation, not a cap. An axis excluded for its cap still
+  pairs with nothing, and a rebuild now keeps the groupings the previous cube
+  held — without that, the first background refresh would have deleted every
+  observed-only pair, because a worker-built cube always rebuilds.
+
+### The product snapshot cache is keyed on identity, never on time
+
+- **Decision (2026-10-15).** Cache the validated product catalog snapshot, and
+  make a hit require the identity the head attests rather than a freshness
+  window.
+- **Evidence.** `read_current()` ran on every product call — read, list, BEGIN
+  and COMMIT alike — and each time decoded the whole manifest, then read,
+  SHA-256-verified and JSON-decoded every typed table in the catalog rather
+  than the one being touched, then rebuilt all typed-row indexes to validate.
+  A single chart save paid that pass about five times. Measured in release on a
+  2,000-row typed table: `read_current` 2.86 ms to 0.63 ms, a one-mutation
+  commit 5.19 ms to 2.69 ms.
+- **Consequence.** Every call still reads `head.json`, so a writer always sees
+  the live head and its CAS version; only the pure function from immutable
+  bytes to a validated snapshot is cached, and a hit needs both the generation
+  and snapshot id the head just named and a matching manifest digest. Snapshot
+  objects are create-only, so an identity names one byte string forever.
+  Nothing expires. If storage ever loses or alters a snapshot object the head
+  still attests, the old code reported it missing and this serves the content
+  whose digest the head names — the content-addressed answer, documented in the
+  tests. The O(S^2) staging is unchanged and remains open: a pure batch is
+  impossible while each change is derived from the running preview.
+
 ### Mixed-key final-merge partitioning remains rejected
 
 - **Decision (2026-10-08).** Keep the final aggregate's established
