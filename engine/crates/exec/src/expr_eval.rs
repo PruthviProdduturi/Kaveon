@@ -4382,15 +4382,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_PARSE" | "TRY_JSON_PARSE" => {
             check_arity(name, args, 1)?;
-            let documents = as_string_array(&args[0])?;
+            let documents = &args[0];
             let try_parse = upper == "TRY_JSON_PARSE";
             let mut result = StringBuilder::new();
             for row in 0..num_rows {
-                if documents.is_null(row) {
+                let Some(document) = text_value(documents, row)? else {
                     result.append_null();
                     continue;
-                }
-                let document = documents.value(row);
+                };
                 if serde_json::from_str::<serde_json::Value>(document).is_ok() {
                     result.append_value(document);
                 } else if try_parse {
@@ -16021,6 +16020,28 @@ mod tests {
         let result = evaluate(&try_parse, &batch).unwrap();
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), r#"{"x":1}"#);
+        assert!(values.is_null(1));
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_json_parse_with_large_utf8_input() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(LargeStringArray::from(vec![
+                Some(r#"{"large":true}"#),
+                Some("not-json"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "TRY_JSON_PARSE".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), r#"{"large":true}"#);
         assert!(values.is_null(1));
         assert!(values.is_null(2));
     }

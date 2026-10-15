@@ -109,6 +109,13 @@ valid values and ordinary out-of-range array accesses retain their normal
 results. The focused SQL and executor suites cover planner lowering and
 execution behavior.
 
+## Large UTF-8 JSON parsing qualification — 2026-10-15
+
+`JSON_PARSE` and `TRY_JSON_PARSE` now accept `LargeUtf8` document columns in
+addition to ordinary `Utf8`. Valid documents retain their text representation,
+malformed values follow the existing strict/TRY behavior, and SQL NULL remains
+NULL. The focused executor regression covers all three row states.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
