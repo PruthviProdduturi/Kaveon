@@ -36,7 +36,7 @@ The raw report is retained beside this document as
 ## Boundary
 
 This strengthens current-image endurance evidence for Track 1 item 2 and
-Track 1 item 16. It does not close the exchange gate: authenticated external
-object-store fault injection, orphan-spool recovery under that fault, and the
-remaining distributed join, aggregate, window, ordering, connector, and
-upgrade qualifications remain open in the tracker.
+Track 1 item 16. In combination with the quota, cancellation, and separate
+object-store fault reports, it closes the declared bounded exchange gate.
+Longer mixed-workload endurance and the remaining distributed join, aggregate,
+window, ordering, connector, and upgrade qualifications remain open.
