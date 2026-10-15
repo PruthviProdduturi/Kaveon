@@ -163,3 +163,13 @@ SELECT * FROM UNNEST(ARRAY[10, 20]) WITH OFFSET AS off ORDER BY off;
 
 Correlated/lateral UNNEST and arbitrary table-function expressions remain
 outside this qualification.
+
+## Trino wire compatibility qualification
+
+The focused Trino compatibility gate passed on the same workspace commit:
+`cargo test -p kaveon-server trino_ --quiet` completed with **25 passed, 0
+failed**. This covers Trino session headers, response paging and structured
+errors, SHOW SESSION/SHOW FUNCTIONS, PREPARE/EXECUTE/DEALLOCATE ownership,
+DESCRIBE INPUT/OUTPUT, typed scalar/array/map bindings, and the session
+context headers. It is a server-side protocol qualification; a sweep from
+external Trino JDBC/CLI clients remains an explicit open gate.
