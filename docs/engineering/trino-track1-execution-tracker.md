@@ -56,8 +56,12 @@ three-node Compose run, and the AKS report
 production topology: three workers discovered with one catalog snapshot, a
 three-way 504-million-row scan and exchange, a final merge, and exact platform
 counts. These runs close the basic multi-worker assignment and stage-dependency
-evidence. Retry/lease evidence, skew, cancellation cleanup, and failure-path
-evidence remain required before item 1 can move to Complete.
+evidence. The bounded AKS fault-pressure report
+`docs/qualification/engine-aks-fault-pressure-2026-10-14.md` additionally
+records worker loss, replacement retry, cancellation cleanup, concurrent exact
+results, and bounded pressure on the same three-worker image. A dedicated skew
+qualification and the remaining stale-attempt/lease and failure-path evidence
+are still required before item 1 can move to Complete.
 
 ## Validation commands
 
