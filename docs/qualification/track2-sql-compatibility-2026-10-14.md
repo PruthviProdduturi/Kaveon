@@ -241,6 +241,17 @@ implemented parity.
 This report is local evidence. AKS workload and external Trino-client
 qualification are separate gates in `docs/engineering/trino-parity-tracker.md`.
 
+## Clean workspace gate rerun — 2026-10-15
+
+The clean detached parity workspace was rerun after the distributed runtime
+qualification updates. `cargo test --workspace --no-fail-fast --quiet` returned
+exit code `0`: core `74/74`, SQL `211 passed / 1 ignored`, planner/runtime
+`85/85`, execution `368 passed / 4 ignored`, CLI `57/57`, server `394/394`,
+additional SQL `159/159`, and storage `121 passed / 1 ignored`. The long server
+differential sweep completed successfully. The differential corpus includes
+grouped `MIN(DISTINCT actions)` and `MAX(DISTINCT actions)` on local and
+distributed execution paths; both match the exact reference extrema.
+
 ## Scalar-query follow-up
 
 Commit `b6a80ec5` adds the missing Trino-compatible implicit single-row
