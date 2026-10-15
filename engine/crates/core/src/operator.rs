@@ -1,4 +1,4 @@
-use crate::{Result, ScalarValue};
+use crate::{Result, ScalarValue, StoragePredicate};
 use arrow::record_batch::RecordBatch;
 
 pub trait BatchSource {
@@ -10,6 +10,23 @@ pub trait BatchSource {
     /// the default keeps non-storage sources correct by declining the push.
     fn apply_runtime_filter(&mut self, _column: &str, _values: &[ScalarValue]) -> Result<bool> {
         Ok(false)
+    }
+
+    /// Apply a safe conjunction of exact single-column `IN` predicates. A
+    /// source may accept every child and prune before decoding; unsupported
+    /// predicate shapes decline so the executor keeps its exact row filter.
+    fn apply_runtime_predicate(&mut self, predicate: &StoragePredicate) -> Result<bool> {
+        match predicate {
+            StoragePredicate::In { column, values } => self.apply_runtime_filter(column, values),
+            StoragePredicate::And(children) if !children.is_empty() => {
+                let mut accepted = true;
+                for child in children {
+                    accepted &= self.apply_runtime_predicate(child)?;
+                }
+                Ok(accepted)
+            }
+            _ => Ok(false),
+        }
     }
 }
 
@@ -23,6 +40,20 @@ pub trait BatchOperator {
     fn apply_runtime_filter(&mut self, _column: &str, _values: &[ScalarValue]) -> Result<bool> {
         Ok(false)
     }
+
+    fn apply_runtime_predicate(&mut self, predicate: &StoragePredicate) -> Result<bool> {
+        match predicate {
+            StoragePredicate::In { column, values } => self.apply_runtime_filter(column, values),
+            StoragePredicate::And(children) if !children.is_empty() => {
+                let mut accepted = true;
+                for child in children {
+                    accepted &= self.apply_runtime_predicate(child)?;
+                }
+                Ok(accepted)
+            }
+            _ => Ok(false),
+        }
+    }
 }
 
 pub fn collect_batches(source: &mut dyn BatchOperator) -> Result<Vec<RecordBatch>> {
@@ -31,4 +62,45 @@ pub fn collect_batches(source: &mut dyn BatchOperator) -> Result<Vec<RecordBatch
         out.push(batch);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct RecordingSource {
+        accepted: usize,
+    }
+
+    impl BatchSource for RecordingSource {
+        fn schema(&self) -> &arrow::datatypes::SchemaRef {
+            unreachable!("schema is not used by this contract test")
+        }
+
+        fn next_batch(&mut self) -> Result<Option<arrow::record_batch::RecordBatch>> {
+            Ok(None)
+        }
+
+        fn apply_runtime_filter(&mut self, _column: &str, _values: &[ScalarValue]) -> Result<bool> {
+            self.accepted += 1;
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn applies_every_child_of_an_and_runtime_predicate() {
+        let mut source = RecordingSource { accepted: 0 };
+        let predicate = StoragePredicate::And(vec![
+            StoragePredicate::In {
+                column: "a".into(),
+                values: vec![ScalarValue::Int64(1)],
+            },
+            StoragePredicate::In {
+                column: "b".into(),
+                values: vec![ScalarValue::Utf8("x".into())],
+            },
+        ]);
+        assert!(source.apply_runtime_predicate(&predicate).unwrap());
+        assert_eq!(source.accepted, 2);
+    }
 }

@@ -1987,12 +1987,10 @@ impl PartitionedHashJoin {
         let Some(filter) = BuildKeyFilter::from_built(built, &self.key_indices) else {
             return Ok(left);
         };
-        if let Some(StoragePredicate::In { column, values }) =
-            filter.storage_predicate(left.schema())
+        if let Some(predicate) = filter.storage_predicate(left.schema())
+            && left.apply_runtime_predicate(&predicate)?
         {
-            if left.apply_runtime_filter(&column, &values)? {
-                return Ok(left);
-            }
+            return Ok(left);
         }
         Ok(Box::new(RuntimeJoinFilter::new(left, filter)))
     }

@@ -140,6 +140,14 @@ remove a valid composite match. Unsupported key values fall back to the exact
 batch filter. The execution regression verifies the two-column predicate shape;
 cloud snapshot and null/type qualification remain open.
 
+## Composite predicate pushdown wiring qualification — 2026-10-15
+
+The runtime operator contract now accepts a safe conjunction of single-column
+`IN` predicates and forwards each child to the underlying scan. This closes
+the integration gap between composite-key filter construction and storage
+readers; unsupported shapes still decline and retain the exact batch filter.
+The core contract regression verifies that every conjunction child is applied.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
