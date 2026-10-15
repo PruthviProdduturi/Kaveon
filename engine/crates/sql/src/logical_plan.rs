@@ -204,6 +204,7 @@ pub enum LogicalPlan {
         columns: Vec<String>,
         with_ordinality: bool,
         ordinality_column: String,
+        ordinality_start: i64,
     },
     Join {
         left: Box<LogicalPlan>,
@@ -793,6 +794,7 @@ fn set_expr_to_plan(body: &ast::SetExpr, ctes: &Lowering) -> Result<LogicalPlan>
                     columns: Vec::new(),
                     with_ordinality: false,
                     ordinality_column: "ordinality".to_owned(),
+                    ordinality_start: 1,
                 });
             }
             let width = rows[0].len();
@@ -820,6 +822,7 @@ fn set_expr_to_plan(body: &ast::SetExpr, ctes: &Lowering) -> Result<LogicalPlan>
                     .collect(),
                 with_ordinality: false,
                 ordinality_column: "ordinality".to_owned(),
+                ordinality_start: 1,
             })
         }
         ast::SetExpr::SetOperation {
@@ -1100,6 +1103,7 @@ fn build_from_clause(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPla
             columns: vec!["_kaveon_unit".into()],
             with_ordinality: false,
             ordinality_column: "_kaveon_ordinality".into(),
+            ordinality_start: 1,
         });
     }
     let mut inputs = select.from.iter();
@@ -1210,6 +1214,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     columns,
                     with_ordinality: *with_ordinality,
                     ordinality_column,
+                    ordinality_start: 1,
                 });
             }
             // DuckDB's sqlparser dialect tokenizes row-producing UNNEST in
@@ -1275,17 +1280,13 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             alias,
             array_exprs,
             with_offset,
+            with_offset_alias,
             with_ordinality,
             ..
         } => {
             if array_exprs.is_empty() {
                 return Err(sql_err(
                     "UNNEST in FROM requires at least one ARRAY expression",
-                ));
-            }
-            if *with_offset {
-                return Err(sql_err(
-                    "UNNEST WITH OFFSET is not supported; use WITH ORDINALITY",
                 ));
             }
             let expressions = array_exprs
@@ -1332,16 +1333,30 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                         })
                         .collect()
                 });
-            let ordinality_column = alias
-                .as_ref()
-                .and_then(|alias| alias.columns.get(expressions.len()))
-                .map(|column| column.name.value.clone())
-                .unwrap_or_else(|| "ordinality".to_owned());
+            let ordinality_column = if *with_offset {
+                with_offset_alias
+                    .as_ref()
+                    .map(|column| column.value.clone())
+                    .or_else(|| {
+                        alias
+                            .as_ref()
+                            .and_then(|alias| alias.columns.get(expressions.len()))
+                            .map(|column| column.name.value.clone())
+                    })
+                    .unwrap_or_else(|| "offset".to_owned())
+            } else {
+                alias
+                    .as_ref()
+                    .and_then(|alias| alias.columns.get(expressions.len()))
+                    .map(|column| column.name.value.clone())
+                    .unwrap_or_else(|| "ordinality".to_owned())
+            };
             Ok(LogicalPlan::Unnest {
                 expressions,
                 columns,
-                with_ordinality: *with_ordinality,
+                with_ordinality: *with_ordinality || *with_offset,
                 ordinality_column,
+                ordinality_start: if *with_offset { 0 } else { 1 },
             })
         }
         _ => Err(sql_err(
@@ -4880,6 +4895,24 @@ mod tests {
                 ordinality_column,
                 ..
             } if columns == vec!["value"] && ordinality_column == "n"
+        ));
+    }
+
+    #[test]
+    fn parses_constant_array_unnest_with_zero_based_offset() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(ARRAY['a', 'b']) WITH OFFSET AS n",
+        )
+        .unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest {
+                columns,
+                with_ordinality: true,
+                ordinality_column,
+                ordinality_start: 0,
+                ..
+            } if columns == vec!["unnest"] && ordinality_column == "n"
         ));
     }
 

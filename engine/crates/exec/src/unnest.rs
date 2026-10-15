@@ -17,6 +17,7 @@ pub struct UnnestOperator {
     schema: SchemaRef,
     values: Vec<ArrayRef>,
     ordinality: bool,
+    ordinality_start: i64,
     emitted: bool,
 }
 
@@ -26,6 +27,7 @@ impl UnnestOperator {
         columns: Vec<String>,
         ordinality: bool,
         ordinality_column: impl Into<String>,
+        ordinality_start: i64,
     ) -> Result<Self> {
         let empty = RecordBatch::try_new_with_options(
             Arc::new(Schema::empty()),
@@ -96,6 +98,7 @@ impl UnnestOperator {
             schema: Arc::new(Schema::new(fields)),
             values,
             ordinality,
+            ordinality_start,
             emitted: false,
         })
     }
@@ -114,7 +117,8 @@ impl BatchOperator for UnnestOperator {
         let mut columns = self.values.clone();
         if self.ordinality {
             columns.push(Arc::new(Int64Array::from_iter_values(
-                1..=self.values.first().map_or(0, |value| value.len()) as i64,
+                self.ordinality_start
+                    ..self.ordinality_start + self.values.first().map_or(0, |value| value.len()) as i64,
             )) as ArrayRef);
         }
         Ok(Some(RecordBatch::try_new(Arc::clone(&self.schema), columns)?))
@@ -135,7 +139,7 @@ mod tests {
                 Expr::Literal(kaveon_core::ScalarValue::Int64(9)),
             ],
         };
-        let mut operator = UnnestOperator::new(&[expression], vec!["value".into()], true, "n")
+        let mut operator = UnnestOperator::new(&[expression], vec!["value".into()], true, "n", 1)
             .unwrap();
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
@@ -162,10 +166,40 @@ mod tests {
             vec!["left".into(), "right".into()],
             false,
             "ordinality",
+            1,
         )
         .unwrap();
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 3);
         assert!(batch.column(1).is_null(2));
+    }
+
+    #[test]
+    fn emits_zero_based_offsets() {
+        let expression = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(kaveon_core::ScalarValue::Int64(4)),
+                Expr::Literal(kaveon_core::ScalarValue::Int64(9)),
+            ],
+        };
+        let mut operator = UnnestOperator::new(
+            &[expression],
+            vec!["value".into()],
+            true,
+            "offset",
+            0,
+        )
+        .unwrap();
+        let batch = operator.next_batch().unwrap().unwrap();
+        assert_eq!(
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[0, 1]
+        );
     }
 }

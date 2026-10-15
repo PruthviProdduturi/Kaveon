@@ -1203,6 +1203,25 @@ fn distributed_multi_array_unnest_matches_trino_padding() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// BigQuery's zero-based `WITH OFFSET` form shares the same leaf fragment
+/// operator as Trino's one-based `WITH ORDINALITY`; the start value must
+/// survive binding, serialization, and distributed execution.
+#[test]
+fn distributed_unnest_with_offset_is_zero_based() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-unnest-offset-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT * FROM UNNEST(ARRAY[10, 20]) WITH OFFSET AS off ORDER BY off";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-offset", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["10\u{1f}0", "20\u{1f}1"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// GROUPING SETS lowers to a bounded UNION of aggregates. Compare that
 /// lowering through the local and fragment paths so a branch cannot silently
 /// lose its NULL grouping key or final aggregate merge.

@@ -148,3 +148,18 @@ fix with output captured and an authoritative exit status. `cargo test
 --workspace --no-fail-fast --quiet` returned exit code `0`: server `393/393`,
 SQL `157/157`, execution `351 passed / 4 ignored`, and the remaining workspace
 targets all passed. The server differential sweep completed in 105.78 seconds.
+
+## UNNEST offset qualification
+
+The row-producing UNNEST surface now accepts the BigQuery-compatible
+`WITH OFFSET AS name` form in addition to Trino's `WITH ORDINALITY`. The
+leaf operator carries an explicit start value: offsets emit `0..n-1` and
+ordinality emits `1..n`. Local SQL and executor tests pass, and the
+distributed differential gate returns the exact rows `10,0` and `20,1` for:
+
+```sql
+SELECT * FROM UNNEST(ARRAY[10, 20]) WITH OFFSET AS off ORDER BY off;
+```
+
+Correlated/lateral UNNEST and arbitrary table-function expressions remain
+outside this qualification.

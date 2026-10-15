@@ -3,7 +3,7 @@ use sqlparser::ast::Statement;
 use sqlparser::ast::{
     AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
 };
-use sqlparser::dialect::DuckDbDialect;
+use sqlparser::dialect::{BigQueryDialect, DuckDbDialect};
 use sqlparser::parser::Parser;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
@@ -18,21 +18,47 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // leave numeric/list brackets untouched so ARRAY[...] remains available
     // for the syntax that explicitly supports it.
     let normalized = normalize_bracket_identifiers(sql);
-    Parser::parse_sql(&dialect, &normalized).map_err(|e| KaveonError::Sql(e.to_string()))
+    match Parser::parse_sql(&dialect, &normalized) {
+        Ok(statements) => Ok(statements),
+        Err(primary) if normalized.to_ascii_uppercase().contains("WITH OFFSET") => {
+            // sqlparser's DuckDB dialect does not expose BigQuery's
+            // zero-based UNNEST offset form. Retry that narrow surface with
+            // the dialect that owns the AST fields, leaving all other
+            // statements on the normal DuckDB grammar and diagnostics.
+            Parser::parse_sql(&BigQueryDialect {}, &normalized)
+                .map_err(|_| KaveonError::Sql(primary.to_string()))
+        }
+        Err(error) => Err(KaveonError::Sql(error.to_string())),
+    }
 }
 
 fn normalize_bracket_identifiers(sql: &str) -> String {
     let bytes = sql.as_bytes();
     let mut out = String::with_capacity(sql.len());
-    let mut i = 0;
+    // Everything before `copied` has been written out. The statement is copied
+    // as string slices and only the bracket spans this rewrites are emitted
+    // character by character.
+    //
+    // It used to rebuild the whole statement with `out.push(b as char)` per
+    // byte. In Rust `u8 as char` is a Latin-1 conversion: byte 0xF0 becomes
+    // U+00F0, which the String then re-encodes as 0xC3 0xB0. So every
+    // multi-byte UTF-8 sequence in any statement came out as one character per
+    // byte -- in identifiers and string literals alike -- and because product
+    // records are written as SQL literals, the corruption was stored and
+    // compounded on each rewrite. A chart named with an en dash reached the
+    // screen as "New Chart ÃÂ¢ÃÂÃÂ ..." after three saves.
+    //
+    // Byte indexing stays valid because every delimiter scanned for here is
+    // ASCII, and a UTF-8 continuation byte can never equal an ASCII byte, so
+    // `copied` and the slice bounds always land on character boundaries.
+    let mut copied = 0usize;
+    let mut i = 0usize;
     let mut quote: Option<u8> = None;
     while i < bytes.len() {
         let b = bytes[i];
         if let Some(q) = quote {
-            out.push(b as char);
             if b == q {
                 if i + 1 < bytes.len() && bytes[i + 1] == q {
-                    out.push(q as char);
                     i += 2;
                     continue;
                 }
@@ -43,31 +69,32 @@ fn normalize_bracket_identifiers(sql: &str) -> String {
         }
         if matches!(b, b'\'' | b'"' | b'`') {
             quote = Some(b);
-            out.push(b as char);
             i += 1;
             continue;
         }
-        if b == b'[' {
-            if let Some(end_rel) = bytes[i + 1..].iter().position(|c| *c == b']') {
-                let end = i + 1 + end_rel;
-                let inner = &sql[i + 1..end];
-                let mut chars = inner.chars();
-                let identifier = chars
-                    .next()
-                    .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
-                    && chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric());
-                if identifier {
-                    out.push('"');
-                    out.push_str(inner);
-                    out.push('"');
-                    i = end + 1;
-                    continue;
-                }
+        if b == b'['
+            && let Some(end_rel) = bytes[i + 1..].iter().position(|c| *c == b']')
+        {
+            let end = i + 1 + end_rel;
+            let inner = &sql[i + 1..end];
+            let mut chars = inner.chars();
+            let identifier = chars
+                .next()
+                .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                && chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric());
+            if identifier {
+                out.push_str(&sql[copied..i]);
+                out.push('"');
+                out.push_str(inner);
+                out.push('"');
+                i = end + 1;
+                copied = i;
+                continue;
             }
         }
-        out.push(b as char);
         i += 1;
     }
+    out.push_str(&sql[copied..]);
     out
 }
 
@@ -157,7 +184,9 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                 return Err(sql_error("product INSERT requires VALUES"));
             };
             if values.rows.is_empty() || values.rows.iter().any(|row| row.len() != 2) {
-                return Err(sql_error("product INSERT rows must contain id and document_json"));
+                return Err(sql_error(
+                    "product INSERT rows must contain id and document_json",
+                ));
             }
             values
                 .rows
@@ -470,6 +499,76 @@ fn sql_error(message: &str) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every statement passes through `normalize_bracket_identifiers`, and it
+    /// used to rebuild the string with `u8 as char` -- a Latin-1 conversion --
+    /// so every multi-byte UTF-8 sequence came out as one character per byte.
+    /// Product records are written as SQL literals, so the corruption was
+    /// stored and compounded on each rewrite.
+    #[test]
+    fn non_ascii_survives_the_bracket_pass_unchanged() {
+        for sql in [
+            "SELECT 'caf\u{e9}' AS x FROM t",
+            "SELECT 'Probe \u{1f695} en\u{2013}dash' FROM t",
+            "SELECT * FROM t WHERE country = 'K\u{f8}benhavn'",
+            "SELECT \"na\u{ef}ve\" FROM t",
+            "SELECT '\u{4f60}\u{597d}' FROM t",
+            // A statement with no brackets at all must come back byte-identical.
+            "SELECT a, b FROM t WHERE c = 'plain'",
+        ] {
+            assert_eq!(normalize_bracket_identifiers(sql), sql, "mangled: {sql}");
+        }
+    }
+
+    /// The rewrite the function exists for still happens, and still only for
+    /// identifier-shaped brackets.
+    #[test]
+    fn bracket_identifiers_are_quoted_and_other_brackets_are_not() {
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT [year] FROM t"),
+            "SELECT \"year\" FROM t"
+        );
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT [_a$1] FROM t"),
+            "SELECT \"_a$1\" FROM t"
+        );
+        // Numeric and list brackets stay, so ARRAY[...] keeps working.
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT ARRAY[1, 2] FROM t"),
+            "SELECT ARRAY[1, 2] FROM t"
+        );
+        // A bracket inside a string literal is data, not an identifier.
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT '[year]' FROM t"),
+            "SELECT '[year]' FROM t"
+        );
+    }
+
+    /// Both together: a rewrite in the same statement as non-ASCII text, which
+    /// is where a slice-copying implementation could lose or duplicate a span.
+    #[test]
+    fn a_bracket_rewrite_and_non_ascii_text_coexist() {
+        assert_eq!(
+            normalize_bracket_identifiers(
+                "SELECT [year] FROM t WHERE city = 'K\u{f8}benhavn' AND note = '\u{2013}'"
+            ),
+            "SELECT \"year\" FROM t WHERE city = 'K\u{f8}benhavn' AND note = '\u{2013}'"
+        );
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT '\u{1f695}', [year], '\u{2013}' FROM t"),
+            "SELECT '\u{1f695}', \"year\", '\u{2013}' FROM t"
+        );
+    }
+
+    /// An escaped quote inside a literal must not end the literal, or a later
+    /// bracket would be rewritten inside what is still a string.
+    #[test]
+    fn a_doubled_quote_keeps_the_literal_open() {
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT 'it''s [year]' FROM t"),
+            "SELECT 'it''s [year]' FROM t"
+        );
+    }
 
     #[test]
     fn accepts_constrained_dml_and_transaction_controls() {
