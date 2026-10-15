@@ -620,7 +620,7 @@ main.main-lab {
 .overview-primary-btn {
   border-radius: 10px;
   border: none;
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   color: #ffffff;
   font-size: 0.82rem;
   font-weight: 600;
@@ -716,7 +716,7 @@ main.main-lab {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   color: #fff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   transition: all 0.2s;
@@ -1585,7 +1585,7 @@ main.main-lab {
 }
 
 .save-query-btn-primary {
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   color: #ffffff;
   border: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -1740,7 +1740,7 @@ main.main-lab {
 }
 
 .connect-btn {
-  background: linear-gradient(135deg, var(--lens-primary, #0078d4), var(--lens-dark, #106ebe));
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
   color: white;
   border: none;
   padding: 0.85rem 2.25rem;
@@ -1932,7 +1932,7 @@ main.main-lab {
 }
 
 .auth-button {
-  background: linear-gradient(135deg, var(--lens-primary, #0078d4), var(--lens-dark, #106ebe));
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
   color: white;
   border: none;
   padding: 1rem 2.5rem;
@@ -2285,7 +2285,7 @@ main.main-lab {
 
 /* Primary quick action tiles (uses theme colors) */
 .welcome-btn-primary {
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   border: none;
   color: #ffffff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -2293,7 +2293,7 @@ main.main-lab {
 }
 
 .welcome-btn-primary:hover {
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   color: #ffffff;
@@ -3646,7 +3646,7 @@ main.main-wide {
 }
 
 .chart-save-modal-btn-primary {
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   color: #ffffff;
   border: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -3666,7 +3666,7 @@ main.main-wide {
 }
 
 .feature-card:nth-child(1) .feature-icon {
-  background: linear-gradient(135deg, var(--lens-primary), var(--lens-primary-hover));
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
   color: #ffffff;
   border-color: rgba(59, 130, 246, 0.5);
 }
@@ -4389,7 +4389,7 @@ main.main-wide {
 }
 
 .save-btn {
-  background: linear-gradient(135deg, var(--lens-primary), var(--lens-primary-hover));
+  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
   color: white;
 }
 
@@ -4665,8 +4665,8 @@ main.main-wide {
   min-width: 16px;
   padding: 0 4px;
   border-radius: 9px;
-  background: var(--accent);
-  color: #ffffff;
+  background: var(--accent-strong);
+  color: var(--on-accent);
   font-size: 0.68rem;
   font-weight: 600;
   text-align: center;
@@ -5385,7 +5385,7 @@ main.main-wide {
 }
 
 .query-preview-btn-primary {
-  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
+  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
   color: #ffffff;
   border: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
