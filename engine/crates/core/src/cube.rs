@@ -242,6 +242,75 @@ impl CubeGrouping {
         self.cells = merged;
         Ok(())
     }
+
+    /// This grouping rolled up to `axes` — a subset of its own, in any
+    /// order: every cell's key projected onto those axes, cells whose
+    /// projected keys are equal folded together, the result sorted by
+    /// key. Exact for every measure a cube keeps: sums and counts add up
+    /// again, bounds widen to the same bounds, and a sketch union sets
+    /// the registers the values themselves would have set. So a grouping
+    /// already read answers every grouping beneath it with no further
+    /// scan — a build is one scan per grouping, and the grand total is
+    /// the roll-up of any single axis.
+    ///
+    /// Only a *complete* grouping may be rolled up. A grouping whose read
+    /// stopped at a limit holds some of the rows, and would roll up to
+    /// some of the total; the caller establishes that.
+    pub fn roll_up(&self, axes: &[usize]) -> Result<CubeGrouping> {
+        let mut positions = Vec::with_capacity(axes.len());
+        for axis in axes {
+            // A repeated axis finds its only position already taken, so a
+            // malformed roll-up is refused rather than duplicating a key.
+            let position = self
+                .axes
+                .iter()
+                .position(|held| held == axis)
+                .filter(|position| !positions.contains(position))
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!(
+                        "cube roll-up to axes {axes:?} from a grouping over {:?}",
+                        self.axes
+                    ))
+                })?;
+            positions.push(position);
+        }
+        let mut rolled = Vec::with_capacity(self.cells.len());
+        for cell in &self.cells {
+            let mut key = Vec::with_capacity(positions.len());
+            for position in &positions {
+                key.push(
+                    cell.key
+                        .get(*position)
+                        .ok_or_else(|| {
+                            KaveonError::Execution(format!(
+                                "cube roll-up reads axis {position} of a {}-axis key",
+                                cell.key.len()
+                            ))
+                        })?
+                        .clone(),
+                );
+            }
+            rolled.push(CubeCell {
+                key,
+                rows: cell.rows,
+                measures: cell.measures.clone(),
+            });
+        }
+        rolled.sort_by(|a, b| compare_keys(&a.key, &b.key));
+        let mut cells: Vec<CubeCell> = Vec::with_capacity(rolled.len());
+        for cell in rolled {
+            match cells.last_mut() {
+                Some(last) if compare_keys(&last.key, &cell.key) == Ordering::Equal => {
+                    last.fold_in(&cell)?;
+                }
+                _ => cells.push(cell),
+            }
+        }
+        Ok(CubeGrouping {
+            axes: axes.to_vec(),
+            cells,
+        })
+    }
 }
 
 /// An axis left out of the cube because it holds more distinct values
@@ -490,6 +559,113 @@ mod tests {
             ]
         );
         assert_eq!(CubeCell::empty(vec![None], &slots).measures.len(), 1);
+    }
+
+    /// A grouping rolls up to any subset of its axes, and the roll-up is
+    /// the grouping a scan would have produced: the same rows, the same
+    /// sums and counts, the same bounds, and a sketch holding the same
+    /// values. Nothing else rolls up — a repeated axis and an axis the
+    /// grouping does not hold are both refused.
+    #[test]
+    fn a_grouping_rolls_up_to_its_subsets_exactly() {
+        let slots = [
+            MeasureAggregate::Sum,
+            MeasureAggregate::Min,
+            MeasureAggregate::CountDistinct,
+        ];
+        let cell = |a: Option<i128>, b: i128, rows: u64, sum: i128, min: i128, values: &[i128]| {
+            let mut sketch = CellMeasure::empty(MeasureAggregate::CountDistinct);
+            for value in values {
+                sketch.fold_value(&StatValue::Int(*value)).unwrap();
+            }
+            CubeCell {
+                key: vec![a.map(StatValue::Int), Some(StatValue::Int(b))],
+                rows,
+                measures: vec![
+                    CellMeasure::Sum(Some(StatValue::Int(sum))),
+                    CellMeasure::Min(Some(StatValue::Int(min))),
+                    sketch,
+                ],
+            }
+        };
+        let pair = CubeGrouping {
+            axes: vec![1, 3],
+            cells: vec![
+                cell(Some(1), 7, 10, 100, 5, &[1, 2, 3]),
+                cell(Some(1), 8, 20, 200, 3, &[3, 4]),
+                cell(None, 7, 5, 50, 9, &[9]),
+            ],
+        };
+        // Rolled up to the first axis: the two cells of key 1 fold.
+        let first = pair.roll_up(&[1]).unwrap();
+        assert_eq!(first.axes, vec![1]);
+        assert_eq!(first.cells.len(), 2);
+        assert_eq!(first.cells[0].key, vec![None]);
+        assert_eq!(first.cells[0].rows, 5);
+        assert_eq!(first.cells[1].key, vec![Some(StatValue::Int(1))]);
+        assert_eq!(first.cells[1].rows, 30);
+        assert_eq!(
+            first.cells[1].measures[0],
+            CellMeasure::Sum(Some(StatValue::Int(300)))
+        );
+        assert_eq!(
+            first.cells[1].measures[1],
+            CellMeasure::Min(Some(StatValue::Int(3)))
+        );
+        let CellMeasure::Distinct(sketch) = &first.cells[1].measures[2] else {
+            panic!("distinct");
+        };
+        // 1, 2, 3, 4 — the union of the two cells' sketches.
+        let mut expected = CellMeasure::empty(MeasureAggregate::CountDistinct);
+        for value in [1, 2, 3, 4] {
+            expected.fold_value(&StatValue::Int(value)).unwrap();
+        }
+        assert_eq!(CellMeasure::Distinct(sketch.clone()), expected);
+        // Rolled up to the second axis, and to the grand total.
+        let second = pair.roll_up(&[3]).unwrap();
+        assert_eq!(second.cells.len(), 2);
+        assert_eq!(second.cells[0].rows, 15);
+        assert_eq!(second.cells[1].rows, 20);
+        let total = pair.roll_up(&[]).unwrap();
+        assert_eq!(total.axes, Vec::<usize>::new());
+        assert_eq!(total.cells.len(), 1);
+        assert_eq!(total.cells[0].key, Vec::<Option<StatValue>>::new());
+        assert_eq!(total.cells[0].rows, 35);
+        assert_eq!(
+            total.cells[0].measures[0],
+            CellMeasure::Sum(Some(StatValue::Int(350)))
+        );
+        assert_eq!(
+            total.cells[0].measures[1],
+            CellMeasure::Min(Some(StatValue::Int(3)))
+        );
+        // Both axes in the other order is the same grouping, keys swapped.
+        let swapped = pair.roll_up(&[3, 1]).unwrap();
+        assert_eq!(swapped.cells.len(), 3);
+        assert!(
+            swapped
+                .cells
+                .iter()
+                .all(|cell| cell.key.len() == 2 && cell.key[0].is_some())
+        );
+        // A grand total rolls up from a single axis and no further.
+        assert_eq!(first.roll_up(&[]).unwrap().cells[0].rows, 35);
+        assert!(
+            first
+                .roll_up(&[3])
+                .unwrap_err()
+                .to_string()
+                .contains("roll-up to axes [3]")
+        );
+        assert!(pair.roll_up(&[1, 1]).is_err());
+        // An empty grouping rolls up to no cell, as an empty table's
+        // grand total holds none.
+        let empty = CubeGrouping {
+            axes: vec![1],
+            cells: Vec::new(),
+        };
+        assert!(empty.roll_up(&[]).unwrap().cells.is_empty());
+        assert_eq!(CubeCell::empty(vec![None], &slots).measures.len(), 3);
     }
 
     #[test]

@@ -540,7 +540,7 @@ struct TaskScanMetrics {
     lane_read_ns_max: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct QueryContext {
     engine_version: String,
     environment: String,
@@ -561,9 +561,9 @@ struct QueryContext {
     /// The statement's charge against the group's quota, made when it
     /// reached the row path; absent when no quota applied or it was
     /// answered from the cache or the statistics.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     quota_charge: Option<crate::resource_groups::QuotaCharge>,
-    #[serde(skip_serializing)]
+    #[serde(default, skip_serializing)]
     settings: QuerySettings,
 }
 
@@ -637,7 +637,7 @@ const QUERY_HISTORY_LIMIT: usize = 10_000;
 #[cfg(not(test))]
 const QUERY_HISTORY_LIMIT: usize = 100;
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum QueryState {
     /// Waiting for memory admission on the coordinator.
@@ -655,6 +655,368 @@ pub(crate) struct ColumnInfo {
     pub(crate) data_type: String,
 }
 
+/// The lines the query journal keeps, and so the records a restart
+/// restores: the same bound the in-memory history has.
+const QUERY_JOURNAL_LINES: usize = QUERY_HISTORY_LIMIT;
+/// The lines appended before the journal is rewritten from the ones it
+/// kept. Twice the bound, so a rewrite happens once per that many
+/// statements rather than on every one.
+const QUERY_JOURNAL_REWRITE_AFTER: usize = 2 * QUERY_JOURNAL_LINES;
+/// The bytes of a statement one journal line keeps. A line is then this
+/// plus the record's own fields at most, so the file is bounded by its
+/// line count and not by what somebody submitted.
+const QUERY_JOURNAL_SQL_BYTES: usize = 8 * 1024;
+
+/// One query as the journal keeps it: what the operations console's
+/// history shows and what a reader can ask for again, without the plan,
+/// the scan telemetry, the task telemetry or the preview rows — those
+/// describe a statement this process ran, and belong to the process that
+/// ran it.
+#[derive(Clone, Serialize, Deserialize)]
+struct JournaledQuery {
+    id: String,
+    sql: String,
+    /// Whether the statement was longer than [`QUERY_JOURNAL_SQL_BYTES`]
+    /// and the journal kept its first bytes.
+    #[serde(default)]
+    sql_truncated: bool,
+    state: QueryState,
+    #[serde(default)]
+    row_count: Option<u64>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    error_code: Option<String>,
+    elapsed_ms: u64,
+    submitted_at_ms: u64,
+    completed_at_ms: u64,
+    #[serde(default)]
+    admission_wait_ms: u64,
+    /// Where the statement ran, as its record said: `distributed`,
+    /// `coordinator`, `cache`, `context` or `pending`.
+    execution_mode: String,
+    #[serde(default)]
+    execution_detail: Option<String>,
+    context: QueryContext,
+}
+
+impl JournaledQuery {
+    /// A terminal record as the journal keeps it; `None` while the
+    /// statement is still queued or running — the journal is a history,
+    /// and a record that is still moving would be journaled again.
+    fn from_record(record: &QueryRecord) -> Option<Self> {
+        if matches!(record.state, QueryState::Queued | QueryState::Running) {
+            return None;
+        }
+        let mut sql = record.sql.clone();
+        let mut sql_truncated = false;
+        if sql.len() > QUERY_JOURNAL_SQL_BYTES {
+            let mut keep = QUERY_JOURNAL_SQL_BYTES;
+            while keep > 0 && !sql.is_char_boundary(keep) {
+                keep -= 1;
+            }
+            sql.truncate(keep);
+            sql_truncated = true;
+        }
+        Some(Self {
+            id: record.id.clone(),
+            sql,
+            sql_truncated,
+            state: record.state,
+            row_count: record.row_count,
+            error: record.error.clone(),
+            error_code: record.error_code.clone(),
+            elapsed_ms: record.elapsed_ms,
+            submitted_at_ms: record.submitted_at_ms,
+            completed_at_ms: record.completed_at_ms,
+            admission_wait_ms: record.admission_wait_ms,
+            execution_mode: record.execution.mode.to_owned(),
+            execution_detail: record.execution.detail.clone(),
+            context: record.context.clone(),
+        })
+    }
+
+    /// The record a restart restores. It says in its own placement detail
+    /// that it came from the journal and what the journal did not keep,
+    /// so a reader never reads an absent plan as a statement that had
+    /// none.
+    fn into_record(self) -> QueryRecord {
+        let mode = match self.execution_mode.as_str() {
+            "distributed" => "distributed",
+            "cache" => "cache",
+            "context" => "context",
+            "pending" => "pending",
+            _ => "coordinator",
+        };
+        let mut note = String::from(
+            "restored from the query journal after a coordinator restart; its plan and task telemetry were not kept",
+        );
+        if self.sql_truncated {
+            note.push_str(&format!(
+                "; the journal kept the first {QUERY_JOURNAL_SQL_BYTES} bytes of the statement"
+            ));
+        }
+        let detail = Some(match self.execution_detail {
+            Some(detail) => format!("{detail}; {note}"),
+            None => note,
+        });
+        QueryRecord {
+            rows_are_preview: true,
+            scan_metrics_complete: false,
+            execution: ExecutionPlacement {
+                mode,
+                detail,
+                source_version: None,
+                current_source_version: None,
+                approximate: None,
+            },
+            recovery: None,
+            settings: QuerySettings::default(),
+            cached_from: None,
+            cached_elapsed_ms: None,
+            admission_wait_ms: self.admission_wait_ms,
+            next_uri: None,
+            id: self.id,
+            sql: self.sql,
+            state: self.state,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            row_count: self.row_count,
+            error: self.error,
+            error_code: self.error_code,
+            elapsed_ms: self.elapsed_ms,
+            submitted_at_ms: self.submitted_at_ms,
+            completed_at_ms: self.completed_at_ms,
+            timings: QueryTimings {
+                analysis_us: None,
+                planning_us: None,
+                execution_us: None,
+                result_serialization_us: None,
+            },
+            plan: QueryPlan {
+                logical: None,
+                optimized: None,
+                physical: None,
+            },
+            scans: Vec::new(),
+            stages: Vec::new(),
+            context: self.context,
+        }
+    }
+}
+
+/// The coordinator's durable query log.
+///
+/// [`QUERY_STORE`] is memory, so `GET /v1/query` answered nothing after a
+/// restart: the console's "No queries yet" was a lost history rather than
+/// an empty one, and a benchmark campaign restarts the coordinator a
+/// dozen times a day. Every record that reaches a terminal state is
+/// appended here as one JSON line, the newest [`QUERY_JOURNAL_LINES`] are
+/// read back into the store after a restart, and the file is rewritten
+/// from the lines it kept once [`QUERY_JOURNAL_REWRITE_AFTER`] have been
+/// appended — so the file is bounded by the same limit the in-memory
+/// history is, and a restart pays one read of a few hundred lines.
+///
+/// A line is written and flushed, never fsynced: a restarted or killed
+/// process keeps every line it wrote, a lost node may lose its last. The
+/// platform's own `query_history` in KaveonDB is unaffected and remains
+/// durable in its own right; this is the Engine's log of the statements
+/// the Engine ran.
+mod query_journal {
+    use super::{JournaledQuery, QUERY_JOURNAL_LINES, QUERY_JOURNAL_REWRITE_AFTER};
+    use std::collections::VecDeque;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// One open journal file and the lines it kept.
+    pub(super) struct Journal {
+        path: PathBuf,
+        file: std::fs::File,
+        /// The newest lines, so a rewrite needs no read.
+        recent: VecDeque<String>,
+        appended: usize,
+    }
+
+    impl Journal {
+        /// Open the journal at `path`, giving back the journal and the
+        /// records the file holds, oldest first: the newest
+        /// [`QUERY_JOURNAL_LINES`] lines that parse, one per query id. A
+        /// line that does not parse is left out rather than failing the
+        /// open — a half-written last line is what a lost node leaves.
+        /// The file is written again from what was kept, so one grown
+        /// across restarts comes back to the bound. `None` for a journal
+        /// the directory would not take: the Engine keeps no history
+        /// rather than refusing to start.
+        pub(super) fn open(path: &Path) -> (Option<Self>, Vec<JournaledQuery>) {
+            let mut entries: Vec<JournaledQuery> = Vec::new();
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let mut by_id: Vec<JournaledQuery> = Vec::new();
+                for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                    let Ok(entry) = serde_json::from_str::<JournaledQuery>(line) else {
+                        continue;
+                    };
+                    // A later line for the same query is the later state
+                    // of it: a cancellation after a failure, say.
+                    by_id.retain(|held| held.id != entry.id);
+                    by_id.push(entry);
+                }
+                let first = by_id.len().saturating_sub(QUERY_JOURNAL_LINES);
+                entries = by_id.split_off(first);
+            }
+            let recent: VecDeque<String> = entries
+                .iter()
+                .filter_map(|entry| serde_json::to_string(entry).ok())
+                .collect();
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::write(path, lines_of(&recent).as_bytes()).is_err() {
+                return (None, entries);
+            }
+            let journal = std::fs::OpenOptions::new()
+                .append(true)
+                .open(path)
+                .ok()
+                .map(|file| Self {
+                    path: path.to_path_buf(),
+                    file,
+                    recent,
+                    appended: 0,
+                });
+            (journal, entries)
+        }
+
+        /// Append one terminal record: one line, written and flushed.
+        /// The file is written again from the lines kept once it has
+        /// grown past its bound. A write that fails is not retried and
+        /// does not fail the statement — the journal is a history, not
+        /// the answer.
+        pub(super) fn append(&mut self, entry: &JournaledQuery) {
+            let Ok(line) = serde_json::to_string(entry) else {
+                return;
+            };
+            if self.file.write_all(format!("{line}\n").as_bytes()).is_err() {
+                return;
+            }
+            self.recent.push_back(line);
+            while self.recent.len() > QUERY_JOURNAL_LINES {
+                self.recent.pop_front();
+            }
+            self.appended += 1;
+            if self.appended >= QUERY_JOURNAL_REWRITE_AFTER {
+                self.rewrite();
+            }
+        }
+
+        /// The file written again from the lines kept, through a
+        /// temporary file and a rename, so a reader never sees a part of
+        /// it.
+        fn rewrite(&mut self) {
+            let staged = self.path.with_extension("jsonl.rewriting");
+            if std::fs::write(&staged, lines_of(&self.recent).as_bytes()).is_err()
+                || std::fs::rename(&staged, &self.path).is_err()
+            {
+                let _ = std::fs::remove_file(&staged);
+                return;
+            }
+            if let Ok(file) = std::fs::OpenOptions::new().append(true).open(&self.path) {
+                self.file = file;
+                self.appended = 0;
+            }
+        }
+
+        /// The lines the file holds, for the test that bounds it.
+        #[cfg(test)]
+        pub(super) fn file_lines(&self) -> usize {
+            std::fs::read_to_string(&self.path)
+                .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count())
+                .unwrap_or(0)
+        }
+    }
+
+    fn lines_of(lines: &VecDeque<String>) -> String {
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        text
+    }
+
+    static JOURNAL: std::sync::LazyLock<Mutex<Option<Journal>>> =
+        std::sync::LazyLock::new(|| Mutex::new(None));
+
+    fn held() -> std::sync::MutexGuard<'static, Option<Journal>> {
+        JOURNAL.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// Whether this process has a journal open, so a worker and a
+    /// coordinator without one pay nothing for a terminal record.
+    pub(super) fn is_open() -> bool {
+        held().is_some()
+    }
+
+    /// Open the journal at `path` as this process's own, and give back
+    /// the records it holds.
+    pub(super) fn install(path: &Path) -> Vec<JournaledQuery> {
+        let (journal, entries) = Journal::open(path);
+        if journal.is_some() {
+            *held() = journal;
+        }
+        entries
+    }
+
+    /// Append one terminal record to this process's journal.
+    pub(super) fn append(entry: &JournaledQuery) {
+        if let Some(journal) = held().as_mut() {
+            journal.append(entry);
+        }
+    }
+}
+
+/// Read the journal at `path` and put the history it kept back in the
+/// store, under the records this process has already made: a statement
+/// submitted while the journal is being read keeps its own record.
+async fn restore_query_history(path: std::path::PathBuf) {
+    let restored = tokio::task::spawn_blocking(move || query_journal::install(&path)).await;
+    let Ok(restored) = restored else {
+        return;
+    };
+    if restored.is_empty() {
+        return;
+    }
+    let mut store = QUERY_STORE.write().await;
+    for entry in restored {
+        store
+            .queries
+            .entry(entry.id.clone())
+            .or_insert_with(|| entry.into_record());
+    }
+}
+
+/// Append the record of `query_id` to the journal, when it has reached a
+/// terminal state, so the history outlives the process. Nothing at all
+/// when no journal is open — a worker, or a coordinator whose journal
+/// could not be opened.
+async fn journal_query(query_id: &str) {
+    if !query_journal::is_open() {
+        return;
+    }
+    let entry = QUERY_STORE
+        .read()
+        .await
+        .queries
+        .get(query_id)
+        .and_then(JournaledQuery::from_record);
+    if let Some(entry) = entry {
+        query_journal::append(&entry);
+    }
+}
+
 static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLock::new(|| {
     RwLock::new(QueryStore {
         queries: HashMap::new(),
@@ -662,6 +1024,16 @@ static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLoc
 });
 
 pub fn build_router(state: Arc<AppState>) -> Router {
+    // The coordinator's query history is read back from its journal in
+    // the background: the Engine answers from its first moment and the
+    // history it kept appears as soon as the file has been read, so a
+    // restart is never slower for keeping one. Not under test, where the
+    // state directory defaults to the crate's own.
+    #[cfg(not(test))]
+    if state.config.coordinator {
+        let path = state.config.state_dir.join("query-history.jsonl");
+        tokio::spawn(restore_query_history(path));
+    }
     Router::new()
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement_wire))
@@ -7147,6 +7519,7 @@ async fn finish_inline_statement(
         record.elapsed_ms = elapsed;
         record.completed_at_ms = unix_time_ms();
     }
+    journal_query(query_id).await;
     Json(StatementResponse {
         next_uri: None,
         id: query_id.into(),
@@ -8443,12 +8816,209 @@ where
         .collect()
 }
 
-/// The cube built on the workers: the grand total and every single axis
-/// first (a few statements at a time), then every pair of axes within
-/// their caps. An axis whose statement reaches `cap + 1` rows is excluded
-/// with the count observed, as the coordinator's build excludes it, and
-/// no pair over it is read. The cube keeps no per-file partials — a scan
-/// has no file column — so a refresh under a changed source rebuilds it.
+/// How long a cube grouping read waits before each further attempt after
+/// a transient failure of the object store behind the table, and so how
+/// many further attempts it makes. A build is one scan per grouping over
+/// the whole table, so one throttled response on one grouping threw away
+/// every scan the build had already paid for: of three builds over a
+/// 33 GB ADLS table, two ended with every worker answering
+/// `error decoding response body` and nothing was kept.
+const CUBE_READ_RETRY_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(8),
+    Duration::from_secs(32),
+];
+
+/// Whether a failed grouping read is worth running again: a transient
+/// condition of the object store behind the table — a throttled,
+/// truncated or unanswered response, a reset connection, a read that
+/// timed out — and never a refusal, which the same read would meet
+/// again. Only a failed execution is considered, so a syntax error, a
+/// forbidden statement, an admission refusal, a cell limit and a
+/// cancellation are all final.
+fn transient_cube_read_failure(error: &SubStatementError) -> bool {
+    let SubStatementError::Failed { code, message, .. } = error else {
+        return false;
+    };
+    if !matches!(code.as_str(), "EXECUTION_ERROR" | "ANALYZE_FAILED") {
+        return false;
+    }
+    let message = message.to_ascii_lowercase();
+    [
+        "error decoding response body",
+        "error sending request",
+        "connection reset",
+        "connection closed before message completed",
+        "broken pipe",
+        "unexpected end of file",
+        "timed out",
+        "operationtimedout",
+        "serverbusy",
+        "too many requests",
+        "service unavailable",
+        "internal server error",
+        "slowdown",
+        "request is throttled",
+    ]
+    .iter()
+    .any(|phrase| message.contains(phrase))
+}
+
+/// One wave of cube grouping reads: a statement per grouping, run `width`
+/// at a time, each attempted again through [`CUBE_READ_RETRY_BACKOFF`]
+/// while its failure is a transient one of the object store. The answers
+/// come back in wave order, each beside the read that produced it.
+#[allow(clippy::too_many_arguments)]
+async fn read_cube_groupings(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    parent_id: &str,
+    context: &QueryContext,
+    qualified: &str,
+    statistics: &kaveon_core::TableStatistics,
+    shape: &kaveon_core::TableShape,
+    cancellation: &CancellationToken,
+    width: usize,
+    wave: &[Vec<usize>],
+) -> Result<Vec<(CubeGroupingRead, Vec<Vec<serde_json::Value>>)>, SubStatementError> {
+    if wave.is_empty() {
+        return Ok(Vec::new());
+    }
+    let axes = shape.axes();
+    let reads: Vec<CubeGroupingRead> = wave
+        .iter()
+        .map(|grouping| cube_grouping_read(shape, &statistics.columns, grouping, qualified))
+        .collect();
+    // Every attempt's child id exists before the wave runs, so the first
+    // failure cancels the siblings' further attempts as well as the
+    // statements already in flight.
+    let attempts: Vec<Vec<String>> = reads
+        .iter()
+        .map(|_| {
+            (0..=CUBE_READ_RETRY_BACKOFF.len())
+                .map(|_| Uuid::new_v4().to_string())
+                .collect()
+        })
+        .collect();
+    let child_ids: Vec<String> = attempts.iter().flatten().cloned().collect();
+    let jobs = reads
+        .iter()
+        .zip(&attempts)
+        .map(|(read, ids)| {
+            let label = format!(
+                "cube grouping over {}",
+                if read.axes.is_empty() {
+                    "the grand total".to_owned()
+                } else {
+                    read.axes
+                        .iter()
+                        .map(|axis| axes[*axis].column.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            );
+            async move {
+                for (attempt, child_id) in ids.iter().enumerate() {
+                    let error = match run_sub_statement(
+                        state,
+                        identity,
+                        parent_id,
+                        context,
+                        read.sql.clone(),
+                        child_id,
+                        cancellation,
+                        &label,
+                        true,
+                    )
+                    .await
+                    {
+                        Ok(rows) => return Ok(rows),
+                        Err(error) => error,
+                    };
+                    if attempt + 1 == ids.len() || !transient_cube_read_failure(&error) {
+                        return Err(error);
+                    }
+                    // The wait is interruptible: a cancelled statement
+                    // does not hold the build open for the backoff.
+                    tokio::select! {
+                        () = tokio::time::sleep(CUBE_READ_RETRY_BACKOFF[attempt]) => {}
+                        () = cancellation.cancelled() => {
+                            return Err(SubStatementError::Canceled);
+                        }
+                    }
+                }
+                Err(SubStatementError::Failed {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    code: "ANALYZE_FAILED".into(),
+                    message: format!("{label} made no attempt"),
+                })
+            }
+        })
+        .collect();
+    let answers = run_sub_statements(state, identity, &child_ids, width, jobs).await?;
+    Ok(reads.into_iter().zip(answers).collect())
+}
+
+/// The pair groupings a build reads, from what its single axes observed.
+/// The pairs the declaration itself plans come first and are read as they
+/// always were; the ones only the observed counts admit follow, cheapest
+/// first, each charged the cells it can hold against the cube's limit, so
+/// a build never does the work of a cuboid the limit would then refuse.
+/// Deterministic: the same table observed the same way plans the same
+/// wave.
+fn cube_pair_wave(
+    shape: &kaveon_core::TableShape,
+    planned: &[Vec<usize>],
+    observed: &[Option<u64>],
+    cells_held: u64,
+    max_cells: u64,
+) -> Vec<Vec<usize>> {
+    let observed_pairs = shape.observed_pairs(observed);
+    let declared = |pair: &[usize]| planned.iter().any(|grouping| grouping == pair);
+    let mut cells = cells_held;
+    let mut wave: Vec<Vec<usize>> = Vec::new();
+    for (pair, pair_cells) in &observed_pairs {
+        if declared(pair) {
+            cells = cells.saturating_add(*pair_cells);
+            wave.push(pair.clone());
+        }
+    }
+    for (pair, pair_cells) in &observed_pairs {
+        if declared(pair) {
+            continue;
+        }
+        match cells.checked_add(*pair_cells) {
+            Some(total) if total <= max_cells => {
+                cells = total;
+                wave.push(pair.clone());
+            }
+            // Cheapest first, so once one does not fit none of the rest
+            // does either.
+            _ => break,
+        }
+    }
+    wave
+}
+
+/// The cube built on the workers: every single axis first (a few
+/// statements at a time), then the grand total rolled up from one of them
+/// with no further read, then the pairs of axes — the ones the
+/// declaration plans from its caps, and the ones the counts just observed
+/// show to be small enough, cheapest first and only while the cube's cell
+/// limit has room for what each can hold.
+///
+/// Planning pairs from the counts rather than from the caps is what makes
+/// a two-dimension grouping answerable at all: a cap is an upper bound a
+/// declaration rarely sharpens, and at the default cap of 10,000 no two
+/// dimensions pair, so a three-value column beside a four-value column
+/// was planned at 100,000,000 cells, its twelve-cell cuboid was never
+/// built, and every such statement scanned the table.
+///
+/// An axis whose statement reaches `cap + 1` rows is excluded with the
+/// count observed, as the coordinator's build excludes it; it then has no
+/// observed count, so no pair over it is read. The cube keeps no per-file
+/// partials — a scan has no file column — so a refresh under a changed
+/// source rebuilds it, keeping the groupings this build chose.
 #[allow(clippy::too_many_arguments)]
 async fn build_cube_on_workers(
     state: &Arc<AppState>,
@@ -8480,83 +9050,94 @@ async fn build_cube_on_workers(
             .collect(),
         per_file_complete: false,
     };
-    let groupings = shape.groupings();
-    let (singles, pairs): (Vec<&Vec<usize>>, Vec<&Vec<usize>>) =
-        groupings.iter().partition(|grouping| grouping.len() < 2);
-    let read_wave =
-        |wave: Vec<&Vec<usize>>, excluded: Vec<usize>| -> (Vec<String>, Vec<CubeGroupingRead>) {
-            let reads: Vec<CubeGroupingRead> = wave
-                .into_iter()
-                .filter(|grouping| !grouping.iter().any(|axis| excluded.contains(axis)))
-                .map(|grouping| cube_grouping_read(shape, &statistics.columns, grouping, qualified))
-                .collect();
-            let ids = reads.iter().map(|_| Uuid::new_v4().to_string()).collect();
-            (ids, reads)
-        };
-    let mut excluded_axes: Vec<usize> = Vec::new();
-    for wave in [singles, pairs] {
-        let (child_ids, reads) = read_wave(wave, excluded_axes.clone());
-        let jobs = reads
+    let planned = shape.groupings();
+    let failed = |error: kaveon_core::KaveonError| SubStatementError::Failed {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        code: "ANALYZE_FAILED".into(),
+        message: error.to_string(),
+    };
+    let read = |wave: Vec<Vec<usize>>| async move {
+        read_cube_groupings(
+            state,
+            identity,
+            parent_id,
+            context,
+            qualified,
+            statistics,
+            shape,
+            cancellation,
+            width,
+            &wave,
+        )
+        .await
+    };
+    // The single axes.
+    let singles: Vec<Vec<usize>> = planned
+        .iter()
+        .filter(|grouping| grouping.len() == 1)
+        .cloned()
+        .collect();
+    let mut observed: Vec<Option<u64>> = vec![None; axes.len()];
+    for (grouping_read, rows) in read(singles).await? {
+        if let (Some(limit), [axis]) = (grouping_read.limit, grouping_read.axes.as_slice())
+            && rows.len() as u64 >= limit
+        {
+            cube.excluded.push(ExcludedAxis {
+                column: axes[*axis].column.clone(),
+                distinct: rows.len() as u64,
+                cap: axes[*axis].cap,
+            });
+            continue;
+        }
+        let grouping: CubeGrouping =
+            cube_grouping_from_rows(shape, &statistics.columns, &grouping_read.axes, &rows)
+                .map_err(failed)?;
+        if let [axis] = grouping_read.axes.as_slice() {
+            observed[*axis] = Some(grouping.cells.len() as u64);
+        }
+        cube.groupings.push(grouping);
+    }
+    // The grand total: the roll-up of a single axis, which is the
+    // grouping a scan would have produced and costs no scan. Read only
+    // when no single axis was — a shape of measures alone, or one whose
+    // every axis was excluded.
+    if planned.iter().any(|grouping| grouping.is_empty()) {
+        let rolled = cube
+            .groupings
             .iter()
-            .zip(&child_ids)
-            .map(|(read, child_id)| {
-                let label = format!(
-                    "cube grouping over {}",
-                    if read.axes.is_empty() {
-                        "the grand total".to_owned()
-                    } else {
-                        read.axes
-                            .iter()
-                            .map(|axis| axes[*axis].column.clone())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                );
-                async move {
-                    let rows = run_sub_statement(
-                        state,
-                        identity,
-                        parent_id,
-                        context,
-                        read.sql.clone(),
-                        child_id,
-                        cancellation,
-                        &label,
-                        true,
-                    )
-                    .await?;
-                    Ok::<_, SubStatementError>(rows)
+            .find(|grouping| grouping.axes.len() == 1)
+            .map(|single| single.roll_up(&[]))
+            .transpose()
+            .map_err(failed)?;
+        match rolled {
+            Some(total) => cube.groupings.push(total),
+            None => {
+                for (grouping_read, rows) in read(vec![Vec::new()]).await? {
+                    cube.groupings.push(
+                        cube_grouping_from_rows(
+                            shape,
+                            &statistics.columns,
+                            &grouping_read.axes,
+                            &rows,
+                        )
+                        .map_err(failed)?,
+                    );
                 }
-            })
-            .collect();
-        let answers = run_sub_statements(state, identity, &child_ids, width, jobs).await?;
-        for (read, rows) in reads.iter().zip(answers) {
-            if let (Some(limit), [axis]) = (read.limit, read.axes.as_slice())
-                && rows.len() as u64 >= limit
-            {
-                excluded_axes.push(*axis);
-                cube.excluded.push(ExcludedAxis {
-                    column: axes[*axis].column.clone(),
-                    distinct: rows.len() as u64,
-                    cap: axes[*axis].cap,
-                });
-                continue;
             }
-            let grouping: CubeGrouping =
-                cube_grouping_from_rows(shape, &statistics.columns, &read.axes, &rows).map_err(
-                    |error| SubStatementError::Failed {
-                        status: StatusCode::INTERNAL_SERVER_ERROR,
-                        code: "ANALYZE_FAILED".into(),
-                        message: error.to_string(),
-                    },
-                )?;
-            cube.groupings.push(grouping);
         }
     }
-    // Keep distributed cube artifacts in the same deterministic grouping
-    // order as the local builder. Worker waves may finish singles, totals,
-    // and pairs in a different order, but snapshots and downstream diffs
-    // should not depend on execution order.
+    // The pairs.
+    let pairs = cube_pair_wave(shape, &planned, &observed, cube.cell_count(), max_cells);
+    for (grouping_read, rows) in read(pairs).await? {
+        cube.groupings.push(
+            cube_grouping_from_rows(shape, &statistics.columns, &grouping_read.axes, &rows)
+                .map_err(failed)?,
+        );
+    }
+    // Worker waves arrive in execution order (singles, rolled-up total,
+    // then pairs), while a local cube is materialized in shape order. Keep
+    // the persisted artifact deterministic across both paths; lookup is by
+    // axes, but stable ordering matters for snapshots and downstream diffs.
     let declared_order = shape.groupings();
     cube.groupings.sort_by_key(|grouping| {
         declared_order
@@ -9731,7 +10312,10 @@ async fn commit_query_record(record: QueryRecord) -> bool {
     {
         return false;
     }
+    let id = record.id.clone();
     store.queries.insert(record.id.clone(), record);
+    drop(store);
+    journal_query(&id).await;
     true
 }
 
@@ -9927,6 +10511,9 @@ async fn cancel_query(
         let _ = state.lifecycle.cancellations.cancel(&query_id);
     }
     drop(store);
+    if was_running {
+        journal_query(&query_id).await;
+    }
     state.results.remove(&query_id);
 
     if let Some(store) = &state.disk_exchange_store {
@@ -13473,6 +14060,7 @@ async fn finish_failed_query(
         record.scans.clear();
         record.stages.clear();
     }
+    journal_query(query_id).await;
 }
 
 /// A coordinator state over an empty in-memory catalog store, for the
@@ -14138,6 +14726,335 @@ mod tests {
         assert!(parse_explain_statement("EXPLAIN (FORMAT GRAPHVIZ) SELECT 1")
             .unwrap_err()
             .contains("unsupported EXPLAIN option"));
+    }
+
+    /// One finished statement as the journal keeps it.
+    fn journaled_query(id: &str, sql: &str) -> super::JournaledQuery {
+        super::JournaledQuery {
+            id: id.to_owned(),
+            sql: sql.to_owned(),
+            sql_truncated: false,
+            state: super::QueryState::Finished,
+            row_count: Some(1),
+            error: None,
+            error_code: None,
+            elapsed_ms: 7,
+            submitted_at_ms: 1_000,
+            completed_at_ms: 2_000,
+            admission_wait_ms: 0,
+            execution_mode: "distributed".to_owned(),
+            execution_detail: Some("fragments".to_owned()),
+            context: super::QueryContext {
+                engine_version: "test".into(),
+                environment: "test".into(),
+                principal: Some("analyst@example.com".into()),
+                user: None,
+                source: None,
+                client: None,
+                catalog: "kaveon".into(),
+                schema: "default".into(),
+                time_zone: None,
+                client_address: None,
+                client_tags: vec![],
+                result_delivery: None,
+                catalog_snapshot_id: "sha256:test".into(),
+                resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+                quota_charge: None,
+                settings: crate::settings::QuerySettings::default(),
+            },
+        }
+    }
+
+    /// A directory of this test's own under the temporary directory.
+    fn journal_directory(label: &str) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "kaveon-query-journal-{label}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    /// The history a restart puts back: the records the journal kept are
+    /// in the store, and a statement this process has already recorded
+    /// keeps its own record.
+    #[tokio::test]
+    async fn a_restart_puts_the_query_history_back_in_the_store() {
+        use super::query_journal::Journal;
+        let directory = journal_directory("restore");
+        let path = directory.join("query-history.jsonl");
+        let id = format!("journaled-{}", uuid::Uuid::new_v4());
+        let live = format!("live-{}", uuid::Uuid::new_v4());
+        let (journal, _) = Journal::open(&path);
+        let mut journal = journal.expect("the journal opens");
+        journal.append(&journaled_query(&id, "SELECT 1"));
+        let mut superseded = journaled_query(&live, "SELECT 2");
+        superseded.sql = "SELECT 2 -- journaled".to_owned();
+        journal.append(&superseded);
+        drop(journal);
+
+        // A statement this process ran, already on record.
+        let mut running = journaled_query(&live, "SELECT 2").into_record();
+        running.state = super::QueryState::Running;
+        super::QUERY_STORE
+            .write()
+            .await
+            .queries
+            .insert(live.clone(), running);
+
+        super::restore_query_history(path).await;
+        let store = super::QUERY_STORE.read().await;
+        let restored = store.queries.get(&id).expect("the history is back");
+        assert!(matches!(restored.state, super::QueryState::Finished));
+        assert_eq!(restored.sql, "SELECT 1");
+        assert!(
+            restored
+                .execution
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("restored from the query journal"))
+        );
+        assert_eq!(
+            store.queries[&live].sql, "SELECT 2",
+            "a record this process holds is not replaced by the journal's"
+        );
+    }
+
+    /// The query log survives a restart. `GET /v1/query` answered
+    /// nothing after one and the console read "No queries yet", which is
+    /// a lost history rendered as an empty one — and a benchmark
+    /// campaign restarts the coordinator a dozen times a day. The
+    /// journal is also bounded: it keeps the newest records and no more,
+    /// whatever has been appended to it.
+    #[test]
+    fn the_query_log_outlives_the_process_and_stays_bounded() {
+        use super::query_journal::Journal;
+        let directory = journal_directory("bounded");
+        let path = directory.join("query-history.jsonl");
+
+        let entry = |index: usize, sql: &str| {
+            let mut entry = journaled_query(&format!("q{index}"), sql);
+            entry.row_count = Some(index as u64);
+            entry.elapsed_ms = index as u64;
+            entry.submitted_at_ms = 1_000 + index as u64;
+            entry.completed_at_ms = 2_000 + index as u64;
+            entry
+        };
+
+        // Nothing on record is an empty history, and the journal opens.
+        let (journal, restored) = Journal::open(&path);
+        let mut journal = journal.expect("the journal opens");
+        assert!(restored.is_empty());
+
+        // Three statements finish. A later line for the same query is the
+        // later state of it.
+        for index in 0..3 {
+            journal.append(&entry(index, &format!("SELECT {index}")));
+        }
+        let mut canceled = entry(1, "SELECT 1");
+        canceled.state = super::QueryState::Canceled;
+        canceled.error = Some("query canceled by client".to_owned());
+        journal.append(&canceled);
+        drop(journal);
+
+        // The process restarts: the history is there, one record per
+        // query, in the order the statements were submitted.
+        let (journal, restored) = Journal::open(&path);
+        let mut journal = journal.expect("the journal reopens");
+        assert_eq!(
+            restored.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            ["q0", "q2", "q1"]
+        );
+        let record = restored
+            .iter()
+            .find(|e| e.id == "q1")
+            .cloned()
+            .unwrap()
+            .into_record();
+        assert!(matches!(record.state, super::QueryState::Canceled));
+        assert_eq!(record.sql, "SELECT 1");
+        assert_eq!(record.error.as_deref(), Some("query canceled by client"));
+        assert_eq!(record.execution.mode, "distributed");
+        // A restored record says what the journal did not keep, so an
+        // absent plan is never read as a statement that had none.
+        let detail = record.execution.detail.unwrap();
+        assert!(
+            detail.starts_with("fragments; restored from the query journal"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("plan and task telemetry were not kept"),
+            "{detail}"
+        );
+        assert!(record.plan.logical.is_none() && record.stages.is_empty());
+
+        // Appended past its bound, the journal keeps the newest records
+        // and the file comes back to the bound.
+        for index in 3..(super::QUERY_JOURNAL_LINES * 3) {
+            journal.append(&entry(index, "SELECT 1"));
+        }
+        assert!(
+            journal.file_lines() <= super::QUERY_JOURNAL_REWRITE_AFTER,
+            "{}",
+            journal.file_lines()
+        );
+        drop(journal);
+        let (_, restored) = Journal::open(&path);
+        assert_eq!(restored.len(), super::QUERY_JOURNAL_LINES);
+        assert_eq!(
+            restored.last().unwrap().id,
+            format!("q{}", super::QUERY_JOURNAL_LINES * 3 - 1)
+        );
+
+        // A half-written last line — what a lost node leaves — is left
+        // out rather than failing the open.
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str("{\"id\":\"half\",\"sql\":\"SELECT");
+        std::fs::write(&path, text).unwrap();
+        let (_, restored) = Journal::open(&path);
+        assert_eq!(restored.len(), super::QUERY_JOURNAL_LINES);
+        assert!(restored.iter().all(|entry| entry.id != "half"));
+
+        // A statement longer than the journal's bound is kept to it and
+        // says so on the record it restores.
+        let long = super::JournaledQuery::from_record(
+            &entry(0, &"x".repeat(super::QUERY_JOURNAL_SQL_BYTES * 2)).into_record(),
+        )
+        .unwrap();
+        assert!(long.sql_truncated);
+        assert_eq!(long.sql.len(), super::QUERY_JOURNAL_SQL_BYTES);
+        assert!(
+            long.into_record()
+                .execution
+                .detail
+                .unwrap()
+                .contains("kept the first 8192 bytes")
+        );
+        // A statement still running is no part of a history.
+        let mut running = entry(0, "SELECT 1").into_record();
+        running.state = super::QueryState::Running;
+        assert!(super::JournaledQuery::from_record(&running).is_none());
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// The pairs a cube build reads come from the counts its single axes
+    /// observed, not from the caps the declaration guessed: at the
+    /// default cap of 10,000 the declaration plans no pair at all, and
+    /// every two-dimension statement over such a table scanned it. The
+    /// pairs the declaration does plan are still read; the rest are read
+    /// cheapest first and only while the cell limit has room.
+    #[test]
+    fn a_cube_build_plans_its_pairs_from_the_counts_it_observed() {
+        let shape = kaveon_core::TableShape::parse(
+            &["region".into(), "platform".into(), "license".into()],
+            &["actions:sum".into()],
+            None,
+        )
+        .unwrap();
+        let planned = shape.groupings();
+        assert_eq!(
+            planned,
+            vec![vec![], vec![0], vec![1], vec![2]],
+            "three dimensions at the default cap plan no pair"
+        );
+        // Observed: 6 regions, 3 platforms, 4 licenses. Every pair fits,
+        // cheapest first — platform x license is twelve cells, which is
+        // what the two-minute scan was answering.
+        let observed = [Some(6), Some(3), Some(4)];
+        assert_eq!(
+            super::cube_pair_wave(&shape, &planned, &observed, 14, 1_000_000),
+            vec![vec![1, 2], vec![0, 1], vec![0, 2]]
+        );
+        // An axis excluded for its cap has no observed count, so no pair
+        // over it is read.
+        assert_eq!(
+            super::cube_pair_wave(&shape, &planned, &[Some(6), None, Some(4)], 11, 1_000_000),
+            vec![vec![0, 2]]
+        );
+        // The cell limit bounds the wave by what each pair can hold, and
+        // the cheapest-first order means the first pair that does not fit
+        // ends it: 14 held + 12 + 18 = 44, and 24 more would be 68.
+        assert_eq!(
+            super::cube_pair_wave(&shape, &planned, &observed, 14, 44),
+            vec![vec![1, 2], vec![0, 1]]
+        );
+        assert!(
+            super::cube_pair_wave(&shape, &planned, &observed, 14, 20).is_empty(),
+            "no pair is read when the limit has room for none"
+        );
+        // A pair the declaration plans is read whatever the limit says:
+        // it was always part of the cube the limit admitted.
+        let declared = kaveon_core::TableShape::parse(
+            &["region:10".into(), "platform:10".into()],
+            &["actions:sum".into()],
+            None,
+        )
+        .unwrap();
+        let declared_planned = declared.groupings();
+        assert!(declared_planned.contains(&vec![0, 1]));
+        assert_eq!(
+            super::cube_pair_wave(&declared, &declared_planned, &[Some(6), Some(3)], 9, 1),
+            vec![vec![0, 1]]
+        );
+    }
+
+    /// A grouping read is run again only for a transient condition of the
+    /// object store behind the table — a build is one scan per grouping,
+    /// and a throttled response on one of them used to throw away every
+    /// scan already paid for. Every refusal stays final.
+    #[test]
+    fn only_a_transient_storage_failure_runs_a_cube_grouping_read_again() {
+        let failed = |code: &str, message: &str| super::SubStatementError::Failed {
+            status: super::StatusCode::INTERNAL_SERVER_ERROR,
+            code: code.into(),
+            message: message.into(),
+        };
+        // The failure three ADLS builds died of.
+        assert!(super::transient_cube_read_failure(&failed(
+            "EXECUTION_ERROR",
+            "cube grouping over region failed: execution error: storage: External: Generic MicrosoftAzure error: error decoding response body"
+        )));
+        for message in [
+            "execution error: storage: External: ServerBusy",
+            "execution error: storage: 503 Service Unavailable",
+            "execution error: storage: OperationTimedOut",
+            "execution error: storage: error sending request",
+            "execution error: connection reset by peer",
+            "execution error: 429 Too Many Requests",
+        ] {
+            assert!(
+                super::transient_cube_read_failure(&failed("EXECUTION_ERROR", message)),
+                "{message}"
+            );
+        }
+        // Refusals, and a cancellation, are met again by the same read.
+        assert!(!super::transient_cube_read_failure(&failed(
+            "EXECUTION_ERROR",
+            "execution error: the cube holds 2000 cells, above the limit of 1000"
+        )));
+        assert!(!super::transient_cube_read_failure(&failed(
+            "SYNTAX_ERROR",
+            "unexpected token"
+        )));
+        assert!(!super::transient_cube_read_failure(&failed(
+            "FORBIDDEN",
+            "ANALYZE requires admin role"
+        )));
+        assert!(!super::transient_cube_read_failure(&failed(
+            "QUERY_CANCELED",
+            "query canceled by client; the connection was reset"
+        )));
+        assert!(!super::transient_cube_read_failure(
+            &super::SubStatementError::Canceled
+        ));
+        // The backoff is bounded and rising, so a throttled store is
+        // given room rather than hammered.
+        assert_eq!(super::CUBE_READ_RETRY_BACKOFF.len(), 3);
+        assert!(
+            super::CUBE_READ_RETRY_BACKOFF
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
     }
 
     /// The statements `ANALYZE` runs on the workers, and the values that
@@ -18268,11 +19185,12 @@ mod tests {
         let record = record(&parent, &admin()).await;
         assert_eq!(record["execution"]["mode"], "distributed");
         assert_eq!(record["execution"]["detail"], "analyze");
-        // One read of the columns, then (), name, day, name×day.
+        // One read of the columns, then name, day, and name×day. The grand
+        // total is rolled up from a single-axis result and needs no child.
         let children = sub_statement_records(&parent).await;
         assert_eq!(
             children.len(),
-            5,
+            4,
             "{:?}",
             children.iter().map(|child| &child.sql).collect::<Vec<_>>()
         );
