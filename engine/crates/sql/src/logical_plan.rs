@@ -210,6 +210,9 @@ pub enum LogicalPlan {
         right: Box<LogicalPlan>,
         join_type: JoinType,
         condition: Option<Expr>,
+        /// Column names from `JOIN ... USING`; used by binding to suppress
+        /// the duplicate right-hand output columns for wildcard projections.
+        using_columns: Option<Vec<String>>,
         distribution: JoinDistribution,
     },
     Filter {
@@ -949,6 +952,7 @@ fn attach_projection_scalars(plan: LogicalPlan, scalars: Vec<LogicalPlan>) -> Lo
             right: Box::new(right),
             join_type: JoinType::Cross,
             condition: None,
+            using_columns: None,
             distribution: JoinDistribution::Partitioned,
         })
 }
@@ -984,6 +988,7 @@ fn attach_having_scalars(plan: LogicalPlan, scalars: Vec<LogicalPlan>) -> Logica
                     right: Box::new(scalar),
                     join_type: JoinType::Cross,
                     condition: None,
+                    using_columns: None,
                     distribution: JoinDistribution::Partitioned,
                 };
             }
@@ -1062,6 +1067,7 @@ fn build_from_clause(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPla
             right: Box::new(right),
             join_type: JoinType::Cross,
             condition: None,
+            using_columns: None,
             distribution: JoinDistribution::Partitioned,
         };
     }
@@ -1290,6 +1296,12 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
             ast::JoinOperator::CrossJoin => (JoinType::Cross, None),
             other => return Err(sql_err(format!("unsupported join type: {other:?}"))),
         };
+        let using_columns = match constraint {
+            Some(ast::JoinConstraint::Using(columns)) => {
+                Some(columns.iter().map(|column| column.value.clone()).collect())
+            }
+            _ => None,
+        };
         let condition = match constraint {
             None | Some(ast::JoinConstraint::None) => None,
             Some(ast::JoinConstraint::On(expr)) => Some(ast_expr_to_expr(expr)?),
@@ -1339,6 +1351,7 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
                 right: Box::new(right),
                 join_type: JoinType::Cross,
                 condition: None,
+                using_columns: using_columns.clone(),
                 distribution: JoinDistribution::Partitioned,
             };
             left = LogicalPlan::Filter {
@@ -1351,6 +1364,7 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
                 right: Box::new(right),
                 join_type,
                 condition,
+                using_columns,
                 distribution: JoinDistribution::Partitioned,
             };
         }
@@ -1515,6 +1529,7 @@ fn extract_subquery_predicates(
                     right: Box::new(scalar),
                     join_type: JoinType::Cross,
                     condition: None,
+                    using_columns: None,
                     distribution: JoinDistribution::Partitioned,
                 };
             })?;
@@ -2219,7 +2234,7 @@ fn build_projection(
         }
     }
 
-    if is_star && columns.len() == 1 && !has_aggregates {
+    if is_star && columns.len() == 1 && !has_aggregates && !contains_using_join(&plan) {
         return Ok(plan);
     }
 
@@ -2227,6 +2242,33 @@ fn build_projection(
         input: Box::new(plan),
         columns,
     })
+}
+
+fn contains_using_join(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Join {
+            left,
+            right,
+            using_columns,
+            ..
+        } => using_columns.is_some() || contains_using_join(left) || contains_using_join(right),
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Window { input, .. }
+        | LogicalPlan::Aggregate { input, .. } => contains_using_join(input),
+        LogicalPlan::Union { inputs, .. } => inputs.iter().any(contains_using_join),
+        LogicalPlan::Intersect { left, right, .. } | LogicalPlan::Except { left, right, .. } => {
+            contains_using_join(left) || contains_using_join(right)
+        }
+        LogicalPlan::SemiJoin { left, right, .. } | LogicalPlan::AntiJoin { left, right, .. } => {
+            contains_using_join(left) || contains_using_join(right)
+        }
+        LogicalPlan::Scan { .. } | LogicalPlan::Unnest { .. } => false,
+    }
 }
 
 /// The sorted plan and, when a key had to be carried through the

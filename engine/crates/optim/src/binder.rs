@@ -238,6 +238,12 @@ impl Binder<'_> {
                 let scope = self.scope_of(&input.plan);
                 let mut columns = columns
                     .into_iter()
+                    .flat_map(|column| match column {
+                        Expr::Star => self
+                            .using_wildcard_columns(&input.plan)
+                            .unwrap_or_else(|| vec![Expr::Star]),
+                        other => vec![other],
+                    })
                     .map(|column| {
                         self.bind_projected(column, &scope, input.aggregate_input.as_ref())
                     })
@@ -451,6 +457,7 @@ impl Binder<'_> {
                 right,
                 join_type,
                 condition,
+                using_columns,
                 distribution,
             } => {
                 let left = self.bind(*left, outer)?;
@@ -496,6 +503,7 @@ impl Binder<'_> {
                             right: Box::new(right.plan),
                             join_type,
                             condition: None,
+                            using_columns,
                             distribution,
                         },
                         aggregate_input: None,
@@ -507,8 +515,14 @@ impl Binder<'_> {
                 } else {
                     join_type
                 };
-                let mut bound =
-                    self.bind_on(left.plan, right.plan, join_type, condition, distribution)?;
+                let mut bound = self.bind_on(
+                    left.plan,
+                    right.plan,
+                    join_type,
+                    condition,
+                    using_columns,
+                    distribution,
+                )?;
                 bound.correlations = correlations;
                 Ok(bound)
             }
@@ -555,6 +569,40 @@ impl Binder<'_> {
                 })
             }
         }
+    }
+
+    /// Expand an unqualified wildcard over a USING join. SQL exposes the
+    /// join key once, using the left relation's position and name; an ON
+    /// join keeps both columns because it has no `using_columns` metadata.
+    fn using_wildcard_columns(&self, plan: &LogicalPlan) -> Option<Vec<Expr>> {
+        let LogicalPlan::Join {
+            left,
+            right,
+            using_columns: Some(using_columns),
+            ..
+        } = plan
+        else {
+            return None;
+        };
+        let left = self
+            .scope_of(left)
+            .qualified_by(relation_qualifier(left));
+        let right = self
+            .scope_of(right)
+            .qualified_by(relation_qualifier(right));
+        let mut columns = left
+            .columns
+            .into_iter()
+            .map(|column| Expr::Column(column.physical))
+            .collect::<Vec<_>>();
+        columns.extend(
+            right
+                .columns
+                .into_iter()
+                .filter(|column| !using_columns.iter().any(|name| name == &column.name))
+                .map(|column| Expr::Column(column.physical)),
+        );
+        Some(columns)
     }
 
     fn fresh_name(&self) -> String {
@@ -673,6 +721,7 @@ impl Binder<'_> {
         right: LogicalPlan,
         join_type: JoinType,
         condition: Expr,
+        using_columns: Option<Vec<String>>,
         distribution: kaveon_sql::logical_plan::JoinDistribution,
     ) -> Result<Bound> {
         let left_scope = self.scope_of(&left).qualified_by(relation_qualifier(&left));
@@ -726,6 +775,7 @@ impl Binder<'_> {
             right: Box::new(right),
             join_type,
             condition: conjoin(keys),
+            using_columns,
             distribution,
         };
         let scope = self.scope_of(&plan);
@@ -929,6 +979,7 @@ impl Binder<'_> {
                 right,
                 join_type: JoinType::Cross | JoinType::Inner,
                 condition,
+                using_columns,
                 distribution,
             } => {
                 let left_scope = self.scope_of(&left).qualified_by(relation_qualifier(&left));
@@ -972,6 +1023,7 @@ impl Binder<'_> {
                         right: Box::new(right),
                         join_type,
                         condition,
+                        using_columns,
                         distribution,
                     },
                     above,
@@ -1973,6 +2025,46 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn using_wildcard_emits_the_join_key_once() {
+        let plan = bound("SELECT * FROM customer c JOIN customer d USING (c_custkey)");
+        let LogicalPlan::Project { columns, input } = plan else {
+            panic!("projection");
+        };
+        assert_eq!(
+            columns,
+            vec![
+                column("c.c_custkey"),
+                column("c.c_name"),
+                column("c.c_nationkey"),
+                column("c.c_mktsegment"),
+                column("d.c_name"),
+                column("d.c_nationkey"),
+                column("d.c_mktsegment"),
+            ]
+        );
+        let LogicalPlan::Join {
+            using_columns: Some(columns),
+            ..
+        } = *input
+        else {
+            panic!("USING metadata should survive binding");
+        };
+        assert_eq!(columns, vec!["c_custkey"]);
+    }
+
+    #[test]
+    fn on_wildcard_keeps_both_join_keys() {
+        let plan = bound("SELECT * FROM customer c JOIN customer d ON c.c_custkey = d.c_custkey");
+        let LogicalPlan::Join {
+            using_columns: None,
+            ..
+        } = plan
+        else {
+            panic!("ON join must not inherit USING wildcard metadata");
+        };
     }
 
     #[test]

@@ -64,11 +64,13 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             join_type,
             condition,
             distribution,
+            using_columns,
         } => LogicalPlan::Join {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
             join_type,
             condition,
+            using_columns,
             distribution,
         },
         LogicalPlan::SemiJoin {
@@ -233,6 +235,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             join_type,
             condition,
             distribution,
+            using_columns,
         } => {
             // Everything above is needed: every input keeps every column.
             let Some(mut columns) = required else {
@@ -241,6 +244,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                     right: Box::new(prune_columns(*right, None)),
                     join_type,
                     condition,
+                    using_columns,
                     distribution,
                 };
             };
@@ -277,6 +281,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 right: Box::new(prune_columns(*right, right_required)),
                 join_type,
                 condition,
+                using_columns,
                 distribution,
             }
         }
@@ -770,6 +775,7 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
             join_type,
             condition,
             distribution,
+            using_columns,
         } => {
             // A conjunct that references one side only moves below the join.
             // An outer join keeps the preserved side's rows whatever the
@@ -847,6 +853,7 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
                 right: Box::new(right),
                 join_type,
                 condition,
+                using_columns,
                 distribution,
             };
             match conjoin(remaining) {
@@ -1207,6 +1214,7 @@ mod tests {
             }),
             join_type: JoinType::Inner,
             condition: Some(compare(column("r.id"), BinaryOp::Eq, column("l.id"))),
+            using_columns: None,
             distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
         };
         let plan = LogicalPlan::Filter {
@@ -1246,6 +1254,7 @@ mod tests {
             }),
             join_type: JoinType::Inner,
             condition: Some(compare(column("l.id"), BinaryOp::Eq, column("r.id"))),
+            using_columns: None,
             distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
         };
         let plan = LogicalPlan::Filter {
@@ -1586,6 +1595,7 @@ mod tests {
                 BinaryOp::Eq,
                 column("u.user_id"),
             )),
+            using_columns: None,
             distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
         }
     }
@@ -1714,6 +1724,7 @@ mod tests {
                         BinaryOp::Eq,
                         column("u.user_id"),
                     )),
+                    using_columns: None,
                     distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
                 }),
                 predicate,
@@ -1808,6 +1819,7 @@ mod tests {
             right: Box::new(aliased("orders", "o")),
             join_type: JoinType::Inner,
             condition: Some(condition),
+            using_columns: None,
             distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
         };
         let outer = |condition: Expr| LogicalPlan::Join {
@@ -1819,6 +1831,7 @@ mod tests {
             right: Box::new(aliased("lineitem", "l")),
             join_type: JoinType::Inner,
             condition: Some(condition),
+            using_columns: None,
             distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
         };
         // The projection's columns reach the innermost scans, along with
@@ -1868,6 +1881,7 @@ mod tests {
                     BinaryOp::Eq,
                     column("o.o_custkey"),
                 )),
+                using_columns: None,
                 distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
             }),
             order_by: vec![(column("o.o_orderdate"), true, false)],

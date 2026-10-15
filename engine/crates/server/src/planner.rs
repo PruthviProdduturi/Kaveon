@@ -865,6 +865,7 @@ impl ExecutableFragmentBuilder<'_> {
                 join_type,
                 condition,
                 distribution,
+                ..
             } => self.build_join(left, right, *join_type, condition.as_ref(), *distribution),
             LogicalPlan::SemiJoin {
                 left,
@@ -1482,6 +1483,7 @@ impl StageGraphBuilder {
                 join_type,
                 condition,
                 distribution,
+                ..
             } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
@@ -2201,6 +2203,7 @@ fn plan_query_with_predicate(
             join_type,
             condition,
             distribution: _,
+            ..
         } => {
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);

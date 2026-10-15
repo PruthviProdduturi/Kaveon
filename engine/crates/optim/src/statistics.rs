@@ -96,6 +96,7 @@ pub fn optimize_with_statistics(
             join_type,
             condition,
             distribution: _,
+            ..
         } => {
             let left = Box::new(optimize_with_statistics(*left, statistics));
             let right = Box::new(optimize_with_statistics(*right, statistics));
@@ -144,6 +145,7 @@ pub fn optimize_with_statistics(
                         right: left,
                         join_type,
                         condition: Some(condition),
+                        using_columns: None,
                         distribution,
                     }),
                     columns,
@@ -156,6 +158,7 @@ pub fn optimize_with_statistics(
                     right,
                     join_type,
                     condition,
+                    using_columns: None,
                     distribution,
                 }
             }
@@ -966,6 +969,7 @@ mod tests {
                 op: BinaryOp::Eq,
                 right: Box::new(Expr::Column("r.id".into())),
             }),
+            using_columns: None,
             distribution: JoinDistribution::Partitioned,
         };
         let optimized = optimize_with_statistics(plan, &mut |table| {
