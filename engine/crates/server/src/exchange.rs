@@ -1341,6 +1341,12 @@ mod tests {
         let mut chunks = vec![first];
         loop {
             tokio::select! {
+                // Once the producer has signalled that `write` completed,
+                // the sender may close immediately after `finish`. Prefer
+                // that completion signal when both it and channel closure
+                // are ready; otherwise a valid run can report a flaky
+                // "producer closed" failure before observing the signal.
+                biased;
                 result = &mut write_done_rx => {
                     result.unwrap();
                     break;
