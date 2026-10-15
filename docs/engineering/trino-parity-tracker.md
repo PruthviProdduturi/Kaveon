@@ -1113,7 +1113,9 @@ page, and a second prepared statement binds a nullable typed array through
 `CARDINALITY` with the exact result preserved. Another principal cannot
 execute the first statement, and the owner can deallocate it. The same test
 also executes a statement supplied through `X-Trino-Prepared-Statement`, so
-header-based selection and result paging are covered. This proves the
+header-based selection and result paging are covered. It also sends repeated
+positional placeholders through the route and verifies both input slots plus
+output metadata through `ORDER BY` and `LIMIT` wrappers. This proves the
 supported lifecycle boundary without overstating it as full Trino wire
 protocol compatibility.
 
