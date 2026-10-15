@@ -280,6 +280,15 @@ _STOPWORDS = frozenset({
     "me", "give", "list", "average", "avg", "sum", "count", "number", "share",
 })
 
+# Generic quantifier words that must not sway metric matching. They appear in
+# metric names ("Total Queries") and questions ("total number of users") alike,
+# so counting them makes "users" tie with "total" and the wrong metric win.
+#
+# Declared here, above the router, because routing discounts exactly the same
+# words — see `_ROUTE_NOISE`.
+_GENERIC_METRIC_TOKENS = {"sum", "avg", "average", "mean", "count", "total",
+                         "number", "num", "amount", "overall", "all", "of", "the"}
+
 # Seed synonym lexicon — column/metric aliases that let "revenue"/"sales"/"top
 # line" hit the same element with no model. Admin-editable overrides land in the
 # manifest later; this is the cold-start floor.
@@ -1433,12 +1442,38 @@ def _near_values(dataset_id: str, term: str, limit: int = 5) -> List[Dict[str, A
     return [hit for _s, _f, _i, hit in scored[:limit]]
 
 
-_ROUTE_NOISE = frozenset({"sum", "avg", "count", "total", "max", "min", "the", "of", "by"})
+# Words that carry no routing signal: the quantifiers a question wraps every
+# measure in, the two extremes, and the grouping cue.
+#
+# This used to be a shorter hand-written list, and the words it was missing are
+# the ones that made it necessary. "average" and "number" were discounted by
+# the metric matcher (`_GENERIC_METRIC_TOKENS`) and worth x3 to the router, so
+# "average deaths by country" scored a metric hit against a telemetry dataset
+# whose measure is "Average latency", cleared the floor on that word alone, and
+# tied with the dataset that actually holds deaths. A word cannot be noise at
+# one stage and evidence at another; the sets are now the same set.
+_ROUTE_NOISE = frozenset(_GENERIC_METRIC_TOKENS) | frozenset({"max", "min", "by"})
 _ROUTE_FLOOR = 2  # reject routing on a single stray generic-word match
+
+_ROUTE_NOISE_STEMS = None
 
 
 def _stem_set(tokens: set) -> set:
     return {_stem(t) for t in tokens}
+
+
+def _without_noise(tokens: set) -> set:
+    """`tokens` minus the routing noise, by stem as well as by spelling.
+
+    Subtracting the words alone left a hole: the scorer matches stems next, so
+    a measure named "Totals" survived the subtraction as `totals` and still
+    met the question's "total" on the stem pass.
+    """
+    global _ROUTE_NOISE_STEMS
+    if _ROUTE_NOISE_STEMS is None:
+        _ROUTE_NOISE_STEMS = frozenset(_stem(t) for t in _ROUTE_NOISE)
+    return {t for t in tokens
+            if t not in _ROUTE_NOISE and _stem(t) not in _ROUTE_NOISE_STEMS}
 
 
 def route(question: str, limit: int = 3, actor: Optional[str] = None,
@@ -1472,9 +1507,9 @@ def route(question: str, limit: int = 3, actor: Optional[str] = None,
         for c in manifest.get("columns", []) or []:
             col_toks |= set(_tokenize(c.get("name"))) | set(c.get("synonyms") or [])
         name_toks = set(_tokenize(manifest.get("name")))
-        metric_toks -= _ROUTE_NOISE
-        col_toks -= _ROUTE_NOISE
-        name_toks -= _ROUTE_NOISE
+        metric_toks = _without_noise(metric_toks)
+        col_toks = _without_noise(col_toks)
+        name_toks = _without_noise(name_toks)
 
         # Match both exact and stemmed tokens for better recall
         m_hit = q_tokens & metric_toks | (q_stems & _stem_set(metric_toks))
@@ -1881,15 +1916,53 @@ _PRESENTATION_REQUEST = re.compile(
 )
 
 
+# The same request with the verb left off: "pie chart", "world map", "a bar
+# chart", "line graph please". `_PRESENTATION_REQUEST` needs a verb, and these
+# carry none of the connectives or pronouns `_FOLLOW_UP_RE` looks for either,
+# so they were re-routed as fresh questions -- and "chart" is a x3 metric hit
+# against the usage dataset's `charts_created`, so "pie chart please" scored
+# 3 there, took the dataset off the conversation, and answered
+# SUM(charts_created).
+#
+# A rendering noun with a rendering TYPE beside it, and nothing else in the
+# sentence but filler, is a request to redraw and nothing else. Both halves are
+# required: the type word is what keeps a bare "charts" or "dashboards" out of
+# this, since those are the usage dataset's own subject and must keep routing
+# on their own merits.
+_PRESENTATION_NOUNS = frozenset({
+    "chart", "charts", "graph", "graphs", "plot", "plots", "map", "maps",
+    "table", "tables", "visualisation", "visualization", "diagram", "diagrams",
+})
+_PRESENTATION_TYPES = frozenset({
+    "bar", "line", "pie", "donut", "doughnut", "scatter", "area", "column",
+    "stacked", "grouped", "horizontal", "vertical", "world", "map", "table",
+    "heatmap", "treemap", "bubble", "kpi",
+})
+_PRESENTATION_FILLER = frozenset({
+    "a", "an", "the", "it", "that", "this", "these", "those", "as", "in",
+    "into", "to", "of", "for", "and", "or", "me", "my", "we", "i", "you",
+    "can", "could", "would", "will", "please", "pls", "now", "instead",
+    "again", "rather", "just", "only", "show", "make", "give", "get", "draw",
+    "plot", "render", "display", "turn", "convert", "view", "format",
+    "version", "same", "but",
+})
+
+
 def _asks_only_to_redraw(question: str) -> bool:
     """Whether the question asks for a different presentation of the answer
     already given, rather than for different data.
 
-    Deliberately narrow: it needs a request to produce something AND the name
-    of a presentation. "how many charts were created" matches neither half, so
-    a genuine question about chart counts still routes on its own merits.
+    Deliberately narrow: either a request to produce something AND the name of
+    a presentation, or a sentence made of nothing but a presentation. "how many
+    charts were created" is neither, so a genuine question about chart counts
+    still routes on its own merits.
     """
-    return bool(_PRESENTATION_REQUEST.search(question or ""))
+    if _PRESENTATION_REQUEST.search(question or ""):
+        return True
+    tokens = set(_tokenize(question or ""))
+    if not (tokens & _PRESENTATION_NOUNS) or not (tokens & _PRESENTATION_TYPES):
+        return False
+    return tokens <= (_PRESENTATION_NOUNS | _PRESENTATION_TYPES | _PRESENTATION_FILLER)
 
 
 def _compiled_datasets() -> List[Dict[str, Any]]:
@@ -1946,7 +2019,7 @@ def _vocabulary_hit(question: str) -> bool:
             toks |= set(_tokenize(m.get("name"))) | set(_tokenize(m.get("expression"))) | set(m.get("synonyms") or [])
         for c in manifest.get("columns", []) or []:
             toks |= set(_tokenize(c.get("name"))) | set(c.get("synonyms") or [])
-        toks -= _ROUTE_NOISE
+        toks = _without_noise(toks)
         if q_tokens & toks or q_stems & _stem_set(toks):
             return True
     return False
@@ -2018,7 +2091,21 @@ def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
     return ranked
 
 
-_BY_PHRASE_RE = re.compile(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ,&]*)", re.I)
+# "divided by" and "multiplied by" are arithmetic: the "by" belongs to the
+# operator, not to a breakdown. Reading it as a grouping cue answered "energy
+# consumption divided by population" with "No dimension of Climate energy
+# matches the requested breakdown — break it down by which one?", a question
+# about a breakdown the reader never asked for. "split by region" and "broken
+# down by region" are groupings and stay ones.
+_NOT_A_CUE = r"(?<!divided )(?<!multiplied )"
+# The cue has to be followed by a word that could name a dimension. A number
+# cannot: "deaths per 100k" and "deaths per 1 million people" are a
+# normalisation, and reading the bare "per" as a grouping cue answered both
+# with "No dimension of COVID matches the requested breakdown — break it down
+# by which one?", a question whose every answer is wrong.
+_GROUPING_CUE_RE = re.compile(r"\b" + _NOT_A_CUE + r"(?:by|per|across|for each)\s+[A-Za-z]", re.I)
+_BY_PHRASE_RE = re.compile(r"\b" + _NOT_A_CUE +
+                           r"(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ,&]*)", re.I)
 
 
 def _by_phrase(question: str) -> Optional[str]:
@@ -2051,6 +2138,21 @@ def _names_metric(phrase_tokens: set, metrics: List[dict],
     return False
 
 
+def _names_dimension(phrase: str, dims: List[dict],
+                     d_alias: Optional[Dict[str, List[str]]] = None) -> bool:
+    """True when the phrase names a dimension outright — its own words, their
+    stems, or a curated alias. Never a lexicon synonym and never a prefix
+    guess, so this says "that word IS this column", not "that word is near
+    it"."""
+    toks = set(_tokenize(phrase))
+    want = toks | {_stem(t) for t in toks}
+    for d in dims:
+        col = d.get("column_name") or d.get("name") or ""
+        if col and want & _name_tokens(col, d_alias):
+            return True
+    return False
+
+
 # Phrases that scope a question to everything rather than splitting it.
 #
 # The dimension words are deliberately absent: "across all countries" DOES want
@@ -2063,7 +2165,17 @@ _WHOLE_SCOPE = re.compile(
     r"|\bglobally\b"
     r"|\boverall\b"
     r"|\bin\s+total\b"
-    r"|\baltogether\b",
+    r"|\baltogether\b"
+    # The same claim in the first person. "by itself" and "on its own" say the
+    # measure alone, not split — and the word after the grouping cue is a
+    # pronoun, not a dimension, so "energy by itself" asked the reader which
+    # dimension to break down by instead of answering the one number.
+    r"|\bby\s+(?:itself|themselves|himself|herself)\b"
+    r"|\bon\s+(?:its|their|his|her)\s+own\b"
+    r"|\bin\s+aggregate\b"
+    r"|\bas\s+a\s+whole\b"
+    r"|\bacross\s+the\s+board\b"
+    r"|\bin\s+(?:its|their)\s+entirety\b",
     re.I,
 )
 
@@ -2072,6 +2184,23 @@ def _asks_for_the_whole(question: str) -> bool:
     """Whether the question scopes to everything rather than asking for a
     breakdown. "across the world" is scope; "across countries" is grouping."""
     return bool(_WHOLE_SCOPE.search(question or ""))
+
+
+def _strip_scope_phrases(question: str) -> str:
+    """The question without the phrase that says its scope.
+
+    Cancelling the grouping cue was only half of it. The words of the scope
+    phrase were still read as data: "world" in "total energy in the world" is
+    the object of a filter preposition, so `_unresolved_terms` reported it as a
+    word the dataset could not place and the question was refused outright —
+    the breakdown correctly suppressed, the answer thrown away anyway. "in
+    aggregate" and "in its entirety" failed the same way.
+
+    A scope phrase says how much of the data to use, never what to measure, so
+    it is taken out before anything is matched against it — the same reason a
+    time expression and a rendering request are.
+    """
+    return _WHOLE_SCOPE.sub(" ", question or "")
 
 
 def _group_by_candidates(question: str, dims: List[dict],
@@ -2325,7 +2454,8 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         date_column = time_spec["column"]
 
     question = _fuzzy_question(question, _dataset_vocabulary(metrics, dims, m_alias, d_alias))
-    qset = set(_tokenize(_strip_presentation_phrases(_strip_time_phrases(question))))
+    qset = set(_tokenize(_strip_scope_phrases(
+        _strip_presentation_phrases(_strip_time_phrases(question)))))
 
     # 1) entity filters from the value index (e.g. "india" -> country='India').
     #    A value that lives in more than one column is a question, not a guess.
@@ -2368,8 +2498,8 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     pinned_phrase = str(choices.get("value_phrase") or "").lower()
     pinned_value = str(choices.get("value") or "")
     for term in _unresolved_terms(
-            _strip_presentation_phrases(_strip_time_phrases(question)), consumed, vocabulary,
-                                  metric_name_tokens, grammar=classes.GRAMMAR_WORDS):
+            _strip_scope_phrases(_strip_presentation_phrases(_strip_time_phrases(question))),
+            consumed, vocabulary, metric_name_tokens, grammar=classes.GRAMMAR_WORDS):
         if term.lower() == pinned_phrase and pinned_value:
             if pinned_value == "skip":
                 notes.append(f'"{term}" was left out of the answer.')
@@ -2492,7 +2622,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     # So a whole-population phrase cancels the cue. These say "all of it",
     # never "one per": the world and the globe as places rather than columns,
     # and the adverbs that mean the same.
-    wanted_groupby = bool(re.search(r"\b(?:by|per|across|for each)\b", question, re.I))
+    wanted_groupby = bool(_GROUPING_CUE_RE.search(question))
     if wanted_groupby and _asks_for_the_whole(question):
         wanted_groupby = False
     if not group_col and wanted_groupby:
@@ -2910,6 +3040,13 @@ def _compose_derived(intent, base_slots: Dict[str, Any], serve, *, spec: dict, q
         return _derived_answer(composed, current_result, [current_result, previous_result], ds, dataset_id)
 
     if name == "share_of_total":
+        # A share needs a slice to be a share OF. With no filter and no
+        # breakdown the part and the whole are the same statement, and the
+        # answer read "Energy consumption is 100.0% of Energy consumption
+        # (— of —)" — a tautology wearing a percentage. Falling back to the
+        # base class answers the number the question does name.
+        if not base_slots["filters"] and not base_slots["group_col"]:
+            return None
         part = serve(base_slots)
         if not part.get("ok"):
             return part
@@ -2924,6 +3061,17 @@ def _compose_derived(intent, base_slots: Dict[str, Any], serve, *, spec: dict, q
         return _derived_answer(composed, part, [part, whole], ds, dataset_id)
 
     if name == "ratio":
+        # "per <dimension>" is a grouping, not a ratio. The resolver already
+        # read this very phrase as a breakdown and resolved it, so a measure
+        # matching the denominator means only that the measure and the column
+        # share a word: with a metric called "Countries tracked"
+        # (COUNT(DISTINCT country)), "energy consumption per country" answered
+        # "Energy consumption per Countries tracked by country".
+        grouped = [d for d in dims
+                   if (d.get("column_name") or d.get("name"))
+                   in _group_cols(base_slots["group_col"])]
+        if grouped and _names_dimension(intent.params["denominator_phrase"], grouped, d_alias):
+            return None
         numerator = _metric_for_phrase(intent.params["numerator_phrase"], metrics, m_alias)
         denominator = _metric_for_phrase(intent.params["denominator_phrase"], metrics, m_alias)
         if not numerator or not denominator or numerator is denominator:
@@ -2976,7 +3124,8 @@ def _compose_derived(intent, base_slots: Dict[str, Any], serve, *, spec: dict, q
             return result
         composed = classes.compose_existence(
             result, metric=base_slots["metric_name"], dimension=dimension,
-            comparison=intent.params["comparison"], threshold=intent.params["threshold"])
+            comparison=intent.params["comparison"], threshold=intent.params["threshold"],
+            as_share=bool(intent.params.get("as_share")))
         return _derived_answer(composed, result, [result], ds, dataset_id)
 
     if name == "vague_default":
@@ -3910,9 +4059,25 @@ def _serve_time_window(dataset_id: str, ds: dict, metric_name: str, group_col: O
     cells = [c for c in cells if c[0] is not None]
     if not cells:
         return None
+    # What the day cells actually cover, before the question's window narrows
+    # them. A window that lands outside it holds no days, and summing no days
+    # gave 0 — "energy in the last 7 days" answered "Energy is 0" against a
+    # dataset whose last day is years back, with no indication that the window
+    # was empty rather than the measure.
+    #
+    # A named year is caught upstream and shifted into range with a note. A
+    # relative window cannot be shifted — "the last 7 days" of when? — so the
+    # answer says what the data holds instead.
+    covered = (min(c[0] for c in cells), max(c[0] for c in cells))
+    outside_the_data = None
     if window:
         lo, hi = window
-        cells = [c for c in cells if c[0] >= lo and (hi is None or c[0] < hi)]
+        inside = [c for c in cells if c[0] >= lo and (hi is None or c[0] < hi)]
+        if not inside:
+            outside_the_data = (
+                f"{date_column} holds data from {covered[0]} to {covered[1]}; "
+                f"the window this question asks for contains none of it.")
+        cells = inside
     if filters:
         want = _normalize(filters[0].get("value"))
         cells = [c for c in cells if _normalize(c[1]) == want]
@@ -3944,21 +4109,27 @@ def _serve_time_window(dataset_id: str, ds: dict, metric_name: str, group_col: O
         response = _ctx_response(dataset_id, dataset_name, metric_name, None,
                                  [date_column, metric_name], rows, conf, subtitle=subtitle)
         response.update({"chartType": "line", "xAxis": date_column,
-                         "title": metric_name + " over time" + (f" — {subtitle}" if subtitle else "")})
+                         "title": metric_name + " over time" + (f" — {subtitle}" if subtitle else ""),
+                         "note": outside_the_data})
         return response
     if group_col:
         buckets = {}
         for _d, g, v in cells:
             buckets.setdefault(g, []).append(v)
         rows = [[g, _sum(vs)] for g, vs in buckets.items()]
-        rows.sort(key=lambda r: (r[1] is None, r[1] if sort_asc else -(r[1] or 0)))
-        if top_n:
-            rows = rows[:int(top_n)]
-        return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
-                             [group_col, metric_name], rows, conf, subtitle=subtitle)
+        if top_n or sort_asc:
+            rows = _rank_cells(rows, top_n=top_n, sort_asc=sort_asc)
+        else:
+            rows.sort(key=lambda r: (r[1] is None, -(r[1] or 0)))
+        response = _ctx_response(dataset_id, dataset_name, metric_name, group_col,
+                                 [group_col, metric_name], rows, conf, subtitle=subtitle)
+        response["note"] = outside_the_data
+        return response
     total = _sum(v for _d, _o, v in cells)
-    return _ctx_response(dataset_id, dataset_name, metric_name, None, [metric_name],
-                         [[total if total is not None else 0]], conf, subtitle=subtitle)
+    response = _ctx_response(dataset_id, dataset_name, metric_name, None, [metric_name],
+                             [[total if total is not None else 0]], conf, subtitle=subtitle)
+    response["note"] = outside_the_data
+    return response
 
 
 def _cell_year_bounds(dataset_id: str, metric_name: str, date_column: Optional[str],
@@ -4002,10 +4173,7 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
         # The cells are stored in the first metric's order; a ranking over any
         # metric orders by the one asked for before it slices.
         if group_col and (sort_asc or top_n):
-            sign = 1 if sort_asc else -1
-            rows = sorted(rows, key=lambda r: (r[-1] is None, sign * _num(r[-1]) if r[-1] is not None else 0))
-        if group_col and top_n:
-            rows = rows[:int(top_n)]
+            rows = _rank_cells(rows, top_n=top_n, sort_asc=sort_asc)
         return _ctx_response(dataset_id, dataset_name, metric_name, group_col, ctx["columns"], rows, conf)
 
     # exactly one single-dimension equality filter, no group-by → pick the row
@@ -4033,8 +4201,8 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                        if r and len(r) >= 3 and _normalize(r[fi]) == want]
             if matched:
                 label = str(f.get("value"))
-                if top_n:
-                    matched = matched[:int(top_n)]
+                if top_n or sort_asc:
+                    matched = _rank_cells(matched, top_n=top_n, sort_asc=sort_asc)
                 return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
                                      [group_col, metric_name], matched, conf, subtitle=label)
 
@@ -4079,8 +4247,8 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                         matched.append([r[gb_idx], r[dim_count]])
                 if matched:
                     label = ", ".join(str(f.get("value")) for f in filters)
-                    if top_n:
-                        matched = matched[:int(top_n)]
+                    if top_n or sort_asc:
+                        matched = _rank_cells(matched, top_n=top_n, sort_asc=sort_asc)
                     return _ctx_response(dataset_id, dataset_name, metric_name, group_col,
                                          [group_col, metric_name], matched, conf, subtitle=label)
     elif len(filters) >= 3:
@@ -4106,7 +4274,13 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
     if len(filters) >= 2:
         grand = _context_answer(dataset_id, metric_name, "")
         if grand is not None and grand["rows"]:
-            grand_total = grand["rows"][0][0] if grand["rows"][0] else None
+            # Every cell below goes into arithmetic, and a cell with no
+            # value is None, not zero. Totalling one raised
+            # "unsupported operand type(s) for +: 'int' and 'NoneType'" out of
+            # a question that should have had an answer -- a breakdown holding
+            # one unmeasured group was enough -- so each is coerced once here
+            # and a group with no value is left out of the scaled rows.
+            grand_total = _cell_number(grand["rows"][0][0]) if grand["rows"][0] else None
             if grand_total is not None:
                 _mm = next((m for m in (ds.get("metrics") or [])
                             if (m.get("name") or m.get("metric_name")) == metric_name), None)
@@ -4119,10 +4293,11 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                     if dim_ctx is None:
                         break
                     want = _normalize(f.get("value"))
-                    dim_total = sum(r[1] for r in dim_ctx["rows"] if r and len(r) >= 2)
+                    dim_total = sum((_cell_number(r[1]) or 0)
+                                    for r in dim_ctx["rows"] if r and len(r) >= 2)
                     for r in dim_ctx["rows"]:
                         if r and _normalize(r[0]) == want and dim_total:
-                            weights.append(r[1] / dim_total)
+                            weights.append((_cell_number(r[1]) or 0) / dim_total)
                             break
                     else:
                         break
@@ -4142,20 +4317,44 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
                             scaled_rows = []
                             for r in gb_ctx["rows"]:
                                 if r and len(r) >= 2:
-                                    val = r[1]
+                                    val = _cell_number(r[1])
+                                    if val is None:
+                                        continue
                                     if not is_intensive:
                                         for w in weights:
                                             val *= w
                                     scaled_rows.append([r[0], round(val, 1)])
-                            scaled_rows.sort(key=lambda x: -(x[1] or 0))
-                            if top_n:
-                                scaled_rows = scaled_rows[:int(top_n)]
+                            scaled_rows = _rank_cells(scaled_rows, top_n=top_n,
+                                                      sort_asc=sort_asc)
                             return _ctx_response(dataset_id, dataset_name, metric_name,
                                                  group_col, [group_col, metric_name],
                                                  scaled_rows, conf, subtitle=label,
                                                  approx=True)
 
     return None
+
+
+def _rank_cells(rows: List[list], *, top_n: Optional[int], sort_asc: bool) -> List[list]:
+    """Precomputed cells ordered the way the statement for the same question
+    orders them.
+
+    The cells come back in the order the build scan produced them — by the
+    cuboid's keys, never by the measure. Slicing that to `top_n` without
+    ordering it first returned the first N cells of the cube under the title
+    "Top N": "top 3 countries by energy consumption in Europe" answered with
+    Albania, a country with no energy figures at all, and Austria, in that
+    order. `sort_asc` was ignored outright, so "bottom 3" returned the same
+    three rows as "top 3".
+
+    Groups with no value are dropped rather than ordered last, which is what
+    `engine_dialect.assemble` writes for the live path as
+    `HAVING <agg> IS NOT NULL`: a group with no measurement does not belong in
+    a ranking of that measure, and one question must not get two different row
+    sets depending on whether the cube happened to cover it.
+    """
+    measured = [r for r in rows if r and _cell_number(r[-1]) is not None]
+    measured.sort(key=lambda r: _num(r[-1]), reverse=not sort_asc)
+    return measured[:int(top_n)] if top_n else measured
 
 
 def _ctx_response(dataset_id, dataset_name, metric_name, group_col, columns, rows, conf, subtitle=None, approx=False):
@@ -5258,13 +5457,6 @@ def _unresolved_terms(question: str, consumed: set, vocabulary: set,
     return found
 
 
-# Generic quantifier words that must not sway metric matching. They appear in
-# metric names ("Total Queries") and questions ("total number of users") alike,
-# so counting them makes "users" tie with "total" and the wrong metric win.
-_GENERIC_METRIC_TOKENS = {"sum", "avg", "average", "mean", "count", "total",
-                         "number", "num", "amount", "overall", "all", "of", "the"}
-
-
 def _distinctive(tokens: set) -> set:
     """Tokens that can tell one metric from another: aggregate words are
     dropped before synonym expansion as well as after, so "total" in a
@@ -5410,8 +5602,19 @@ def _match_any_dim(question: str, dims: List[dict],
     A dimension named outright (its own words or a curated alias) wins over one
     only a lexicon synonym reaches, which wins over a prefix guess — so "top 5
     countries by users" is country, never a dimension whose synonyms happen to
-    contain "user". `exclude` drops the tokens that already named the measure."""
-    words = {_normalize(t) for t in _tokenize(question)} - set(exclude or ())
+    contain "user". `exclude` drops the tokens that already named the measure.
+
+    The quantifier words go too, and the prefix tier is why. "total" is a seed
+    synonym of "count", "count" shares its first four letters with "country",
+    and so "total deaths by" was answered as a breakdown by country — a
+    dimension the question never mentions, reached from the word "total"
+    through two hops. Those words are discounted at every other stage
+    (`_distinctive`, `_names_metric`, `_ROUTE_NOISE`); a dimension named
+    outright in a "by <x>" phrase is resolved by `_group_by_candidates`
+    without coming through here, so an explicit "by total" still works.
+    """
+    words = ({_normalize(t) for t in _tokenize(question)}
+             - set(exclude or ()) - _GENERIC_METRIC_TOKENS)
     named = words | {_stem(t) for t in words}
     qt = _expand_tokens(words)
     cols = [c for c in ((d.get("column_name") or d.get("name") or "").strip() for d in dims)

@@ -86,6 +86,38 @@ class RedrawRequestsKeepTheDataset(unittest.TestCase):
                          "deaths by country"):
             self.assertFalse(engine._asks_only_to_redraw(question), question)
 
+    def test_the_same_request_with_the_verb_left_off(self):
+        """The half the first fix missed. "pie chart please" has no verb for
+        `_PRESENTATION_REQUEST` and no pronoun for `_FOLLOW_UP_RE`, so it was
+        routed as a fresh question — and "chart" scores 3 against the usage
+        dataset's `charts_created`, which is enough to clear the routing floor
+        on its own. It took the dataset off the conversation and answered
+        SUM(charts_created)."""
+        for question in ("pie chart",
+                         "pie chart please",
+                         "a bar chart",
+                         "bar chart",
+                         "world map",
+                         "a world map",
+                         "line graph please",
+                         "scatter plot",
+                         "as a table",
+                         "stacked bar chart instead"):
+            self.assertTrue(engine._asks_only_to_redraw(question), question)
+
+    def test_a_bare_subject_word_still_routes_on_its_own_merits(self):
+        """The negative, and the reason both a rendering noun AND a rendering
+        type are required: "charts" and "dashboards" are what that dataset
+        measures, so a sentence that names one without naming a chart type is
+        a question about a quantity."""
+        for question in ("charts",
+                         "dashboards",
+                         "maps created by platform",
+                         "plots by region",
+                         "tables scanned last month",
+                         "world map chart of deaths"):
+            self.assertFalse(engine._asks_only_to_redraw(question), question)
+
 
 if __name__ == "__main__":
     unittest.main()
