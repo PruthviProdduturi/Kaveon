@@ -81,6 +81,15 @@ shapes, not a general Apply implementation. Correlated `LIMIT`, `OFFSET`,
 `UNION`, multi-level outer references, and lateral/derived relation forms
 remain explicitly outside the contract and continue to fail closed.
 
+## Fresh clean workspace gate — commit `33ad59e1` — 2026-10-15
+
+The complete workspace gate was rerun from a detached clean checkout of the
+pushed commit. It passed with zero failures: 74 core tests, 211 SQL tests (one
+ignored), 85 planner/runtime tests, 368 execution tests (four ignored), 57 CLI
+tests, 394 server tests, 159 additional SQL tests, and 121 storage tests (one
+ignored). The long server differential sweep completed successfully in that
+same run.
+
 ## JSON_FORMAT qualification — 2026-10-15
 
 `JSON_FORMAT(json)` now canonicalizes the Engine's validated UTF-8 JSON
