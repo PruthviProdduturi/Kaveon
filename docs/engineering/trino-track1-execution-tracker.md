@@ -48,6 +48,10 @@ The next evidence package must include:
 After that evidence is reviewed, change item 1 to `Complete`, move item 2 to
 `Active`, and update this matrix in place.
 
+Current evidence: the scheduler and stage-runtime focused suites pass (16
+tests total) on the current commit. This is local evidence only; it does not
+close the multi-topology gate.
+
 ## Validation commands
 
 Run from `engine/`:
