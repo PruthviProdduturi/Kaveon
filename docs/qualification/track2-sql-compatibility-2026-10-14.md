@@ -199,7 +199,9 @@ directory tables now use the same deferred source contract: the footer and
 pinned listing are available for planning, while the first decoder is held
 until the exact build-side keys arrive. A focused `parquet_reader` regression
 selects only the expected labels from the six-row fixture, and the full
-storage Parquet test group passes. Object-backed readers still use the bounded
-pre-probe filter because their background stream is initialized before the
-join can inject a filter; that interface and cloud snapshot qualification
-remain open.
+storage Parquet test group passes. Single-object readers now publish their
+footer schema, wait for the first batch request, and accept exact build-side
+keys before constructing the remote decoder; an in-memory object-store
+regression returns exactly those keys with decoder row filtering enabled.
+Object-directory source injection and cloud snapshot qualification remain
+open.
