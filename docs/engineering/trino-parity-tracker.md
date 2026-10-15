@@ -1136,6 +1136,7 @@ The 2026-10-14 prepared-statement follow-up reran the full server suite after
 adding repeated positional-slot preservation and metadata planning through
 transparent `LIMIT`/`OFFSET`/`ORDER BY`/`DISTINCT` wrappers. The focused prepared
 slice passed **5/5** tests, and the complete server suite passed **380/380**;
+the Trino-focused server group passes **24/24** as well;
 the route-level lifecycle test also covers owner isolation, result paging,
 typed array binding, and `X-Trino-Prepared-Statement` selection. This strengthens
 the implemented adapter boundary but does not close the explicitly documented
