@@ -1232,9 +1232,7 @@ fn distributed_grouping_sets_match_the_local_result() {
 }
 
 /// `JOIN ... USING` must reach the same qualified equality keys through the
-/// fragment planner as it does through the node-local planner.  The query
-/// projects explicit columns so the currently documented duplicate-key output
-/// boundary is not hidden by a wildcard projection.
+/// fragment planner as it does through the node-local planner.
 #[test]
 fn distributed_join_using_matches_the_local_result() {
     let directory =
@@ -1254,6 +1252,33 @@ fn distributed_join_using_matches_the_local_result() {
         &execute_distributed(statement, &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
         true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_join_using_wildcard_suppresses_the_right_key() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-using-star-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT * FROM events u JOIN users p USING (user_id)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-join-using-star", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    // events has 15 columns and users contributes locale/country; user_id
+    // appears once because USING suppresses the right-hand key.
+    assert_eq!(local.operator.schema().fields().len(), 17);
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
     );
     assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
