@@ -120,6 +120,10 @@ impl BatchOperator for ScanOperator {
     fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> Result<bool> {
         self.source.apply_runtime_filter(column, values)
     }
+
+    fn apply_runtime_predicate(&mut self, predicate: &StoragePredicate) -> Result<bool> {
+        self.source.apply_runtime_predicate(predicate)
+    }
 }
 
 #[cfg(test)]
