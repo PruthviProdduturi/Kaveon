@@ -183,7 +183,22 @@ class Tests(unittest.TestCase):
             output = Path(result["output_directory"])
             self.assertEqual({p.name for p in output.iterdir()}, {
                 "context-cache-live.json", "dlm-generation-live.json",
-                "context_cache.json", "dlm_generation.json", "special-family-lossless.json"})
+                "context_cache.json", "dlm_generation.json", "special-family-lossless.json",
+                "special-family-rollback.json"})
+            # Which rollback the run leaves available, said out loud. A small
+            # population keeps the exact-row path; past the capacity it is a
+            # deterministic rebuild, which the retirement proved before it
+            # deleted anything.
+            rollback = json.loads((output / "special-family-rollback.json").read_text())
+            self.assertEqual(rollback["rollback_path"], "exact_row_restore")
+            self.assertEqual(rollback["row_total"], sum(captured()["before"].values()))
+            self.assertEqual(rollback["exact_row_capacity"],
+                             retirement.EXACT_ROW_ROLLBACK_CAPACITY)
+            self.assertEqual(rollback["rebuild_target_snapshot_id"], "snapshot-1")
+            self.assertEqual(result["rollback_path"], "exact_row_restore")
+            # The receipt the auditor reads keeps its exact key set.
+            self.assertNotIn("rollback_path",
+                             json.loads((output / "special-family-lossless.json").read_text()))
             dlm = json.loads((output / "dlm-generation-live.json").read_text())
             self.assertEqual(dlm["source"]["rows"]["dlm_answers"], 3866)
             self.assertEqual(dlm["deletion"]["remaining_rows"]["dlm_answers"], 0)

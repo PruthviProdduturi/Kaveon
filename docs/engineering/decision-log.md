@@ -1,5 +1,55 @@
 # Decision log
 
+### Two of the three contradicting retirement bounds were right; one was the wrong unit
+
+- **Decision (2026-10-15).** The exact-row rollback capacity is declared once,
+  in `postgresql_special_family_retirement` as `EXACT_ROW_ROLLBACK_CAPACITY`,
+  and `postgresql_special_family_restore.MAX_ROWS` consumes it. The retirement
+  records which rollback path a run leaves available in a new
+  `special-family-rollback.json`. A backup's object inventory is bounded by
+  `MAX_OBJECTS`, not by the record bound. The 900s and 3600s duration ceilings
+  both stand, and each refusal now names the other.
+- **The row contradiction was apparent, not real.** `context_cache_retirement`
+  and `dlm_generation_retirement` validate counts to 10_000_000_000 while the
+  restore refused past 10_000, which reads as a rollback precondition that
+  becomes unsatisfiable exactly when it matters. It is not: these five families
+  are generated artifacts, and `_validate_rebuild` already requires proof that
+  a deterministic rebuild covered every active dataset with zero failures and a
+  repeatable probe hash before anything is deleted. So rollback by rebuild is
+  proven and unbounded, and rollback by row copy is bounded by what one
+  transaction can replay. Both numbers are correct for their own path. What was
+  missing was any statement of which path applied, so an operator discovered it
+  by attempting the restore and being refused mid-rollback. Neither number
+  changed; the capacity stopped being declared twice, and the run now says
+  which path it left.
+- **The object bound was a genuine defect.** `kaveondb_recovery_evidence`
+  bounded a backup's object inventory by `MAX_RECORDS` (1,000,000) when
+  `kaveondb_backup.MAX_OBJECTS` is 10,000 and `adls_artifact_client.list`
+  refuses a larger request outright. The validator therefore accepted an
+  inventory a hundred times larger than the producer can emit -- evidence that
+  could not have come from the backup path passed as valid. A record is a
+  product record and an object is a blob; they are different units and only one
+  has a transport ceiling.
+- **The duration pair is two scopes, not a conflict.** 3600s is the ceiling for
+  any rollback control; 900s is what this path holds itself to, restoring at
+  most 10,000 rows. The trap was that four distinct refusals shared one
+  sentence -- "special-family restore exceeds its rollback bound" -- so a
+  control valid against the general ceiling was rejected here with nothing
+  said about which bound it met or whether it was the operator's to change.
+  Split into four, each naming its ceiling and why it differs.
+- **Evidence.** 7 new tests in `test_retirement_rollback_bounds.py` plus the
+  retirement's own test extended to assert the new file, the boundary at
+  capacity and capacity+1, and that the auditor's receipt keeps its exact key
+  set. api suite 1471 -> 1478 passed, 186 -> 190 subtests; scripts 135
+  unchanged.
+- **Consequence.** The rollback path for a run is readable before a rollback is
+  attempted. A new bound in this area must say what it governs and must not be
+  expressed in another bound's unit. The receipt consumed by
+  `postgresql_operational_evidence` has an exact key set, so new evidence goes
+  in its own file -- the first attempt added fields to that receipt and broke
+  the gate that reads it.
+
+
 ### The brand accent is an identity colour, not a label-bearing fill
 
 - **Decision (2026-10-15).** `--accent` keeps its value and its role. Two new
