@@ -121,3 +121,16 @@ current tree and passed with zero failures: server `389/389`, SQL `151/151`,
 execution `351/351` with four pre-existing ignored benchmark tests, and all
 remaining workspace targets green. The server differential sweep completed in
 111.72 seconds.
+
+## Current workspace gate (follow-up)
+
+The focused parity evidence remains green: `cargo test -p kaveon-sql --quiet`
+passes `157/157`, and the VALUES and typed-TIME runtime checks above remain
+valid. A later workspace run on the shared working tree is **not** a release
+gate: it is concurrently carrying unrelated catalog and cube changes. That
+run reported a catalog timing benchmark failure and the server
+`analyze_reads_the_columns_on_the_workers_and_cancels_with_them` regression
+reported a changed cube-grouping payload. These failures are outside the
+VALUES/TIME changes and are retained as open workspace gates rather than being
+counted as parity evidence. The full workspace command must be rerun from a
+clean, integrated tree before Track 2 is called qualified.
