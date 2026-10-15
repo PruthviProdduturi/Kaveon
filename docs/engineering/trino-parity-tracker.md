@@ -37,7 +37,7 @@ evidence passes against exact-result references.
 
 | Capability | State | Current contract | Acceptance evidence still required |
 |---|---|---|---|
-| Core SELECT surface | Implemented | WHERE, projection, CASE, casts, GROUP BY, bounded GROUPING SETS/CUBE/ROLLUP lowering, HAVING, ORDER BY, LIMIT/OFFSET, DISTINCT, NULL semantics, date/time and decimal paths. | Broader differential corpus against the pinned Trino version. |
+| Core SELECT surface | Implemented | WHERE, projection, CASE, casts, GROUP BY, bounded GROUPING SETS/CUBE/ROLLUP lowering, HAVING, ORDER BY (including select ordinals), LIMIT/OFFSET, DISTINCT, NULL semantics, date/time and decimal paths. | Broader differential corpus against the pinned Trino version. |
 | CTEs and derived tables | Implemented | Non-recursive CTEs and derived relations bind through the normal optimizer. | Recursive CTE support remains open. |
 | Joins and subqueries | Partial | Equi/residual joins, EXISTS, IN/NOT IN, and bounded scalar aggregate/projection forms are supported. | Correlated non-aggregate, multi-row scalar, and deeper Apply/lateral shapes. |
 | Set operations | Implemented | UNION, INTERSECT, EXCEPT, including ALL forms, with exact local/distributed tests. | Additional complex-type differential cases. |
