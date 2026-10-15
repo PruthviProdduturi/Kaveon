@@ -599,6 +599,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_lead_ignore_nulls",
+        "SELECT country, LEAD(industry) IGNORE NULLS OVER (ORDER BY actions, country, industry NULLS LAST) AS next_industry FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country, industry NULLS LAST LIMIT 6",
+        true,
+    ),
+    (
         "qualify_partitioned_row_number",
         "SELECT country, region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country) AS rn FROM {T} QUALIFY rn = 1 ORDER BY region, country",
         true,

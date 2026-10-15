@@ -990,6 +990,18 @@ mod tests {
             ints(expression("LAG_IGNORE_NULLS", None), &nullable),
             vec![Some(2), None, Some(2), Some(1)]
         );
+        let mut lag_ignore = expression("LAG_IGNORE_NULLS", None);
+        if let Expr::WindowFunction { args, .. } = &mut lag_ignore {
+            args.push(Expr::Literal(ScalarValue::Int64(2)));
+        }
+        assert_eq!(
+            ints(lag_ignore, &nullable),
+            vec![Some(1), None, Some(1), None]
+        );
+        assert_eq!(
+            ints(expression("LEAD_IGNORE_NULLS", None), &nullable),
+            vec![None, Some(2), None, None]
+        );
         let mut lag = expression("LAG", None);
         if let Expr::WindowFunction { args, .. } = &mut lag {
             args.extend([
