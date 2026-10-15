@@ -49,14 +49,15 @@ After that evidence is reviewed, change item 1 to `Complete`, move item 2 to
 `Active`, and update this matrix in place.
 
 Current evidence: the scheduler and stage-runtime focused suites pass (16
-tests total) on the current commit. The Docker qualification report
+tests total) on the current commit. The Docker report
 `docs/qualification/track1-worker-scheduling-docker-2026-10-14.md` records a
-three-node Compose run: two workers discovered with one catalog snapshot, scan
-partitions assigned to both workers, exchange stages completed, and the final
-17-row grouped result matched the 10,000-row fixture. This is local container
-evidence only; it does not close the multi-topology gate. AKS execution,
-retry/lease evidence, skew, cancellation cleanup, and failure-path evidence
-remain required.
+three-node Compose run, and the AKS report
+`docs/qualification/track1-worker-scheduling-aks-2026-10-14.md` records the
+production topology: three workers discovered with one catalog snapshot, a
+three-way 504-million-row scan and exchange, a final merge, and exact platform
+counts. These runs close the basic multi-worker assignment and stage-dependency
+evidence. Retry/lease evidence, skew, cancellation cleanup, and failure-path
+evidence remain required before item 1 can move to Complete.
 
 ## Validation commands
 
