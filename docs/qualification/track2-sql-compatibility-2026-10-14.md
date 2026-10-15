@@ -417,3 +417,7 @@ storage tests, with only the recorded ignored cases. The gate includes
 `JSON_ARRAY_GET` (including negative indexes and `TRY`), JSON query/value
 scalar-vs-container behavior, Decimal128 JSON needles, and the composite
 partitioned-join regression.
+
+The focused JSON regression also covers a `LargeUtf8` document with an
+`Int32` index, confirming that scalar index coercion does not depend on a
+64-bit input column.

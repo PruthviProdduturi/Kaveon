@@ -16214,6 +16214,24 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_json_array_get_with_large_utf8_document_and_int32_index() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(LargeStringArray::from(vec![Some(r#"["wide"]"#)])) as ArrayRef,
+            ),
+            ("index", Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_ARRAY_GET".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("index".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "\"wide\"");
+    }
+
+    #[test]
     fn evaluates_json_array_length_with_non_arrays_as_null() {
         let batch = RecordBatch::try_from_iter([(
             "document",
