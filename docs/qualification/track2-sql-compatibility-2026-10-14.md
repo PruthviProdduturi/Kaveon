@@ -131,6 +131,15 @@ scalar output. The JSON coercion and returning-mode boundaries remain open.
 existing NaN/infinity rejection. The focused executor regression adds an
 `Int32` probe alongside the existing 64-bit and text cases.
 
+## Composite runtime-filter qualification — 2026-10-15
+
+Composite inner and semi joins now expose independent build-key `IN`
+predicates to eligible storage readers. The projections are safe prefilters:
+they can retain rows that the later composite hash probe rejects, but cannot
+remove a valid composite match. Unsupported key values fall back to the exact
+batch filter. The execution regression verifies the two-column predicate shape;
+cloud snapshot and null/type qualification remain open.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records

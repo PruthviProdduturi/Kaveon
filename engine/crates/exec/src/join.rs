@@ -1,4 +1,4 @@
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -218,7 +218,47 @@ impl BuildKeyFilter {
                 .chain(duplicate_rows.keys())
                 .map(|value| i64::try_from(*value).ok().map(ScalarValue::Int64))
                 .collect::<Option<Vec<_>>>(),
-            JoinIndex::Composite(_) => None,
+            JoinIndex::Composite(entries) => {
+                let mut predicates = Vec::new();
+                for (key_index, (left, _)) in self.keys.iter().enumerate() {
+                    let mut seen = AHashSet::new();
+                    let mut values = Vec::new();
+                    for tuple in entries.keys() {
+                        let Some(key) = tuple.get(key_index) else { continue };
+                        if !seen.insert(key.clone()) { continue; }
+                        let value = match key {
+                            Key::Bool(value) => ScalarValue::Bool(*value),
+                            Key::Int32(value) => ScalarValue::Int64(i64::from(*value)),
+                            Key::Int64(value) => ScalarValue::Int64(*value),
+                            Key::UInt64(value) => ScalarValue::Int64(i64::try_from(*value).ok()?),
+                            Key::Decimal(value, scale) => ScalarValue::Decimal128 {
+                                value: *value,
+                                precision: 38,
+                                scale: *scale,
+                            },
+                            Key::Float64(bits) => {
+                                let value = f64::from_bits(*bits);
+                                if !value.is_finite() { continue; }
+                                ScalarValue::Float64(value)
+                            }
+                            Key::Utf8(value) => ScalarValue::Utf8(value.clone()),
+                            Key::Decimal256(_, _) => continue,
+                        };
+                        values.push(value);
+                    }
+                    if !values.is_empty() {
+                        predicates.push(StoragePredicate::In {
+                            column: schema.field(*left).name().to_owned(),
+                            values,
+                        });
+                    }
+                }
+                return match predicates.len() {
+                    0 => None,
+                    1 => predicates.into_iter().next(),
+                    _ => Some(StoragePredicate::And(predicates)),
+                };
+            }
         }?;
         (!values.is_empty()).then_some(StoragePredicate::In { column, values })
     }
@@ -2104,4 +2144,33 @@ mod tests {
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert!(pool.snapshot().peak_bytes <= pool.snapshot().limit_bytes);
     }
+
+    #[test]
+    fn composite_runtime_filter_exposes_safe_independent_storage_ins() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("left_a", DataType::Int32, true),
+            Field::new("left_b", DataType::Utf8, true),
+        ]));
+        let build_schema = Arc::new(Schema::new(vec![
+            Field::new("right_a", DataType::Int32, true),
+            Field::new("right_b", DataType::Utf8, true),
+        ]));
+        let build = RecordBatch::try_new(
+            build_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(arrow::array::StringArray::from(vec![Some("x"), Some("y")])),
+            ],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&build_schema, &[build], &[(0, 0), (1, 1)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0), (1, 1)]).unwrap();
+        let predicate = filter.storage_predicate(&schema).unwrap();
+        let StoragePredicate::And(predicates) = predicate else {
+            panic!("expected independent composite-key predicates");
+        };
+        assert_eq!(predicates.len(), 2);
+        assert!(predicates.iter().all(|predicate| matches!(predicate, StoragePredicate::In { .. })));
+    }
+
 }
