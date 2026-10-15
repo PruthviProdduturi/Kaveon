@@ -1685,7 +1685,14 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     fn single_row(plan: &LogicalPlan) -> bool {
         match plan {
             LogicalPlan::Aggregate { group_by, .. } => group_by.is_empty(),
-            LogicalPlan::Filter { input, .. } => single_row(input),
+            // A HAVING filter over an ungrouped aggregate still emits one
+            // row (possibly with NULL aggregate values). A WHERE filter over
+            // a constant relation can emit zero rows, so it is not safe to
+            // model as a cross-joined scalar without an Apply/null-fill
+            // operator.
+            LogicalPlan::Filter { input, .. } => {
+                matches!(input.as_ref(), LogicalPlan::Aggregate { group_by, .. } if group_by.is_empty())
+            }
             // `SELECT 42` and constant `UNNEST(ARRAY[...])` relations are
             // statically single-row when every array has at most one value.
             // This is safe for a scalar subquery: unlike a general table
@@ -5468,6 +5475,7 @@ mod tests {
             panic!("literal scalar should cross join its one-row relation");
         };
         assert!(matches!(*right, LogicalPlan::Project { .. }));
+        assert!(sql_to_logical_plan("SELECT (SELECT 42 WHERE false) FROM t").is_err());
     }
 
     #[test]
