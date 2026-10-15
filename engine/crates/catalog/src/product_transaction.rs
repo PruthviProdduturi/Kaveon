@@ -87,11 +87,33 @@ impl ProductTransaction {
     /// Stages a write and validates the entire transaction. Failed staging is
     /// atomic: the previous staged state remains available.
     pub fn stage(&mut self, change: CatalogChange) -> Result<(), TransactionError> {
+        self.stage_all(vec![change])
+    }
+
+    /// Stages several writes under one validation pass.
+    ///
+    /// Validating is what costs: every staged statement re-checks every product
+    /// record in the catalog and rebuilds every typed-row index, so staging S
+    /// statements one at a time pays S of those passes over a write set that
+    /// grows as it goes. A caller that already holds the whole batch — and that
+    /// does not need each statement's result in order to compose the next one —
+    /// should stage it here instead and pay one.
+    ///
+    /// Atomic like `stage`, and checked identically: this is the same `prepare`
+    /// over the same ordered write set, so an invalid batch stages nothing and
+    /// leaves the previous view in place. Only the number of times it runs
+    /// differs.
+    pub fn stage_all(&mut self, changes: Vec<CatalogChange>) -> Result<(), TransactionError> {
+        if changes.is_empty() {
+            return Ok(());
+        }
         let mut candidate = self.request.clone();
-        candidate.changes.push(change);
+        candidate.changes.extend(changes);
         let preview = self
             .base
-            .prepare(candidate.clone())
+            // The base was validated when `begin` read it from the durable
+            // head, and a session cannot change it.
+            .prepare_verified(candidate.clone())
             .map_err(|error| TransactionError::InvalidWriteSet(error.to_string()))?;
         self.request = candidate;
         self.preview = Some(preview);
@@ -144,13 +166,35 @@ impl ProductTransaction {
         digest.update(context);
         digest.update((changes.len() as u64).to_be_bytes());
         digest.update(changes);
-        self.request.request_digest = format!("{:x}", digest.finalize());
-        if !self.request.changes.is_empty() {
-            self.preview = Some(
-                self.base
-                    .prepare(self.request.clone())
-                    .map_err(|error| TransactionError::InvalidWriteSet(error.to_string()))?,
-            );
+        let request_digest = format!("{:x}", digest.finalize());
+        if !crate::product_commit::valid_digest(&request_digest) {
+            return Err(TransactionError::InvalidWriteSet(
+                "rebound request digest is not a SHA-256 digest".to_owned(),
+            ));
+        }
+        self.request.request_digest = request_digest.clone();
+        match &mut self.preview {
+            // The preview is already the result of preparing this exact write
+            // set against this exact base, and the request digest reaches the
+            // prepared snapshot in one place only: `prepare` checks that it is
+            // a digest and copies it in. Nothing else it does reads it. So the
+            // digest is checked above and written in place here, instead of
+            // preparing — and so revalidating — the whole write set again.
+            //
+            // The replay branch of `prepare` is the one place the digest could
+            // decide an outcome, and it cannot be reached from a session: it
+            // requires the base's own parent to be the base, which no snapshot
+            // satisfies. A staged preview therefore came from the ordinary
+            // path, which is a pure function of the base and the changes.
+            Some(preview) => preview.request_digest = request_digest,
+            None if !self.request.changes.is_empty() => {
+                self.preview = Some(
+                    self.base
+                        .prepare_verified(self.request.clone())
+                        .map_err(|error| TransactionError::InvalidWriteSet(error.to_string()))?,
+                );
+            }
+            None => {}
         }
         Ok(())
     }

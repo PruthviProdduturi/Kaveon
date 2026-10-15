@@ -385,6 +385,19 @@ impl CatalogSnapshot {
     /// publication conditional on `request.base`; this function performs no I/O.
     pub fn prepare(&self, request: PrepareChange) -> Result<Self, ManifestError> {
         self.validate()?;
+        self.prepare_verified(request)
+    }
+
+    /// `prepare` for a base that is already known to be valid.
+    ///
+    /// Validating the base is a full walk of every product record and typed row
+    /// it holds plus a rebuild of all its indexes, and a transaction pays it
+    /// again for every statement it stages even though the base cannot change
+    /// while the session is open. The two callers inside this crate both hold a
+    /// snapshot that was validated when it was read from storage, or that was
+    /// built and validated by this function; nothing else can reach it, which is
+    /// why it is crate-private rather than part of the published API.
+    pub(crate) fn prepare_verified(&self, request: PrepareChange) -> Result<Self, ManifestError> {
         validate_request(&request)?;
 
         if request.operation_id == self.operation_id {
@@ -566,7 +579,9 @@ impl CatalogSnapshot {
             return Err(error("snapshot control-record limit exceeded"));
         }
         validate_product_records(&product_records)?;
-        validate_typed_rows(&typed_rows)?;
+        // `build_typed_row_indexes` validates the rows it is given before it
+        // builds anything, so validating them here as well walked every row in
+        // the catalog twice for nothing.
         validate_typed_schema_bindings(&typed_rows, &typed_schemas)?;
         let typed_row_indexes = build_typed_row_indexes(&typed_rows)?;
         let generation = self
