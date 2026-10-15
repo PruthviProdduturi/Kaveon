@@ -66,8 +66,10 @@ are still required before item 1 can move to Complete. The rerun summary is
 records the cancellation-harness correction and a passing live result. The focused scheduler
 gate report `docs/qualification/track1-scheduler-gates-2026-10-14.md` records
 the corresponding skew-tail steal, retry, and stale-attempt unit evidence; a
-live AKS fault-injection run is still required before treating those behaviors
-as deployment-qualified.
+live AKS fault-injection run is now retained in the rerun report. The live
+skew observation `docs/qualification/track1-aks-skew-observation-2026-10-14.md`
+records a 29.3x data imbalance with bounded worker timing and exact results;
+it does not claim a general skew-splitting optimizer.
 
 ## Validation commands
 
