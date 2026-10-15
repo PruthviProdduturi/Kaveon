@@ -286,41 +286,70 @@ fn try_integer_batch_top_n(
         keys.push(values);
     }
 
-    let mut references = keys
-        .iter()
-        .enumerate()
-        .flat_map(|(batch, values)| (0..values.len()).map(move |row| (batch, row)))
-        .collect::<Vec<_>>();
-    references.sort_by(|left, right| {
-        let left_key = keys[left.0][left.1];
-        let right_key = keys[right.0][right.1];
-        match (left_key, right_key) {
-            (None, None) => std::cmp::Ordering::Equal,
-            (None, Some(_)) => {
-                if sort_expr.nulls_first {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                }
-            }
-            (Some(_), None) => {
-                if sort_expr.nulls_first {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Less
-                }
-            }
-            (Some(left), Some(right)) => {
-                let ordering = left.cmp(&right);
-                if sort_expr.ascending {
-                    ordering
-                } else {
-                    ordering.reverse()
-                }
+    let compare_keys = |left: Option<i128>, right: Option<i128>| match (left, right) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => {
+            if sort_expr.nulls_first {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
             }
         }
+        (Some(_), None) => {
+            if sort_expr.nulls_first {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
+        }
+        (Some(left), Some(right)) => {
+            let ordering = left.cmp(&right);
+            if sort_expr.ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        }
+    };
+    let batches_are_sorted = keys.iter().all(|values| {
+        values
+            .windows(2)
+            .all(|window| compare_keys(window[0], window[1]) != std::cmp::Ordering::Greater)
     });
-    references.truncate(limit);
+    let references = if batches_are_sorted {
+        // Worker TopN operators emit sorted batches. Merge their heads instead
+        // of materializing and sorting every candidate row at the coordinator.
+        // The fallback below remains available for raw/unsorted inputs.
+        let mut cursors = vec![0usize; keys.len()];
+        let mut merged = Vec::with_capacity(limit.min(keys.iter().map(Vec::len).sum()));
+        while merged.len() < limit {
+            let next = keys
+                .iter()
+                .enumerate()
+                .filter_map(|(batch, values)| {
+                    let row = cursors[batch];
+                    (row < values.len()).then_some((batch, row))
+                })
+                .min_by(|left, right| {
+                    compare_keys(keys[left.0][left.1], keys[right.0][right.1])
+                });
+            let Some((batch, row)) = next else { break };
+            merged.push((batch, row));
+            cursors[batch] += 1;
+        }
+        merged
+    } else {
+        let mut references = keys
+            .iter()
+            .enumerate()
+            .flat_map(|(batch, values)| (0..values.len()).map(move |row| (batch, row)))
+            .collect::<Vec<_>>();
+        references.sort_by(|left, right| {
+            compare_keys(keys[left.0][left.1], keys[right.0][right.1])
+        });
+        references.truncate(limit);
+        references
+    };
 
     let mut selected = Vec::with_capacity(references.len());
     let mut offsets = vec![0u32; batches.len()];
@@ -877,6 +906,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(distributed, expected);
+    }
+
+    #[test]
+    fn merges_sorted_integer_batches_with_k_way_heads() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, false),
+            Field::new("id", DataType::Utf8, false),
+        ]));
+        let worker_a = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![9, 7, 1])),
+                Arc::new(StringArray::from(vec!["a9", "a7", "a1"])),
+            ],
+        )
+        .unwrap();
+        let worker_b = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![8, 7, 2])),
+                Arc::new(StringArray::from(vec!["b8", "b7", "b2"])),
+            ],
+        )
+        .unwrap();
+        let ordering = vec![SortExpr::new(Expr::Column("score".into()), false)];
+
+        let result = merge_top_n(&schema, &[worker_a, worker_b], &ordering, 4)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[9, 8, 7, 7]
+        );
+        assert_eq!(
+            result
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a9"), Some("b8"), Some("a7"), Some("b7")]
+        );
     }
 
     #[test]
