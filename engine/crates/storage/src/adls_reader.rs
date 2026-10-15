@@ -1418,8 +1418,15 @@ impl AdlsParquetReader {
                         Err(OpenError::NotFound(_)) => {
                             // No object at the location: a directory of
                             // Parquet files is a table too.
+                            let (start_tx, start_rx) = std::sync::mpsc::sync_channel(1);
+                            let _ = start_tx.send(());
                             self.directory_reader(store, metrics)
-                                .run(initial_sender, batch_sender)
+                                .run(
+                                    initial_sender,
+                                    batch_sender,
+                                    start_rx,
+                                    std::sync::Arc::new(std::sync::Mutex::new(None)),
+                                )
                                 .await;
                             return;
                         }
