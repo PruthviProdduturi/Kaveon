@@ -242,6 +242,9 @@ impl Binder<'_> {
                         Expr::Star => self
                             .using_wildcard_columns(&input.plan)
                             .unwrap_or_else(|| vec![Expr::Star]),
+                        Expr::Column(name) if name.ends_with(".*") => self
+                            .qualified_wildcard_columns(&input.plan, name.trim_end_matches(".*"))
+                            .unwrap_or_else(|| vec![Expr::Column(name)]),
                         other => vec![other],
                     })
                     .map(|column| {
@@ -603,6 +606,21 @@ impl Binder<'_> {
                 .map(|column| Expr::Column(column.physical)),
         );
         Some(columns)
+    }
+
+    fn qualified_wildcard_columns(
+        &self,
+        plan: &LogicalPlan,
+        qualifier: &str,
+    ) -> Option<Vec<Expr>> {
+        let scope = self.scope_of(plan);
+        let columns = scope
+            .columns
+            .into_iter()
+            .filter(|column| column.qualifier.as_deref() == Some(qualifier))
+            .map(|column| Expr::Column(column.physical))
+            .collect::<Vec<_>>();
+        (!columns.is_empty()).then_some(columns)
     }
 
     fn fresh_name(&self) -> String {
@@ -2065,6 +2083,19 @@ mod tests {
         else {
             panic!("ON join must not inherit USING wildcard metadata");
         };
+    }
+
+    #[test]
+    fn qualified_wildcard_selects_only_the_named_relation() {
+        let plan = bound("SELECT c.* FROM customer c JOIN customer d ON c.c_custkey = d.c_custkey");
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("qualified wildcard should remain a projection");
+        };
+        assert_eq!(columns.len(), 4);
+        assert!(columns.iter().all(|column| matches!(
+            column,
+            Expr::Column(name) if name.starts_with("c.")
+        )));
     }
 
     #[test]
