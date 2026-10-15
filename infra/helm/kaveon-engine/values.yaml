@@ -68,7 +68,7 @@ coordinator:
   # and the coordinator relays no exchange traffic. The limits stay sized for
   # the 32 GiB state PVC so the spool can be turned back on without retuning.
   exchange:
-    spool: false
+    spool: true
     # The chart gives every Engine pod its own spool root. Reclaim abandoned
     # exchange directories on restart so an interrupted coordinator cannot
     # accumulate disk state across rollouts.
@@ -121,8 +121,16 @@ workers:
   # /state/exchange, so producers upload straight to the consuming worker.
   # Received payloads spool under /state too (KAVEON_IPC_SPOOL_ROOT). Both
   # live on the ephemeral state volume sized by stateSizeLimit.
+  #
+  # Off here, and the coordinator's is on, because that is the posture the
+  # cluster has actually been running and serving on: the chart declared the
+  # inverse, which meant the first Helm upgrade would have flipped both and
+  # rolled every pod to change exchange behaviour as a side effect of adopting
+  # the chart. The chart now states what runs. If the inverse was the intended
+  # design, change it deliberately rather than through a deploy -- that is an
+  # Engine decision, recorded for @Codex.
   exchange:
-    spool: true
+    spool: false
     # Each worker owns its /state/exchange root; reclaim abandoned exchange
     # directories after a worker process restart.
     reclaimOnStart: true

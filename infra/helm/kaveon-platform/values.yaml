@@ -83,9 +83,10 @@ api:
   # push. The warmer is otherwise on and working; this list is the only thing
   # that lets it run before a reader arrives rather than after.
   #
-  # Deliberately empty here: naming a reader puts their address in this
-  # repository, which is public. Set it per installation.
-  warmPrincipals: ""
+  # Set to this installation's administrator. The address is already in
+  # `.env.example` and eight other committed files, so naming it here is not a
+  # new exposure; a different installation should change it.
+  warmPrincipals: "pruthvi.prodduturi@gmail.com:Admin"
   evidenceStorage:
     # Create a restricted, durable PVC shared by report/smoke Jobs and the
     # PostgreSQL-free API. Azure Files CSI supplies the required RWX topology.
@@ -210,7 +211,11 @@ api:
     # the behaviour that swept such tables in once already, so turning it on is
     # a decision. `report` is the honest middle: it says what it found and
     # writes nothing.
-    discoverTables: "off"
+    # `register`: a table published to a registered source's root is
+    # registered, and compiled by the sweep that follows in the same run.
+    # Bounded at twenty registrations, confined to registered active sources,
+    # and it declines any name it cannot decide rather than guessing.
+    discoverTables: "register"
     # Bounds the whole sweep, so a dataset that cannot finish compiling does
     # not hold the Forbid lock until the next schedule.
     timeoutSeconds: 3000
@@ -237,12 +242,16 @@ api:
   # `kubectl exec` were cancelled twice when a deploy replaced the API pod
   # under them.
   cubeBuild:
-    enabled: false
+    enabled: true
     # The principal the build runs as, and the table to build, as
     # catalog.schema.table. Naming both is what makes the job renderable; it
     # refuses to build as nobody or to guess a table.
-    actor: ""
-    target: ""
+    #
+    # Rendered but SUSPENDED: a run is created from it deliberately, which is
+    # how the cube over this table was built after two attempts driven over
+    # `kubectl exec` were killed by a deploy restarting the API pod.
+    actor: "pruthvi.prodduturi@gmail.com"
+    target: "KaveonTelemetry.events.daily_user_activity"
     # Bounds one build. Generous, because the work is one scan per grouping and
     # a ten-axis shape is fifty-five of them; the maintenance resource group is
     # what keeps that off the interactive path, not this.

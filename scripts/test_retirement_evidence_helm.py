@@ -2,7 +2,11 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).parents[1] / "infra" / "helm" / "kaveon-portal-test"
+# The chart was renamed kaveon-portal-test -> kaveon-platform and this path was
+# not. The test then failed on a missing file rather than on a broken contract,
+# and it failed only in CI: a pytest run from `api/` never collects `scripts/`,
+# so the whole suite looked green locally while the pipeline stayed red.
+ROOT = Path(__file__).parents[1] / "infra" / "helm" / "kaveon-platform"
 
 
 def test_evidence_pvc_is_opt_in_durable_and_rwx_capable():
@@ -17,16 +21,29 @@ def test_evidence_pvc_is_opt_in_durable_and_rwx_capable():
 
 
 def test_restart_api_reads_same_durable_evidence_paths():
+    """The API's evidence contract, wherever the chart happens to declare it.
+
+    The three environment variables moved out of `api.yaml` into the shared
+    `portal.apiEnv` helper, so pinning this to one file asserted the layout of
+    the chart rather than the contract, and failed on a move that changed
+    nothing. The mount and the claim stay in the pod spec, so those are still
+    read from `api.yaml`; the variables are looked for across the API's whole
+    declared environment.
+    """
     api = (ROOT / "templates" / "api.yaml").read_text("utf-8")
-    required = (
+    helpers = (ROOT / "templates" / "_helpers.tpl").read_text("utf-8")
+    environment = api + helpers
+    for value in (
         "KAVEON_POSTGRESQL_RESTART_REHEARSAL_MODE",
         "KAVEON_POSTGRESQL_RECONCILIATION_REPORTS",
         "KAVEON_POSTGRESQL_OPERATIONAL_RECEIPTS",
+    ):
+        assert value in environment, f"{value} is declared nowhere in the API env"
+    for value in (
         "mountPath: /retirement, readOnly: true",
         "persistentVolumeClaim: {claimName: {{ .Values.api.cutover.evidencePvc }}",
-    )
-    for value in required:
-        assert value in api
+    ):
+        assert value in api, f"{value} is not in the API pod spec"
 
 
 def test_example_uses_one_claim_for_every_evidence_consumer():
