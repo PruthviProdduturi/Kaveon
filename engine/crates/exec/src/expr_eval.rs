@@ -6302,6 +6302,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             (start..end)
                                 .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
                         }
+                        DataType::LargeUtf8 => {
+                            let keys = map_keys.as_string::<i64>();
+                            let needle = requested.as_string::<i64>().value(row);
+                            (start..end)
+                                .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                        }
                         other => {
                             return Err(KaveonError::Execution(format!(
                                 "ELEMENT_AT does not support MAP key type {other}"
@@ -11122,8 +11128,41 @@ mod tests {
         let contains = eval_scalar_function("CONTAINS_KEY", &[Arc::clone(&map), Arc::clone(&needle)], 1)
             .unwrap();
         assert_eq!(contains.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
-        let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
+        let value = eval_scalar_function(\n            "MAP_ELEMENT_AT",\n            &[Arc::clone(&map), Arc::clone(&needle)],\n            1,\n        )\n        .unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
+    }
+
+    #[test]
+    fn element_at_accepts_large_utf8_map_keys() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::LargeUtf8, false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let entries = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(LargeStringArray::from(vec![Some("wide")])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+            ],
+            None,
+        );
+        let map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
+                entries,
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let needle = Arc::new(LargeStringArray::from(vec![Some("wide")])) as ArrayRef;
+        let value = eval_scalar_function("ELEMENT_AT", &[map, needle], 1).unwrap();
+        assert_eq!(
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(7)]
+        );
     }
 
     #[test]

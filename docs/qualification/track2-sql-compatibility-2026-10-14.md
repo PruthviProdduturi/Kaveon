@@ -225,6 +225,13 @@ validation, and bounded spill behavior. It does not close the Track 1 global
 ORDER BY gate: final ordered results still merge at one coordinator, so a
 fully parallel ordered stream and its deployment qualification remain open.
 
+## Large UTF-8 map-key qualification
+
+`ELEMENT_AT(map, key)` now accepts maps whose key array uses Arrow
+`LargeUtf8`, matching the existing regular-UTF8 lookup behavior. The focused
+expression suite passed `142/143` tests with one pre-existing ignored case,
+and the server regression suite passed `394/394`.
+
 ## Large-list element access qualification
 
 `ELEMENT_AT(array, index)` now accepts both regular and `LargeListArray`
