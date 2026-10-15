@@ -469,6 +469,43 @@ and parallelism one would narrow that further at the cost of a much longer
 build; left as it is, because the cube is a one-off and makes these
 aggregations answerable without a scan afterwards.
 
+### D-45 · A ranking was led by the groups with no data
+**fixed** · 2026-10-14
+
+"Top 10 countries by energy consumption" answered with ten entities that have
+no energy figures at all — `Africa (Ember)`, `Curacao`, `OPEC (Shift)` — each
+shown as 0. Their `SUM` is NULL, and `ORDER BY … DESC` sorts NULL first, which
+is standard SQL and what PostgreSQL and Trino both do. So the statement was
+correct and the answer was useless.
+
+Ranked statements now carry `HAVING <aggregate> IS NOT NULL`. Chosen over
+`NULLS LAST` because the builder serves every dialect and SQL Server/Fabric has
+no `NULLS LAST`, and because it reads better: a group with no measurement does
+not belong in a ranking of that measure at all rather than belonging at the
+bottom. Only where the aggregate can be null — a COUNT never is, so a count
+ranking keeps its clean statement instead of carrying a clause that is always
+true. The unranked shape the cube answers is untouched.
+
+### D-46 · The energy dataset's country dimension contains aggregates
+**open** · 2026-10-14
+
+With D-45 fixed, the same question answers `World`, `Non-OPEC (EIA)`,
+`High-income countries`, `OECD (EI)` — real figures, but not countries. The
+`country` column of `climate_energy.energy` holds regional, economic and
+organisational aggregates alongside countries, as the upstream data does.
+
+`iso_code` separates them cleanly: every aggregate has NULL and every country
+has a code, and filtering on it gives the right answer — United States,
+China, Russia, Japan, India, Germany, Canada, France, United Kingdom, Brazil.
+
+What is missing is anywhere to put that rule. A dataset's `filters` are
+equality pairs, so `iso_code IS NOT NULL` cannot be expressed, and dropping
+the aggregate rows is wrong because `World` is a legitimate answer to a
+question about the world. This needs a dataset-level predicate the ask path
+applies — the same mechanism would serve any dataset whose dimension mixes
+members with totals, which is most published statistics.
+
+
 ---
 
 ## Verified fixed

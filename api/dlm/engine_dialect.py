@@ -160,6 +160,16 @@ POSTGRESQL = Dialect()
 ENGINE = EngineDialect()
 
 
+# A whole-expression COUNT is the one aggregate that cannot return NULL.
+# Anything else -- SUM, AVG, MIN, MAX, or an expression combining them, where a
+# division by a null count is itself null -- can.
+_PURE_COUNT = re.compile(r"\s*count\s*\(.*\)\s*\Z", re.IGNORECASE | re.DOTALL)
+
+
+def _can_be_null(metric_expr: str) -> bool:
+    return _PURE_COUNT.match(str(metric_expr or "")) is None
+
+
 def assemble(dialect: Dialect, *, schema: Optional[str], fact: str, metric_expr: str, metric_name: str,
              group_cols: Sequence[str], time_group: Optional[str], filters: Sequence[Dict[str, Any]],
              columns: Sequence[dict], date_column: Optional[str] = None, year: Optional[int] = None,
@@ -195,6 +205,29 @@ def assemble(dialect: Dialect, *, schema: Optional[str], fact: str, metric_expr:
     elif group_cols:
         sql += f" GROUP BY {', '.join(dialect.ident(c) for c in group_cols)}"
         if ranked:
+            # A ranking excludes groups that have no value for the measure.
+            #
+            # Without this, "top 10 countries by energy consumption" answered
+            # with the ten entities that have NO energy figures at all. Their
+            # SUM is NULL, and in `ORDER BY … DESC` a NULL sorts FIRST — which
+            # is standard (and what PostgreSQL and Trino both do), so the
+            # statement was correct SQL returning a useless answer, with the
+            # UI rendering each NULL as 0.
+            #
+            # `HAVING … IS NOT NULL` rather than `NULLS LAST`, because this
+            # builder serves every dialect and SQL Server/Fabric has no
+            # `NULLS LAST`. It is also the better reading: a group with no
+            # measurement does not belong in a ranking of that measure at all,
+            # rather than belonging at the bottom.
+            #
+            # Only where the aggregate can actually be null. A COUNT never is,
+            # over any group, so `HAVING COUNT(*) IS NOT NULL` would be a
+            # clause that is always true — noise in every statement a reader
+            # sees in the evidence, for no behaviour. SUM, AVG, MIN and MAX
+            # return NULL over a group with no values, which is the case this
+            # exists for.
+            if _can_be_null(metric_expr):
+                sql += f" HAVING {dialect.expression(metric_expr)} IS NOT NULL"
             order_dir = "ASC" if sort_asc else "DESC"
             sql += f" ORDER BY {dialect.ident(metric_name)} {order_dir} LIMIT {int(limit_n or 50)}"
     return sql
