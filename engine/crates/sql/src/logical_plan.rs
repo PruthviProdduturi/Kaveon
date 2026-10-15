@@ -2228,10 +2228,10 @@ fn build_projection(
     for item in projection {
         match item {
             ast::SelectItem::UnnamedExpr(expr) => {
-                columns.push(ast_expr_to_expr(expr)?);
+                columns.push(ast_projection_expr_to_expr(expr)?);
             }
             ast::SelectItem::ExprWithAlias { expr, alias } => {
-                let e = ast_expr_to_expr(expr)?;
+                let e = ast_projection_expr_to_expr(expr)?;
                 columns.push(Expr::Alias {
                     expr: Box::new(e),
                     name: alias.value.clone(),
@@ -2290,6 +2290,24 @@ fn contains_using_join(plan: &LogicalPlan) -> bool {
         }
         LogicalPlan::Scan { .. } | LogicalPlan::Unnest { .. } => false,
     }
+}
+
+/// Keep date predicates in their compact day-number form for storage pruning,
+/// but preserve the SQL type when a DATE literal is projected to a client.
+fn ast_projection_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
+    if let ast::Expr::TypedString {
+        data_type: ast::DataType::Date,
+        value,
+    } = expr
+    {
+        parse_date_days(value)
+            .ok_or_else(|| sql_err(format!("invalid DATE literal: '{value}'")))?;
+        return Ok(Expr::Cast {
+            expr: Box::new(Expr::Literal(ScalarValue::Utf8(value.clone()))),
+            data_type: CastTarget::Date32,
+        });
+    }
+    ast_expr_to_expr(expr)
 }
 
 /// The sorted plan and, when a key had to be carried through the
@@ -4346,6 +4364,20 @@ mod tests {
                 right: Box::new(Expr::Literal(ScalarValue::Int64(15887))),
             }
         );
+    }
+
+    #[test]
+    fn projected_date_literals_keep_date_type() {
+        let plan = sql_to_logical_plan("SELECT DATE '2013-07-01' AS d").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Alias { expr, name }
+                if name == "d"
+                    && matches!(expr.as_ref(), Expr::Cast { data_type: CastTarget::Date32, .. })
+        ));
     }
 
     #[test]
