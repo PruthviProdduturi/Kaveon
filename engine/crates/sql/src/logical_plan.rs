@@ -5610,16 +5610,18 @@ mod tests {
 
     #[test]
     fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
-        for sql in [
-            "SELECT * FROM UNNEST(ARRAY[1, 2])",
-            "SELECT * FROM UNNEST(ARRAY[1, 2]) AS t(value)",
-            "SELECT * FROM system.UNNEST(ARRAY[1, 2])",
+        for (sql, expected) in [
+            (
+                "SELECT * FROM UNNEST(ARRAY[1, 2], ARRAY[3, 4])",
+                "exactly one ARRAY expression",
+            ),
+            (
+                "SELECT * FROM UNNEST(values) AS t(value)",
+                "constant ARRAY expression",
+            ),
         ] {
             let error = sql_to_logical_plan(sql).unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                "sql: row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)"
-            );
+            assert!(error.to_string().contains(expected), "{error}");
         }
     }
 
