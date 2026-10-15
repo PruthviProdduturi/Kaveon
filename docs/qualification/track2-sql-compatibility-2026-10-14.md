@@ -203,9 +203,8 @@ storage Parquet test group passes. Single-object readers now publish their
 footer schema, wait for the first batch request, and accept exact build-side
 keys before constructing the remote decoder; an in-memory object-store
 regression returns exactly those keys with decoder row filtering enabled.
-Object-directory scans now wait after their pinned listing and schema plan,
-then add exact file-column keys to every residual before opening a remote file
-decoder. A focused directory regression selects only the first and last keys
-from the fixture. Partition-key filters remain conservatively rejected rather
-than being applied as file predicates, and cloud snapshot qualification
-remains open.
+Object-directory scans now wait after their pinned listing and schema plan.
+They fold exact keys over each file's partition values first, prune files whose
+path cannot match, and add only the remaining physical-column residual to each
+remote decoder. A focused directory regression selects only the first and last
+keys from the fixture. Cloud snapshot qualification remains open.

@@ -1264,7 +1264,6 @@ enum ColumnSource {
 #[derive(Clone, Debug)]
 pub(crate) struct DirectoryColumns {
     schema: SchemaRef,
-    file_schema: SchemaRef,
     /// The projection the per-file reader runs, or `None` for every file
     /// column.
     file_columns: Option<Vec<String>>,
@@ -1291,7 +1290,6 @@ impl DirectoryColumns {
                 .collect();
             return Ok(Self {
                 schema: table,
-                file_schema: Arc::clone(file_schema),
                 file_columns: None,
                 sources,
                 partitions: layout.columns.clone(),
@@ -1331,7 +1329,6 @@ impl DirectoryColumns {
         }
         Ok(Self {
             schema,
-            file_schema: Arc::clone(file_schema),
             file_columns: Some(file_columns),
             sources,
             partitions: layout.columns.clone(),
@@ -1344,10 +1341,6 @@ impl DirectoryColumns {
 
     pub(crate) fn file_columns(&self) -> Option<&[String]> {
         self.file_columns.as_deref()
-    }
-
-    pub(crate) fn has_file_column(&self, column: &str) -> bool {
-        self.file_schema.index_of(column).is_ok()
     }
 
     /// A file batch, re-wrapped to the advertised schema with the file's
@@ -1838,24 +1831,39 @@ impl ObjectDirectoryReader {
             }
         };
         if let Some(predicate) = runtime_filter {
-            let StoragePredicate::In { column, .. } = &predicate else {
+            if !matches!(predicate, StoragePredicate::In { .. }) {
                 let _ = tx.send(Err(error(
                     "directory runtime filter must be a single-column IN predicate",
                 )));
                 return;
+            }
+            let layout = PartitionLayout {
+                columns: columns.partitions.clone(),
+                values: Vec::new(),
+                sizes: Vec::new(),
             };
-            if !columns.has_file_column(column) {
-                let _ = tx.send(Err(error(format!(
-                    "directory runtime filter references non-file column '{column}'"
-                ))));
-                return;
-            }
-            for scan in &mut files {
-                scan.residual = Some(match scan.residual.take() {
-                    Some(existing) => StoragePredicate::And(vec![existing, predicate.clone()]),
-                    None => predicate.clone(),
-                });
-            }
+            files.retain_mut(|scan| {
+                match fold_predicate(&predicate, &layout, &scan.values) {
+                    Folded::Known(SqlBool::False | SqlBool::Null) => false,
+                    Folded::Known(SqlBool::True) => true,
+                    Folded::Unknown => {
+                        scan.residual = Some(match scan.residual.take() {
+                            Some(existing) => {
+                                StoragePredicate::And(vec![existing, predicate.clone()])
+                            }
+                            None => predicate.clone(),
+                        });
+                        true
+                    }
+                    Folded::Open { predicate, .. } => {
+                        scan.residual = Some(match scan.residual.take() {
+                            Some(existing) => StoragePredicate::And(vec![existing, predicate]),
+                            None => predicate,
+                        });
+                        true
+                    }
+                }
+            });
         }
         for scan in files {
             let mut reader =
@@ -3086,6 +3094,12 @@ mod tests {
         assert_eq!(snapshot.files_considered, 5);
         assert_eq!(snapshot.files_opened, 5);
         assert_eq!(snapshot.files_pruned_by_partition, 0);
+
+        let mut runtime_partition = reader().read_blocking().unwrap();
+        assert!(runtime_partition
+            .apply_runtime_filter("region", &[ScalarValue::Utf8("us".into())])
+            .unwrap());
+        assert_eq!(values(&mut runtime_partition), vec![3]);
 
         // A projection orders keys and file columns as asked.
         let mut projected = reader()
