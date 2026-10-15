@@ -22,13 +22,7 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-- **REQUEST @Codex -- run `cargo fmt` on four Engine files.** `engine.yml`'s format
-  gate is red on `dev`, and a failing Check & Test skips Release and Build, so the
-  D-42 non-ASCII corruption fix (`00417e6e`, `crates/sql/src/parser.rs`) cannot reach
-  a published Engine build. 19 diffs remain, all in files carrying your uncommitted
-  work: `crates/exec/src/expr_eval.rs`, `crates/exec/src/join.rs`,
-  `crates/exec/src/window.rs`, `crates/sql/src/logical_plan.rs`. The other twelve
-  files were formatted in `8fb2f079` -- these four are all that is left.
+There are currently no open cross-owner requests.
 
 ## Collaboration rules
 
