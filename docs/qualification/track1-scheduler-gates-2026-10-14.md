@@ -23,3 +23,11 @@ All three tests passed. The assertions prove that:
 This is scheduler-level evidence. It does not claim that a live AKS run
 experienced a skewed tail or stale attempt; that remains a live fault-injection
 qualification requirement.
+
+## Clean-checkout rerun — 2026-10-15
+
+The three focused gates were rerun from the clean Engine checkout used for the
+current pushed baseline. `stealing_a_skewed_tail_invalidates_the_original_attempt`,
+`failed_leases_return_splits_to_the_queue`, and
+`does_not_retry_a_worker_for_the_same_partition` each passed (`1 passed,
+0 failed`).
