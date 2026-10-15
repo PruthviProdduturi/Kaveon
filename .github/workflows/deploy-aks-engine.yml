@@ -1,0 +1,633 @@
+name: Deploy Kaveon Engine to AKS
+
+# Defect D-7: `infra/helm/kaveon-engine` was deployed by nobody. Every change to
+# it — `workers.replicas: 4`, the Trino anti-affinity, the node-sized resource
+# limits — was applied to the live cluster by hand, so the chart and the cluster
+# could disagree without anything saying so.
+#
+# This workflow closes that, but it is deliberately NOT a copy of the platform
+# deploy, because the Engine is not the platform:
+#
+#   * A push renders, lints and reports drift. It does not touch the cluster.
+#   * Applying is a `workflow_dispatch` with `mode: apply`.
+#
+# The reason is the coordinator. It is one replica with the catalog on a PVC,
+# it is not HA, and running queries do not resume across a restart — and this
+# cluster also hosts a benchmark campaign and long maintenance jobs (cube
+# builds run for minutes). A push-triggered `helm upgrade` would roll the
+# coordinator and every worker whenever anyone edited the chart, which is an
+# outage nobody asked for and a discarded benchmark round. So the continuous
+# half of CI/CD is the drift report, and rolling the Engine stays a decision
+# somebody makes.
+#
+# To make a push apply instead, give the `deploy` job `mode: apply` below. Read
+# the restart guard first.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: plan renders and reports drift; apply runs helm upgrade
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply]
+      image_digest:
+        description: >-
+          Engine image digest to deploy (sha256:...). Empty keeps the digest
+          the cluster is already running, so a chart-only deploy changes no
+          image.
+        required: false
+        type: string
+      coordinator_replicas:
+        description: coordinator replicas, or "preserve" to keep the live count
+        required: false
+        default: preserve
+        type: string
+      worker_replicas:
+        description: >-
+          worker replicas, or "preserve" to keep the live count. Preserve is
+          the default so a benchmark round measuring with three workers, or the
+          availability guard holding its floor, is not fought by a deploy.
+        required: false
+        default: preserve
+        type: string
+      accept_restart:
+        description: >-
+          Required when the render differs from the running pods. Without it a
+          deploy that would roll the coordinator and the workers is refused and
+          the differing fields are printed instead.
+        required: false
+        default: false
+        type: boolean
+      allow_busy:
+        description: >-
+          Deploy even though non-scheduled Jobs are active or the benchmark
+          engine is up. Off by default: those are the things a rollout ruins.
+        required: false
+        default: false
+        type: boolean
+      allow_resource_groups_takeover:
+        description: >-
+          Allow a render in which Helm owns the resource-groups document. Off
+          by default, because the coordinator holds the live copy at
+          /state/catalog/resource-groups.json and the rendered ConfigMap takes
+          precedence over it, after which a runtime PUT (Settings ->
+          Governance) fails. See infra/helm/kaveon-engine/examples/README.md.
+        required: false
+        default: false
+        type: boolean
+      allow_product_catalog_change:
+        description: >-
+          Allow the product-transactions account/container/prefix to differ
+          from what the coordinator is running. Off by default: a prefix that
+          points one segment short of the catalog is indistinguishable from a
+          new installation, and the Engine answers it by initialising an empty
+          one beside the real data.
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [dev]
+    paths:
+      - 'infra/helm/kaveon-engine/**'
+      - '.github/workflows/deploy-aks-engine.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never cancel in flight: a cancelled `helm upgrade` leaves the release
+  # pending and the next run refuses to touch it.
+  group: kaveon-aks-engine
+  cancel-in-progress: false
+
+env:
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'kaveon-rg' }}
+  AZURE_AKS_NAME: ${{ vars.AZURE_AKS_NAME || 'kaveon-aks' }}
+  KAVEON_ACR_NAME: ${{ vars.KAVEON_ACR_NAME || 'kaveonacr' }}
+  # Namespace and release name are fixed. The Bicep workload identity federated
+  # subject names this service account in this namespace, and the chart's TLS
+  # certificate SANs are `kaveon-coordinator.kaveon.svc.cluster.local` and
+  # `*.kaveon-workers.kaveon.svc.cluster.local`. A different release name
+  # renders different DNS and the certificate stops covering it.
+  NAMESPACE: kaveon
+  RELEASE: kaveon
+  CHART: infra/helm/kaveon-engine
+  HELM_TIMEOUT: 15m
+  # Fallbacks for a cluster that has no Engine yet. On an existing installation
+  # every one of these is read back from what is running, and these are unused.
+  VAR_IMAGE_REPOSITORY: ${{ vars.KAVEON_ENGINE_IMAGE_REPOSITORY }}
+  VAR_IMAGE_DIGEST: ${{ vars.KAVEON_ENGINE_IMAGE_DIGEST }}
+  VAR_CLIENT_ID: ${{ vars.KAVEON_ENGINE_WORKLOAD_IDENTITY_CLIENT_ID }}
+  VAR_PRODUCT_ACCOUNT: ${{ vars.KAVEON_PRODUCT_ADLS_ACCOUNT }}
+  VAR_PRODUCT_CONTAINER: ${{ vars.KAVEON_PRODUCT_ADLS_CONTAINER }}
+  VAR_PRODUCT_PREFIX: ${{ vars.KAVEON_PRODUCT_CATALOG_PREFIX }}
+
+jobs:
+  deploy:
+    name: ${{ inputs.mode == 'apply' && 'Deploy the Engine chart' || 'Render and report drift' }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      MODE: ${{ inputs.mode || 'plan' }}
+      INPUT_IMAGE_DIGEST: ${{ inputs.image_digest }}
+      INPUT_COORDINATOR_REPLICAS: ${{ inputs.coordinator_replicas || 'preserve' }}
+      INPUT_WORKER_REPLICAS: ${{ inputs.worker_replicas || 'preserve' }}
+      ACCEPT_RESTART: ${{ inputs.accept_restart || false }}
+      ALLOW_BUSY: ${{ inputs.allow_busy || false }}
+      ALLOW_RESOURCE_GROUPS: ${{ inputs.allow_resource_groups_takeover || false }}
+      ALLOW_CATALOG_CHANGE: ${{ inputs.allow_product_catalog_change || false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.10
+
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+
+      - name: Target the cluster
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${AZURE_SUBSCRIPTION_ID:-}" ]] || { echo 'Missing secret AZURE_SUBSCRIPTION_ID' >&2; exit 1; }
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+          az aks show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_AKS_NAME" \
+            --query '{state:provisioningState,power:powerState.code}' -o tsv \
+            | grep -q $'Succeeded\tRunning' \
+            || { echo 'AKS is not in Succeeded/Running state' >&2; exit 1; }
+          az aks get-credentials -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_AKS_NAME" --overwrite-existing >/dev/null
+          kubelogin convert-kubeconfig -l azurecli >/dev/null
+          kubectl get namespace "$NAMESPACE" >/dev/null
+
+      - name: Refuse a release that is mid-operation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # An interrupted `helm upgrade` leaves the release `pending-upgrade`
+          # and every later upgrade fails with "another operation in progress".
+          # Say so here rather than in the middle of a deploy. "not found" is a
+          # first install; any other failure is a failure and must not be read
+          # as one.
+          mkdir -p tmp
+          if helm status "$RELEASE" -n "$NAMESPACE" -o json > tmp/status.json 2> tmp/status.err; then
+            status="$(python3 -c 'import json; print(json.load(open("tmp/status.json"))["info"]["status"])')"
+          elif grep -qi 'not found' tmp/status.err; then
+            status=absent
+          else
+            cat tmp/status.err >&2
+            echo "Refusing: could not read the state of release $RELEASE." >&2
+            exit 1
+          fi
+          echo "Release $RELEASE: $status"
+          case "$status" in
+            deployed|absent) ;;
+            *) echo "Refusing: release $RELEASE is '$status'. Resolve it by hand (helm rollback, or helm upgrade once the lock clears) before deploying." >&2; exit 1 ;;
+          esac
+
+      - name: Read back the values this deploy must not invent
+        id: live
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sts() { kubectl -n "$NAMESPACE" get statefulset "$1" -o "jsonpath=$2" 2>/dev/null || true; }
+          coord_env() { sts "${RELEASE}-coordinator" "{.spec.template.spec.containers[0].env[?(@.name==\"$1\")].value}"; }
+
+          live_image="$(sts "${RELEASE}-coordinator" '{.spec.template.spec.containers[0].image}')"
+          live_repo="${live_image%@*}"; live_digest="${live_image##*@}"
+          [[ "$live_image" == *@* ]] || { live_repo=""; live_digest=""; }
+          live_coord_replicas="$(sts "${RELEASE}-coordinator" '{.spec.replicas}')"
+          live_worker_replicas="$(sts "${RELEASE}-worker" '{.spec.replicas}')"
+          live_client_id="$(kubectl -n "$NAMESPACE" get serviceaccount kaveon-engine \
+            -o 'jsonpath={.metadata.annotations.azure\.workload\.identity/client-id}' 2>/dev/null || true)"
+          live_pt_enabled="$(coord_env KAVEON_PRODUCT_TRANSACTIONS_ENABLED)"
+          live_pt_account="$(coord_env KAVEON_PRODUCT_ADLS_ACCOUNT)"
+          live_pt_container="$(coord_env KAVEON_PRODUCT_ADLS_CONTAINER)"
+          live_pt_prefix="$(coord_env KAVEON_PRODUCT_ADLS_PREFIX)"
+          live_coord_spool="$(coord_env KAVEON_COORDINATOR_EXCHANGE_SPOOL)"
+          live_worker_spool="$(sts "${RELEASE}-worker" '{.spec.template.spec.containers[0].env[?(@.name=="KAVEON_WORKER_EXCHANGE_SPOOL")].value}')"
+
+          # Precedence: dispatch input, then Actions variable, then what the
+          # cluster is running. The cluster is last because it is a fact, not a
+          # decision — but it is the only source that is never stale, which is
+          # why a chart-only deploy relies on it and changes no image.
+          repo="${VAR_IMAGE_REPOSITORY:-$live_repo}"
+          digest="${INPUT_IMAGE_DIGEST:-${VAR_IMAGE_DIGEST:-$live_digest}}"
+          client_id="${VAR_CLIENT_ID:-$live_client_id}"
+          pt_account="${VAR_PRODUCT_ACCOUNT:-$live_pt_account}"
+          pt_container="${VAR_PRODUCT_CONTAINER:-$live_pt_container}"
+          pt_prefix="${VAR_PRODUCT_PREFIX:-$live_pt_prefix}"
+          pt_enabled="${live_pt_enabled:-false}"
+          if [[ -n "$pt_account$pt_container$pt_prefix" ]]; then pt_enabled=true; fi
+
+          [[ -n "$repo" ]] || { echo 'No Engine image repository: set the Actions variable KAVEON_ENGINE_IMAGE_REPOSITORY' >&2; exit 1; }
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "Engine image digest must be sha256 plus 64 lowercase hex digits, got '$digest'" >&2; exit 1; }
+          [[ "$client_id" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "workloadIdentity.clientId is not a GUID: '$client_id'" >&2; exit 1; }
+          if [[ "$pt_enabled" == true ]]; then
+            for pair in "account=$pt_account" "container=$pt_container" "prefix=$pt_prefix"; do
+              [[ -n "${pair#*=}" ]] || { echo "productTransactions.${pair%%=*} is empty while product transactions are enabled" >&2; exit 1; }
+            done
+            # The prefix must name the catalog in full, head object included.
+            # Assembled from parts it once read one segment short, the Engine
+            # found no head, initialised a fresh genesis head beside the real
+            # one, and Studio truthfully reported an installation with no
+            # datasets while nine of them sat intact one directory deeper.
+            if [[ -n "$live_pt_prefix" && "$pt_prefix" != "$live_pt_prefix" && "$ALLOW_CATALOG_CHANGE" != true ]]; then
+              echo "Refusing: product catalog prefix would change from '$live_pt_prefix' to '$pt_prefix'. Re-run with allow_product_catalog_change if that is intended." >&2
+              exit 1
+            fi
+            if [[ -n "$live_pt_account" && "$pt_account" != "$live_pt_account" && "$ALLOW_CATALOG_CHANGE" != true ]]; then
+              echo "Refusing: product storage account would change from '$live_pt_account' to '$pt_account'." >&2; exit 1
+            fi
+            if [[ -n "$live_pt_container" && "$pt_container" != "$live_pt_container" && "$ALLOW_CATALOG_CHANGE" != true ]]; then
+              echo "Refusing: product container would change from '$live_pt_container' to '$pt_container'." >&2; exit 1
+            fi
+          fi
+
+          # Replicas are preserved, not declared. The chart says four workers;
+          # a benchmark round measuring node-equal runs three and the
+          # availability guard holds a floor of one. A deploy that rewrote the
+          # count would take a node back from a round in flight, or restore
+          # four during one. Setting them is an explicit input.
+          resolve() {
+            local want="$1" live="$2" floor="$3" role="$4"
+            if [[ "$want" == preserve ]]; then
+              if [[ -z "$live" ]]; then echo "$floor"; return; fi
+              if (( live < floor )); then
+                echo "$role is at $live replicas; raising to the availability-guard floor of $floor" >&2
+                echo "$floor"; return
+              fi
+              echo "$live"; return
+            fi
+            [[ "$want" =~ ^[0-9]+$ ]] || { echo "$role replicas must be a number or 'preserve', got '$want'" >&2; exit 1; }
+            (( want >= floor )) || { echo "$role replicas $want is below the availability-guard floor of $floor; the guard would raise it within a minute and roll the set a second time" >&2; exit 1; }
+            echo "$want"
+          }
+          # Floors mirror api/services/availability_guard.py FLOORS.
+          coord_replicas="$(resolve "$INPUT_COORDINATOR_REPLICAS" "$live_coord_replicas" 1 coordinator)"
+          worker_replicas="$(resolve "$INPUT_WORKER_REPLICAS" "$live_worker_replicas" 1 worker)"
+
+          mkdir -p tmp
+          cat > tmp/engine-values.yaml <<EOF
+          image:
+            repository: $repo
+            digest: $digest
+          workloadIdentity:
+            clientId: $client_id
+          coordinator:
+            replicas: $coord_replicas
+          workers:
+            replicas: $worker_replicas
+          productTransactions:
+            enabled: $pt_enabled
+            account: "$pt_account"
+            container: "$pt_container"
+            prefix: "$pt_prefix"
+          EOF
+          echo '--- values this run supplies (no secrets; the chart reads tokens and TLS from existing Secrets) ---'
+          cat tmp/engine-values.yaml
+          {
+            echo "live_coord_replicas=${live_coord_replicas:-absent}"
+            echo "live_worker_replicas=${live_worker_replicas:-absent}"
+            echo "live_coord_spool=${live_coord_spool:-absent}"
+            echo "live_worker_spool=${live_worker_spool:-absent}"
+            echo "chart_worker_replicas=$(grep -A40 '^workers:' "$CHART/values.yaml" | grep -m1 '^  replicas:' | tr -dc 0-9)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Lint and render
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          helm lint "$CHART" --strict -n "$NAMESPACE" -f tmp/engine-values.yaml
+          helm template "$RELEASE" "$CHART" -n "$NAMESPACE" -f tmp/engine-values.yaml > tmp/rendered.yaml
+          objects="$(grep -c '^kind:' tmp/rendered.yaml)"
+          echo "rendered $objects objects:"
+          grep -E '^kind:|^  name:' tmp/rendered.yaml | paste - - | sed 's/^/  /'
+          # Seven: ServiceAccount, three Services, two StatefulSets, one
+          # NetworkPolicy. An eighth means the resource-groups ConfigMap.
+          if [[ "$objects" -ne 7 && "$ALLOW_RESOURCE_GROUPS" != true ]]; then
+            echo "Refusing: the chart renders $objects objects, expected 7. Review the change." >&2; exit 1
+          fi
+          # The coordinator stores its resource groups durably at
+          # /state/catalog/resource-groups.json, and Settings -> Governance
+          # edits them there. With `resourceGroups.enabled`, the chart renders a
+          # ConfigMap, mounts it read-only and names it in
+          # KAVEON_RESOURCE_GROUPS, which takes precedence over the runtime
+          # copy — and a runtime PUT then fails, because the file is Helm's.
+          # That switch must never flip as a side effect of a deploy, so the
+          # render is refused unless the dispatch asked for the takeover.
+          if grep -q 'KAVEON_RESOURCE_GROUPS' tmp/rendered.yaml && [[ "$ALLOW_RESOURCE_GROUPS" != true ]]; then
+            echo "Refusing: the render names KAVEON_RESOURCE_GROUPS, so Helm would own the resource groups and the runtime PUT would start failing. Move the live document into $CHART/values.yaml first and re-run with allow_resource_groups_takeover — see $CHART/examples/README.md." >&2
+            exit 1
+          fi
+
+      - name: Refuse objects Helm does not own
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # The lesson of D-30, encoded. Four objects were applied with
+          # `kubectl apply` to prove they worked; Helm then refused to adopt
+          # what it had not created — "missing app.kubernetes.io/managed-by" —
+          # and three consecutive platform deploys failed while every test
+          # stayed green. Helm adopts an existing object only when it carries
+          # the label app.kubernetes.io/managed-by=Helm and the annotations
+          # meta.helm.sh/release-name and meta.helm.sh/release-namespace
+          # matching this release. Anything else is a hard failure, so find it
+          # here, with the commands to fix it, rather than halfway through an
+          # upgrade.
+          kubectl get -f tmp/rendered.yaml -o json --ignore-not-found \
+            > tmp/existing.json 2>/dev/null || true
+          python3 - "$RELEASE" "$NAMESPACE" <<'PY'
+          import json, os, sys
+
+          release, namespace = sys.argv[1], sys.argv[2]
+          try:
+              with open('tmp/existing.json') as handle:
+                  payload = json.load(handle)
+          except (OSError, ValueError):
+              payload = None
+          if not payload:
+              print('No rendered object exists yet; this would be a first install.')
+              raise SystemExit(0)
+          items = payload.get('items', [payload])
+          blocked = []
+          for item in items:
+              meta = item.get('metadata', {})
+              kind = item.get('kind', '?')
+              name = meta.get('name', '?')
+              labels = meta.get('labels') or {}
+              annotations = meta.get('annotations') or {}
+              owner = labels.get('app.kubernetes.io/managed-by')
+              rel = annotations.get('meta.helm.sh/release-name')
+              rel_ns = annotations.get('meta.helm.sh/release-namespace')
+              ok = owner == 'Helm' and rel == release and rel_ns == namespace
+              print(f'  {"ok  " if ok else "FAIL"} {kind}/{name} '
+                    f'managed-by={owner} release={rel}/{rel_ns}')
+              if not ok:
+                  blocked.append((kind.lower(), name))
+          if blocked:
+              print('\nHelm will refuse to adopt these. Label and annotate them, '
+                    'then re-run:', file=sys.stderr)
+              for kind, name in blocked:
+                  print(f'  kubectl -n {namespace} label {kind} {name} '
+                        f'app.kubernetes.io/managed-by=Helm --overwrite', file=sys.stderr)
+                  print(f'  kubectl -n {namespace} annotate {kind} {name} '
+                        f'meta.helm.sh/release-name={release} '
+                        f'meta.helm.sh/release-namespace={namespace} --overwrite', file=sys.stderr)
+              raise SystemExit(1)
+          print('\nEvery rendered object that exists is already this release\'s.')
+          PY
+
+      - name: Report what the release would change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if helm get manifest "$RELEASE" -n "$NAMESPACE" > tmp/release.yaml 2>/dev/null; then
+            echo '--- helm: recorded release manifest vs this render ---'
+            diff -u tmp/release.yaml tmp/rendered.yaml || true
+          else
+            echo 'No recorded release manifest; this would be a first install.'
+          fi
+
+      - name: Decide whether this would roll the Engine
+        id: restart
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # `helm get manifest` only knows what Helm last recorded, and the
+          # hand-applied changes are not in it. So compare the render to the
+          # pods that are actually running: a difference in the container
+          # image, the environment, the resources, the node selector or the
+          # anti-affinity is a rolling restart of the coordinator and every
+          # worker. Replicas are excluded — they are resolved from the live
+          # count above and never rewritten by surprise.
+          kubectl -n "$NAMESPACE" get statefulset "${RELEASE}-coordinator" "${RELEASE}-worker" \
+            -o json > tmp/live-sts.json 2>/dev/null || echo '{"items":[]}' > tmp/live-sts.json
+          set +e
+          python3 - <<'PY'
+          import json, os, sys
+
+          try:
+              import yaml
+          except ModuleNotFoundError:
+              print('PyYAML is unavailable; cannot compare the render to the live pods.',
+                    file=sys.stderr)
+              raise SystemExit(2)
+
+          FIELDS = ('image', 'env', 'envOrder', 'resources', 'nodeSelector',
+                    'affinity', 'volumes')
+
+          def entry(variable):
+              """A value or a reference; a changed secret name matters as much."""
+              if 'valueFrom' in variable:
+                  return json.dumps(variable['valueFrom'], sort_keys=True)
+              return variable.get('value')
+
+          def shape(spec):
+              pod = spec['template']['spec']
+              container = pod['containers'][0]
+              variables = container.get('env') or []
+              return {
+                  'image': container['image'],
+                  'env': {v['name']: entry(v) for v in variables},
+                  'envOrder': [v['name'] for v in variables],
+                  'resources': container.get('resources') or {},
+                  'nodeSelector': pod.get('nodeSelector') or {},
+                  'affinity': pod.get('affinity') or {},
+                  'volumes': sorted(
+                      (v['name'], json.dumps({k: x for k, x in v.items() if k != 'name'},
+                                             sort_keys=True))
+                      for v in pod.get('volumes') or []),
+              }
+
+          rendered = {}
+          with open('tmp/rendered.yaml') as handle:
+              for doc in yaml.safe_load_all(handle):
+                  if doc and doc.get('kind') == 'StatefulSet':
+                      rendered[doc['metadata']['name']] = shape(doc['spec'])
+          live = {}
+          with open('tmp/live-sts.json') as handle:
+              for item in json.load(handle).get('items', []):
+                  live[item['metadata']['name']] = shape(item['spec'])
+
+          differs = []
+          for name, want in sorted(rendered.items()):
+              have = live.get(name)
+              if have is None:
+                  differs.append(f'{name} (does not exist yet)')
+                  continue
+              for field in FIELDS:
+                  if want[field] == have[field]:
+                      continue
+                  differs.append(f'{name}.{field}')
+                  if field == 'env':
+                      for key in sorted(set(want['env']) | set(have['env'])):
+                          if want['env'].get(key) != have['env'].get(key):
+                              print(f'    {name} {key}: running '
+                                    f'{have["env"].get(key)!r} -> rendered '
+                                    f'{want["env"].get(key)!r}')
+                  elif field == 'envOrder':
+                      print(f'    {name} environment order differs (same names, '
+                            'different sequence - Kubernetes sees a changed pod '
+                            'template and rolls the set)')
+                  else:
+                      print(f'    {name} {field}:')
+                      print(f'      running  {json.dumps(have[field], sort_keys=True)}')
+                      print(f'      rendered {json.dumps(want[field], sort_keys=True)}')
+
+          output = os.environ['GITHUB_OUTPUT']
+          with open(output, 'a') as handle:
+              handle.write(f'rolls={"true" if differs else "false"}\n')
+          if differs:
+              print('\nThis render differs from the running pods: ' + ', '.join(differs))
+              print('Applying it rolls the coordinator and every worker.')
+          else:
+              print('The render matches the running pods. Applying it changes no pod '
+                    'and restarts nothing; it only makes Helm the owner of record again.')
+          PY
+          rc=$?
+          set -e
+          [[ $rc -eq 0 ]] || exit $rc
+
+      - name: Plan summary
+        if: env.MODE != 'apply'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'Plan only. The cluster was read and nothing was changed.'
+          echo "Would roll the Engine: ${{ steps.restart.outputs.rolls }}"
+          echo "Live worker replicas: ${{ steps.live.outputs.live_worker_replicas }} (chart declares ${{ steps.live.outputs.chart_worker_replicas }})"
+          echo 'Re-run with workflow_dispatch, mode: apply to deploy.'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-render-${{ github.run_id }}
+          path: |
+            tmp/rendered.yaml
+            tmp/engine-values.yaml
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Refuse to roll the Engine while work is in flight
+        if: env.MODE == 'apply'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # A rolling restart kills whatever is running on the workers. A
+          # benchmark round is then a round to discard, and a cube build that
+          # has been going for minutes starts again. Scheduled sweeps
+          # (availability guard, catalog archive, DLM freshness) are excluded:
+          # they are CronJob children, they run every minute to every hour, and
+          # losing one costs nothing.
+          busy=0
+          active="$(kubectl -n "$NAMESPACE" get jobs -o json | python3 -c '
+          import json, sys
+          for item in json.load(sys.stdin).get("items", []):
+              meta = item["metadata"]
+              owners = {o["kind"] for o in meta.get("ownerReferences", [])}
+              if "CronJob" in owners:
+                  continue
+              if (item.get("status") or {}).get("active"):
+                  print(meta["name"])
+          ')"
+          if [[ -n "$active" ]]; then
+            echo "Active unscheduled Jobs:" >&2; echo "$active" | sed 's/^/  /' >&2; busy=1
+          fi
+          for name in "${RELEASE}-benchmark-trino-coordinator" "${RELEASE}-benchmark-trino-worker"; do
+            count="$(kubectl -n "$NAMESPACE" get statefulset "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+            if [[ -n "$count" && "$count" -gt 0 ]]; then
+              echo "$name is at $count replicas, so a benchmark round is up." >&2; busy=1
+            fi
+          done
+          if [[ "$busy" -eq 1 ]]; then
+            if [[ "$ALLOW_BUSY" == true ]]; then
+              echo 'allow_busy was given; continuing and discarding whatever is in flight.'
+            else
+              echo 'Refusing to deploy while this is running. Wait for it, or re-run with allow_busy.' >&2
+              exit 1
+            fi
+          else
+            echo 'Nothing unscheduled is running and the benchmark engine is down.'
+          fi
+
+      - name: Require the restart to be accepted
+        if: env.MODE == 'apply' && steps.restart.outputs.rolls == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$ACCEPT_RESTART" != true ]]; then
+            echo 'Refusing: this render differs from the running pods, so applying it rolls the coordinator and every worker. The differing fields are printed above. Re-run with accept_restart once you have read them.' >&2
+            exit 1
+          fi
+          echo 'accept_restart was given; the Engine will roll.'
+
+      - name: Deploy
+        if: env.MODE == 'apply'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # --reset-values, explicitly: the recorded release was installed by
+          # hand in October with values that are now wrong (a product prefix
+          # one segment short of the catalog, one worker, the exchange spools
+          # the other way round). Everything that matters is supplied in
+          # tmp/engine-values.yaml, so the chart's defaults plus that file are
+          # the whole input and no stale value can survive.
+          #
+          # No --atomic, unlike the platform deploy. A rollback would roll the
+          # coordinator and the workers a second time, and the coordinator is
+          # one replica with the catalog on a PVC and no HA. A failed upgrade
+          # left standing can be read and decided on; one that has rolled
+          # twice has cost two outages.
+          helm upgrade --install "$RELEASE" "$CHART" \
+            -n "$NAMESPACE" \
+            -f tmp/engine-values.yaml \
+            --reset-values \
+            --wait --timeout "$HELM_TIMEOUT"
+
+      - name: Verify the Engine and the platform it serves
+        if: env.MODE == 'apply'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          kubectl -n "$NAMESPACE" rollout status "statefulset/${RELEASE}-coordinator" --timeout=10m
+          kubectl -n "$NAMESPACE" rollout status "statefulset/${RELEASE}-worker" --timeout=10m
+          kubectl -n "$NAMESPACE" get statefulset "${RELEASE}-coordinator" "${RELEASE}-worker" -o json \
+            | python3 -c '
+          import json, sys
+          bad = []
+          for item in json.load(sys.stdin)["items"]:
+              name = item["metadata"]["name"]
+              want = item["spec"].get("replicas", 0)
+              have = (item.get("status") or {}).get("readyReplicas", 0)
+              print(f"  {name}: {have}/{want} ready")
+              if have != want:
+                  bad.append(name)
+          if bad:
+              raise SystemExit("not ready: " + ", ".join(bad))
+          '
+          # Probes prove process health, not that the Engine serves its
+          # catalog. /api/health probes KaveonDB — the Engine's own product
+          # catalog — so a 200 here is the platform reading the Engine through
+          # the front door. The pod carries the portal label because the
+          # namespace NetworkPolicy admits port 8080 from pods in the namespace
+          # only.
+          smoke="kaveon-engine-smoke-${GITHUB_RUN_ID}"
+          kubectl -n "$NAMESPACE" run "$smoke" --rm -i --restart=Never \
+            --labels app=kaveon-portal --image=curlimages/curl:8.10.1 \
+            --command -- curl --fail --silent --show-error \
+            "http://kaveon-api:8080/api/health" >/dev/null
+          echo 'Engine rolled out and the platform reads its catalog.'
+          helm history "$RELEASE" -n "$NAMESPACE" --max 5

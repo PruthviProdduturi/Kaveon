@@ -62,6 +62,12 @@ ConfigMap takes precedence over this runtime copy and a runtime `PUT` starts
 failing, because the file is then Helm's. Move the same groups into
 `values.yaml` at that point.
 
+`.github/workflows/deploy-aks-engine.yml` will not let that happen by accident:
+it refuses any render that names `KAVEON_RESOURCE_GROUPS` unless the dispatch
+is given `allow_resource_groups_takeover`. So committing the flag does not
+quietly take the document away from the coordinator — the deploy fails and says
+so.
+
 The document is validated strictly: the top level accepts only `groups`,
 `selectors` and `demo`, and unknown fields are rejected rather than ignored —
 so it carries no comments of its own, which is why this note is a separate

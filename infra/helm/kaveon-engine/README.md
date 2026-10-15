@@ -21,6 +21,35 @@ The engine's default reqwest transport uses native TLS/OpenSSL. The chart points
 
 Containers run as numeric UID/GID 10001 with a read-only root filesystem, no Linux capabilities, writable `/tmp`, and group-writable state volumes. The coordinator's SQLite catalog persists across pod replacements; running queries do not resume and this is not HA. Worker state, exchange spools and spills are ephemeral. Each chart pod owns its `/state/exchange` root; `exchange.reclaimOnStart` removes abandoned exchange directories after a process restart before traffic is accepted. Do not enable that setting on a root shared by multiple live Engine processes. Coordinator readiness uses `/ready`, which requires an initialized catalog; bootstrap through pod-local access before the coordinator Service has ready endpoints. Worker readiness uses `/health`, proving process health only: workers execute shipped fragments without a synchronized local catalog, so catalog-dependent `/ready` would prevent their headless DNS endpoints from being published. Probes do not demonstrate worker registration, ADLS authorization or query correctness; verify these separately with a distributed query. Drain queries before upgrades; the grace period alone does not provide draining.
 
+## Deploying
+
+`.github/workflows/deploy-aks-engine.yml` deploys this chart to `kaveon-aks`. Do not apply it by hand: anything this chart also manages must reach the cluster through a `helm upgrade`, or Helm refuses to adopt it afterwards and every later deploy fails on `missing app.kubernetes.io/managed-by` (defect D-30).
+
+A push to `dev` touching this chart renders it, lints it `--strict`, verifies that every object it names is already owned by release `kaveon`, and prints what would change. **It does not touch the cluster.** Applying is a `workflow_dispatch` with `mode: apply`, because rolling the Engine is not a side effect anyone should get from editing a chart: the coordinator is one replica with the catalog on a PVC, it is not HA, running queries do not resume across a restart, and the same cluster hosts the benchmark campaign and long maintenance jobs.
+
+What the workflow reads back from the cluster rather than deciding for itself:
+
+| Value | Why |
+|---|---|
+| `coordinator.replicas`, `workers.replicas` | A round measuring node-equal runs three workers and the availability guard holds a floor of one. The live count is preserved (clamped up to the floor); `coordinator_replicas` / `worker_replicas` set it deliberately. |
+| `image.repository`, `image.digest` | A chart-only deploy must change no image, so the digest the coordinator is running is re-pinned. `image_digest` rolls a new one. |
+| `productTransactions.account`, `.container`, `.prefix` | A prefix one segment short of the catalog is indistinguishable from a new installation. A change to any of them is refused unless `allow_product_catalog_change` is given. |
+| `workloadIdentity.clientId` | Read from the `kaveon-engine` ServiceAccount annotation, so it cannot drift from the federated subject. |
+
+Everything else is the chart's. `--reset-values` is passed explicitly: the recorded release was installed by hand and its stored values are stale, so the chart's defaults plus the values the run supplies are the whole input.
+
+Apply is refused when any of these holds, and each refusal names what to do:
+
+- An object the render names exists without this release's Helm label and annotations.
+- The release is not `deployed` (an interrupted upgrade leaves it `pending-upgrade`).
+- The render names `KAVEON_RESOURCE_GROUPS` — see the next section — unless `allow_resource_groups_takeover` is given.
+- A non-CronJob Job is active, or the benchmark engine is up, unless `allow_busy` is given. The scheduled sweeps (availability guard, catalog archive, DLM freshness) are ignored; a cube build is not.
+- The rendered pod template differs from the running one in image, environment, resources, node selector, affinity or volumes, unless `accept_restart` is given. The differing fields are printed either way, so a plan run is the drift report.
+
+There is no `--atomic`, unlike the platform deploy: a rollback would roll the coordinator and every worker a second time, and the coordinator cannot afford two outages where one will do. A failed upgrade is left standing to be read.
+
+After the rollout the workflow waits on both StatefulSets, asserts `readyReplicas` matches, and curls `/api/health` from a pod labelled `app=kaveon-portal` (the namespace NetworkPolicy admits port 8080 from the namespace only). That endpoint probes KaveonDB — this Engine's own product catalog — so a 200 is the platform reading the Engine through the front door, which the HTTPS probes cannot prove.
+
 ## Memory and exchange settings
 
 Every memory and disk budget the Engine reads from the environment is a chart value, per role, so `helm upgrade` reproduces the running StatefulSets. Byte values are strings.
@@ -44,6 +73,8 @@ The admission limit must fit inside the container memory limit less the Engine's
 ## Resource groups and the demo posture
 
 `resourceGroups.enabled` (default `false`) renders `resourceGroups.document` to a ConfigMap mounted read-only on the coordinator and named by `KAVEON_RESOURCE_GROUPS`, so the groups are Helm's rather than the coordinator's durable runtime copy (a `PUT /v1/admin/resource-groups` then fails on the read-only file; edit the values instead). The example document in `values.yaml` is the public demo's posture: `demo.enabled` and a `demo` group with `rate: {max_statements: 5, per_seconds: 21600, count: live}` — five live statements per principal per rolling six hours, counted from the audit ledger so a restart keeps the count, admins exempt, cache and statistics answers not counted. A self-hosted install leaves the block off. The portal chart's `api.demoMode` is the other half; see `docs/engine/governance.md`.
+
+A first install on a cluster that has no Engine yet, or a self-hosted install. On `kaveon-aks` use the workflow instead — see **Deploying** above.
 
 ```powershell
 helm upgrade --install kaveon infra/helm/kaveon-engine --namespace kaveon --create-namespace --set image.repository=<registry>/kaveon-engine --set image.digest=sha256:<digest> --set workloadIdentity.clientId=<client-id> --set productTransactions.enabled=true --set productTransactions.account=<storage-account> --set productTransactions.container=<product-container> --set productTransactions.prefix=<product-prefix> --wait --timeout 10m
