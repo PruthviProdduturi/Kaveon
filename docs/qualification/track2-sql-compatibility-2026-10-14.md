@@ -91,3 +91,9 @@ SELECT TIME '12:34:56.789' AS t;   -- 12:34:56.789000
 
 Invalid hours, minutes, seconds, and malformed fractional values fail during
 expression evaluation rather than being silently coerced.
+
+After the typed-time change, the complete workspace gate was rerun on the
+current tree and passed with zero failures: server `389/389`, SQL `151/151`,
+execution `351/351` with four pre-existing ignored benchmark tests, and all
+remaining workspace targets green. The server differential sweep completed in
+111.72 seconds.
