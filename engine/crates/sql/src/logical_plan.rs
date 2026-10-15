@@ -197,13 +197,11 @@ pub enum LogicalPlan {
     },
     /// A constant array expanded into rows by `UNNEST` in `FROM`.
     ///
-    /// The current table-function slice deliberately accepts only one
-    /// constant ARRAY expression. Correlated/lateral arrays and multiple
-    /// array zips remain explicit planner boundaries until their join and
-    /// null-padding semantics are implemented end to end.
+    /// Constant ARRAY expressions expanded into rows by `UNNEST` in `FROM`.
+    /// Correlated/lateral arrays remain an explicit planner boundary.
     Unnest {
-        expression: Expr,
-        column: String,
+        expressions: Vec<Expr>,
+        columns: Vec<String>,
         with_ordinality: bool,
         ordinality_column: String,
     },
@@ -1089,37 +1087,71 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 let args = args.as_ref().ok_or_else(|| {
                     sql_err("UNNEST in FROM requires an ARRAY expression")
                 })?;
-                if args.args.len() != 1 {
+                if args.args.is_empty() {
                     return Err(sql_err(
-                        "UNNEST in FROM currently requires exactly one ARRAY expression",
+                        "UNNEST in FROM requires at least one ARRAY expression",
                     ));
                 }
-                let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(array)) = &args.args[0]
-                else {
-                    return Err(sql_err(
-                        "UNNEST in FROM currently requires a constant ARRAY expression",
-                    ));
-                };
-                let expression = ast_expr_to_expr(array)?;
-                if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
-                {
-                    return Err(sql_err(
-                        "UNNEST in FROM currently requires a constant ARRAY expression",
-                    ));
-                }
-                let column = alias
+                let expressions = args
+                    .args
+                    .iter()
+                    .map(|argument| {
+                        let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(array)) = argument
+                        else {
+                            return Err(sql_err(
+                                "UNNEST in FROM requires constant ARRAY expressions",
+                            ));
+                        };
+                        let expression = ast_expr_to_expr(array)?;
+                        if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
+                        {
+                            return Err(sql_err(
+                                "UNNEST in FROM requires constant ARRAY expressions",
+                            ));
+                        }
+                        Ok(expression)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let columns = alias
                     .as_ref()
-                    .and_then(|alias| alias.columns.first())
-                    .map(|column| column.name.value.clone())
-                    .unwrap_or_else(|| "unnest".to_owned());
+                    .map(|alias| {
+                        expressions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| {
+                                alias
+                                    .columns
+                                    .get(index)
+                                    .map(|column| column.name.value.clone())
+                                    .unwrap_or_else(|| {
+                                        if index == 0 {
+                                            "unnest".to_owned()
+                                        } else {
+                                            format!("unnest_{}", index + 1)
+                                        }
+                                    })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_else(|| {
+                        (0..expressions.len())
+                            .map(|index| {
+                                if index == 0 {
+                                    "unnest".to_owned()
+                                } else {
+                                    format!("unnest_{}", index + 1)
+                                }
+                            })
+                            .collect()
+                    });
                 let ordinality_column = alias
                     .as_ref()
                     .and_then(|alias| alias.columns.get(1))
                     .map(|column| column.name.value.clone())
                     .unwrap_or_else(|| "ordinality".to_owned());
                 return Ok(LogicalPlan::Unnest {
-                    expression,
-                    column,
+                    expressions,
+                    columns,
                     with_ordinality: *with_ordinality,
                     ordinality_column,
                 });
@@ -1173,9 +1205,9 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             with_ordinality,
             ..
         } => {
-            if array_exprs.len() != 1 {
+            if array_exprs.is_empty() {
                 return Err(sql_err(
-                    "UNNEST in FROM currently requires exactly one ARRAY expression",
+                    "UNNEST in FROM requires at least one ARRAY expression",
                 ));
             }
             if *with_offset {
@@ -1183,26 +1215,58 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     "UNNEST WITH OFFSET is not supported; use WITH ORDINALITY",
                 ));
             }
-            let expression = ast_expr_to_expr(&array_exprs[0])?;
-            if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
+            let expressions = array_exprs
+                .iter()
+                .map(|array| ast_expr_to_expr(array))
+                .collect::<Result<Vec<_>>>()?;
+            if expressions
+                .iter()
+                .any(|expression| !matches!(expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY")))
             {
                 return Err(sql_err(
-                    "UNNEST in FROM currently requires a constant ARRAY expression",
+                    "UNNEST in FROM requires constant ARRAY expressions",
                 ));
             }
-            let column = alias
+            let columns = alias
                 .as_ref()
-                .and_then(|alias| alias.columns.first())
-                .map(|column| column.name.value.clone())
-                .unwrap_or_else(|| "unnest".to_owned());
+                .map(|alias| {
+                    expressions
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| {
+                            alias
+                                .columns
+                                .get(index)
+                                .map(|column| column.name.value.clone())
+                                .unwrap_or_else(|| {
+                                    if index == 0 {
+                                        "unnest".to_owned()
+                                    } else {
+                                        format!("unnest_{}", index + 1)
+                                    }
+                                })
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    (0..expressions.len())
+                        .map(|index| {
+                            if index == 0 {
+                                "unnest".to_owned()
+                            } else {
+                                format!("unnest_{}", index + 1)
+                            }
+                        })
+                        .collect()
+                });
             let ordinality_column = alias
                 .as_ref()
                 .and_then(|alias| alias.columns.get(1))
                 .map(|column| column.name.value.clone())
                 .unwrap_or_else(|| "ordinality".to_owned());
             Ok(LogicalPlan::Unnest {
-                expression,
-                column,
+                expressions,
+                columns,
                 with_ordinality: *with_ordinality,
                 ordinality_column,
             })
@@ -3750,7 +3814,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                     relations.push(table.rsplit('.').next().unwrap().to_owned());
                 }
             }
-            LogicalPlan::Unnest { expression, .. } => expressions.push(expression),
+            LogicalPlan::Unnest { expressions: values, .. } => expressions.extend(values),
             LogicalPlan::Filter { input, predicate } => {
                 expressions.push(predicate);
                 visit(input, relations, expressions);
@@ -4441,10 +4505,27 @@ mod tests {
         assert!(matches!(
             plan,
             LogicalPlan::Unnest {
-                column,
+                columns,
                 with_ordinality: false,
                 ..
-            } if column == "value"
+            } if columns == vec!["value"]
+        ));
+    }
+
+    #[test]
+    fn parses_multiple_constant_array_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(ARRAY[1, 2], ARRAY[3]) AS t(left_col, right_col)",
+        )
+        .unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest {
+                expressions,
+                columns,
+                with_ordinality: false,
+                ..
+            } if expressions.len() == 2 && columns == vec!["left_col", "right_col"]
         ));
     }
 
@@ -4457,11 +4538,11 @@ mod tests {
         assert!(matches!(
             plan,
             LogicalPlan::Unnest {
-                column,
+                columns,
                 with_ordinality: true,
                 ordinality_column,
                 ..
-            } if column == "value" && ordinality_column == "n"
+            } if columns == vec!["value"] && ordinality_column == "n"
         ));
     }
 
@@ -5626,8 +5707,8 @@ mod tests {
     fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
         for (sql, expected) in [
             (
-                "SELECT * FROM UNNEST(ARRAY[1, 2], ARRAY[3, 4])",
-                "exactly one ARRAY expression",
+                "SELECT * FROM UNNEST(1, 2)",
+                "constant ARRAY expressions",
             ),
             (
                 "SELECT * FROM UNNEST(values) AS t(value)",

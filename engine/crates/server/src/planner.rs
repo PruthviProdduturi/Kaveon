@@ -506,14 +506,14 @@ impl ExecutableFragmentBuilder<'_> {
     fn build(&mut self, plan: &LogicalPlan) -> Result<StageId> {
         match plan {
             LogicalPlan::Unnest {
-                expression,
-                column,
+                expressions,
+                columns,
                 with_ordinality,
                 ordinality_column,
             } => Ok(self.add_fragment(FragmentDraft::leaf(
                 FragmentOperator::Unnest {
-                    expression: expression.clone(),
-                    column: column.clone(),
+                    expressions: expressions.clone(),
+                    columns: columns.clone(),
                     with_ordinality: *with_ordinality,
                     ordinality_column: ordinality_column.clone(),
                 },
@@ -1918,15 +1918,15 @@ fn build_plan_tree(
         LogicalPlan::Distinct { input } => ("Distinct", BTreeMap::new(), Some(input.as_ref())),
         LogicalPlan::Window { input, .. } => ("Window", BTreeMap::new(), Some(input.as_ref())),
         LogicalPlan::Unnest {
-            expression,
-            column,
+            expressions,
+            columns,
             with_ordinality,
             ordinality_column,
         } => (
             "Unnest",
             BTreeMap::from([
-                ("expression".to_owned(), format!("{expression:?}")),
-                ("column".to_owned(), column.clone()),
+                ("expressions".to_owned(), format!("{expressions:?}")),
+                ("columns".to_owned(), format!("{columns:?}")),
                 ("with_ordinality".to_owned(), with_ordinality.to_string()),
                 ("ordinality_column".to_owned(), ordinality_column.clone()),
             ]),
@@ -2014,14 +2014,14 @@ fn plan_query_with_predicate(
 ) -> Result<PlannedQuery> {
     match plan {
         LogicalPlan::Unnest {
-            expression,
-            column,
+            expressions,
+            columns,
             with_ordinality,
             ordinality_column,
         } => Ok(PlannedQuery {
             operator: Box::new(kaveon_exec::unnest::UnnestOperator::new(
-                expression,
-                column.clone(),
+                expressions,
+                columns.clone(),
                 *with_ordinality,
                 ordinality_column.clone(),
             )?),
