@@ -15008,13 +15008,12 @@ mod tests {
         }
         .expect("a queued statement is in the history");
 
-        let cancelled = super::cancel_query(
+        let cancelled = super::cancel_trino_query(
             axum::extract::State(state.clone()),
             axum::Extension(analyst.clone()),
             axum::extract::Path(queued.clone()),
         )
-        .await
-        .into_response();
+        .await;
         assert_eq!(cancelled.status(), axum::http::StatusCode::NO_CONTENT);
         let (status, body) = submitting.await.unwrap();
         assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
