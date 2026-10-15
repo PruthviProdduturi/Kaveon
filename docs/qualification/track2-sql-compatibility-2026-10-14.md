@@ -152,6 +152,14 @@ The post-change workspace gate at commit `3d2085cb` passed with 74 core tests,
 and the 19-test server differential suite also passed. This is repository
 evidence; multi-worker cloud qualification remains a separate Track 1 gate.
 
+## Composite runtime-filter null safety — 2026-10-15
+
+The composite storage-predicate path was exercised with nullable build keys.
+The regression confirms that independent per-column `IN` projections contain
+only non-null build values; exact composite probing remains responsible for
+rejecting the false-positive cross-products. The join-focused suite passes all
+46 tests with this case included.
+
 ## Composite runtime-filter qualification — 2026-10-15
 
 Composite inner and semi joins now expose independent build-key `IN`
