@@ -42,7 +42,9 @@ The planner now admits scalar subqueries whose input is a statically single-row
 constant relation, including Trino's `SELECT (SELECT 42)`. Implicit scalar
 SELECTs and constant `UNNEST(ARRAY[...])` inputs are accepted only when every
 array has at most one element; scans and correlated subqueries remain
-fail-closed. The SQL planner suite passes 158 tests with zero failures.
+fail-closed. Filters over constant scalar inputs also remain fail-closed
+because a zero-row scalar requires Apply/null-fill semantics. The SQL planner
+suite passes 158 tests with zero failures.
 
 ## Workspace gate rerun — 2026-10-15
 
