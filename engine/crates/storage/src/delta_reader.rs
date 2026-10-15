@@ -1,7 +1,7 @@
 use crate::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader, ScanMetrics, ScanPartition};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchSource, KaveonError, Result, StoragePredicate};
+use kaveon_core::{BatchSource, KaveonError, Result, ScalarValue, StoragePredicate};
 #[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,34 +193,22 @@ impl DeltaTableReader {
             })
             .collect();
         metrics.files_skipped(skipped);
-        let current = files
-            .first()
-            .map(|first| {
-                configured_reader(
-                    first,
-                    self.batch_size,
-                    self.columns.as_ref(),
-                    self.predicate.as_ref(),
-                    metrics.clone(),
-                )
-                .read()
-            })
-            .transpose()?;
-        let mut schema = match current.as_ref() {
-            Some(reader) => reader.schema().clone(),
-            None => projected_schema(
-                configured_reader(
-                    &schema_file,
-                    self.batch_size,
-                    None,
-                    None,
-                    ScanMetrics::default(),
-                )
-                .metadata()?
-                .schema,
-                self.columns.as_deref(),
-            )?,
-        };
+        // Keep the first file unopened until the first batch. A partitioned
+        // join can then push its exact build-side keys into this iterator
+        // before any footer/row-group reader is created.
+        let current = None;
+        let mut schema = projected_schema(
+            configured_reader(
+                &schema_file,
+                self.batch_size,
+                None,
+                None,
+                ScanMetrics::default(),
+            )
+            .metadata()?
+            .schema,
+            self.columns.as_deref(),
+        )?;
         if let Some(logical_schema) = snapshot.schema {
             let physical_schema = ParquetReader::new(&schema_file).metadata()?.schema;
             crate::delta_snapshot::validate_physical_schema(&logical_schema, &physical_schema)?;
@@ -289,6 +277,24 @@ impl BatchSource for DeltaBatchIterator {
             );
             self.next_file += 1;
         }
+    }
+
+    fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> Result<bool> {
+        // The iterator has not opened a file when a partitioned join pushes
+        // its build keys. Once a file is active, changing the predicate would
+        // invalidate the pinned reader and is deliberately declined.
+        if self.current.is_some() || values.is_empty() {
+            return Ok(false);
+        }
+        let predicate = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        self.predicate = Some(match self.predicate.take() {
+            Some(existing) => StoragePredicate::And(vec![existing, predicate]),
+            None => predicate,
+        });
+        Ok(true)
     }
 }
 
@@ -432,6 +438,9 @@ mod tests {
             })
             .read()
             .unwrap();
+        assert!(source
+            .apply_runtime_filter("id", &[ScalarValue::Int64(0), ScalarValue::Int64(1)])
+            .unwrap());
         let mut values = Vec::new();
         while let Some(batch) = source.next_batch().unwrap() {
             values.extend(

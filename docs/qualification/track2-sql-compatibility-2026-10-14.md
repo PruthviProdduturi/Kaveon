@@ -184,3 +184,16 @@ scan-level Parquet/Delta pruning: storage predicates are fixed when a source
 is constructed, so a future source-level filter interface must preserve
 snapshot consistency and exact outer/anti-join semantics before that gate can
 close.
+
+## Delta source-level runtime-filter qualification
+
+The first source-level runtime-filter path is now implemented for local Delta
+scans. `DeltaBatchIterator` defers opening its first Parquet file until the
+first batch, accepts an exact single-key build-side `IN` predicate before that
+open, and combines it with the statement predicate. Existing Delta snapshot
+and row-group pruning remain in force. The focused storage regression passed
+with the injected keys (`predicate_prunes_row_groups_and_filters_rows_across_all_files`), and the full server suite passed **394/394** afterward.
+
+This narrows, but does not close, the Track 1 gate: Parquet and object-store
+sources still use the bounded pre-probe filter until their deferred-reader
+interfaces are qualified.

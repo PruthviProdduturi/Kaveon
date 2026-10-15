@@ -2,7 +2,7 @@ use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, BatchSource, KaveonError, Result};
+use kaveon_core::{BatchOperator, BatchSource, KaveonError, Result, ScalarValue};
 use std::sync::Arc;
 
 pub struct ScanOperator {
@@ -115,6 +115,10 @@ impl BatchOperator for ScanOperator {
             columns,
             &arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
         )?))
+    }
+
+    fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> Result<bool> {
+        self.source.apply_runtime_filter(column, values)
     }
 }
 
