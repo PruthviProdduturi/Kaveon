@@ -401,10 +401,23 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
         except Exception:
             pass
 
+    # The dataset's own row predicates, ahead of whatever the chart config
+    # filters on. They say which rows belong to this dataset at all -- a
+    # published dimension usually mixes members with totals, and the
+    # aggregates are only separable by a column that is null for them -- so a
+    # chart must not be able to drop them by clearing its own filters. Applied
+    # here as well as on the ask path, because the two assemble their
+    # statements separately and a predicate honoured by only one would make a
+    # chart and an answer disagree about the same dataset.
+    row_filters = [clause for clause in (dataset.get("row_filters") or [])
+                   if isinstance(clause, dict) and isinstance(clause.get("column"), str)
+                   and clause.get("column").strip()]
+
     # Configuration controls visualization operations only.  The data source
     # and any virtual SQL are durable dataset metadata, never browser input.
     params = {
         **config,
+        "filters": row_filters + list(config.get("filters") or []),
         "datasource": datasource,
         "sql_text": dataset.get("sql_text") or "",
         "dimensions": dimensions,
