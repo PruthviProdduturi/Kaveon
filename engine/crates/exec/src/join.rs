@@ -63,10 +63,12 @@ impl BuildKeyFilter {
         // Cloning a very large index would defeat the purpose of filtering;
         // the bounded path is for the common small-build/large-probe case.
         (built.right.num_rows() <= 100_000)
-            .then(|| built.index.as_ref().map(|index| Self {
-                index: index.clone(),
-                keys: keys.to_vec(),
-            }))
+            .then(|| {
+                built.index.as_ref().map(|index| Self {
+                    index: index.clone(),
+                    keys: keys.to_vec(),
+                })
+            })
             .flatten()
     }
 
@@ -78,8 +80,13 @@ impl BuildKeyFilter {
     /// common in fact/dimension joins and can use the already-built hash maps
     /// directly; composite and other keys retain the exact row-key path.
     pub(crate) fn filter_batch(&self, batch: &RecordBatch) -> Result<BooleanArray> {
-        if let (JoinIndex::Int32 { first_rows, duplicate_rows }, [(left, _)]) =
-            (&self.index, self.keys.as_slice())
+        if let (
+            JoinIndex::Int32 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
         {
             let values = batch
                 .column(*left)
@@ -95,8 +102,13 @@ impl BuildKeyFilter {
                 .collect::<Vec<_>>()
                 .into());
         }
-        if let (JoinIndex::UInt64 { first_rows, duplicate_rows }, [(left, _)]) =
-            (&self.index, self.keys.as_slice())
+        if let (
+            JoinIndex::UInt64 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
         {
             let values = batch
                 .column(*left)
@@ -112,8 +124,13 @@ impl BuildKeyFilter {
                 .collect::<Vec<_>>()
                 .into());
         }
-        if let (JoinIndex::Date32 { first_rows, duplicate_rows }, [(left, _)]) =
-            (&self.index, self.keys.as_slice())
+        if let (
+            JoinIndex::Date32 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
         {
             let values = batch
                 .column(*left)
@@ -129,8 +146,13 @@ impl BuildKeyFilter {
                 .collect::<Vec<_>>()
                 .into());
         }
-        if let (JoinIndex::Int64 { first_rows, duplicate_rows }, [(left, _)]) =
-            (&self.index, self.keys.as_slice())
+        if let (
+            JoinIndex::Int64 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
         {
             let values = batch
                 .column(*left)
@@ -146,8 +168,13 @@ impl BuildKeyFilter {
                 .collect::<Vec<_>>()
                 .into());
         }
-        if let (JoinIndex::Utf8 { first_rows, duplicate_rows }, [(left, _)]) =
-            (&self.index, self.keys.as_slice())
+        if let (
+            JoinIndex::Utf8 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
         {
             let column = batch.column(*left);
             return match column.data_type() {
@@ -193,27 +220,50 @@ impl BuildKeyFilter {
             .first()
             .map(|(left, _)| schema.field(*left).name().to_owned());
         let values = match &self.index {
-            JoinIndex::Int32 { first_rows, duplicate_rows } => Some(first_rows
-                .keys()
-                .chain(duplicate_rows.keys())
-                .map(|value| ScalarValue::Int64(i64::from(*value)))
-                .collect()),
-            JoinIndex::Date32 { first_rows, duplicate_rows } => Some(first_rows
-                .keys()
-                .chain(duplicate_rows.keys())
-                .map(|value| ScalarValue::Int64(i64::from(*value)))
-                .collect()),
-            JoinIndex::Int64 { first_rows, duplicate_rows } => Some(first_rows
-                .keys()
-                .chain(duplicate_rows.keys())
-                .map(|value| ScalarValue::Int64(*value))
-                .collect()),
-            JoinIndex::Utf8 { first_rows, duplicate_rows } => Some(first_rows
-                .keys()
-                .chain(duplicate_rows.keys())
-                .map(|value| ScalarValue::Utf8(value.clone()))
-                .collect()),
-            JoinIndex::UInt64 { first_rows, duplicate_rows } => first_rows
+            JoinIndex::Int32 {
+                first_rows,
+                duplicate_rows,
+            } => Some(
+                first_rows
+                    .keys()
+                    .chain(duplicate_rows.keys())
+                    .map(|value| ScalarValue::Int64(i64::from(*value)))
+                    .collect(),
+            ),
+            JoinIndex::Date32 {
+                first_rows,
+                duplicate_rows,
+            } => Some(
+                first_rows
+                    .keys()
+                    .chain(duplicate_rows.keys())
+                    .map(|value| ScalarValue::Int64(i64::from(*value)))
+                    .collect(),
+            ),
+            JoinIndex::Int64 {
+                first_rows,
+                duplicate_rows,
+            } => Some(
+                first_rows
+                    .keys()
+                    .chain(duplicate_rows.keys())
+                    .map(|value| ScalarValue::Int64(*value))
+                    .collect(),
+            ),
+            JoinIndex::Utf8 {
+                first_rows,
+                duplicate_rows,
+            } => Some(
+                first_rows
+                    .keys()
+                    .chain(duplicate_rows.keys())
+                    .map(|value| ScalarValue::Utf8(value.clone()))
+                    .collect(),
+            ),
+            JoinIndex::UInt64 {
+                first_rows,
+                duplicate_rows,
+            } => first_rows
                 .keys()
                 .chain(duplicate_rows.keys())
                 .map(|value| i64::try_from(*value).ok().map(ScalarValue::Int64))
@@ -224,8 +274,12 @@ impl BuildKeyFilter {
                     let mut seen = AHashSet::new();
                     let mut values = Vec::new();
                     for tuple in entries.keys() {
-                        let Some(key) = tuple.get(key_index) else { continue };
-                        if !seen.insert(key.clone()) { continue; }
+                        let Some(key) = tuple.get(key_index) else {
+                            continue;
+                        };
+                        if !seen.insert(key.clone()) {
+                            continue;
+                        }
                         let value = match key {
                             Key::Bool(value) => ScalarValue::Bool(*value),
                             Key::Int32(value) => ScalarValue::Int64(i64::from(*value)),
@@ -238,7 +292,9 @@ impl BuildKeyFilter {
                             },
                             Key::Float64(bits) => {
                                 let value = f64::from_bits(*bits);
-                                if !value.is_finite() { continue; }
+                                if !value.is_finite() {
+                                    continue;
+                                }
                                 ScalarValue::Float64(value)
                             }
                             Key::Utf8(value) => ScalarValue::Utf8(value.clone()),
@@ -569,12 +625,8 @@ fn residual_matches(
     let mut accepted = Vec::new();
     for chunk in candidates.chunks(OUTPUT_BATCH_ROWS) {
         let left_indices = UInt64Array::from(vec![left_row as u64; chunk.len()]);
-        let right_indices = UInt64Array::from(
-            chunk
-                .iter()
-                .map(|row| *row as u64)
-                .collect::<Vec<_>>(),
-        );
+        let right_indices =
+            UInt64Array::from(chunk.iter().map(|row| *row as u64).collect::<Vec<_>>());
         let columns = left
             .columns()
             .iter()
@@ -592,14 +644,9 @@ fn residual_matches(
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| exec_err("join residual predicate must evaluate to BOOLEAN"))?;
-        accepted.extend(
-            chunk
-                .iter()
-                .enumerate()
-                .filter_map(|(index, right_row)| {
-                    (predicate.is_valid(index) && predicate.value(index)).then_some(*right_row)
-                }),
-        );
+        accepted.extend(chunk.iter().enumerate().filter_map(|(index, right_row)| {
+            (predicate.is_valid(index) && predicate.value(index)).then_some(*right_row)
+        }));
     }
     Ok(accepted)
 }
@@ -686,20 +733,19 @@ impl BatchOperator for HashJoin {
                         check_cancelled(self.memory.as_ref())?;
                     }
                     if state.match_rows.is_empty() && state.match_offset == 0 {
-                        let candidates = if self.join_type == JoinType::Cross
-                            || state.index.is_none()
-                        {
-                            (0..state.right.num_rows()).collect::<Vec<_>>()
-                        } else {
-                            state
-                                .index
-                                .as_ref()
-                                .map(|index| index.matches(left, state.left_row, &self.keys))
-                                .transpose()?
-                                .flatten()
-                                .unwrap_or_default()
-                                .to_vec()
-                        };
+                        let candidates =
+                            if self.join_type == JoinType::Cross || state.index.is_none() {
+                                (0..state.right.num_rows()).collect::<Vec<_>>()
+                            } else {
+                                state
+                                    .index
+                                    .as_ref()
+                                    .map(|index| index.matches(left, state.left_row, &self.keys))
+                                    .transpose()?
+                                    .flatten()
+                                    .unwrap_or_default()
+                                    .to_vec()
+                            };
                         state.match_rows = residual_matches(
                             residual.as_ref(),
                             left,
@@ -807,9 +853,13 @@ impl BatchOperator for HashJoin {
                     left.columns()
                         .iter()
                         .map(|column| take(column, &left_indices, None))
-                        .chain(state.right.columns().iter().map(|column| {
-                            take(column, &right_indices, None)
-                        }))
+                        .chain(
+                            state
+                                .right
+                                .columns()
+                                .iter()
+                                .map(|column| take(column, &right_indices, None)),
+                        )
                         .collect::<std::result::Result<Vec<ArrayRef>, _>>()?
                 };
                 return Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?));
@@ -1487,8 +1537,8 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Decimal128Array, Decimal256Array, Int32Array, Int64Array,
-        LargeStringArray, StringArray, Time32MillisecondArray, TimestampMillisecondArray,
+        Date64Array, Decimal128Array, Decimal256Array, Int32Array, Int64Array, LargeStringArray,
+        StringArray, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use arrow::datatypes::i256;
     use std::collections::VecDeque;
@@ -1546,13 +1596,9 @@ mod tests {
                 vec!["b", "c", "n"],
                 "right_name",
             ));
-            let mut join = HashJoin::try_new(
-                left,
-                right,
-                join_type,
-                vec![("id".into(), "id".into())],
-            )
-            .unwrap();
+            let mut join =
+                HashJoin::try_new(left, right, join_type, vec![("id".into(), "id".into())])
+                    .unwrap();
             let batches = kaveon_core::collect_batches(&mut join).unwrap();
             let result = concat_batches(join.schema(), &batches).unwrap();
             assert_eq!(result.num_columns(), 2);
@@ -1569,7 +1615,11 @@ mod tests {
 
     #[test]
     fn large_utf8_join_keys_match_and_skip_nulls() {
-        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::LargeUtf8, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::LargeUtf8,
+            true,
+        )]));
         let left = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(LargeStringArray::from(vec![
@@ -1592,7 +1642,10 @@ mod tests {
         )
         .unwrap();
         let batches = kaveon_core::collect_batches(&mut join).unwrap();
-        assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), 1);
+        assert_eq!(
+            concat_batches(join.schema(), &batches).unwrap().num_rows(),
+            1
+        );
     }
 
     #[test]
@@ -1646,11 +1699,7 @@ mod tests {
     #[test]
     fn timestamp_join_keys_match_across_duplicate_and_null_rows() {
         let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "ts",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("side", DataType::Utf8, false),
         ]));
         let left = RecordBatch::try_new(
@@ -1720,14 +1769,13 @@ mod tests {
         )
         .unwrap();
         let batches = kaveon_core::collect_batches(&mut join).unwrap();
-        assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), 1);
+        assert_eq!(
+            concat_batches(join.schema(), &batches).unwrap().num_rows(),
+            1
+        );
 
         let time_schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "key",
-                DataType::Time32(TimeUnit::Millisecond),
-                true,
-            ),
+            Field::new("key", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new("side", DataType::Utf8, false),
         ]));
         let left = RecordBatch::try_new(
@@ -1754,7 +1802,10 @@ mod tests {
         )
         .unwrap();
         let batches = kaveon_core::collect_batches(&mut join).unwrap();
-        assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), 1);
+        assert_eq!(
+            concat_batches(join.schema(), &batches).unwrap().num_rows(),
+            1
+        );
     }
 
     #[test]
@@ -1817,7 +1868,11 @@ mod tests {
         let left = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                decimal(vec![Some(i256::from_i128(125)), Some(i256::from_i128(200)), None]),
+                decimal(vec![
+                    Some(i256::from_i128(125)),
+                    Some(i256::from_i128(200)),
+                    None,
+                ]),
                 Arc::new(StringArray::from(vec!["a", "b", "null"])),
             ],
         )
@@ -1825,7 +1880,11 @@ mod tests {
         let right = RecordBatch::try_new(
             schema,
             vec![
-                decimal(vec![Some(i256::from_i128(125)), Some(i256::from_i128(125)), None]),
+                decimal(vec![
+                    Some(i256::from_i128(125)),
+                    Some(i256::from_i128(125)),
+                    None,
+                ]),
                 Arc::new(StringArray::from(vec!["x", "y", "null"])),
             ],
         )
@@ -1926,7 +1985,10 @@ mod tests {
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap();
-        assert_eq!(right_values.iter().collect::<Vec<_>>(), vec![Some(3), None, Some(2)]);
+        assert_eq!(
+            right_values.iter().collect::<Vec<_>>(),
+            vec![Some(3), None, Some(2)]
+        );
     }
 
     #[test]
@@ -1941,11 +2003,8 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![5, 1]))],
         )
         .unwrap();
-        let right = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int32Array::from(vec![3, 7]))],
-        )
-        .unwrap();
+        let right =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![3, 7]))]).unwrap();
         let residual = Expr::BinaryOp {
             left: Box::new(Expr::Column("left.value".into())),
             op: kaveon_core::BinaryOp::Gt,
@@ -2164,14 +2223,25 @@ mod tests {
             ],
         )
         .unwrap();
-        let built = BuiltSide::build(&build_schema, &[build], &[(0, 0), (1, 1)], JoinType::Inner, None).unwrap();
+        let built = BuiltSide::build(
+            &build_schema,
+            &[build],
+            &[(0, 0), (1, 1)],
+            JoinType::Inner,
+            None,
+        )
+        .unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0), (1, 1)]).unwrap();
         let predicate = filter.storage_predicate(&schema).unwrap();
         let StoragePredicate::And(predicates) = predicate else {
             panic!("expected independent composite-key predicates");
         };
         assert_eq!(predicates.len(), 2);
-        assert!(predicates.iter().all(|predicate| matches!(predicate, StoragePredicate::In { .. })));
+        assert!(
+            predicates
+                .iter()
+                .all(|predicate| matches!(predicate, StoragePredicate::In { .. }))
+        );
     }
 
     #[test]
@@ -2188,24 +2258,38 @@ mod tests {
             build_schema.clone(),
             vec![
                 Arc::new(arrow::array::Int32Array::from(vec![Some(1), None, Some(2)])),
-                Arc::new(arrow::array::StringArray::from(vec![Some("x"), Some("z"), Some("y")])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("x"),
+                    Some("z"),
+                    Some("y"),
+                ])),
             ],
         )
         .unwrap();
-        let built = BuiltSide::build(&build_schema, &[build], &[(0, 0), (1, 1)], JoinType::Inner, None).unwrap();
+        let built = BuiltSide::build(
+            &build_schema,
+            &[build],
+            &[(0, 0), (1, 1)],
+            JoinType::Inner,
+            None,
+        )
+        .unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0), (1, 1)]).unwrap();
         let StoragePredicate::And(predicates) = filter.storage_predicate(&schema).unwrap() else {
             panic!("expected independent composite-key predicates");
         };
         assert_eq!(predicates.len(), 2);
-        let StoragePredicate::In { values: ints, .. } = &predicates[0] else { panic!("int predicate") };
+        let StoragePredicate::In { values: ints, .. } = &predicates[0] else {
+            panic!("int predicate")
+        };
         assert_eq!(ints.len(), 2);
         assert!(ints.contains(&ScalarValue::Int64(1)));
         assert!(ints.contains(&ScalarValue::Int64(2)));
-        let StoragePredicate::In { values: texts, .. } = &predicates[1] else { panic!("text predicate") };
+        let StoragePredicate::In { values: texts, .. } = &predicates[1] else {
+            panic!("text predicate")
+        };
         assert_eq!(texts.len(), 2);
         assert!(texts.contains(&ScalarValue::Utf8("x".into())));
         assert!(texts.contains(&ScalarValue::Utf8("y".into())));
     }
-
 }

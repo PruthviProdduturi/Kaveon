@@ -46,7 +46,11 @@ struct RuntimeJoinFilter {
 impl RuntimeJoinFilter {
     fn new(source: Box<dyn BatchOperator>, filter: BuildKeyFilter) -> Self {
         let schema = source.schema().clone();
-        Self { source, filter, schema }
+        Self {
+            source,
+            filter,
+            schema,
+        }
     }
 }
 
@@ -457,10 +461,25 @@ pub fn hash_join_with_residual(
 ) -> Result<Box<dyn BatchOperator>> {
     if let Some(memory) = memory {
         let broadcast_residual = keys.is_empty() && residual.is_some();
-        if !broadcast_residual
-            && let Some((spill, count)) = spill_from_environment(memory.query())?
+        if !broadcast_residual && let Some((spill, count)) = spill_from_environment(memory.query())?
         {
-            return Ok(Box::new(PartitionedHashJoin::new(
+            return Ok(Box::new(
+                PartitionedHashJoin::new(
+                    left,
+                    right,
+                    join_type,
+                    keys,
+                    left_qualifier,
+                    right_qualifier,
+                    memory,
+                    spill,
+                    count,
+                )?
+                .with_residual(residual),
+            ));
+        }
+        Ok(Box::new(
+            HashJoin::try_new_qualified_with_memory_and_residual(
                 left,
                 right,
                 join_type,
@@ -468,21 +487,9 @@ pub fn hash_join_with_residual(
                 left_qualifier,
                 right_qualifier,
                 memory,
-                spill,
-                count,
-            )?
-            .with_residual(residual)));
-        }
-        Ok(Box::new(HashJoin::try_new_qualified_with_memory_and_residual(
-            left,
-            right,
-            join_type,
-            keys,
-            left_qualifier,
-            right_qualifier,
-            memory,
-            residual,
-        )?))
+                residual,
+            )?,
+        ))
     } else {
         Ok(Box::new(HashJoin::try_new_qualified_with_residual(
             left,
@@ -3272,13 +3279,22 @@ mod tests {
             vec![Arc::new(Int64Array::from(vec![Some(2), Some(4)]))],
         )
         .unwrap();
-        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
-            .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
-        let mut operator = RuntimeJoinFilter::new(input(vec![Some(1), Some(2), Some(4), None], 4), filter);
+        let mut operator =
+            RuntimeJoinFilter::new(input(vec![Some(1), Some(2), Some(4), None], 4), filter);
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().iter().collect::<Vec<_>>(), vec![Some(2), Some(4)]);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(4)]
+        );
         assert!(operator.next_batch().unwrap().is_none());
     }
 
@@ -3286,11 +3302,7 @@ mod tests {
     fn runtime_join_filter_uses_typed_int32_index() {
         use arrow::array::Int32Array;
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "key",
-            DataType::Int32,
-            true,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
         let build = RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(Int32Array::from(vec![Some(2), Some(4), Some(4)]))],
@@ -3306,8 +3318,7 @@ mod tests {
             ]))],
         )
         .unwrap();
-        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
-            .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
         let mut operator = RuntimeJoinFilter::new(
             Box::new(Input {
@@ -3350,8 +3361,8 @@ mod tests {
             Box::new(Input { schema, batches })
         }
 
-        let pool = QueryMemoryPool::new("partitioned-int32-runtime-filter", 4 * 1024 * 1024)
-            .unwrap();
+        let pool =
+            QueryMemoryPool::new("partitioned-int32-runtime-filter", 4 * 1024 * 1024).unwrap();
         let mut join = PartitionedHashJoin::new(
             input_int32(&[Some(1), Some(2), Some(3), None], 2),
             input_int32(&[Some(2), Some(4), Some(4)], 3),
@@ -3366,8 +3377,16 @@ mod tests {
         .unwrap();
         let mut rows = Vec::new();
         while let Some(batch) = join.next_batch().unwrap() {
-            let left = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
-            let right = batch.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+            let left = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let right = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
             rows.extend((0..batch.num_rows()).map(|row| (left.value(row), right.value(row))));
         }
         assert_eq!(rows, vec![(2, 2)]);
@@ -3396,8 +3415,8 @@ mod tests {
             let schema = Arc::new(Schema::new(vec![Field::new("key", data_type, true)]));
             let build = RecordBatch::try_new(schema.clone(), vec![build]).unwrap();
             let probe = RecordBatch::try_new(schema.clone(), vec![probe]).unwrap();
-            let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
-                .unwrap();
+            let built =
+                BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
             let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
             let mut operator = RuntimeJoinFilter::new(
                 Box::new(Input {
@@ -3417,7 +3436,11 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, true)]));
         let build = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(StringArray::from(vec![Some("b"), Some("d"), Some("d")]))],
+            vec![Arc::new(StringArray::from(vec![
+                Some("b"),
+                Some("d"),
+                Some("d"),
+            ]))],
         )
         .unwrap();
         let probe = RecordBatch::try_new(
@@ -3430,8 +3453,7 @@ mod tests {
             ]))],
         )
         .unwrap();
-        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
-            .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
         let mut operator = RuntimeJoinFilter::new(
             Box::new(Input {
@@ -3481,8 +3503,7 @@ mod tests {
             ]))],
         )
         .unwrap();
-        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
-            .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
         let mut operator = RuntimeJoinFilter::new(
             Box::new(Input {
@@ -3517,22 +3538,23 @@ mod tests {
         let make_input = |ids: Vec<Option<i32>>, kinds: Vec<Option<&str>>| {
             Box::new(Input {
                 schema: Arc::clone(&schema),
-                batches: VecDeque::from([
-                    RecordBatch::try_new(
-                        Arc::clone(&schema),
-                        vec![
-                            Arc::new(Int32Array::from(ids)),
-                            Arc::new(StringArray::from(kinds)),
-                        ],
-                    )
-                    .unwrap(),
-                ]),
+                batches: VecDeque::from([RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(ids)),
+                        Arc::new(StringArray::from(kinds)),
+                    ],
+                )
+                .unwrap()]),
             }) as Box<dyn BatchOperator>
         };
-        let pool = QueryMemoryPool::new("partitioned-composite-runtime-filter", 4 * 1024 * 1024)
-            .unwrap();
+        let pool =
+            QueryMemoryPool::new("partitioned-composite-runtime-filter", 4 * 1024 * 1024).unwrap();
         let mut join = PartitionedHashJoin::new(
-            make_input(vec![Some(1), Some(1), Some(2), None], vec![Some("y"), Some("x"), Some("z"), Some("x")]),
+            make_input(
+                vec![Some(1), Some(1), Some(2), None],
+                vec![Some("y"), Some("x"), Some("z"), Some("x")],
+            ),
             make_input(vec![Some(1), Some(2)], vec![Some("x"), Some("z")]),
             JoinType::Inner,
             vec![("id".into(), "id".into()), ("kind".into(), "kind".into())],
@@ -3545,9 +3567,19 @@ mod tests {
         .unwrap();
         let mut rows = Vec::new();
         while let Some(batch) = join.next_batch().unwrap() {
-            let ids = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
-            let kinds = batch.column(1).as_any().downcast_ref::<StringArray>().unwrap();
-            rows.extend((0..batch.num_rows()).map(|row| (ids.value(row), kinds.value(row).to_owned())));
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let kinds = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            rows.extend(
+                (0..batch.num_rows()).map(|row| (ids.value(row), kinds.value(row).to_owned())),
+            );
         }
         rows.sort();
         assert_eq!(rows, vec![(1, "x".to_owned()), (2, "z".to_owned())]);
@@ -3591,7 +3623,11 @@ mod tests {
                 rows.sort();
                 rows
             };
-            assert_eq!(collect_left(&mut partitioned), collect_left(&mut reference), "{kind:?}");
+            assert_eq!(
+                collect_left(&mut partitioned),
+                collect_left(&mut reference),
+                "{kind:?}"
+            );
         }
     }
 
@@ -4578,4 +4614,3 @@ mod tests {
         assert_eq!(spill.snapshot().current_bytes, 0);
     }
 }
-

@@ -1144,9 +1144,9 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .next()
                 .is_some_and(|name| name.eq_ignore_ascii_case("UNNEST"))
             {
-                let args = args.as_ref().ok_or_else(|| {
-                    sql_err("UNNEST in FROM requires an ARRAY expression")
-                })?;
+                let args = args
+                    .as_ref()
+                    .ok_or_else(|| sql_err("UNNEST in FROM requires an ARRAY expression"))?;
                 if args.args.is_empty() {
                     return Err(sql_err(
                         "UNNEST in FROM requires at least one ARRAY expression",
@@ -3426,8 +3426,8 @@ fn parse_decimal_literal(text: &str) -> Result<ScalarValue> {
     {
         return Err(sql_err(format!("invalid DECIMAL literal: '{text}'")));
     }
-    let scale = i8::try_from(fraction.len())
-        .map_err(|_| sql_err("DECIMAL literal scale is too large"))?;
+    let scale =
+        i8::try_from(fraction.len()).map_err(|_| sql_err("DECIMAL literal scale is too large"))?;
     let digits = format!("{whole}{fraction}");
     let magnitude = digits
         .parse::<i128>()
@@ -3520,9 +3520,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             Expr::Function {
                 name: inner_name,
                 args: inner_args,
-            } if inner_args.len() == 2
-                && inner_name.eq_ignore_ascii_case("JSON_ARRAY_GET") =>
-            {
+            } if inner_args.len() == 2 && inner_name.eq_ignore_ascii_case("JSON_ARRAY_GET") => {
                 Ok(Expr::Function {
                     name: "TRY_JSON_ARRAY_GET".into(),
                     args: inner_args,
@@ -3579,9 +3577,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         // still require separate semantics.  Value windows carry IGNORE NULLS
         // in the internal name so the executor can apply it to the frame.
         if !func.within_group.is_empty() {
-            return Err(sql_err(
-                "window WITHIN GROUP is unsupported",
-            ));
+            return Err(sql_err("window WITHIN GROUP is unsupported"));
         }
         let window_name = match func.null_treatment {
             None | Some(ast::NullTreatment::RespectNulls) => name.clone(),
@@ -4147,7 +4143,10 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                     relations.push(table.rsplit('.').next().unwrap().to_owned());
                 }
             }
-            LogicalPlan::Unnest { expressions: values, .. } => expressions.extend(values),
+            LogicalPlan::Unnest {
+                expressions: values,
+                ..
+            } => expressions.extend(values),
             LogicalPlan::Filter { input, predicate } => {
                 expressions.push(predicate);
                 visit(input, relations, expressions);
@@ -4358,9 +4357,8 @@ mod tests {
 
     #[test]
     fn order_by_select_ordinal_resolves_to_the_projected_output() {
-        let plan =
-            sql_to_logical_plan("SELECT k, COUNT(*) AS n FROM t GROUP BY k ORDER BY 2 DESC")
-                .unwrap();
+        let plan = sql_to_logical_plan("SELECT k, COUNT(*) AS n FROM t GROUP BY k ORDER BY 2 DESC")
+            .unwrap();
         let LogicalPlan::Sort { order_by, .. } = plan else {
             panic!("sort");
         };
@@ -4945,10 +4943,8 @@ mod tests {
 
     #[test]
     fn parses_constant_array_unnest_with_zero_based_offset() {
-        let plan = sql_to_logical_plan(
-            "SELECT * FROM UNNEST(ARRAY['a', 'b']) WITH OFFSET AS n",
-        )
-        .unwrap();
+        let plan =
+            sql_to_logical_plan("SELECT * FROM UNNEST(ARRAY['a', 'b']) WITH OFFSET AS n").unwrap();
         assert!(matches!(
             plan,
             LogicalPlan::Unnest {
@@ -5137,10 +5133,9 @@ mod tests {
 
     #[test]
     fn lowers_join_using_to_qualified_equality_keys() {
-        let plan = sql_to_logical_plan(
-            "SELECT u.id, o.amount FROM users u JOIN orders o USING (id)",
-        )
-        .unwrap();
+        let plan =
+            sql_to_logical_plan("SELECT u.id, o.amount FROM users u JOIN orders o USING (id)")
+                .unwrap();
         let LogicalPlan::Project { input, .. } = plan else {
             panic!("unexpected plan: {plan:?}")
         };
@@ -5159,11 +5154,14 @@ mod tests {
 
     #[test]
     fn rejects_using_over_a_composite_left_relation_until_bound() {
-        let error = sql_to_logical_plan(
-            "SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)",
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("single base relation on the left"));
+        let error =
+            sql_to_logical_plan("SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)")
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("single base relation on the left")
+        );
     }
 
     #[test]
@@ -5625,9 +5623,9 @@ mod tests {
     fn try_rejects_unsupported_expression_with_actionable_error() {
         let error = sql_to_logical_plan("SELECT TRY(value / divisor) FROM t").unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET")
+            error.to_string().contains(
+                "TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET"
+            )
         );
     }
 
@@ -6196,10 +6194,7 @@ mod tests {
     #[test]
     fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
         for (sql, expected) in [
-            (
-                "SELECT * FROM UNNEST(1, 2)",
-                "constant ARRAY expressions",
-            ),
+            ("SELECT * FROM UNNEST(1, 2)", "constant ARRAY expressions"),
             (
                 "SELECT * FROM UNNEST(values) AS t(value)",
                 "constant ARRAY expression",
