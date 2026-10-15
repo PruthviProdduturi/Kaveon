@@ -194,6 +194,12 @@ open, and combines it with the statement predicate. Existing Delta snapshot
 and row-group pruning remain in force. The focused storage regression passed
 with the injected keys (`predicate_prunes_row_groups_and_filters_rows_across_all_files`), and the full server suite passed **394/394** afterward.
 
-This narrows, but does not close, the Track 1 gate: Parquet and object-store
-sources still use the bounded pre-probe filter until their deferred-reader
-interfaces are qualified.
+This narrows, but does not close, the Track 1 gate. Local Parquet files and
+directory tables now use the same deferred source contract: the footer and
+pinned listing are available for planning, while the first decoder is held
+until the exact build-side keys arrive. A focused `parquet_reader` regression
+selects only the expected labels from the six-row fixture, and the full
+storage Parquet test group passes. Object-backed readers still use the bounded
+pre-probe filter because their background stream is initialized before the
+join can inject a filter; that interface and cloud snapshot qualification
+remain open.
