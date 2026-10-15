@@ -18,6 +18,10 @@ export default function CatalogSchemaPage() {
   const catalog = decodeURIComponent(p.catalog), schema = decodeURIComponent(p.schema);
   const { isEditor } = useRole();
   const [adding, setAdding] = useState(false);
+  // The sheet registers the table on the Engine; this list reads the Engine's
+  // definitions. Closing it re-reads them, so the table that was just added
+  // is in the list the reader is returned to.
+  const [reload, setReload] = useState(0);
 
   return (
     <>
@@ -25,14 +29,19 @@ export default function CatalogSchemaPage() {
         <Link href="/catalog">Catalog</Link><i>›</i><b>{catalog}</b><i>›</i><b>{schema}</b>
       </div>
       <Inventory
-        catalogName={catalog} schemaName={schema}
+        catalogName={catalog} schemaName={schema} reloadToken={reload}
         action={isEditor && (
           <button type="button" className={`${s.ghost} ${s.primary}`} onClick={() => setAdding(true)}>
             <i className="fas fa-plus" aria-hidden="true" /> Add table
           </button>
         )}
       />
-      {adding && <RegisterSheet kind="table" catalog={catalog} schema={schema} onClose={() => setAdding(false)} />}
+      {adding && (
+        <RegisterSheet
+          kind="table" catalog={catalog} schema={schema}
+          onClose={() => { setAdding(false); setReload(count => count + 1); }}
+        />
+      )}
     </>
   );
 }

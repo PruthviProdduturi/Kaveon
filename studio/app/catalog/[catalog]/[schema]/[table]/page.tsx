@@ -80,13 +80,24 @@ export default function CatalogTablePage() {
         // Definitions deliberately remain cheap and may not carry a count.
         // Merge the durable footer measurement so the table page agrees with
         // the Catalog inventory and never shows an avoidable em dash.
-        try {
-          const measurements = await fetchInventory(d.schemaId || `${source}-${schema}`, true);
-          const measured = measurements.find(m => m.tableId === d.id);
-          if (measured?.state === "measured" && typeof measured.rows === "number") {
-            d = { ...d, rowCount: measured.rows };
-          }
-        } catch { /* the definition remains useful if measurement is unavailable */ }
+        // Only with a real schema id. The fallback here was
+        // `${source}-${schema}`, which is not an id the Engine issues, so
+        // where the definition carried no schema id this was a request that
+        // could only ever 404 — a round trip the page waited on for nothing.
+        //
+        // Read without `refresh`, so this takes the same reading the Catalog
+        // inventory took rather than re-listing every location in the schema
+        // on each table opened: the endpoint's own cache is what keeps the
+        // two surfaces reporting the same row count.
+        if (d.schemaId) {
+          try {
+            const measurements = await fetchInventory(d.schemaId);
+            const measured = measurements.find(m => m.tableId === d.id);
+            if (measured?.state === "measured" && typeof measured.rows === "number") {
+              d = { ...d, rowCount: measured.rows };
+            }
+          } catch { /* the definition remains useful if measurement is unavailable */ }
+        }
         if (!cancelled) setDef(d);
       })
       .catch(e => { if (!cancelled) setDefError(e instanceof CatalogError ? e : new CatalogError(0, "The definition could not be read.")); });

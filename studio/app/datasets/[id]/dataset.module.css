@@ -175,7 +175,7 @@
 .ghostDone { color: var(--success); border-color: var(--success) }
 
 .note { margin: 10px 0 0; color: var(--text-muted); font: 400 var(--fs-body)/1.55 Inter, sans-serif }
-.noteError { color: var(--error) }
+.noteError { color: var(--danger) }
 
 /* ── Data preview ─────────────────────────────────────────────────────────
    The card is as tall as the rows it has. While they load it is as tall as
@@ -186,6 +186,16 @@
   overflow: auto; min-height: 0; max-height: 52vh;
 }
 .grid table { font-size: var(--fs-body) }
+
+/* The sort control inside a column head: the head's own type and ink, a real
+   tab stop, and a focus ring, so the grid can be ordered from the keyboard. */
+.sortHead {
+  display: inline-flex; align-items: baseline; gap: .4rem;
+  width: 100%; min-width: 0; padding: 0;
+  border: 0; background: none; font: inherit; color: inherit;
+  letter-spacing: inherit; text-align: left; cursor: pointer;
+}
+.sortHead:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px }
 
 /* The skeleton repeats the grid it stands in for: the same frame, the same
    row height, one bar per column. */
@@ -252,7 +262,14 @@
 }
 .tagDim { color: var(--accent) }
 .tagMetric { color: var(--success) }
-.tagTime { color: #8b5cf6 }
+/* Time is the one role mark with no token behind it, so it carries a literal —
+   and the literal it carried, #8b5cf6, was measured at 3.96:1 on the light
+   card and 4.11:1 on the dark one. An 11px 700 mark is body text by the 4.5:1
+   rule, and no single value can clear it on both grounds, so the pair is
+   theme-aware the same way every colour in globals.css is: 6.93:1 on
+   --bg-surface light, 6.13:1 dark. The hue is unchanged. */
+.tagTime { color: #6d28d9 }
+:global([data-theme="dark"]) .tagTime { color: #a78bfa }
 .empty { margin: 0; color: var(--text-muted); font: 400 var(--fs-body)/1.5 Inter, sans-serif }
 
 @media (max-width: 860px) {

@@ -309,7 +309,12 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                   rather than the floor of the viewport, so the tree and the
                   thing a reader does with it stay one block. */}
               <div className={s.treeFoot}>
-                <Link href={current.catalog ? `/lab?catalog=${enc(current.catalog)}${current.schema ? `&schema=${enc(current.schema)}` : ""}` : "/lab"} className={`${s.ghost} ${s.treeAction}`} aria-current={pathname.startsWith("/catalog/query") ? "page" : undefined}><i className="fas fa-code" aria-hidden="true" /> SQL Lab</Link>
+                {/* The Lab is its own page. `/catalog/query` is the route it
+                    used to be mounted at and now only forwards, so marking
+                    this link as the current page there would have claimed a
+                    route the reader is never on — and one this link does not
+                    point to. */}
+                <Link href={current.catalog ? `/lab?catalog=${enc(current.catalog)}${current.schema ? `&schema=${enc(current.schema)}` : ""}` : "/lab"} className={`${s.ghost} ${s.treeAction}`}><i className="fas fa-code" aria-hidden="true" /> SQL Lab</Link>
               </div>
             </>
           )}

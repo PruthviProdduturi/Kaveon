@@ -57,7 +57,7 @@
 .problem {
   margin: 6px 0 0;
   font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--error);
+  color: var(--danger);
 }
 
 .retry {
@@ -126,7 +126,7 @@
 .unreadable {
   margin: 12px 0 0;
   font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--error);
+  color: var(--danger);
 }
 
 /* ── Choosing between the two kinds of source ─────────────────────────────── */

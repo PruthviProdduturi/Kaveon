@@ -6,6 +6,7 @@ import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useRole } from "../../../hooks/useRole";
 import { SETUP_DB_ICONS } from "../../../components/DataSourceIcons";
+import { reasonFromStatus, unknownText } from "../../../components/Reading";
 import s from "../settings.module.css";
 
 interface SystemStore {
@@ -67,18 +68,33 @@ export default function ConnectionsPage() {
   const [meta, setMeta] = useState<MetadataConfig | null | undefined>(undefined);
   const [engine, setEngine] = useState<EngineStatus | null | undefined>(undefined);
   const [cluster, setCluster] = useState<EngineCluster | null>(null);
+  /** Bumped by "Check again": a restarting coordinator is the common case on
+   *  this page, and recovery used to mean reloading the browser. */
+  const [reload, setReload] = useState(0);
+  /** The status of whichever of these reads was refused, where one was. */
+  const [failedStatus, setFailedStatus] = useState<number | null>(null);
 
   useEffect(() => {
     if (roleLoading || !isAdmin) return;
     let cancelled = false;
-    msalFetch(`${API_BASE}/api/v1/admin/metadata`).then(r => (r.ok ? r.json() : null))
-      .then((d: MetadataConfig | null) => { if (!cancelled) setMeta(d); }).catch(() => { if (!cancelled) setMeta(null); });
-    msalFetch(`${API_BASE}/api/v1/catalog-sources/engine-status`).then(r => (r.ok ? r.json() : null))
-      .then((d: EngineStatus | null) => { if (!cancelled) setEngine(d); }).catch(() => { if (!cancelled) setEngine(null); });
+    setMeta(undefined); setEngine(undefined); setCluster(null); setFailedStatus(null);
+    // A non-ok response and a request that never arrived were both stored as
+    // `null`, and the card then said the page "could not reach the Kaveon
+    // API" — a reachability claim it cannot make about a 403 or a 500. The
+    // status is kept so the sentence can be the one the server earned.
+    const read = async <T,>(path: string): Promise<T | null> => {
+      const res = await msalFetch(`${API_BASE}/api/v1${path}`);
+      if (!res.ok) { if (!cancelled) setFailedStatus(res.status); return null; }
+      return res.json() as Promise<T>;
+    };
+    read<MetadataConfig>("/admin/metadata")
+      .then(d => { if (!cancelled) setMeta(d); }).catch(() => { if (!cancelled) setMeta(null); });
+    read<EngineStatus>("/catalog-sources/engine-status")
+      .then(d => { if (!cancelled) setEngine(d); }).catch(() => { if (!cancelled) setEngine(null); });
     msalFetch(`${API_BASE}/api/v1/engine/console/cluster`).then(r => (r.ok ? r.json() : null))
       .then((d: EngineCluster | null) => { if (!cancelled) setCluster(d); }).catch(() => { if (!cancelled) setCluster(null); });
     return () => { cancelled = true; };
-  }, [roleLoading, isAdmin]);
+  }, [roleLoading, isAdmin, reload]);
 
   // KaveonDB is both the query runtime and the system of record, so there is
   // one system to show, not two. Only a deployment still served by an external
@@ -119,7 +135,7 @@ export default function ConnectionsPage() {
         ]} />
       )}
       {unified && store?.configured && store.durable === false && (
-        <p className={s.note} style={{ marginTop: 12, color: "var(--warning, #f59e0b)" }}>
+        <p className={s.note} style={{ marginTop: 12, color: "var(--warning)" }}>
           The system store is a directory on the host, which does not survive the container that writes it.
           Point <code>KAVEON_PRODUCT_STORAGE_MODE</code> at object storage before this deployment holds
           anything you cannot rebuild.
@@ -139,19 +155,32 @@ export default function ConnectionsPage() {
           {engine?.connected
             ? "Connection and credentials are set at deployment. The console shows live workers, memory and every query KaveonDB has recorded."
             : engine === null
-            ? "This page could not reach the Kaveon API, so it cannot say anything about KaveonDB. Nothing is known to be wrong."
+            ? unknownText({
+                what: "KaveonDB's status", says: "anything about it",
+                reason: reasonFromStatus(failedStatus),
+                detail: failedStatus === 403 ? "The server refused the read for this role." : null,
+              })
             : engine?.reason === "unreachable"
             ? "The endpoint and credential are configured and the coordinator did not answer. It may be restarting; this page reports what it finds and changes nothing."
             : engine?.reason === "invalid_listing"
             ? "The coordinator answered with something other than a catalog listing. The connection is configured and reaching a server that disagrees with this version."
             : "No KaveonDB endpoint is configured. Set KAVEON_ENGINE_URL and the bridge credential at deployment."}
         </p>
-        {engine?.connected && (
-          <div style={{ display: "flex", gap: 8 }}>
-            <Link href="/catalog" className={s.ghost}>Catalog</Link>
-            <Link href="/engine" className={`${s.ghost} ${s.primary}`}>Open KaveonDB console</Link>
-          </div>
-        )}
+        {/* The console is where an operator looks when the coordinator is not
+            answering, so it is not hidden by the coordinator not answering —
+            and a check that can be made again is offered beside it, rather
+            than leaving a browser reload as the only way to re-read. */}
+        <div style={{ display: "flex", gap: 8 }}>
+          {engine !== undefined && !engine?.connected && (
+            <button type="button" className={s.ghost} onClick={() => setReload(count => count + 1)}>
+              Check again
+            </button>
+          )}
+          <Link href="/catalog" className={s.ghost}>Catalog</Link>
+          <Link href="/engine" className={engine?.connected ? `${s.ghost} ${s.primary}` : s.ghost}>
+            Open KaveonDB console
+          </Link>
+        </div>
       </div>
     </section>
   );
@@ -179,9 +208,18 @@ export default function ConnectionsPage() {
             <Status on={null}>Unknown</Status>
           </div>
           <p className={s.note} style={{ marginTop: 12 }}>
-            This page could not reach the Kaveon API, so it cannot report what holds your
-            records. Nothing is known to be missing. Reload once the API is serving.
+            {unknownText({
+              what: "The system of record", says: "what holds your records",
+              reason: reasonFromStatus(failedStatus),
+              detail: failedStatus === 403 ? "The server refused the read for this role." : null,
+            })}
           </p>
+          <div className={s.cardFoot}>
+            <span />
+            <button type="button" className={s.ghost} onClick={() => setReload(count => count + 1)}>
+              Check again
+            </button>
+          </div>
         </section>
         {engineCard}
       </div>
@@ -214,7 +252,17 @@ export default function ConnectionsPage() {
         {meta?.ui_configured ? (
           <Facts rows={[["Database", meta.database], ["Host", meta.host], ["Endpoint", meta.endpoint], ["Port", meta.port]]} />
         ) : (
-          <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
+          // The setup wizard this used to send an administrator to does not
+          // exist in Studio — there is no /setup route — and on a KaveonDB
+          // installation the API refuses its endpoints outright (409
+          // postgresql_retired). The instruction was an action with no
+          // destination; what is true is where the setting lives.
+          <p className={s.note} style={{ marginTop: 12 }}>
+            No external metadata database is configured. It is set at deployment through{" "}
+            <code>METADATA_DB_TYPE</code> and the endpoint, database and credential for it —
+            there is no screen here that can connect one. A deployment where KaveonDB is the
+            system of record needs none: it keeps the records itself.
+          </p>
         )}
       </section>
       {engineCard}

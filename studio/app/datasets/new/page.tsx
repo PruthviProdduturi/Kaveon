@@ -6,6 +6,7 @@ import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
 import { useRole } from "../../../hooks/useRole";
+import { unknownText } from "../../../components/Reading";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DataSourceSelector } from "../../../components/DataSourceSelector";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -77,6 +78,15 @@ interface DatasetMetricRow {
   name: string;
   column: string;
   agg: string;
+  /**
+   * The expression as the store holds it, kept only for a metric this form
+   * could not take apart into an aggregate and a column — `COUNT(DISTINCT x)`,
+   * `SUM(a)/SUM(b)`, a CASE. Such a metric used to seed with an empty column,
+   * which the submit filter then dropped from the payload, and the API
+   * replaces metrics wholesale: saving any edit deleted it. It is sent back
+   * unchanged instead.
+   */
+  expression?: string;
 }
 
 interface DatasetDimensionDTO {
@@ -232,6 +242,12 @@ export default function NewDatasetPage() {
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [isLoadingDatabases, setIsLoadingDatabases] = useState(false);
   const [isLoadingTables, setIsLoadingTables] = useState(false);
+  /**
+   * A re-read of the schemas and tables that did not answer. Held apart from
+   * `loadError`, which hides the whole form: a refresh that failed leaves
+   * everything already on screen valid, and the previous list standing.
+   */
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [selectedSchema, setSelectedSchema] = useState<string | null>(null);
@@ -558,6 +574,7 @@ export default function NewDatasetPage() {
             name: m.name,
             column,
             agg,
+            expression: column ? undefined : (m.expression || undefined),
           };
         });
         if (seedMetrics.length > 0) {
@@ -806,6 +823,26 @@ export default function NewDatasetPage() {
     }
   };
 
+  /**
+   * The refresh behind both re-read buttons. `loadTables` throws, and the
+   * buttons called it as a bare `void` — so a refused re-read became an
+   * unhandled rejection, set no state, and left a control that looked as
+   * though it had done nothing at all.
+   */
+  const refreshTables = async () => {
+    setRefreshError(null);
+    setIsLoadingTables(true);
+    try {
+      await loadTables(true);
+    } catch (e: unknown) {
+      setRefreshError(e instanceof Error
+        ? e.message
+        : "The schemas and tables could not be re-read. The list below is the last one that answered.");
+    } finally {
+      setIsLoadingTables(false);
+    }
+  };
+
   const loadDimensionCandidates = async (schema?: string) => {
     if (!isAuthenticated) return;
     if (!schema) return;
@@ -997,7 +1034,12 @@ export default function NewDatasetPage() {
           : editingDatasetId
           ? String(editingDatasetId)
           : null;
-      void router.push(datasetId ? `/datasets/${datasetId}` : "/datasets");
+      // `replace`, not `push` — the same rule the database path below states
+      // and explains: the creation step is finished and must not stay in
+      // history, or Back from the saved dataset returns into the form that
+      // created it and submitting again creates a second dataset. This path
+      // was pushing.
+      void router.replace(datasetId ? `/datasets/${datasetId}` : "/datasets");
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : "Failed to save dataset");
     } finally {
@@ -1061,9 +1103,20 @@ export default function NewDatasetPage() {
         }));
 
       const metricPayload = metrics
-        .filter((m) => m.name.trim() && m.column)
+        .filter((m) => m.name.trim() && (m.column || m.expression))
         .map((m) => {
           const agg = (m.agg || "SUM").toUpperCase();
+          // A metric this form could not parse keeps the expression it came
+          // with. Rebuilding it from an empty column would write
+          // `SUM([])`, and dropping it would delete it.
+          if (!m.column && m.expression) {
+            return {
+              name: m.name.trim(),
+              expression: m.expression,
+              metric_type: agg.toLowerCase(),
+              format: null as string | null,
+            };
+          }
           const safeColumn = m.column.replace(/[\[\]]/g, "");
           const expression = `${agg}([${safeColumn}])`;
           return {
@@ -1161,7 +1214,7 @@ export default function NewDatasetPage() {
         }
       }
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
         description: description.trim() || null,
         table_name: selectedTable.name,
@@ -1174,6 +1227,23 @@ export default function NewDatasetPage() {
         columns: columnPayload,
         metrics: metricPayload,
       };
+
+      // The API applies `exclude_unset`: a collection left out of a PATCH is
+      // left as it stands, while one sent as `[]` is an explicit delete —
+      // `_replace_columns(..., delete_first=True)`. This form can only speak
+      // for a collection it was able to rebuild, and all four of these are
+      // rebuilt from the table's columns. When that read did not answer,
+      // `factColumns` is null and every one of them is empty because nothing
+      // was read, not because the dataset holds nothing — and Update was
+      // still enabled, so pressing it deleted the dataset's columns,
+      // dimension joins, metrics and filters. They are omitted instead, and
+      // the dataset keeps what it has.
+      if (editingDatasetId && !factColumns) {
+        delete payload.dimensions;
+        delete payload.filters;
+        delete payload.columns;
+        delete payload.metrics;
+      }
 
       const url = editingDatasetId
         ? `${API_BASE}/api/v1/datasets/${editingDatasetId}`
@@ -1221,7 +1291,10 @@ export default function NewDatasetPage() {
         // reaches the library it was opened from.
         void router.replace(`/datasets/${created.id}`);
       } else {
-        void router.push("/datasets");
+        // A string id is as valid as a number one — the engine path above
+        // accepts both — and landing on the list instead of the dataset just
+        // created was the only consequence of insisting on a number here.
+        void router.replace(created?.id != null ? `/datasets/${String(created.id)}` : "/datasets");
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Failed to create dataset";
@@ -1238,6 +1311,17 @@ export default function NewDatasetPage() {
         dim.include && (!dim.factKey || !dim.dimKey || !dim.schema || !dim.name),
     );
   }, [mode, dimensionMappings]);
+
+  /**
+   * Included dimensions whose fact key could not be parsed out of the stored
+   * join condition. There is no control on this page that can set a fact key,
+   * so these cannot be completed here — only excluded.
+   */
+  const unkeyedDimensions = useMemo(
+    () => (mode !== "semantic" ? [] : dimensionMappings
+      .filter(dim => dim.include && !dim.factKey)
+      .map(dim => (dim.schema && dim.name ? `${dim.schema}.${dim.name}` : dim.name || "a dimension"))),
+    [mode, dimensionMappings]);
 
   const factKeyOptions = useMemo(() => {
     if (!factColumns) return [] as ColumnInfo[];
@@ -1485,31 +1569,64 @@ export default function NewDatasetPage() {
         </div>
       )}
 
+      {/* A failed catalog read used to be stored as "no catalogs", which drew
+          this card — "This installation has neither", with instructions to go
+          and register a catalog source. Both sentences were made out of a
+          request that did not answer, and the second sends an administrator to
+          configure something that may already be correct. The verdict is kept
+          for the case the server actually reported: nothing registered. */}
       {isAuthenticated && !editingDatasetId && nothingRegistered && (
         <div className="card page-empty-card">
-          <p className="page-empty-title">Nothing is registered for a dataset to read</p>
+          <p className="page-empty-title">
+            {engineCatalogError
+              ? "What a dataset may read is not known"
+              : "Nothing is registered for a dataset to read"}
+          </p>
           <p className="page-empty-body">
-            A dataset reads one table: either a table of a catalog registered against the Engine,
-            or a table of an external database connection. This installation has neither. Register
-            a catalog source under Settings &rarr; Storage, or a database connection under
-            Settings &rarr; Data sources; both are administrator settings.
-            {engineUnsynchronized.length > 0 && (
+            {engineCatalogError ? (
               <>
-                {" "}
-                {engineUnsynchronized.length === 1
-                  ? `The catalog source ${engineUnsynchronized[0]} is registered, but the Engine returned no definition for it`
-                  : `${engineUnsynchronized.length} catalog sources are registered, but the Engine returned no definition for them`}
-                : either they have not been synchronized, or your account has not been granted
-                them.
+                {unknownText({
+                  what: "The registered catalogs",
+                  says: "which catalogs a dataset may read",
+                  detail: engineCatalogError,
+                })}
+                {" "}No database connection is registered either, so this page has nothing it can
+                offer yet — but it is not saying your catalogs are gone.
+              </>
+            ) : (
+              <>
+                A dataset reads one table: either a table of a catalog registered against the
+                Engine, or a table of an external database connection. This installation has
+                neither. Register a catalog source under Settings &rarr; Storage, or a database
+                connection under Settings &rarr; Data sources; both are administrator settings.
+                {engineUnsynchronized.length > 0 && (
+                  <>
+                    {" "}
+                    {engineUnsynchronized.length === 1
+                      ? `The catalog source ${engineUnsynchronized[0]} is registered, but the Engine returned no definition for it`
+                      : `${engineUnsynchronized.length} catalog sources are registered, but the Engine returned no definition for them`}
+                    : either they have not been synchronized, or your account has not been granted
+                    them.
+                  </>
+                )}
               </>
             )}
           </p>
-          {engineCatalogError && (
-            <p className="page-empty-body" style={{ color: "var(--error)" }}>
-              The registered catalogs could not be read: {engineCatalogError}
-            </p>
-          )}
         </div>
+      )}
+
+      {/* The same failure, where one database connection does exist: the form
+          resolved straight to that path and the catalog read's failure was
+          never mentioned anywhere, so a reader whose catalogs were simply
+          unreachable was shown a page with no catalogs in it and no reason. */}
+      {isAuthenticated && !editingDatasetId && engineCatalogError && !nothingRegistered && (
+        <p className="muted" style={{ marginTop: 12, fontSize: 13 }} role="status">
+          {unknownText({
+            what: "The registered catalogs",
+            says: "which catalogs a dataset may read",
+            detail: engineCatalogError,
+          })}
+        </p>
       )}
 
       {isAuthenticated && !sourceKind && bothRegistered && (
@@ -1562,7 +1679,12 @@ export default function NewDatasetPage() {
       )}
 
       {isAuthenticated && !!sourceKind && (sourceKind === "engine" || !loadError) && (
-        <form onSubmit={handleSubmit} className="card" style={{ padding: 0, overflow: "hidden" }}>
+        // No `overflow: hidden` here. An overflow-hidden ancestor becomes the
+        // sticky header's scrollport, and this box never scrolls — so the
+        // header stopped sticking and scrolled away with the page, taking
+        // Cancel and Create with it. A semantic dataset's form runs for
+        // thousands of pixels and has no second submit at its foot.
+        <form onSubmit={handleSubmit} className="card" style={{ padding: 0 }}>
           {/* Sticky Header with Action Buttons */}
           <div style={{
             position: "sticky",
@@ -1740,8 +1862,9 @@ export default function NewDatasetPage() {
                 <button
                   type="button"
                   className="icon-button"
-                  title="Refresh tables"
-                  onClick={() => void loadTables(true)}
+                  title="Re-read the schemas and tables of this connection"
+                  aria-label="Re-read the schemas and tables of this connection"
+                  onClick={() => void refreshTables()}
                   disabled={isLoadingTables}
                 >
                   <i className="fas fa-sync-alt" aria-hidden="true" />
@@ -1777,13 +1900,19 @@ export default function NewDatasetPage() {
                   type="button"
                   className="icon-button"
                   title="Refresh tables"
-                  onClick={() => void loadTables(true)}
+                  aria-label="Refresh tables"
+                  onClick={() => void refreshTables()}
                   disabled={isLoadingTables}
                 >
                   <i className="fas fa-sync-alt" aria-hidden="true" />
                 </button>
               </div>
             </div>
+            {refreshError && (
+              <p style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }} role="status">
+                {refreshError}
+              </p>
+            )}
               </>
             )}
           </div>
@@ -2223,14 +2352,19 @@ export default function NewDatasetPage() {
 
               <div style={{ marginBottom: 16 }}>
                 <span className="save-query-field-label">Dataset type</span>
-                <div style={{ display: "inline-flex", borderRadius: 999, border: "1px solid var(--lens-border)", padding: 2, marginTop: 4 }}>
+                {/* Both halves of this toggle were drawn in a pre-rename
+                    token declared once as #111827 with no dark value anywhere,
+                    so on the dark theme the unselected half was near-black on
+                    near-black: the only control that switches dataset type
+                    could not be read. */}
+                <div style={{ display: "inline-flex", borderRadius: 999, border: "1px solid var(--border)", padding: 2, marginTop: 4 }}>
                   <button
                     type="button"
                     onClick={() => setMode("flat")}
                     style={{
                       border: "none",
                       backgroundColor: mode === "flat" ? primaryColor : "transparent",
-                      color: mode === "flat" ? "#ffffff" : "var(--lens-text)",
+                      color: mode === "flat" ? "#ffffff" : "var(--text-secondary)",
                       borderRadius: 999,
                       padding: "4px 10px",
                       fontSize: 13,
@@ -2245,7 +2379,7 @@ export default function NewDatasetPage() {
                     style={{
                       border: "none",
                       backgroundColor: mode === "semantic" ? primaryColor : "transparent",
-                      color: mode === "semantic" ? "#ffffff" : "var(--lens-text)",
+                      color: mode === "semantic" ? "#ffffff" : "var(--text-secondary)",
                       borderRadius: 999,
                       padding: "4px 10px",
                       fontSize: 13,
@@ -2260,6 +2394,31 @@ export default function NewDatasetPage() {
                   joins to dimension tables later so charts and Lab queries can use friendly fields.
                 </p>
               </div>
+
+              {/* A failed column read is reported in both modes. Rendered
+                  inside the semantic block, a flat dataset showed only "No
+                  columns available" in three selects — a verdict about the
+                  table made out of a request that did not answer — while the
+                  reason sat in a branch that was not on screen. */}
+              {factColumnsError && (
+                <div style={{
+                  marginTop: 12, padding: 12, borderRadius: 8,
+                  // `--warning-bg` is defined nowhere in the repo, so this card
+                  // always fell back to #fff3cd with #856404 ink: a cream
+                  // rectangle on the dark theme, and two literals for a state
+                  // the danger token already carries.
+                  background: "color-mix(in srgb, var(--danger) 8%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--danger) 35%, transparent)",
+                }}>
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--danger)" }}>
+                    <strong>The table&rsquo;s columns could not be read:</strong> {factColumnsError}
+                  </p>
+                  <p style={{ margin: '8px 0 0 0', fontSize: 12, color: "var(--text-secondary)" }}>
+                    Nothing about the dataset has changed. The columns, dimension joins and metrics
+                    it already holds are left as they are until they can be read again.
+                  </p>
+                </div>
+              )}
 
               {mode === "semantic" && (
                 <div style={{ marginTop: 24 }}>
@@ -2320,17 +2479,6 @@ export default function NewDatasetPage() {
                     </p>
                   )}
 
-                  {factColumnsError && (
-                    <div className="card" style={{ marginTop: 12, padding: 12, background: "var(--warning-bg, #fff3cd)", border: "1px solid var(--warning, #ffc107)" }}>
-                      <p style={{ margin: 0, fontSize: 13, color: '#856404' }}>
-                        <strong>Error loading table columns:</strong> {factColumnsError}
-                      </p>
-                      <p style={{ margin: '8px 0 0 0', fontSize: 12, color: '#856404' }}>
-                        Make sure the table exists and you have permission to access it.
-                      </p>
-                    </div>
-                  )}
-
                   {dimensionSchema && !isLoadingDimensions && !isLoadingFactColumns && !factColumnsError && dimensionMappings.length === 0 && (
                     <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
                       {!selectedTable ? (
@@ -2375,7 +2523,7 @@ export default function NewDatasetPage() {
                               }}
                             >
                               {isLoadingFactColumns
-                                ? "Loading fact columns5"
+                                ? "Loading fact columns…"
                                 : dim.factKey || "No key available"}
                             </div>
                             {dim.factKey && (
@@ -2601,10 +2749,32 @@ export default function NewDatasetPage() {
                     </div>
                   )}
 
-                  {hasSemanticKeyIssues && (
+                  {/* Two different blockers, told apart. A missing dimension
+                      key has a control on the row; a missing FACT key has
+                      none — the fact key is static text, and the only control
+                      that could set one is hidden exactly when it is absent.
+                      Told "choose both", a reader went looking for a control
+                      that is not there while Update stayed disabled. */}
+                  {unkeyedDimensions.length > 0 && (
+                    <p className="muted" style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }}>
+                      The join condition stored for{" "}
+                      <strong>{unkeyedDimensions.join(", ")}</strong>{" "}
+                      {unkeyedDimensions.length === 1 ? "is not one this form can read" : "are not ones this form can read"}, so
+                      no fact key can be shown for{" "}
+                      {unkeyedDimensions.length === 1 ? "it" : "them"} and the dataset cannot be
+                      saved while {unkeyedDimensions.length === 1 ? "it is" : "they are"} included.
+                      Clear the Include box to save the dataset without{" "}
+                      {unkeyedDimensions.length === 1 ? "that join" : "those joins"} — which
+                      removes {unkeyedDimensions.length === 1 ? "it" : "them"} — or leave this
+                      page without saving to keep{" "}
+                      {unkeyedDimensions.length === 1 ? "it" : "them"} as{" "}
+                      {unkeyedDimensions.length === 1 ? "it is" : "they are"}.
+                    </p>
+                  )}
+                  {hasSemanticKeyIssues && unkeyedDimensions.length === 0 && (
                     <p
                       className="muted"
-                      style={{ marginTop: 8, fontSize: 12, color: "var(--error)" }}
+                      style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }}
                     >
                       For each dimension you include, choose both a fact key and a
                       dimension key.
@@ -2616,7 +2786,7 @@ export default function NewDatasetPage() {
               )}
 
               {submitError && (
-                <p className="page-empty-body" style={{ color: "var(--error)", marginTop: 12 }}>
+                <p className="page-empty-body" style={{ color: "var(--danger)", marginTop: 12 }}>
                   {submitError}
                 </p>
               )}

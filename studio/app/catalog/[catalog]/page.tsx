@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
+import { useRole } from "../../../hooks/useRole";
+import { RegisterSheet } from "../CatalogEditor";
 import { Inventory } from "../Inventory";
 import { SystemCatalog } from "../SystemCatalog";
 import { useCatalogTree } from "../CatalogShell";
@@ -12,6 +15,9 @@ export default function CatalogPage() {
   const params = useParams<{ catalog: string }>();
   const catalog = params.catalog ? decodeURIComponent(params.catalog) : "";
   const { catalogs: registry } = useCatalogTree();
+  const { isEditor } = useRole();
+  const [adding, setAdding] = useState(false);
+  const [reload, setReload] = useState(0);
 
   // Either of the system catalog's two names opens its own reading, so a link
   // written to the product label resolves as well as one to the identifier.
@@ -42,5 +48,26 @@ export default function CatalogPage() {
     );
   }
 
-  return <Inventory catalogName={catalog} />;
+  // A schema is the one thing a catalog's own page can be missing, and the
+  // overview above and the schema page below both offer to add one. This level
+  // did not, so an editor who had navigated into a catalog had to go back out
+  // to register into it. The sheet opens scoped to this catalog.
+  return (
+    <>
+      <Inventory
+        catalogName={catalog} reloadToken={reload}
+        action={isEditor && (
+          <button type="button" className={`${s.ghost} ${s.primary}`} onClick={() => setAdding(true)}>
+            <i className="fas fa-plus" aria-hidden="true" /> Add schema
+          </button>
+        )}
+      />
+      {adding && (
+        <RegisterSheet
+          kind="schema" catalog={catalog}
+          onClose={() => { setAdding(false); setReload(count => count + 1); }}
+        />
+      )}
+    </>
+  );
 }
