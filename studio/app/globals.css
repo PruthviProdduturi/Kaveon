@@ -26,6 +26,13 @@
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.1);
 
+  /* `--danger` was never defined, in either theme. Seventy-four call sites
+     carried it as a fallback -- fifty-four `var(--danger, #ef4444)` and twenty
+     `var(--danger, #dc2626)` -- so the product had two different reds for the
+     same meaning and neither followed the theme. Measured on white, #dc2626
+     clears the 4.5:1 body-text threshold at 4.83:1 where #ef4444 reaches only
+     3.76:1, so the minority value was the better one and is now the token. */
+  --danger: #dc2626;
   --success: #10b981;
   --warning: #f59e0b;
   --error: #ef4444;
@@ -55,6 +62,18 @@
      primary > secondary > muted > faint still holds. */
   --text-muted: #8c8c8c;
   --text-faint: #6e6e6e;
+
+  /* Status colours chosen for this ground rather than inherited from the
+     light palette, where they were defined and the dark block simply had
+     none. Measured on the dark surface, the light values read 4.43:1
+     (#ef4444), 6.57:1 (#10b981) and 7.76:1 (#f59e0b) -- the red is the weak
+     one, the other two already pass. Danger therefore lifts to a lighter red
+     at 6.03:1, and success and warning lift a step as well so the three read
+     as one set rather than one corrected member beside two inherited ones:
+     8.67:1 and 9.99:1. */
+  --danger: #f87171;
+  --success: #34d399;
+  --warning: #fbbf24;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.4);

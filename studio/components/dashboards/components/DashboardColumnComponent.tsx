@@ -4,13 +4,27 @@
  * Renders a vertical container whose children are stacked top-to-bottom.
  * No header bar — edit actions appear as a floating overlay on hover.
  * Each child's height is resizable by dragging the handle at its bottom edge.
+ *
+ * Reordering and accepting a drop are ONE mechanism (D-37). A grip's drag is
+ * resolved by `useContainerDropTarget` into an insertion index, and the
+ * indicator between two children is where the release lands — whether the
+ * thing being dragged is one of this column's own children, a tile from the
+ * canvas, or a palette entry. There used to be a second, parallel path here:
+ * per-child `dragover`/`drop` handlers that read an index out of `dataTransfer`
+ * and only ever worked for this column's own children, so an incoming tile
+ * could only ever be appended.
  */
 
 import React, { useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { useDashboard } from '../DashboardContext';
-import { useBuilderContext, moveDragProps, useContainerDropTarget } from '../BuilderContext';
+import {
+  useBuilderContext,
+  moveDragProps,
+  useContainerDropTarget,
+  CHILD_SLOT_ATTR,
+} from '../BuilderContext';
 import { ConfirmModal } from '../../ConfirmModal';
 
 const DashboardItem = dynamic(() => import('../DashboardItem'), { ssr: false });
@@ -38,24 +52,24 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const { isDropTarget, dropProps } = useContainerDropTarget(
+  // The element whose direct `[data-child-slot]` children are the drop slots.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const { isDropTarget, dropSlot, dropProps } = useContainerDropTarget(
     item.i,
     'column',
-    !!isEditMode && !!builderCtx
+    !!isEditMode && !!builderCtx,
+    { axis: 'y', contentRef }
   );
 
-  // ── Child drag-to-reorder ─────────────────────────────────────────────────────
+  // ── Child drag ───────────────────────────────────────────────────────────────
 
   /**
-   * The grip's drag means two things, and which one it is depends only on where
-   * it is released: dropped on a sibling slot in this column it reorders,
-   * dropped on the canvas or another container it moves the child out. The
-   * index below drives the reorder; `moveDragProps` arms the payload the other
-   * drop targets read. One gesture, so the user does not have to know.
+   * The grip's drag means one thing — "put this somewhere else" — and where it
+   * is released decides where: a boundary inside this column reorders it, the
+   * canvas or another container moves it out. `moveDragProps` arms the payload
+   * every drop target reads; this only dresses the cursor.
    */
-  const handleChildDragStart = (e: React.DragEvent, index: number) => {
-    e.dataTransfer.setData('text/plain', String(index));
+  const handleChildDragStart = (e: React.DragEvent) => {
     e.dataTransfer.effectAllowed = 'move';
     const ghost = document.createElement('div');
     ghost.textContent = 'Moving item…';
@@ -68,41 +82,6 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 50, 14);
     requestAnimationFrame(() => document.body.removeChild(ghost));
-  };
-
-  /**
-   * Is the drag in flight one of THIS column's own children?
-   *
-   * The reorder below reads an index out of `dataTransfer`, and an index is
-   * only meaningful within the column that issued it. Without this check,
-   * dragging a child of one column over another column's slot reordered the
-   * wrong column's children using a stranger's index.
-   */
-  const isOwnChildDrag = () => {
-    const payload = builderCtx?.pendingDrag.current;
-    return !!payload && payload.kind === 'move' && payload.fromParentId === item.i;
-  };
-
-  const handleChildDragOver = (e: React.DragEvent, index: number) => {
-    if (!isOwnChildDrag()) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    setDragOverIndex(index);
-  };
-
-  const handleChildDrop = (e: React.DragEvent, dropIndex: number) => {
-    setDragOverIndex(null);
-    if (!isOwnChildDrag()) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
-    if (builderCtx) builderCtx.pendingDrag.current = null;
-    if (isNaN(fromIndex) || fromIndex === dropIndex) return;
-    const reordered = [...children];
-    const [moved] = reordered.splice(fromIndex, 1);
-    reordered.splice(dropIndex, 0, moved);
-    updateLayoutItem(item.i, { children: reordered });
   };
 
   // ── Delete self ──────────────────────────────────────────────────────────────
@@ -326,14 +305,38 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
 
       {/* ── Column children ────────────────────────────────────────────────── */}
       <div
+        ref={contentRef}
         style={{
           display: 'flex',
           flexDirection: 'column',
           padding: isEditMode ? 8 : 0,
           flex: 1,
           minHeight: 0,
+          position: 'relative',
         }}
       >
+        {/*
+          Where the drop will land, on the boundary the resolver picked. Drawn
+          over the children rather than between them: an element that took up
+          space would shift the rects the index is measured from.
+        */}
+        {isDropTarget && dropSlot && children.length > 0 && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              top: dropSlot.offset - 2,
+              left: 4,
+              right: 4,
+              height: 4,
+              borderRadius: 2,
+              background: 'var(--accent)',
+              boxShadow: '0 0 0 3px rgba(var(--accent-rgb), 0.25)',
+              pointerEvents: 'none',
+              zIndex: 25,
+            }}
+          />
+        )}
         {/* Empty column CTA */}
         {children.length === 0 && isEditMode && (
           <div style={{ position: 'relative', flex: 1, minHeight: 80 }}>
@@ -355,6 +358,11 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
               }}
             >
               <span style={{ fontWeight: 500 }}>Add a block</span>
+              {/* Says that the column is a drop target, where someone looking
+                  at an empty one will read it (D-36). */}
+              <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>
+                or drag a tile in from the canvas
+              </span>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center' }}>
                 {ADD_ITEMS.map((opt) =>
                   opt.type === 'chart' && !builderCtx ? null : (
@@ -397,25 +405,22 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
         )}
 
         {/* Render children with drag-to-reorder + resize handles */}
-        {children.map((child, idx) => {
+        {children.map((child) => {
           const isDivider = child.type === 'divider';
           const childHeight = isDivider
             ? Math.max(1, child.h || 1) * ROW_HEIGHT
             : Math.max(MIN_H * ROW_HEIGHT, (child.h || 8) * ROW_HEIGHT);
-          const isDropTarget = dragOverIndex === idx;
 
           return (
             <React.Fragment key={child.i}>
               <div
-                onDragOver={(e) => handleChildDragOver(e, idx)}
-                onDrop={(e) => handleChildDrop(e, idx)}
-                onDragLeave={() => setDragOverIndex(null)}
+                // One insertion slot. The drop resolver measures these rects to
+                // decide which boundary the pointer is nearest.
+                {...{ [CHILD_SLOT_ATTR]: '' }}
                 style={{
                   flexShrink: 0,
                   marginBottom: 8,
-                  outline: isDropTarget ? '2px dashed var(--accent)' : '2px solid transparent',
                   borderRadius: 5,
-                  transition: 'outline 0.1s',
                 }}
               >
                 {/* Drag handle — only in edit mode */}
@@ -424,7 +429,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                     {...moveDragProps(
                       builderCtx.pendingDrag,
                       { ...child, parentId: item.i },
-                      { onDragStart: (e) => handleChildDragStart(e, idx) }
+                      { onDragStart: handleChildDragStart }
                     )}
                     title="Drag to reorder, or out to the canvas"
                     style={{

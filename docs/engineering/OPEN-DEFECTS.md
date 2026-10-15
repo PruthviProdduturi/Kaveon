@@ -229,7 +229,7 @@ Recorded rather than fixed because a dead API with a latent precedence bug is
 a trap for whoever first uses it.
 
 ### D-34 · A container taller than its tile spills over its neighbour
-**open, needs a judgement** · 2026-10-13
+**fixed** · 2026-10-13
 
 Container tiles keep `overflow: visible` because a row's only delete control
 sits at `top: -14px`, outside its own box. So a row whose contents exceed its
@@ -258,7 +258,7 @@ measured: I believed the grab strip covered it, then that the chart overlay
 did. It was never rendered. `elementFromPoint` settled it.
 
 ### D-36 · The nesting grip is correct and not discoverable
-**open, needs a design decision** · 2026-10-13
+**fixed** · 2026-10-13
 
 Dragging a tile into a row works, but only off a small grip that appears on
 hover and only when the dashboard contains a container. "Drag by this square
@@ -269,7 +269,7 @@ rather than guessed at, since it is a design choice and the mechanism
 underneath is sound.
 
 ### D-37 · Insertion position inside a container is modelled, not offered
-**open** · 2026-10-13
+**fixed** · 2026-10-13
 
 `moveItemToContainer` takes an index and every caller appends, so a tile cannot
 be dropped between two existing children of a row. The model supports it; no
@@ -641,6 +641,26 @@ this cannot report true progress and no longer pretends to: the label is
 derived from elapsed time off a single timer, advances once in order, and holds
 on "Running the query", which is where a long wait is actually spent. Real
 stage reporting needs the endpoint to stream them.
+### D-50 · `--danger` was never defined, and its two fallbacks disagreed
+**fixed** · 2026-10-14
+
+Seventy-four call sites carried it as a fallback — fifty-four
+`var(--danger, #ef4444)` and twenty `var(--danger, #dc2626)` — so the product
+had two different reds for one meaning and neither followed the theme.
+`--success` and `--warning` existed, but only in the light block.
+
+Measured rather than picked: on white the minority value is the better one
+(#dc2626 at 4.83:1 against #ef4444's 3.76:1), and on the dark surface the red
+was the weak member of the set at 4.43:1 where the green and amber already
+passed. All three are now defined in both themes, with danger at 6.03:1 on
+dark and the other two lifted a step so the set reads as one family rather
+than one corrected member beside two inherited ones.
+
+Found by the agent sweeping dashboard colour literals, which reported all three
+as undefined; two of them were defined, and the correction mattered because it
+changed which value was wrong.
+
+
 ---
 
 ## Verified fixed

@@ -140,7 +140,7 @@ const DashboardChartLoader: React.FC<DashboardChartLoaderProps> = ({
 
   if (error) {
     return (
-      <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>
+      <div style={{ padding: 20, color: 'var(--danger, #ef4444)', fontSize: 13 }}>
         {error}
       </div>
     );
@@ -256,12 +256,12 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
           display: 'flex',
           alignItems: 'center',
           gap: 4,
-          background: '#eff6ff',
-          border: '1px solid #bfdbfe',
+          background: 'rgba(var(--accent-rgb), 0.10)',
+          border: '1px solid rgba(var(--accent-rgb), 0.45)',
           borderRadius: 6,
           padding: '3px 8px',
           fontSize: 11,
-          color: '#1d4ed8',
+          color: 'var(--accent)',
           fontWeight: 600,
         }}>
           <i className="fas fa-filter" style={{ fontSize: 9 }} />
@@ -269,7 +269,7 @@ export const DashboardChartComponent: React.FC<DashboardComponentProps> = ({ ite
           <button
             type="button"
             onClick={() => clearCrossFilter(item.i)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#60a5fa', padding: '0 0 0 2px', fontSize: 11, lineHeight: 1 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: '0 0 0 2px', fontSize: 11, lineHeight: 1 }}
             title="Clear cross-filter"
           >×</button>
         </div>

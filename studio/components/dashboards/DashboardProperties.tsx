@@ -2,7 +2,7 @@ import React from "react";
 
 export default function DashboardProperties({ title, description, onChange }: { title: string; description: string; onChange: (field: string, value: string) => void }) {
   return (
-    <div className="dashboard-properties" style={{ width: 320, padding: 16, borderLeft: "1px solid #eee" }}>
+    <div className="dashboard-properties" style={{ width: 320, padding: 16, borderLeft: "1px solid var(--border)" }}>
       <h3>Properties</h3>
       <label>
         Title

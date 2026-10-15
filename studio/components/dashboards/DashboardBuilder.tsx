@@ -514,6 +514,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
     });
   };
 
+  // A per-chart-type identity palette, not page chrome: each entry is the hue
+  // that identifies that chart type wherever it is listed, so the whole table
+  // keeps literal values rather than theme tokens.
   const chartTypeInfo =(type?: string): { icon: string; color: string; bg: string; label: string } => {
     if (!type) return { icon: "fas fa-chart-bar", color: "#6366f1", bg: "#eef2ff", label: "Chart" };
     const t = type.toLowerCase();
@@ -736,6 +739,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
               }}
               onMouseOver={(e) => {
                 if (!isPublishing) {
+                  // Darker green for the publish hover. No success-dark token
+                  // exists, so this stays a literal; the reset below returns to
+                  // the --success token the button rests on.
                   e.currentTarget.style.background = "#059669";
                 }
               }}

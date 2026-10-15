@@ -88,6 +88,8 @@ const DashboardViewContent: React.FC<{
       try {
         const node = canvasRef.current;
         if (!node) return;
+        // Baked into the stored JPEG, so it has to be a resolved colour per
+        // theme rather than a token the rasterizer cannot read.
         const bg = isDark ? "#0b1220" : "#f8fafc";
         const raster = await toJpeg(node, {
           quality: 0.92,
@@ -252,6 +254,8 @@ const DashboardViewContent: React.FC<{
             >
               {initialConfig?.name || 'Dashboard'}
             </h1>
+            {/* Published/Draft status hues. No green or amber tint/ink tokens
+                exist, so this pair keeps literals. */}
             <span style={{
               fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, lineHeight: 1.5,
               flexShrink: 0, whiteSpace: 'nowrap',
@@ -328,12 +332,13 @@ const DashboardViewContent: React.FC<{
           <button type="button" onClick={onFavoriteClick} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'} style={{
             ...btnBase, width: 34, padding: 0, justifyContent: 'center', flexShrink: 0,
             background: isFavorite ? 'rgba(245, 158, 11, 0.08)' : 'var(--bg-surface)',
+            // The amber favourite border has no token; it stays a literal.
             borderColor: isFavorite ? '#fde68a' : 'var(--border)',
             transform: isAnimating ? 'scale(0.88)' : 'scale(1)',
             transition: 'all 0.2s ease',
           }}>
             <i className={isFavorite ? 'fas fa-star' : 'far fa-star'} style={{
-              fontSize: 14, color: isFavorite ? '#f59e0b' : 'var(--text-muted)',
+              fontSize: 14, color: isFavorite ? 'var(--warning, #f59e0b)' : 'var(--text-muted)',
               filter: isFavorite ? 'drop-shadow(0 1px 3px rgba(245,158,11,0.4))' : 'none',
             }} />
           </button>
@@ -342,6 +347,8 @@ const DashboardViewContent: React.FC<{
 
           {/* Publish — a PUT on this dashboard, so it needs write access to it. */}
           {!isPublished && mayEdit && (
+            // The green publish affordance keeps literals: no green tint,
+            // border or ink token exists to carry it.
             <button onClick={onPublish} disabled={publishing} style={{
               ...btnBase, flexShrink: 0, background: publishing ? 'var(--bg-hover)' : '#f0fdf4',
               borderColor: publishing ? 'var(--border)' : '#86efac', color: publishing ? 'var(--text-muted)' : '#15803d',
@@ -561,11 +568,11 @@ const DashboardViewPage: React.FC = () => {
     return (
       <div className="page-shell page-shell-wide">
         <div style={{ padding: 40, textAlign: "center" }}>
-          <i className="fas fa-exclamation-circle" style={{ fontSize: 32, color: "#ef4444" }} />
-          <div style={{ marginTop: 16, color: "#64748b" }}>{error}</div>
+          <i className="fas fa-exclamation-circle" style={{ fontSize: 32, color: "var(--danger, #ef4444)" }} />
+          <div style={{ marginTop: 16, color: "var(--text-secondary)" }}>{error}</div>
           <button
             onClick={() => router.push("/dashboards")}
-            style={{ marginTop: 16, padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}
+            style={{ marginTop: 16, padding: "8px 16px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}
           >
             Back to Dashboards
           </button>

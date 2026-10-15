@@ -9,7 +9,8 @@
  *  - Drag handles between children to resize column widths
  *  - Empty-row placeholder with call-to-action
  *  - Accepts a drop: a palette entry, or an existing tile dragged in from the
- *    canvas or out of another container
+ *    canvas or out of another container, AT A POSITION — the indicator between
+ *    two children is where the drop lands (D-37)
  *  - Each child carries a grip, which is the only way a child can be dragged
  *    out — the row itself is a grid tile whose whole body is a drag surface, so
  *    a child cannot share that gesture
@@ -20,7 +21,12 @@ import dynamic from 'next/dynamic';
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { GRID_COLUMNS } from '../../../types/dashboard';
 import { useDashboard } from '../DashboardContext';
-import { useBuilderContext, moveDragProps, useContainerDropTarget } from '../BuilderContext';
+import {
+  useBuilderContext,
+  moveDragProps,
+  useContainerDropTarget,
+  CHILD_SLOT_ATTR,
+} from '../BuilderContext';
 
 // Lazy-load DashboardItem to avoid circular-import issues
 const DashboardItem = dynamic(() => import('../DashboardItem'), { ssr: false });
@@ -40,11 +46,14 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
 
   const children = item.children || [];
   const rowRef = useRef<HTMLDivElement>(null);
+  // The element whose direct `[data-child-slot]` children are the drop slots.
+  const contentRef = useRef<HTMLDivElement>(null);
   const [isHovered, setIsHovered] = useState(false);
-  const { isDropTarget, dropProps } = useContainerDropTarget(
+  const { isDropTarget, dropSlot, dropProps } = useContainerDropTarget(
     item.i,
     'row',
-    !!isEditMode && !!builderCtx
+    !!isEditMode && !!builderCtx,
+    { axis: 'x', contentRef }
   );
 
   // ── Column resize (snaps to GRID_COLUMNS units) ───────────────────────────
@@ -149,8 +158,8 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
         >
           <div
             style={{
-              background: '#fff',
-              border: '1px solid #e2e8f0',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
               borderRadius: 6,
               padding: '2px 4px',
               display: 'flex',
@@ -165,7 +174,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
               style={{
                 fontSize: 11,
                 fontWeight: 700,
-                color: '#94a3b8',
+                color: 'var(--text-faint)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.5px',
                 padding: '2px 6px',
@@ -174,7 +183,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
               Row
             </span>
 
-            <div style={{ width: 1, height: 14, background: '#e2e8f0', margin: '0 2px' }} />
+            <div style={{ width: 1, height: 14, background: 'var(--border)', margin: '0 2px' }} />
 
             {/* Add Column */}
             <button
@@ -185,7 +194,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                 border: 'none',
                 cursor: 'pointer',
                 padding: '3px 8px',
-                color: '#475569',
+                color: 'var(--text-secondary)',
                 fontSize: 12,
                 fontWeight: 500,
                 display: 'flex',
@@ -195,12 +204,12 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                 whiteSpace: 'nowrap',
               }}
               onMouseOver={(e) => {
-                e.currentTarget.style.background = '#f1f5f9';
-                e.currentTarget.style.color = '#1e293b';
+                e.currentTarget.style.background = 'var(--bg-hover)';
+                e.currentTarget.style.color = 'var(--text-primary)';
               }}
               onMouseOut={(e) => {
                 e.currentTarget.style.background = 'transparent';
-                e.currentTarget.style.color = '#475569';
+                e.currentTarget.style.color = 'var(--text-secondary)';
               }}
             >
               <i className="fas fa-columns" style={{ fontSize: 11 }} />
@@ -217,7 +226,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                   border: 'none',
                   cursor: 'pointer',
                   padding: '3px 8px',
-                  color: '#475569',
+                  color: 'var(--text-secondary)',
                   fontSize: 12,
                   fontWeight: 500,
                   display: 'flex',
@@ -227,12 +236,12 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                   whiteSpace: 'nowrap',
                 }}
                 onMouseOver={(e) => {
-                  e.currentTarget.style.background = '#f1f5f9';
-                  e.currentTarget.style.color = '#1e293b';
+                  e.currentTarget.style.background = 'var(--bg-hover)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
                 }}
                 onMouseOut={(e) => {
                   e.currentTarget.style.background = 'transparent';
-                  e.currentTarget.style.color = '#475569';
+                  e.currentTarget.style.color = 'var(--text-secondary)';
                 }}
               >
                 <i className="fas fa-chart-bar" style={{ fontSize: 11 }} />
@@ -240,7 +249,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
               </button>
             )}
 
-            <div style={{ width: 1, height: 14, background: '#e2e8f0', margin: '0 2px' }} />
+            <div style={{ width: 1, height: 14, background: 'var(--border)', margin: '0 2px' }} />
 
             {/* Delete Row */}
             <button
@@ -251,13 +260,13 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                 border: 'none',
                 cursor: 'pointer',
                 padding: '3px 8px',
-                color: '#ef4444',
+                color: 'var(--danger, #ef4444)',
                 fontSize: 12,
                 borderRadius: 4,
                 display: 'flex',
                 alignItems: 'center',
               }}
-              onMouseOver={(e) => { e.currentTarget.style.background = '#fef2f2'; }}
+              onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.10)'; }}
               onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
             >
               <i className="fas fa-trash" style={{ fontSize: 11 }} />
@@ -268,14 +277,24 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
 
       {/* ── Row content ────────────────────────────────────────────────────── */}
       <div
+        ref={contentRef}
         style={{
           display: 'flex',
           alignItems: 'stretch',
-          minHeight: children.length === 0 && isEditMode ? 80 : undefined,
+          // `minHeight` rather than `height`, so a row holding a column taller
+          // than the row's own tile grows to its content instead of letting it
+          // spill over the tile below. The canvas then grows the tile to match
+          // — see the fit-to-content effect in DashboardCanvas (D-34).
+          // Measured: with `height: 100%` the content box stayed at the tile's
+          // 380px and the nested column's 480px of children overflowed it; with
+          // `min-height` the content box reports 548px and the tile follows.
+          // The empty-row floor is the tile's own minimum (row minH 2 = 80px),
+          // so one rule covers both states.
+          minHeight: '100%',
           padding: isEditMode ? 8 : 0,
           gap: 0,
-          height: '100%',
           boxSizing: 'border-box',
+          position: 'relative',
         }}
       >
         {/* Empty row placeholder */}
@@ -286,17 +305,42 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#94a3b8',
+              color: 'var(--text-muted)',
               fontSize: 13,
-              border: '2px dashed #e2e8f0',
+              border: '2px dashed var(--border)',
               borderRadius: 6,
               gap: 8,
               padding: '16px 24px',
             }}
           >
             <i className="fas fa-plus-circle" />
-            Add a column or chart using the toolbar above
+            Add a column or chart using the toolbar above, or drag a tile in from the canvas
           </div>
+        )}
+
+        {/*
+          Where the drop will land. Drawn on the boundary the resolver picked,
+          so the indicator and the insertion index are the same number — and
+          absolutely positioned rather than inserted between the children,
+          because an element that takes up space would move the very rects the
+          index is measured from.
+        */}
+        {isDropTarget && dropSlot && children.length > 0 && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: dropSlot.offset - 2,
+              top: 4,
+              bottom: 4,
+              width: 4,
+              borderRadius: 2,
+              background: 'var(--accent)',
+              boxShadow: '0 0 0 3px rgba(var(--accent-rgb), 0.25)',
+              pointerEvents: 'none',
+              zIndex: 25,
+            }}
+          />
         )}
 
         {/* Children with resize handles */}
@@ -304,6 +348,9 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
           <React.Fragment key={child.i}>
             {/* Child item — width based on 12-column grid */}
             <div
+              // One insertion slot. The drop resolver measures these rects to
+              // decide which boundary the pointer is nearest.
+              {...{ [CHILD_SLOT_ATTR]: '' }}
               style={{
                 flex: `0 0 ${((child.w || 1) / GRID_COLUMNS) * 100}%`,
                 minWidth: 0,
@@ -358,7 +405,7 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                     width: 4,
                     height: '60%',
                     minHeight: 40,
-                    background: isHovered ? '#2563eb' : '#e2e8f0',
+                    background: isHovered ? 'var(--accent)' : 'var(--border)',
                     borderRadius: 2,
                     transition: 'background 0.15s ease',
                   }}

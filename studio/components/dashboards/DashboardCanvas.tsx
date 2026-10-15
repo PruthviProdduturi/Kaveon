@@ -181,6 +181,17 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
   // No containers on the dashboard means nothing a tile could be dragged into,
   // so the "into a container" grip would be a control with no destination.
   const hasContainerTarget = rootItems.some((it) => isContainerType(it.type));
+  /**
+   * What the nest grip is labelled, named after the destinations that actually
+   * exist. "Drag by this square to put the tile inside that row" was not
+   * self-evident from an unlabelled square that only appeared on hover (D-36),
+   * and a control that names its destination needs no explaining.
+   */
+  const nestLabel = (() => {
+    const types = new Set(rootItems.filter((it) => isContainerType(it.type)).map((it) => it.type));
+    if (types.size === 1) return types.has('row') ? 'Into row' : 'Into column';
+    return 'Into container';
+  })();
 
   // ── Placements ───────────────────────────────────────────────────────────────
   // Authored coordinates, with per-type defaults for anything a legacy record
@@ -227,6 +238,86 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
   };
 
   const markUserMove = () => { userMovedTilesRef.current = true; };
+
+  // ── A container tile is never shorter than its content (D-34) ───────────────
+  /**
+   * The spill had one cause: a row or column tile keeps the height the author
+   * gave it while its children grow with the model, so a container holding more
+   * than its tile could show overlapped whatever was below it until someone
+   * resized the tile by hand. Clipping was the obvious fix and is the wrong
+   * one — a row's only delete control lives at `top: -14px`, outside its own
+   * box, so `overflow: hidden` on a container takes away the only way to remove
+   * it, and clipping hides the children instead of placing them.
+   *
+   * So the cause goes instead of the symptom: the tile grows to fit. The
+   * container reports its real content height through the tile's scroll area
+   * and the grid item's `h` is raised to cover it, which makes the grid itself
+   * push the neighbour down — exactly what it does for a tile the user
+   * enlarges. `overflow` stays visible, the toolbar stays where it is, and
+   * nothing is clipped.
+   *
+   * Grow only, never shrink. A row's leaf children stretch to the row's height
+   * (`align-items: stretch`), so their natural height is whatever the row is
+   * and a shrink pass would read that as "no content" and collapse the row to
+   * nothing. The author can still make a container taller than its content by
+   * dragging; they cannot make it shorter, which is the honest rule — a
+   * container's floor is its children.
+   *
+   * The arithmetic is react-grid-layout's own, inverted: a tile `h` rows tall
+   * is `h * rowHeight + (h - 1) * marginY` pixels, so the rows needed for `px`
+   * are `ceil((px + marginY) / (rowHeight + marginY))`. Checked against the
+   * installed library — `calcWHRaw` reports h 18 for 880px and h 12 for 560px
+   * with this grid config, and so does this.
+   */
+  const containerTiles = React.useRef(new Map<string, HTMLDivElement>());
+  // One callback per tile id, kept so the identity is stable across renders —
+  // a fresh closure each render would make React detach and reattach every
+  // container ref on every render of the canvas.
+  const tileRefCallbacks = React.useRef(new Map<string, (el: HTMLDivElement | null) => void>());
+  const registerContainerTile = (id: string) => {
+    const existing = tileRefCallbacks.current.get(id);
+    if (existing) return existing;
+    const cb = (el: HTMLDivElement | null) => {
+      if (el) {
+        containerTiles.current.set(id, el);
+      } else {
+        containerTiles.current.delete(id);
+        tileRefCallbacks.current.delete(id);
+      }
+    };
+    tileRefCallbacks.current.set(id, cb);
+    return cb;
+  };
+
+  // useEffect, not useLayoutEffect: the grid itself only renders once
+  // `useContainerWidth` has measured in an effect, so the first paint of any
+  // tile already happens after an effect pass, and react-grid-layout v2 uses
+  // nothing but useEffect — a layout effect here would only add the
+  // "does nothing on the server" warning to every prerender of the builder.
+  React.useEffect(() => {
+    if (!mounted || width <= 0) return;
+    const marginY = GRID_CONFIG.margin[1];
+    const rowsForPx = (px: number) =>
+      Math.max(1, Math.ceil((px + marginY) / (GRID_CONFIG.rowHeight + marginY)));
+    let changed = false;
+    const fitted = layout.map((it) => {
+      if (it.parentId || !isContainerType(it.type)) return it;
+      const el = containerTiles.current.get(it.i);
+      if (!el) return it;
+      // scrollHeight, not offsetHeight: the tile's box is the height the author
+      // gave it, and the scroll area is what the content needs. Measured — a
+      // three-child column in a 380px tile reports 880.
+      const required = rowsForPx(el.scrollHeight);
+      const current = it.h || dimsFor(it.type).h;
+      if (required <= current) return it;
+      changed = true;
+      return { ...it, h: required };
+    });
+    // adoptLayout, not setLayout: a tile that was too short for its own content
+    // was never a height the author chose, so correcting it must not light the
+    // Unsaved badge on a dashboard nobody has touched.
+    if (changed) adoptLayout(fitted);
+  }, [layout, width, mounted, isEditMode, adoptLayout]);
 
   /**
    * "Add Chart" picks a chart first.
@@ -418,6 +509,9 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
               // scrolls.
               <div
                 key={item.i}
+                // Only container tiles are measured, and only container tiles
+                // can outgrow their box — a leaf tile clips at `.tile`.
+                ref={isContainer ? registerContainerTile(item.i) : undefined}
                 className={`${styles.tile}${isContainer ? ` ${styles.tileContainer}` : ''}`}
               >
                 {isEditMode && (
@@ -450,16 +544,26 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
                   DRAG_CANCEL, so this grip never starts a grid drag either —
                   the two gestures stay separate and each means one thing. Only
                   rendered when there is somewhere it could go.
+
+                  It carries its destination in words, and it is visible at rest
+                  rather than on hover (D-36): an unlabelled square that only
+                  appeared under the pointer told nobody that a tile can be
+                  nested at all. The label itself resolves on hover, because the
+                  resting footprint has to stay clear of the `s` resize handle —
+                  20px wide, centred on the tile's bottom edge — on a tile as
+                  narrow as two columns. The gesture is untouched: same element,
+                  same HTML5 drag, same payload.
                 */}
                 {isEditMode && builder && hasContainerTarget && (
                   <div className={styles.tileTools}>
                     <div
                       {...moveDragProps(builder.pendingDrag, item)}
                       className={styles.nest}
-                      title="Drag into a row or column"
-                      aria-label="Drag into a row or column"
+                      title="Drag into a row or column, between its children"
+                      aria-label="Drag into a row or column, between its children"
                     >
                       <i className="fas fa-object-group" />
+                      <span className={styles.nestLabel}>{nestLabel}</span>
                     </div>
                   </div>
                 )}
