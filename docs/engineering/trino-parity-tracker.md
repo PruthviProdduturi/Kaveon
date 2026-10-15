@@ -18,7 +18,7 @@ evidence passes against exact-result references.
 | Capability | State | Current contract | Acceptance evidence still required |
 |---|---|---|---|
 | Worker discovery and scheduling | Qualified (bounded) | Coordinator assigns fragments and retries tasks across compatible workers; the declared three-worker Docker/AKS topology has exact skew, forced-loss, repeated-pressure, and graceful node-drain evidence. | Additional supported topologies and endurance qualification. |
-| Hash exchange and repartition | Implemented | Authenticated Arrow exchange, stable partitioning, bounded payloads, replayable spools, cleanup. | Sustained network and cloud-storage pressure run. |
+| Hash exchange and repartition | Implemented | Authenticated Arrow exchange, stable partitioning, bounded payloads, replayable spools, fail-closed live quota rejection, and cleanup. | Storage-service fault injection, orphan-spool recovery, and sustained network/cloud-storage pressure run. |
 | Distributed joins | Implemented | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, bounded join spill. | Skew and disk-exhaustion qualification on the release image. |
 | Distributed aggregates | Implemented | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, hybrid final merge. | Larger-scale AKS pressure and published p95 SLO. |
 | Windows | Partial | Distributed row-number and compatible partitioned windows are qualified; mixed-key and unpartitioned windows remain centralized for correctness. | Parallel execution for the remaining window shapes. |

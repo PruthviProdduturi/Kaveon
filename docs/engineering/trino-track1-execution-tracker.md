@@ -56,8 +56,11 @@ The bounded ADLS-backed soak
 `docs/qualification/track1-aks-exchange-soak-2026-10-15.md` completed 416/416
 exact requests over 300 seconds with four-way concurrency, zero unexpected
 restarts, and zero retained exchange/spill files. Explicit cloud-storage fault
-injection, quota rejection, orphan-spool recovery, and longer endurance remain
-open for item 2.
+injection, orphan-spool recovery, and longer endurance remain open for item 2.
+The live quota probe
+`docs/qualification/track1-aks-exchange-quota-2026-10-15.md` rejected a
+high-cardinality exchange with HTTP 507 and retained zero exchange files after
+restoration of the production limits.
 
 The positive graceful node-drain result is retained in
 `docs/qualification/track1-aks-node-drain-skew-2026-10-15.md`; repeated pod-loss
