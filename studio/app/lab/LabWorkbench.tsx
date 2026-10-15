@@ -25,6 +25,11 @@ import styles from "./lab.module.css";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
+/** Where a reader's open Lab tabs are kept, per identity. */
+const LAB_TABS_KEY = "kaveon_lab_tabs_v1_";
+/** The same store under the name it had before the product was renamed. */
+const LEGACY_LAB_TABS_KEY = "lens_lab_tabs_v1_";
+
 /**
  * A failed read that remembers the status it failed with.
  *
@@ -165,6 +170,12 @@ interface StreamPage {
   row_count?: number;
   complete?: boolean;
 }
+
+/**
+ * What a cancelled statement is told. It is not an error — nothing failed —
+ * and it is not an empty result, so it is neither of those two panels.
+ */
+const CANCELLED_TEXT = "The statement was cancelled before it finished, so no rows were returned. KaveonDB has stopped the scan.";
 
 const STREAM_TERMINAL = new Set(["FINISHED", "FAILED", "CANCELED"]);
 /** How often the record is read while a streamed statement runs. */
@@ -379,6 +390,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryRow[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyUnknown, setHistoryUnknown] = useState<ReadFailure | null>(null);
   const [historySearch, setHistorySearch] = useState("");
 
   // Resizable panels
@@ -392,6 +404,9 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const [isExecuting, setIsExecuting] = useState(false);
   const [isEstimating, setIsEstimating] = useState(false);
   const [estimatedRows, setEstimatedRows] = useState<number | null>(null);
+  // Why an estimate was refused. It is a quiet line beside the control, not a
+  // result-pane error: the statement itself has not been run.
+  const [estimateError, setEstimateError] = useState<string | null>(null);
   const [rowLimit, setRowLimit] = useState<number>(1000);
   const [multiResults, setMultiResults] = useState<Array<{ sql: string; result?: QueryResult; error?: string }> | null>(null);
   const [results, setResults] = useState<QueryResult | null>(null);
@@ -399,6 +414,19 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // The Engine refused the statement on the demo's live-query quota: shown
   // as a notice with the time the next is allowed, not as a failure.
   const [resultNotice, setResultNotice] = useState<string | null>(null);
+  /**
+   * A statement the reader cancelled.
+   *
+   * Cancelling cleared the pane and said nothing, so the Lab fell back to its
+   * opening state — "Ready for Analysis", the words it shows before anything
+   * has ever been run. A statement that ran for four minutes and was then
+   * stopped is not the same as one that was never submitted, and a reader who
+   * cannot tell the two apart does not know whether the cluster is still
+   * working. The streamed path could say it once rows had landed, because
+   * `results.cancelled` had somewhere to live; with nothing on screen yet, and
+   * on the whole synchronous path, there was nowhere. This is that somewhere.
+   */
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
   const demoQuota = useDemoQuota();
   const [liveElapsedMs, setLiveElapsedMs] = useState<number | null>(null);
   // A KaveonDB statement's live counters while its rows stream into the grid.
@@ -489,6 +517,14 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
 
   const [expandedSchemas, setExpandedSchemas] = useState<Record<string, boolean>>({});
 
+  /** Enter and Space on an element that is a button in everything but its tag. */
+  const onActivateKey = (act: () => void) => (event: React.KeyboardEvent) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    act();
+  };
+
   // Keep schema refs in sync so the completion provider always sees fresh data.
   useEffect(() => { tablesRef.current = tables; }, [tables]);
   useEffect(() => { tableColumnsRef.current = tableColumns; }, [tableColumns]);
@@ -559,7 +595,14 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
         const res = await msalFetch(`${API_BASE}/api/v1/lab/saved-queries/${id}`, {
           headers: userEmail ? { 'x-user-email': userEmail } : undefined,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          throw new ReadError(
+            res.status === 404
+              ? "That saved query no longer exists."
+              : `The saved-query store answered ${res.status}.`,
+            res.status,
+          );
+        }
 
         const data = await res.json();
         const name: string = data.name || `Saved Query ${id}`;
@@ -579,10 +622,12 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
         });
 
         setActiveQueryId(`saved-${id}`);
-      } catch (e) {
-        // For now, log and continue without interrupting other Lab flows.
-        // eslint-disable-next-line no-console
-        console.error("Failed to load saved query", e);
+      } catch (error) {
+        // Arriving from the Library on `?savedQueryId=` and getting nothing —
+        // no tab, no statement, no word about it — reads as a link that does
+        // nothing. The dialog this raises is the Lab's existing one for a read
+        // that did not answer, and it carries the status.
+        setLoadError(asLoadFailure(error, "The saved query could not be read"));
       }
     };
 
@@ -678,7 +723,14 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
         const res = await msalFetch(`${API_BASE}/api/v1/datasets/${id}`, {
           headers: userEmail ? { 'x-user-email': userEmail } : undefined,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          throw new ReadError(
+            res.status === 404
+              ? "That dataset no longer exists."
+              : `The dataset store answered ${res.status}.`,
+            res.status,
+          );
+        }
 
         const ds: DatasetDetailForLab = await res.json();
 
@@ -699,39 +751,28 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
           },
         ]);
         setActiveQueryId(newId);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("Failed to load dataset for Lab preview", e);
+      } catch (error) {
+        // Same as the saved-query path above: a dataset the Lab was asked to
+        // preview and could not read is reported, not dropped.
+        setLoadError(asLoadFailure(error, "The dataset could not be read"));
       }
     };
 
     void load();
   }, [isAuthenticated, initialSavedQueryLoaded, initialDatasetPreviewLoaded, datasetId, account?.email, account?.username]);
 
-  // Pre-populate the table sidebar from the cache written by the home page.
-  // This gives instant table visibility while the full data-sources/active
-  // round-trip (warehouse cold start) runs in the background below.
-  useEffect(() => {
-    if (!isAuthenticated || typeof window === 'undefined') return;
-    const userEmail = account?.email || account?.username || null;
-    const key = `lens_lab_tables_v1_${userEmail || 'anon'}`;
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) return;
-      const { database, tables: rawTables, cachedAt } = JSON.parse(raw);
-      // Skip if stale (> 15 minutes old)
-      if (!rawTables || Date.now() - cachedAt > 15 * 60 * 1000) return;
-      const withIds: TableInfo[] = (rawTables as any[]).map((t: any, idx: number) => ({
-        id: t.id || `${t.schema}.${t.name}.${idx}`,
-        schema: t.schema,
-        name: t.name,
-        fullName: t.fullName,
-      }));
-      setCurrentDatabase(database);
-      setTables(withIds);
-      setFilteredTables(withIds);
-    } catch { /* ignore parse errors */ }
-  }, [isAuthenticated, account?.email, account?.username]);
+  /*
+   * The table-tree warm start is gone.
+   *
+   * It read `lens_lab_tables_v1_<user>` and seeded the sidebar from it, which
+   * was written by a home page that no longer exists — nothing in this repo
+   * has written that key since the product was called Lens, so the effect
+   * could only ever read a stale entry from somebody's browser and set
+   * `currentDatabase` and the whole tree from it, racing the real discovery
+   * below. A warm start that cannot be warm is worse than none: it is a
+   * listing presented as current with nothing behind it. The catalog loaders
+   * are the only thing that fills this panel now.
+   */
 
   // Restore permalink query from URL (?q=base64)
   useEffect(() => {
@@ -756,9 +797,13 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // Restore tabs from localStorage on mount
   useEffect(() => {
     if (!isAuthenticated || typeof window === 'undefined') return;
-    const key = `lens_lab_tabs_v1_${account?.email || account?.username || 'anon'}`;
+    const identity = account?.email || account?.username || 'anon';
+    const key = `${LAB_TABS_KEY}${identity}`;
     try {
-      const raw = localStorage.getItem(key);
+      // The key was `lens_lab_tabs_v1_` for two product names. Reading the old
+      // one once, and only when the new one holds nothing, moves a reader's
+      // open tabs across the rename instead of discarding them.
+      const raw = localStorage.getItem(key) ?? localStorage.getItem(`${LEGACY_LAB_TABS_KEY}${identity}`);
       if (!raw) return;
       const { queries: saved, activeQueryId: savedActive } = JSON.parse(raw) as { queries: QueryTab[]; activeQueryId: string };
       if (Array.isArray(saved) && saved.length > 0) {
@@ -778,27 +823,38 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // Persist tabs to localStorage on every change
   useEffect(() => {
     if (!isAuthenticated || typeof window === 'undefined') return;
-    const key = `lens_lab_tabs_v1_${account?.email || account?.username || 'anon'}`;
+    const identity = account?.email || account?.username || 'anon';
     try {
-      localStorage.setItem(key, JSON.stringify({ queries, activeQueryId }));
+      localStorage.setItem(`${LAB_TABS_KEY}${identity}`, JSON.stringify({ queries, activeQueryId }));
+      localStorage.removeItem(`${LEGACY_LAB_TABS_KEY}${identity}`);
     } catch { /* storage full */ }
   }, [queries, activeQueryId, isAuthenticated, account?.email, account?.username]);
 
-  // Load query history when panel is first opened
+  // Load query history when panel is first opened. A read that did not answer
+  // is said so: swallowing it left the panel reading "No history yet." over a
+  // history nobody had managed to ask for, which is the one mistake
+  // `components/Reading` exists to prevent.
   useEffect(() => {
     if (!isHistoryPanelOpen || !isAuthenticated || queryHistory.length > 0) return;
     const load = async () => {
       setIsLoadingHistory(true);
+      setHistoryUnknown(null);
       try {
         const userEmail = account?.email || account?.username || null;
         const res = await msalFetch(`${API_BASE}/api/v1/lab/query-history?limit=100`, {
           headers: userEmail ? { 'x-user-email': userEmail } : undefined,
         });
-        if (res.ok) {
-          const data = await res.json();
-          setQueryHistory(Array.isArray(data) ? data : []);
-        }
-      } catch { /* silent */ } finally {
+        if (!res.ok) throw new ReadError(`The server answered ${res.status}.`, res.status);
+        const data = await res.json();
+        setQueryHistory(Array.isArray(data) ? data : []);
+      } catch (error) {
+        setHistoryUnknown({
+          what: "Your query history",
+          says: "which statements have run",
+          reason: reasonFromStatus(error instanceof ReadError ? error.status : null),
+          detail: error instanceof Error ? error.message : null,
+        });
+      } finally {
         setIsLoadingHistory(false);
       }
     };
@@ -1126,6 +1182,9 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     });
   };
 
+  const toggleSchema = (schema: string) =>
+    setExpandedSchemas((prev) => ({ ...prev, [schema]: !(prev[schema] ?? false) }));
+
   const getSelectedTable = (): TableInfo | null => {
     if (!selectedTableId) return null;
     return tables.find((t) => t.id === selectedTableId) || null;
@@ -1137,6 +1196,37 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     return `[${table.schema}].[${table.name}]`;
   };
 
+  /*
+   * Every statement this panel hands a reader has to be in the dialect of the
+   * catalog that is selected. `buildQualifiedName` was already deciding the
+   * quoting that way, but the statements wrapped around it were fixed T-SQL --
+   * `SELECT TOP 100`, `COUNT_BIG(*)`, `[column]`, `INFORMATION_SCHEMA.COLUMNS`
+   * -- so with a KaveonDB catalog selected, dragging a table into the editor,
+   * dragging a column, and all three Templates produced statements the
+   * Engine's parser refuses outright. A control whose only possible outcome is
+   * a parse error is worse than no control.
+   *
+   * KaveonDB parses queries with DuckDB's dialect, so an identifier is
+   * double-quoted and a row cap is LIMIT; `SHOW COLUMNS FROM` is the Engine's
+   * own way to describe a table (engine/crates/sql/src/ddl.rs).
+   */
+
+  /** A column name, quoted for the catalog that is selected. */
+  const quoteColumn = (name: string) =>
+    usingEngine ? `"${name.replace(/"/g, '""')}"` : `[${name.replace(/]/g, "]]")}]`;
+
+  /** Read the first `rows` of a table. */
+  const previewStatement = (table: TableInfo, rows = 100) =>
+    usingEngine
+      ? `SELECT * FROM ${buildQualifiedName(table)} LIMIT ${rows};`
+      : `SELECT TOP ${rows} * FROM ${buildQualifiedName(table)};`;
+
+  /** The distinct values of one column. */
+  const distinctStatement = (table: TableInfo, column: string) =>
+    usingEngine
+      ? `SELECT DISTINCT ${quoteColumn(column)} FROM ${buildQualifiedName(table)} LIMIT 1000;`
+      : `SELECT DISTINCT ${quoteColumn(column)} FROM ${buildQualifiedName(table)};`;
+
   // Clicking a table previews it: highlight, show columns, and run a top-100 read
   // whose rows land in the results pane. It deliberately does not write into the
   // editor -- browsing a schema must not rewrite the query someone is editing.
@@ -1145,7 +1235,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     setResultError(null);
     await toggleTableColumns(table);
     setResults(null);
-    await executeQuery(usingEngine ? `SELECT * FROM ${buildQualifiedName(table)} LIMIT 100;` : `SELECT TOP 100 * FROM ${buildQualifiedName(table)};`);
+    await executeQuery(previewStatement(table));
   };
 
   // Putting the statement in the editor is the explicit action, for when someone
@@ -1153,7 +1243,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // preview above already fetched them.
   const insertTableQuery = (table: TableInfo) => {
     const qualified = buildQualifiedName(table);
-    const snippet = `-- Preview: ${qualified}\n${usingEngine ? `SELECT * FROM ${qualified} LIMIT 100;` : `SELECT TOP 100 * FROM ${qualified};`}`;
+    const snippet = `-- Preview: ${qualified}\n${previewStatement(table)}`;
     const editor = editorRef.current;
     const existing = editor?.getValue() ?? "";
     const appended = existing.trimEnd() ? `${existing.trimEnd()}
@@ -1239,6 +1329,7 @@ return;
       setIsExecuting(true);
       setResultError(null);
       setResultNotice(null);
+      setCancelNotice(null);
       setResults(null);
       setMultiResults(null);
       setEstimatedRows(null);
@@ -1279,17 +1370,36 @@ return;
         }),
       });
       const responseText = await res.text();
-      const data = JSON.parse(responseText, (key, value) => {
-        if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
-          return value;
-        }
-        return value;
-      });
+      /**
+       * A long statement does not always come back as JSON.
+       *
+       * The proxy in front of the API answers a gateway timeout or a bad
+       * gateway with an HTML page, and this used to hand that page straight to
+       * `JSON.parse` inside the try — so a statement that ran past the
+       * gateway's patience was reported to the reader as
+       * `Unexpected token '<', "<html>"...`, which names the parser's problem
+       * and not theirs. The status is the thing that was known all along.
+       */
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(unknownText({
+          what: "The query service",
+          says: "what the statement returned",
+          reason: reasonFromStatus(res.status),
+          detail: res.ok ? null : `The server answered ${res.status} and not a result.`,
+        }));
+      }
 
       if (!res.ok || !data.success) {
         const notice = rateLimitNotice(res.status, data);
         if (notice) throw new RateLimitedError(notice);
-        throw new Error(data.error || "Query execution failed");
+        throw new Error(refusalMessage(data, data.error || unknownText({
+          what: "The query service",
+          says: "what the statement returned",
+          reason: reasonFromStatus(res.status),
+        })));
       }
 
       const allRows: unknown[][] = data.rows || [];
@@ -1307,8 +1417,12 @@ return;
       setHiddenColumns(new Set());
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") {
-        // User cancelled — clear state silently
+        // The reader cancelled. The request is gone from this browser and the
+        // API's disconnect watcher cancels it on the source, which is a fact
+        // worth stating: silence here read as a statement that had finished
+        // with nothing in it.
         setResults(null);
+        setCancelNotice(CANCELLED_TEXT);
       } else if (e instanceof RateLimitedError) {
         setResultNotice(e.message);
         setResults(null);
@@ -1544,9 +1658,20 @@ return;
       return;
     }
     if (state === "CANCELED") {
-      setResults((prev) => prev
+      // With rows on screen the result itself carries the cancellation and the
+      // results bar reads "Cancelled". With none — cancelled before the first
+      // page, which is the common case for a statement somebody stops — there
+      // is no result to carry it, and clearing the pane put the Lab back to
+      // its opening words.
+      // `received` is this run's own count of rows appended to the grid, read
+      // here rather than out of the state updater: an updater does not run
+      // until the next render, so a flag assigned inside one is still false on
+      // the line after the call.
+      const held = received > 0;
+      setResults((prev) => (prev && held
         ? { ...prev, rowCount: prev.rows.length, executionTime: elapsedSeconds, execution: null, cancelled: true }
-        : null);
+        : null));
+      if (!held) setCancelNotice(CANCELLED_TEXT);
       return;
     }
     if (totalRows === null && rowLimit > 0 && received >= rowLimit) {
@@ -1583,6 +1708,7 @@ return;
       setIsExecuting(true);
       setResultError(null);
       setResultNotice(null);
+      setCancelNotice(null);
       setResults(null);
       setMultiResults(null);
       setEstimatedRows(null);
@@ -1765,17 +1891,31 @@ return;
     window.addEventListener("mouseup", onUp);
   };
 
+  /**
+   * Estimate is a legacy-data-plane control.
+   *
+   * It composes T-SQL (`COUNT_BIG`) and posts it to `/lab/execute`, which is
+   * guarded by `_require_legacy_data_plane()` and by the Analyst floor: on a
+   * KaveonDB catalog that route answers 503, and to a Viewer 403. The button
+   * was offered regardless and swallowed whatever came back, so on the
+   * Engine it was a control whose only outcome was a refusal nobody was told
+   * about. It is now offered only where its route can serve it, and a refusal
+   * is reported rather than dropped.
+   */
+  const canEstimate = !usingEngine && !!currentDatabase;
+
   const estimateRowCount = async () => {
     const active = getActiveQuery();
     const text = (active?.text ?? "").trim();
-    if (!text || !currentDatabase) return;
+    if (!text || !canEstimate) return;
     setIsEstimating(true);
     setEstimatedRows(null);
+    setEstimateError(null);
     try {
       const userEmail = account?.email || account?.username || null;
       // Strip trailing ORDER BY — T-SQL rejects ORDER BY in a subquery without TOP/OFFSET.
       const stripped = text.replace(/\bORDER\s+BY\b[\s\S]*$/i, "").trim();
-      const countSql = `SELECT COUNT_BIG(*) AS estimated_rows FROM (\n${stripped}\n) AS _lens_estimate`;
+      const countSql = `SELECT COUNT_BIG(*) AS estimated_rows FROM (\n${stripped}\n) AS kaveon_estimate`;
       // Use /lab/execute (not /lab/query) so estimates never appear in query history.
       const res = await msalFetch(`${API_BASE}/api/v1/lab/execute`, {
         method: "POST",
@@ -1785,13 +1925,22 @@ return;
         },
         body: JSON.stringify({ sql: countSql, database: currentDatabase }),
       });
-      const data = await res.json();
-      if (data.rowCount != null || data.rows?.[0]?.[0] != null) {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.detail === "string"
+            ? data.detail
+            : `The estimate was refused with ${res.status}.`,
+        );
+      }
+      if (data?.rowCount != null || data?.rows?.[0]?.[0] != null) {
         const val = data.rows?.[0]?.[0] ?? data.rowCount;
         setEstimatedRows(Number(val));
+      } else {
+        throw new Error("The estimate returned no count.");
       }
-    } catch {
-      // Estimate is best-effort — don't surface errors
+    } catch (error) {
+      setEstimateError(error instanceof Error ? error.message : "The estimate could not be taken.");
     } finally {
       setIsEstimating(false);
     }
@@ -1918,6 +2067,13 @@ return;
       release();
     };
   }, []);
+
+  /** Open a statement from the history panel in a tab of its own. */
+  const openHistoryStatement = (row: QueryHistoryRow) => {
+    const newId = `hist${Date.now()}`;
+    setQueries((prev) => [...prev, { id: newId, name: `History #${row.id}`, text: row.sql_text }]);
+    setActiveQueryId(newId);
+  };
 
   /** Commit an in-progress tab rename. */
   const commitRename = () => {
@@ -2185,20 +2341,17 @@ return;
     };
 
     if (type === "sample") {
-      const sql = `-- Template: sample 100 rows from ${qualified}\nSELECT TOP 100 * FROM ${qualified};`;
-      appendTemplate(sql);
+      appendTemplate(`-- Template: sample 100 rows from ${qualified}\n${previewStatement(table)}`);
     } else if (type === "rowcount") {
-      const sql = `-- Template: row count for ${qualified}\nSELECT COUNT_BIG(*) AS TotalRows FROM ${qualified};`;
-      appendTemplate(sql);
+      // COUNT_BIG is T-SQL's; the Engine counts with COUNT(*).
+      appendTemplate(`-- Template: row count for ${qualified}\n${usingEngine
+        ? `SELECT COUNT(*) AS total_rows FROM ${qualified};`
+        : `SELECT COUNT_BIG(*) AS TotalRows FROM ${qualified};`}`);
     } else {
-      const sql =
-        `-- Template: column schema for ${qualified}\n` +
-        "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '" +
-        table.name +
-        "' AND TABLE_SCHEMA = '" +
-        table.schema +
-        "';";
-      appendTemplate(sql);
+      appendTemplate(`-- Template: column schema for ${qualified}\n${usingEngine
+        ? `SHOW COLUMNS FROM ${qualified};`
+        : "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '"
+          + table.name + "' AND TABLE_SCHEMA = '" + table.schema + "';"}`);
     }
   };
 
@@ -2457,15 +2610,11 @@ return;
                   <div key={schema} className="schema-group">
                     <div
                       className="schema-header"
-                      onClick={() =>
-                        setExpandedSchemas((prev) => {
-                          const isExpanded = prev[schema] ?? false;
-                          return {
-                            ...prev,
-                            [schema]: !isExpanded,
-                          };
-                        })
-                      }
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={expandedSchemas[schema] ?? false}
+                      onClick={() => toggleSchema(schema)}
+                      onKeyDown={onActivateKey(() => toggleSchema(schema))}
                     >
                       <span className="schema-name">
                         <i className="fas fa-layer-group schema-icon" />
@@ -2491,8 +2640,7 @@ return;
                             }
                             draggable
                             onDragStart={(e) => {
-                              const qualified = buildQualifiedName(t);
-                              e.dataTransfer.setData("text/plain", `SELECT TOP 100 * FROM ${qualified};`);
+                              e.dataTransfer.setData("text/plain", previewStatement(t));
                               e.dataTransfer.effectAllowed = "copy";
                             }}
                             onClick={async () => {
@@ -2506,7 +2654,11 @@ return;
                               <div className="table-name-row">
                                 <span
                                   className="table-name"
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Preview ${t.schema}.${t.name}`}
                                   title={t.fullName || `${t.schema}.${t.name}`}
+                                  onKeyDown={onActivateKey(() => { void selectTable(t); })}
                                 >
                                   {t.name}
                                 </span>
@@ -2526,10 +2678,15 @@ return;
                             </button>
                             <div
                               className="column-toggle-icon"
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={!!expandedTables[t.id]}
+                              aria-label={`${expandedTables[t.id] ? "Hide" : "Show"} columns of ${t.name}`}
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 await toggleTableColumns(t);
                               }}
+                              onKeyDown={onActivateKey(() => { void toggleTableColumns(t); })}
                             >
                               <i
                                 className={
@@ -2565,11 +2722,7 @@ return;
                                       className="column-item"
                                       draggable
                                       onDragStart={(e) => {
-                                        const qualified = buildQualifiedName(t);
-                                        e.dataTransfer.setData(
-                                          "text/plain",
-                                          `SELECT DISTINCT [${col.name}] FROM ${qualified};`,
-                                        );
+                                        e.dataTransfer.setData("text/plain", distinctStatement(t, col.name));
                                         e.dataTransfer.effectAllowed = "copy";
                                         e.stopPropagation();
                                       }}
@@ -2607,8 +2760,12 @@ return;
             {/* Query History Panel */}
             <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
               <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={isHistoryPanelOpen}
                 style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.5rem 0.75rem", cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, color: "var(--text-secondary)", userSelect: "none" }}
                 onClick={() => setIsHistoryPanelOpen((p) => !p)}
+                onKeyDown={onActivateKey(() => setIsHistoryPanelOpen((open) => !open))}
               >
                 <span><i className="fas fa-history" style={{ marginRight: 6 }} />Query History</span>
                 <i className={`fas fa-chevron-${isHistoryPanelOpen ? "up" : "down"}`} style={{ fontSize: "0.7rem", color: "var(--text-muted)" }} />
@@ -2635,14 +2792,15 @@ return;
                     .map((h) => (
                       <div
                         key={h.id}
+                        role="button"
+                        tabIndex={0}
                         style={{ padding: "0.4rem 0.75rem", cursor: "pointer", borderBottom: "1px solid var(--border)", fontSize: "0.75rem" }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
                         onMouseLeave={(e) => (e.currentTarget.style.background = "")}
-                        onClick={() => {
-                          const newId = `hist${Date.now()}`;
-                          setQueries((prev) => [...prev, { id: newId, name: `History #${h.id}`, text: h.sql_text }]);
-                          setActiveQueryId(newId);
-                        }}
+                        onFocus={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                        onBlur={(e) => (e.currentTarget.style.background = "")}
+                        onClick={() => openHistoryStatement(h)}
+                        onKeyDown={onActivateKey(() => openHistoryStatement(h))}
                       >
                         <div style={{ fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
                           {h.sql_text?.slice(0, 80)}{(h.sql_text?.length ?? 0) > 80 ? "…" : ""}
@@ -2654,7 +2812,12 @@ return;
                       </div>
                     ))
                   }
-                  {!isLoadingHistory && queryHistory.length === 0 && (
+                  {!isLoadingHistory && historyUnknown && (
+                    <div style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}>
+                      <UnknownLine {...historyUnknown} />
+                    </div>
+                  )}
+                  {!isLoadingHistory && !historyUnknown && queryHistory.length === 0 && (
                     <div style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>No history yet.</div>
                   )}
                 </div>
@@ -2856,7 +3019,7 @@ return;
                 </button>
                 {demoQuota.label && (
                   <span
-                    style={{ fontSize: "0.72rem", color: demoQuota.quota?.remaining === 0 ? "var(--warning, #d97706)" : "var(--text-muted)", whiteSpace: "nowrap" }}
+                    style={{ fontSize: "0.72rem", color: demoQuota.quota?.remaining === 0 ? "var(--warning)" : "var(--text-muted)", whiteSpace: "nowrap" }}
                     title="This demo allows a fixed number of live reads per rolling window; answers from the result cache and from statistics do not count."
                   >
                     {demoQuota.label}
@@ -2866,7 +3029,7 @@ return;
                   <button
                     type="button"
                     className="template-btn"
-                    style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem", color: "var(--error)" }}
+                    style={{ padding: "0.35rem 0.7rem", fontSize: "0.8rem", color: "var(--danger)" }}
                     onClick={cancelQuery}
                     title="Cancel running query"
                   >
@@ -2895,20 +3058,30 @@ return;
 
                 {/* ── Utility group (right) ── */}
                 <div style={{ flex: 1 }} />
-                <button
-                  type="button"
-                  className="template-btn"
-                  style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}
-                  onClick={() => void estimateRowCount()}
-                  disabled={isExecuting || isEstimating || !currentDatabase}
-                  title="Estimate row count"
-                >
-                  {isEstimating
-                    ? <><i className="fas fa-spinner fa-spin" /> Estimating…</>
-                    : estimatedRows != null
-                    ? <><i className="fas fa-calculator" /> ~{estimatedRows.toLocaleString()}</>
-                    : <><i className="fas fa-calculator" /> Estimate</>}
-                </button>
+                {/* Offered only where /lab/execute can serve it. A KaveonDB
+                    catalog has no estimate route, so the control is absent
+                    rather than present and certain to be refused. */}
+                {canEstimate && (
+                  <button
+                    type="button"
+                    className="template-btn"
+                    style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}
+                    onClick={() => void estimateRowCount()}
+                    disabled={isExecuting || isEstimating}
+                    title="Estimate row count"
+                  >
+                    {isEstimating
+                      ? <><i className="fas fa-spinner fa-spin" /> Estimating…</>
+                      : estimatedRows != null
+                      ? <><i className="fas fa-calculator" /> ~{estimatedRows.toLocaleString()}</>
+                      : <><i className="fas fa-calculator" /> Estimate</>}
+                  </button>
+                )}
+                {canEstimate && estimateError && (
+                  <span role="alert" style={{ fontSize: "0.72rem", color: "var(--danger)", whiteSpace: "nowrap" }}>
+                    {estimateError}
+                  </span>
+                )}
                 <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
                 <button
                   type="button"
@@ -2970,9 +3143,11 @@ return;
                         <span className="results-bar__fact">{rowCount.toLocaleString()} rows received</span>
                         <span className="results-bar__fact">{formatExecutionTime(executionTime)}</span>
                       </>
-                    ) : rowCount > 0 ? (
+                    ) : results ? (
                       <>
-                        <strong className="results-bar__lede">{rowCount.toLocaleString()} rows</strong>
+                        <strong className="results-bar__lede">
+                          {rowCount === 1 ? "1 row" : `${rowCount.toLocaleString()} rows`}
+                        </strong>
                         {executionLabel && <span className="results-bar__fact">{executionLabel}</span>}
                         <span className="results-bar__fact">{formatExecutionTime(executionTime)}</span>
                       </>
@@ -3110,7 +3285,7 @@ return;
                     <button
                       type="button"
                       className="template-btn results-bar__btn results-bar__btn--icon results-bar__btn--quiet"
-                      onClick={() => { setResults(null); setMultiResults(null); setResultError(null); setResultFilter(""); }}
+                      onClick={() => { setResults(null); setMultiResults(null); setResultError(null); setCancelNotice(null); setResultFilter(""); }}
                       title="Clear the result"
                       aria-label="Clear the result"
                     >
@@ -3146,7 +3321,7 @@ return;
                           Statement {idx + 1}: {item.sql.length > 100 ? `${item.sql.slice(0, 100)}…` : item.sql}
                         </div>
                         {item.error ? (
-                          <div style={{ padding: "0.8rem", color: "var(--error)", fontSize: "0.85rem" }}>
+                          <div role="alert" style={{ padding: "0.8rem", color: "var(--danger)", fontSize: "0.85rem" }}>
                             <i className="fas fa-exclamation-triangle" style={{ marginRight: "0.4rem" }} />
                             {item.error}
                           </div>
@@ -3182,7 +3357,7 @@ return;
                 {/* ── Single-statement results ──
                     The idle panel stands down while a statement runs: the
                     lane ladder above has the pane then. */}
-                {!multiResults && !results && !resultError && !isExecuting && (
+                {!multiResults && !results && !resultError && !cancelNotice && !resultNotice && !isExecuting && (
                   <div className="empty-state">
                     <div className="analysis-ready-mark" aria-hidden="true">
                       <KaveonMark size={64} />
@@ -3191,6 +3366,15 @@ return;
                     <p>
                       Select a table from the left sidebar or write a custom SQL query to get started.
                     </p>
+                  </div>
+                )}
+
+                {/* Stopped, not failed and not empty. */}
+                {!multiResults && !results && cancelNotice && !isExecuting && (
+                  <div className="empty-state" style={{ color: "var(--text-secondary)" }}>
+                    <i className="fas fa-circle-stop" aria-hidden="true" />
+                    <h3>Cancelled</h3>
+                    <p role="status">{cancelNotice}</p>
                   </div>
                 )}
 
@@ -3204,10 +3388,10 @@ return;
                 )}
 
                 {!multiResults && resultError && (
-                  <div className="empty-state" style={{ color: "var(--error)" }}>
+                  <div className="empty-state" style={{ color: "var(--danger)" }}>
                     <i className="fas fa-exclamation-triangle" />
                     <h3>Error</h3>
-                    <p>{resultError}</p>
+                    <p role="alert">{resultError}</p>
                   </div>
                 )}
 
@@ -3234,7 +3418,12 @@ return;
                             return (
                               <th
                                 key={col}
+                                role="columnheader"
+                                tabIndex={0}
+                                aria-sort={isSorted ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+                                title={`Sort by ${col}`}
                                 onClick={() => handleSort(colIndex)}
+                                onKeyDown={onActivateKey(() => handleSort(colIndex))}
                                 className={isSorted ? "sorted" : undefined}
                                 style={explicitWidth ? { width: explicitWidth } : undefined}
                               >
@@ -3545,7 +3734,7 @@ return;
                 </p>
               )}
               {visualizeError && (
-                <p style={{ marginTop: 10, fontSize: "0.85rem", color: "var(--error)" }}>
+                <p style={{ marginTop: 10, fontSize: "0.85rem", color: "var(--danger)" }}>
                   <i className="fas fa-exclamation-triangle" style={{ marginRight: 6 }} />
                   {visualizeError}
                 </p>

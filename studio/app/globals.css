@@ -35,7 +35,14 @@
   --danger: #dc2626;
   --success: #10b981;
   --warning: #f59e0b;
-  --error: #ef4444;
+  /* One meaning, one definition. `--error` and `--danger` had drifted into two
+     tokens for the same thing, and only `--danger` was given a dark value --
+     so the eighteen files still saying `var(--error)` rendered #ef4444 on the
+     dark surface at 4.43:1, under the 4.5:1 body-text threshold, while
+     `var(--danger)` resolved to 6.03:1 beside them. Aliasing rather than
+     duplicating means the dark block cannot be updated for one and not the
+     other again. */
+  --error: var(--danger);
 }
 
 [data-theme="dark"] {
