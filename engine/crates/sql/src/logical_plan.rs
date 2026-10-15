@@ -3023,6 +3023,18 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             },
         }),
 
+        // Trino's typed JSON literal (`JSON '{"key": 1}'`) is equivalent to
+        // parsing the UTF-8 payload, while Arrow carries JSON values as text.
+        // Keep it on the same validated JSON_PARSE path used by CAST(... AS
+        // JSON), so malformed literals fail with the normal JSON error.
+        ast::Expr::TypedString {
+            data_type: ast::DataType::JSON | ast::DataType::JSONB,
+            value,
+        } => Ok(Expr::Function {
+            name: "JSON_PARSE".into(),
+            args: vec![Expr::Literal(ScalarValue::Utf8(value.clone()))],
+        }),
+
         // ── CAST ────────────────────────────────────────────────────────
         ast::Expr::Cast {
             kind,
@@ -6283,6 +6295,13 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_CAST(payload AS JSONB) FROM events").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("TRY_JSON_PARSE"), "{debug}");
+    }
+
+    #[test]
+    fn parses_trino_typed_json_literal() {
+        let plan = sql_to_logical_plan("SELECT JSON '{\"a\": 7}'").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"JSON_PARSE\""), "{debug}");
     }
 
     #[test]
