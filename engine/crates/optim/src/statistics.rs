@@ -95,6 +95,7 @@ pub fn optimize_with_statistics(
             right,
             join_type,
             condition,
+            using_columns,
             distribution: _,
             ..
         } => {
@@ -158,7 +159,7 @@ pub fn optimize_with_statistics(
                     right,
                     join_type,
                     condition,
-                    using_columns: None,
+                    using_columns,
                     distribution,
                 }
             }
@@ -667,6 +668,25 @@ mod tests {
         assert!(matches!(*right,LogicalPlan::Scan {table,..} if table=="small"));
         assert!(format!("{condition:?}").contains("left: Column(\"b.id\")"));
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn preserves_using_join_metadata_when_statistics_do_not_reorder() {
+        let plan = sql_to_logical_plan("SELECT * FROM left_table l JOIN right_table r USING (id)")
+            .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut |_| {
+            Some(RelationStatistics::exact(
+                1_000,
+                vec!["id".into(), "value".into()],
+            ))
+        });
+        let LogicalPlan::Project { input, .. } = optimized else {
+            panic!("USING projection missing")
+        };
+        let LogicalPlan::Join { using_columns, .. } = *input else {
+            panic!("USING join missing")
+        };
+        assert_eq!(using_columns, Some(vec!["id".to_owned()]));
     }
 
     #[test]

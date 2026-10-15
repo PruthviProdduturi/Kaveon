@@ -29,7 +29,7 @@ evidence passes against exact-result references.
 | Coordinator restart | Partial | Idle and active-query cleanup are fail-closed; an in-flight query is interrupted safely. | Multi-coordinator/failover survival with in-flight query continuity. |
 | Snapshot consistency | Implemented | Fragments pin catalog and Delta versions for a statement and its retries. | Cross-coordinator recovery qualification. |
 | Runtime dynamic filtering | Partial | Build-side filters reduce probe work after scan; scan-level Parquet/Delta pruning is not yet wired to runtime filters. | Scan-level filter injection with exact-result and exchange tests. |
-| Join reordering and skew mitigation | Missing | Planner uses declared statistics and broadcast/partitioned rules; no general cost-based join reordering or skew splitting. | Cost model, skew policy, and plan-regression corpus. |
+| Join reordering and skew mitigation | Partial | Statistics-aware planning can reorder eligible inner equi-joins, preserve the original output order through an explicit projection, and choose a bounded broadcast build; skew splitting and a general cost-based join enumeration policy are not implemented. | Skew policy, multi-join cost model, and plan-regression corpus. |
 | Connector federation | Partial | Native Parquet/Delta/Iceberg paths exist; registered SQL sources are passthrough API paths. | Authenticated multi-source pushdown and cross-source execution qualification. |
 | Upgrade, rollback, and sustained soak | Missing | Deployment artifacts exist; the full operational acceptance run is not complete. | Upgrade/rollback rehearsal and sustained mixed workload. |
 
