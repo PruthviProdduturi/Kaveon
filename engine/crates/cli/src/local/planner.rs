@@ -14,6 +14,7 @@ use kaveon_exec::semijoin::SemiJoinOperator;
 use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::{SortExpr, SortOperator};
 use kaveon_exec::topn::TopNOperator;
+use kaveon_exec::unnest::UnnestOperator;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
@@ -34,6 +35,15 @@ fn plan_with_predicate(
     storage_predicate: Option<&kaveon_core::StoragePredicate>,
 ) -> Result<Box<dyn BatchOperator>> {
     match plan {
+        LogicalPlan::Unnest {
+            expression,
+            column,
+            with_ordinality,
+        } => Ok(Box::new(UnnestOperator::new(
+            expression,
+            column.clone(),
+            *with_ordinality,
+        )?)),
         LogicalPlan::Scan { table, columns, .. } => {
             let reference = TableReference::parse(table);
             let resolved = catalog.resolve_table(&reference)?;
@@ -258,7 +268,11 @@ fn plan_with_predicate(
             Ok(Box::new(SetOpOperator::new(
                 left,
                 right,
-                if *all { SetOpMode::IntersectAll } else { SetOpMode::Intersect },
+                if *all {
+                    SetOpMode::IntersectAll
+                } else {
+                    SetOpMode::Intersect
+                },
             )))
         }
 
@@ -268,7 +282,11 @@ fn plan_with_predicate(
             Ok(Box::new(SetOpOperator::new(
                 left,
                 right,
-                if *all { SetOpMode::ExceptAll } else { SetOpMode::Except },
+                if *all {
+                    SetOpMode::ExceptAll
+                } else {
+                    SetOpMode::Except
+                },
             )))
         }
         LogicalPlan::SemiJoin {

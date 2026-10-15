@@ -42,6 +42,11 @@ pub struct FragmentNode {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FragmentOperator {
     Scan(ScanSpec),
+    Unnest {
+        expression: Expr,
+        column: String,
+        with_ordinality: bool,
+    },
     ExchangeInput(ExchangeInput),
     Filter {
         predicate: Expr,
@@ -344,6 +349,7 @@ impl FragmentNode {
                 scan.validate()?;
                 0
             }
+            FragmentOperator::Unnest { .. } => 0,
             FragmentOperator::ExchangeInput(input) => {
                 validate_exchange_id(&input.exchange_id)?;
                 0

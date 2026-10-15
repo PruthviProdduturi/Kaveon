@@ -243,6 +243,7 @@ pub fn optimize_with_statistics(
             residual,
         },
         scan @ LogicalPlan::Scan { .. } => scan,
+        unnest @ LogicalPlan::Unnest { .. } => unnest,
     }
 }
 

@@ -195,6 +195,17 @@ pub enum LogicalPlan {
         alias: Option<String>,
         columns: Option<Vec<String>>,
     },
+    /// A constant array expanded into rows by `UNNEST` in `FROM`.
+    ///
+    /// The current table-function slice deliberately accepts only one
+    /// constant ARRAY expression. Correlated/lateral arrays and multiple
+    /// array zips remain explicit planner boundaries until their join and
+    /// null-padding semantics are implemented end to end.
+    Unnest {
+        expression: Expr,
+        column: String,
+        with_ordinality: bool,
+    },
     Join {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
@@ -306,7 +317,7 @@ impl LogicalPlan {
     /// The plan's direct inputs.
     pub fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
-            LogicalPlan::Scan { .. } => Vec::new(),
+            LogicalPlan::Scan { .. } | LogicalPlan::Unnest { .. } => Vec::new(),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Project { input, .. }
             | LogicalPlan::Aggregate { input, .. }
@@ -326,7 +337,7 @@ impl LogicalPlan {
 
     pub fn inputs_mut(&mut self) -> Vec<&mut LogicalPlan> {
         match self {
-            LogicalPlan::Scan { .. } => Vec::new(),
+            LogicalPlan::Scan { .. } | LogicalPlan::Unnest { .. } => Vec::new(),
             LogicalPlan::Filter { input, .. }
             | LogicalPlan::Project { input, .. }
             | LogicalPlan::Aggregate { input, .. }
@@ -602,7 +613,8 @@ fn bind_parameters(
         if parameters.len() > maximum_positional_index {
             error = Some(sql_err(format!(
                 "received {} positional values but the query binds {}",
-                parameters.len(), maximum_positional_index
+                parameters.len(),
+                maximum_positional_index
             )));
         } else if named_parameters
             .keys()
@@ -643,18 +655,18 @@ fn parameter_to_ast_expr(value: &ParameterValue) -> Result<ast::Expr> {
                 name: ast::ObjectName(vec![ast::Ident::new("MAP")]),
                 args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                     args: vec![
-                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
-                            ast::Expr::Array(ast::Array {
+                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(ast::Expr::Array(
+                            ast::Array {
                                 elem: keys,
                                 named: false,
-                            }),
-                        )),
-                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
-                            ast::Expr::Array(ast::Array {
+                            },
+                        ))),
+                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(ast::Expr::Array(
+                            ast::Array {
                                 elem: values,
                                 named: false,
-                            }),
-                        )),
+                            },
+                        ))),
                     ],
                     duplicate_treatment: None,
                     clauses: vec![],
@@ -837,11 +849,7 @@ fn select_to_plan_with_bindings(
     select: &ast::Select,
     ctes: &Lowering,
 ) -> Result<(LogicalPlan, ExpressionBindings)> {
-    let qualify = select
-        .qualify
-        .as_ref()
-        .map(ast_expr_to_expr)
-        .transpose()?;
+    let qualify = select.qualify.as_ref().map(ast_expr_to_expr).transpose()?;
     // Projection scalar subqueries are lowered after the outer aggregation and
     // window stages.  That keeps their single-row relation available to the
     // final projection without making it a grouping key or aggregate input.
@@ -849,10 +857,7 @@ fn select_to_plan_with_bindings(
     let mut aliases = Vec::new();
     for item in &projection {
         if let ast::SelectItem::ExprWithAlias { expr, alias } = item {
-            aliases.push((
-                Expr::Column(alias.value.clone()),
-                ast_expr_to_expr(expr)?,
-            ));
+            aliases.push((Expr::Column(alias.value.clone()), ast_expr_to_expr(expr)?));
         }
     }
     let qualify = qualify.map(|predicate| replace_bound_expression(predicate, &aliases));
@@ -1066,22 +1071,56 @@ fn build_from_clause(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPla
 
 fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<LogicalPlan> {
     match factor {
-        ast::TableFactor::Table { name, alias, .. } => {
+        ast::TableFactor::Table {
+            name,
+            alias,
+            args,
+            with_ordinality,
+            ..
+        } => {
             let table_name = name.to_string();
             let alias_name = alias.as_ref().map(|a| a.name.value.clone());
-            // DuckDB's sqlparser dialect tokenizes row-producing UNNEST in
-            // FROM as a table-shaped factor instead of exposing the generic
-            // TableFactor::UNNEST variant. Refuse that shape explicitly so it
-            // cannot silently become a scan of a table named UNNEST.
             if table_name
                 .rsplit('.')
                 .next()
                 .is_some_and(|name| name.eq_ignore_ascii_case("UNNEST"))
             {
-                return Err(sql_err(
-                    "row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)",
-                ));
+                let args = args.as_ref().ok_or_else(|| {
+                    sql_err("UNNEST in FROM requires an ARRAY expression")
+                })?;
+                if args.args.len() != 1 {
+                    return Err(sql_err(
+                        "UNNEST in FROM currently requires exactly one ARRAY expression",
+                    ));
+                }
+                let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(array)) = &args.args[0]
+                else {
+                    return Err(sql_err(
+                        "UNNEST in FROM currently requires a constant ARRAY expression",
+                    ));
+                };
+                let expression = ast_expr_to_expr(array)?;
+                if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
+                {
+                    return Err(sql_err(
+                        "UNNEST in FROM currently requires a constant ARRAY expression",
+                    ));
+                }
+                let column = alias
+                    .as_ref()
+                    .and_then(|alias| alias.columns.first())
+                    .map(|column| column.name.value.clone())
+                    .unwrap_or_else(|| "unnest".to_owned());
+                return Ok(LogicalPlan::Unnest {
+                    expression,
+                    column,
+                    with_ordinality: *with_ordinality,
+                });
             }
+            // DuckDB's sqlparser dialect tokenizes row-producing UNNEST in
+            // FROM as a table-shaped factor. Handle its function arguments
+            // before ordinary table resolution so it cannot become a scan of
+            // a table named UNNEST.
             let lookup = alias_name.as_deref().unwrap_or(&table_name).to_lowercase();
             if let Some(cte_query) = ctes
                 .ctes
@@ -1119,6 +1158,41 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             let plan = query_to_plan(subquery, ctes)?;
             let _ = alias;
             Ok(plan)
+        }
+        ast::TableFactor::UNNEST {
+            alias,
+            array_exprs,
+            with_offset,
+            with_ordinality,
+            ..
+        } => {
+            if array_exprs.len() != 1 {
+                return Err(sql_err(
+                    "UNNEST in FROM currently requires exactly one ARRAY expression",
+                ));
+            }
+            if *with_offset {
+                return Err(sql_err(
+                    "UNNEST WITH OFFSET is not supported; use WITH ORDINALITY",
+                ));
+            }
+            let expression = ast_expr_to_expr(&array_exprs[0])?;
+            if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
+            {
+                return Err(sql_err(
+                    "UNNEST in FROM currently requires a constant ARRAY expression",
+                ));
+            }
+            let column = alias
+                .as_ref()
+                .and_then(|alias| alias.columns.first())
+                .map(|column| column.name.value.clone())
+                .unwrap_or_else(|| "unnest".to_owned());
+            Ok(LogicalPlan::Unnest {
+                expression,
+                column,
+                with_ordinality: *with_ordinality,
+            })
         }
         _ => Err(sql_err(
             "only table references and subqueries are supported in FROM",
@@ -1516,7 +1590,9 @@ fn build_aggregate(
     // grouping-id column in addition to these expanded aggregate branches.
     if let Some(sets_ast) = grouping_sets_ast {
         if sets_ast.is_empty() {
-            return Err(sql_err("GROUP BY CUBE with 16 or more keys is not supported"));
+            return Err(sql_err(
+                "GROUP BY CUBE with 16 or more keys is not supported",
+            ));
         }
         if sets_ast.len() > MAX_GROUPING_SET_BRANCHES {
             return Err(sql_err(format!(
@@ -1524,9 +1600,7 @@ fn build_aggregate(
             )));
         }
         if aggregates.is_empty() {
-            return Err(sql_err(
-                "GROUPING SETS requires at least one aggregate",
-            ));
+            return Err(sql_err("GROUPING SETS requires at least one aggregate"));
         }
         let ordinary_group_by = group_by_ast
             .iter()
@@ -1914,17 +1988,18 @@ fn replace_bound_expression(expr: Expr, bindings: &ExpressionBindings) -> Expr {
                 .into_iter()
                 .map(|e| replace_bound_expression(e, bindings))
                 .collect::<Vec<_>>();
-            let grouping = resolved
-                .iter()
-                .all(|expr| matches!(expr, Expr::Column(_)));
+            let grouping = resolved.iter().all(|expr| matches!(expr, Expr::Column(_)));
             if grouping {
                 let argument_count = resolved.len();
                 let mut value = Expr::Literal(ScalarValue::Int64(0));
                 for (index, column) in resolved.into_iter().enumerate() {
-                    let bit = replace_bound_expression(Expr::Function {
-                        name: "GROUPING".to_owned(),
-                        args: vec![column],
-                    }, bindings);
+                    let bit = replace_bound_expression(
+                        Expr::Function {
+                            name: "GROUPING".to_owned(),
+                            args: vec![column],
+                        },
+                        bindings,
+                    );
                     let weight = 1_i64 << (argument_count - index - 1);
                     value = Expr::BinaryOp {
                         left: Box::new(value),
@@ -1969,9 +2044,7 @@ fn replace_bound_expression(expr: Expr, bindings: &ExpressionBindings) -> Expr {
                 .collect(),
             order_by: order_by
                 .into_iter()
-                .map(|(e, b, nulls_first)| {
-                    (replace_bound_expression(e, bindings), b, nulls_first)
-                })
+                .map(|(e, b, nulls_first)| (replace_bound_expression(e, bindings), b, nulls_first))
                 .collect(),
             frame,
         },
@@ -2184,7 +2257,9 @@ fn build_limit_offset(
     let fetch_limit = match fetch {
         None => None,
         Some(fetch) if fetch.percent => {
-            return Err(sql_err("FETCH PERCENT is unsupported; use FETCH ... ROWS ONLY"));
+            return Err(sql_err(
+                "FETCH PERCENT is unsupported; use FETCH ... ROWS ONLY",
+            ));
         }
         Some(fetch) => Some(
             fetch
@@ -2202,7 +2277,8 @@ fn build_limit_offset(
             count: offset_count,
         }),
         (Some(expr), None) => {
-            if matches!(expr, ast::Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("ALL")) {
+            if matches!(expr, ast::Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("ALL"))
+            {
                 return if offset_count == 0 {
                     Ok(plan)
                 } else {
@@ -2221,7 +2297,10 @@ fn build_limit_offset(
                     count: offset_count,
                 }
             };
-            Ok(LogicalPlan::Limit { input: Box::new(plan), count })
+            Ok(LogicalPlan::Limit {
+                input: Box::new(plan),
+                count,
+            })
         }
         (None, Some(expr)) => {
             let count = ast_expr_to_usize(expr)?;
@@ -2234,12 +2313,13 @@ fn build_limit_offset(
                         count: offset_count,
                     }
                 };
-                return Ok(LogicalPlan::Limit { input: Box::new(plan), count });
+                return Ok(LogicalPlan::Limit {
+                    input: Box::new(plan),
+                    count,
+                });
             }
             let LogicalPlan::Sort { input, order_by } = plan else {
-                return Err(sql_err(
-                    "FETCH WITH TIES requires an ORDER BY clause",
-                ));
+                return Err(sql_err("FETCH WITH TIES requires an ORDER BY clause"));
             };
             let rank = Expr::WindowFunction {
                 name: "RANK".to_owned(),
@@ -2547,7 +2627,11 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 ast::BinaryOperator::LtEq => "LE",
                 ast::BinaryOperator::Gt => "GT",
                 ast::BinaryOperator::GtEq => "GE",
-                other => return Err(sql_err(format!("unsupported quantified comparison: {other}"))),
+                other => {
+                    return Err(sql_err(format!(
+                        "unsupported quantified comparison: {other}"
+                    )));
+                }
             };
             Ok(Expr::Function {
                 name: format!("ARRAY_ANY_{suffix}"),
@@ -2573,7 +2657,11 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 ast::BinaryOperator::LtEq => "LE",
                 ast::BinaryOperator::Gt => "GT",
                 ast::BinaryOperator::GtEq => "GE",
-                other => return Err(sql_err(format!("unsupported quantified comparison: {other}"))),
+                other => {
+                    return Err(sql_err(format!(
+                        "unsupported quantified comparison: {other}"
+                    )));
+                }
             };
             Ok(Expr::Function {
                 name: format!("ARRAY_ALL_{suffix}"),
@@ -3041,9 +3129,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             Expr::Function {
                 name: inner_name,
                 args: inner_args,
-            } if inner_name.eq_ignore_ascii_case("JSON_PARSE")
-                && inner_args.len() == 1 =>
-            {
+            } if inner_name.eq_ignore_ascii_case("JSON_PARSE") && inner_args.len() == 1 => {
                 Ok(Expr::Function {
                     name: "TRY_JSON_PARSE".into(),
                     args: inner_args,
@@ -3081,7 +3167,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         name = "COUNT".to_owned();
     }
 
-    if let Some(filter) = &func.filter && !is_count_if {
+    if let Some(filter) = &func.filter
+        && !is_count_if
+    {
         if !is_aggregate_function(&name) {
             return Err(sql_err(format!(
                 "FILTER is only supported on aggregate functions, not {name}"
@@ -3113,9 +3201,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 "argument clauses in window functions are unsupported",
             ));
         }
-        if window_distinct
-            && !matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
-        {
+        if window_distinct && !matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX") {
             return Err(sql_err(format!(
                 "DISTINCT is unsupported for window function {name}"
             )));
@@ -3228,10 +3314,7 @@ fn grouping_marker_name(column: &str) -> String {
     format!("__kaveon_grouping_{column}")
 }
 
-fn collect_grouping_columns_from_ast_expr(
-    expr: &ast::Expr,
-    out: &mut Vec<String>,
-) -> Result<()> {
+fn collect_grouping_columns_from_ast_expr(expr: &ast::Expr, out: &mut Vec<String>) -> Result<()> {
     match expr {
         ast::Expr::Function(func) => {
             let name = canonical_function_name(func);
@@ -3262,8 +3345,7 @@ fn collect_grouping_columns_from_ast_expr(
             }
             if let ast::FunctionArguments::List(args) = &func.args {
                 for argument in &args.args {
-                    if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = argument
-                    {
+                    if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = argument {
                         collect_grouping_columns_from_ast_expr(expr, out)?;
                     }
                 }
@@ -3655,6 +3737,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                     relations.push(table.rsplit('.').next().unwrap().to_owned());
                 }
             }
+            LogicalPlan::Unnest { expression, .. } => expressions.push(expression),
             LogicalPlan::Filter { input, predicate } => {
                 expressions.push(predicate);
                 visit(input, relations, expressions);
@@ -3870,30 +3953,21 @@ mod tests {
         else {
             panic!("sort");
         };
-        assert_eq!(
-            order_by,
-            vec![(Expr::Column("x".into()), true, true)]
-        );
+        assert_eq!(order_by, vec![(Expr::Column("x".into()), true, true)]);
 
         let LogicalPlan::Sort { order_by, .. } =
             sql_to_logical_plan("SELECT x FROM t ORDER BY x DESC NULLS LAST").unwrap()
         else {
             panic!("sort");
         };
-        assert_eq!(
-            order_by,
-            vec![(Expr::Column("x".into()), false, false)]
-        );
+        assert_eq!(order_by, vec![(Expr::Column("x".into()), false, false)]);
 
         let LogicalPlan::Sort { order_by, .. } =
             sql_to_logical_plan("SELECT x FROM t ORDER BY x").unwrap()
         else {
             panic!("sort");
         };
-        assert_eq!(
-            order_by,
-            vec![(Expr::Column("x".into()), true, false)]
-        );
+        assert_eq!(order_by, vec![(Expr::Column("x".into()), true, false)]);
     }
 
     #[test]
@@ -3956,7 +4030,10 @@ mod tests {
         let LogicalPlan::Sort { order_by, .. } = *input else {
             panic!("sort");
         };
-        assert_eq!(order_by, vec![(Expr::Column("u.country".into()), true, false)]);
+        assert_eq!(
+            order_by,
+            vec![(Expr::Column("u.country".into()), true, false)]
+        );
     }
 
     #[test]
@@ -4088,7 +4165,10 @@ mod tests {
             Expr::BinaryOp {
                 left: Box::new(Expr::Function {
                     name: "DATE_ADD_DAYS".into(),
-                    args: vec![Expr::Column("d".into()), Expr::Literal(ScalarValue::Int64(7))],
+                    args: vec![
+                        Expr::Column("d".into()),
+                        Expr::Literal(ScalarValue::Int64(7))
+                    ],
                 }),
                 op: BinaryOp::Lt,
                 right: Box::new(Expr::Column("e".into())),
@@ -4148,7 +4228,10 @@ mod tests {
             Expr::BinaryOp {
                 left: Box::new(Expr::Function {
                     name: "DATE_ADD_MONTHS".into(),
-                    args: vec![Expr::Column("d".into()), Expr::Literal(ScalarValue::Int64(1))],
+                    args: vec![
+                        Expr::Column("d".into()),
+                        Expr::Literal(ScalarValue::Int64(1))
+                    ],
                 }),
                 op: BinaryOp::Lt,
                 right: Box::new(Expr::Column("e".into())),
@@ -4159,7 +4242,10 @@ mod tests {
             Expr::BinaryOp {
                 left: Box::new(Expr::Function {
                     name: "DATE_ADD_SECONDS".into(),
-                    args: vec![Expr::Column("ts".into()), Expr::Literal(ScalarValue::Int64(7_200))],
+                    args: vec![
+                        Expr::Column("ts".into()),
+                        Expr::Literal(ScalarValue::Int64(7_200))
+                    ],
                 }),
                 op: BinaryOp::Lt,
                 right: Box::new(Expr::Column("e".into())),
@@ -4170,7 +4256,10 @@ mod tests {
             Expr::BinaryOp {
                 left: Box::new(Expr::Function {
                     name: "DATE_ADD_DAYS".into(),
-                    args: vec![Expr::Column("d".into()), Expr::Literal(ScalarValue::Int64(14))],
+                    args: vec![
+                        Expr::Column("d".into()),
+                        Expr::Literal(ScalarValue::Int64(14))
+                    ],
                 }),
                 op: BinaryOp::Lt,
                 right: Box::new(Expr::Column("e".into())),
@@ -4331,6 +4420,35 @@ mod tests {
             LogicalPlan::Scan { table, .. } => assert_eq!(table, "users"),
             _ => panic!("expected Scan for SELECT *"),
         }
+    }
+
+    #[test]
+    fn parses_constant_array_unnest_in_from() {
+        let plan = sql_to_logical_plan("SELECT * FROM UNNEST(ARRAY[1, 2]) AS t(value)").unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest {
+                column,
+                with_ordinality: false,
+                ..
+            } if column == "value"
+        ));
+    }
+
+    #[test]
+    fn parses_constant_array_unnest_with_ordinality() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(ARRAY['a', 'b']) WITH ORDINALITY AS t(value, n)",
+        )
+        .unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest {
+                column,
+                with_ordinality: true,
+                ..
+            } if column == "value"
+        ));
     }
 
     #[test]
@@ -4962,9 +5080,8 @@ mod tests {
 
     #[test]
     fn studio_bracketed_identifier_lowers_to_a_column() {
-        let plan =
-            sql_to_logical_plan("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
-                .unwrap();
+        let plan = sql_to_logical_plan("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
+            .unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("Column(\"year\")"), "{debug}");
         assert!(!debug.contains("name: \"ARRAY\""), "{debug}");
@@ -4988,7 +5105,10 @@ mod tests {
     fn array_slice_lowers_to_array_slice_function() {
         let plan = sql_to_logical_plan("SELECT ARRAY[10, 20, 30][2:3] FROM t").unwrap();
         let debug = format!("{plan:?}");
-        assert!(debug.contains("Function { name: \"ARRAY_SLICE\""), "{debug}");
+        assert!(
+            debug.contains("Function { name: \"ARRAY_SLICE\""),
+            "{debug}"
+        );
     }
 
     #[test]
@@ -5027,9 +5147,11 @@ mod tests {
             &[ScalarValue::Int64(1), ScalarValue::Int64(2)],
         )
         .unwrap_err();
-        assert!(positional
-            .to_string()
-            .contains("received 2 positional values but the query binds 1"));
+        assert!(
+            positional
+                .to_string()
+                .contains("received 2 positional values but the query binds 1")
+        );
 
         let mut named = HashMap::new();
         named.insert("region".to_owned(), ScalarValue::Utf8("EU".to_owned()));
@@ -5040,9 +5162,11 @@ mod tests {
             &named,
         )
         .unwrap_err();
-        assert!(named
-            .to_string()
-            .contains("named parameter :unused was supplied but is not used"));
+        assert!(
+            named
+                .to_string()
+                .contains("named parameter :unused was supplied but is not used")
+        );
     }
 
     #[test]
@@ -5153,8 +5277,14 @@ mod tests {
         )
         .expect("offset with ties should be accepted");
         let debug = format!("{offset:?}");
-        assert!(debug.contains("Int64(5)"), "rank boundary must include offset: {debug}");
-        assert!(debug.contains("count: 3"), "offset must apply after ties: {debug}");
+        assert!(
+            debug.contains("Int64(5)"),
+            "rank boundary must include offset: {debug}"
+        );
+        assert!(
+            debug.contains("count: 3"),
+            "offset must apply after ties: {debug}"
+        );
     }
 
     #[test]
@@ -5199,7 +5329,10 @@ mod tests {
         )
         .unwrap();
         let debug = format!("{plan:?}");
-        assert!(debug.contains("Union"), "expected UNION ALL branches: {debug}");
+        assert!(
+            debug.contains("Union"),
+            "expected UNION ALL branches: {debug}"
+        );
         assert_eq!(debug.matches("Aggregate").count(), 2, "{debug}");
         assert!(debug.contains("region"), "{debug}");
         assert!(debug.contains("platform"), "{debug}");
@@ -5232,10 +5365,8 @@ mod tests {
 
     #[test]
     fn grouping_sets_supports_the_grand_total_form() {
-        let plan = sql_to_logical_plan(
-            "SELECT COUNT(*) FROM events GROUP BY GROUPING SETS (())",
-        )
-        .unwrap();
+        let plan =
+            sql_to_logical_plan("SELECT COUNT(*) FROM events GROUP BY GROUPING SETS (())").unwrap();
         let debug = format!("{plan:?}");
         assert_eq!(debug.matches("Aggregate").count(), 1, "{debug}");
     }
@@ -5245,9 +5376,7 @@ mod tests {
         let sets = std::iter::repeat_n("(region)", 4097)
             .collect::<Vec<_>>()
             .join(", ");
-        let sql = format!(
-            "SELECT COUNT(*) FROM events GROUP BY GROUPING SETS ({sets})"
-        );
+        let sql = format!("SELECT COUNT(*) FROM events GROUP BY GROUPING SETS ({sets})");
         let error = sql_to_logical_plan(&sql).unwrap_err();
         assert!(error.to_string().contains("maximum 4096"), "{error}");
     }
@@ -5831,10 +5960,12 @@ mod tests {
             }] if name == "__kaveon_arg_0"
         ));
         assert!(format!("{:?}", columns[1]).contains("count___kaveon_arg_0"));
-        assert!(sql_to_logical_plan(
-            "SELECT COUNT_IF(actions > 5) OVER (PARTITION BY region) FROM events"
-        )
-        .is_ok());
+        assert!(
+            sql_to_logical_plan(
+                "SELECT COUNT_IF(actions > 5) OVER (PARTITION BY region) FROM events"
+            )
+            .is_ok()
+        );
         let filtered = sql_to_logical_plan(
             "SELECT COUNT_IF(actions > 5) FILTER (WHERE region = 'EU') FROM events",
         )
