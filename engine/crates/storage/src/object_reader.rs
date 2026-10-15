@@ -272,7 +272,16 @@ impl ObjectParquetReader {
                         Err(object_store::Error::NotFound { .. }) => {
                             // No object at the location: a directory of
                             // Parquet files is a table too.
-                            self.directory_reader().run(initial_tx, tx).await;
+                            let (start_tx, start_rx) = mpsc::sync_channel(1);
+                            let _ = start_tx.send(());
+                            self.directory_reader()
+                                .run(
+                                    initial_tx,
+                                    tx,
+                                    start_rx,
+                                    Arc::new(Mutex::new(None)),
+                                )
+                                .await;
                             return;
                         }
                         Err(failure) => {
