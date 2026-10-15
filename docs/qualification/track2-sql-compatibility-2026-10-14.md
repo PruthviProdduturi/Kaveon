@@ -68,7 +68,8 @@ The current tests cover the implemented Trino-shaped surface including core
 SELECT semantics, joins and semi/anti joins, CTEs and derived relations, set
 operations, grouping sets, windows and QUALIFY, arrays/maps/rows, JSON paths,
 prepared statements and typed parameters, metadata statements, global ordering
-and limits, and local/distributed exact-result execution.
+and limits (including `FETCH … WITH TIES`), grouping metadata functions, and
+local/distributed exact-result execution.
 
 ## Correlated subquery boundary — 2026-10-15
 
