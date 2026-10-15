@@ -59,4 +59,6 @@ the other boundaries in the matrix remain open.
 The same pass found a result-boundary defect for Arrow's `Null` type. Commit
 `3d34d2e1` maps it to JSON `null` instead of the Arrow debug string
 `NullArray(1)`. The focused regression and all 389 server tests pass, and the
-rebuilt Docker coordinator now returns `[[null]]` for `SELECT NULL`.
+rebuilt Docker coordinator now returns `[[null]]` for `SELECT NULL`. The full
+workspace gate was rerun after this change: all targets passed, including 389
+server tests, 148 SQL tests, and the differential sweep.
