@@ -34,3 +34,14 @@ queries exercised three stages and all three workers. This qualifies the
 declared three-worker loss, retry, cancellation, and bounded-pressure gate for
 this image. It does not qualify coordinator failover, a sustained multi-hour
 soak, or a general skew-splitting optimizer.
+
+## Node-drain follow-up
+
+A complementary `--failure-mode node-drain` run was attempted against the same
+cluster and image. The worker was replaced and the 504M-row result remained
+exact, but the harness did not observe a retry attempt: graceful eviction let
+the task finish without exercising lease requeue. The run therefore failed the
+`worker_loss_exact_retry_and_recovery` gate and is retained as negative evidence
+in `tmp/aks-fault-pressure-node-drain-2026-10-15.json`. Track 1 must not treat
+node-drain recovery as qualified until a controlled eviction produces an
+observed retry.
