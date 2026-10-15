@@ -14,7 +14,7 @@ use object_store::{ObjectStore, aws::AmazonS3Builder, azure::MicrosoftAzureBuild
 use parquet::arrow::{
     ParquetRecordBatchStreamBuilder, ProjectionMask, async_reader::ParquetObjectReader,
 };
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc};
 
 #[derive(Clone)]
 pub struct ObjectLocation {
@@ -109,6 +109,8 @@ pub struct ObjectBatchSource {
     receiver: mpsc::Receiver<Result<Option<RecordBatch>>>,
     metrics: ScanMetrics,
     exhausted: bool,
+    start: Option<mpsc::SyncSender<()>>,
+    runtime_predicate: Option<Arc<Mutex<Option<StoragePredicate>>>>,
 }
 
 impl ObjectBatchSource {
@@ -125,12 +127,38 @@ impl BatchSource for ObjectBatchSource {
         if self.exhausted {
             return Ok(None);
         }
+        if let Some(start) = self.start.take() {
+            start
+                .send(())
+                .map_err(|_| error("object reader terminated before decoding started"))?;
+        }
         let batch = self
             .receiver
             .recv()
             .map_err(|_| error("object reader terminated without an end-of-stream marker"))??;
         self.exhausted = batch.is_none();
         Ok(batch)
+    }
+
+    fn apply_runtime_filter(&mut self, column: &str, values: &[kaveon_core::ScalarValue]) -> Result<bool> {
+        let Some(shared) = &self.runtime_predicate else {
+            return Ok(false);
+        };
+        if self.start.is_none() || values.is_empty() {
+            return Ok(false);
+        }
+        let predicate = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        let mut guard = shared
+            .lock()
+            .map_err(|_| error("object reader runtime-filter state was poisoned"))?;
+        *guard = Some(match guard.take() {
+            Some(existing) => StoragePredicate::And(vec![existing, predicate]),
+            None => predicate,
+        });
+        Ok(true)
     }
 }
 
@@ -214,12 +242,17 @@ impl ObjectParquetReader {
         })
     }
 
-    pub fn read_blocking(self) -> Result<ObjectBatchSource> {
+    pub fn read_blocking(mut self) -> Result<ObjectBatchSource> {
         if self.batch_size == 0 {
             return Err(error("batch size must be greater than zero"));
         }
         let (initial_tx, initial_rx) = mpsc::sync_channel(1);
         let (tx, rx) = mpsc::sync_channel(2);
+        let (start_tx, start_rx) = mpsc::sync_channel(1);
+        let deferred_mode = Arc::new(AtomicBool::new(false));
+        let deferred_mode_for_worker = Arc::clone(&deferred_mode);
+        let runtime_predicate = Arc::new(Mutex::new(self.predicate.clone()));
+        let runtime_predicate_for_worker = Arc::clone(&runtime_predicate);
         std::thread::Builder::new()
             .name("kaveon-object-reader".into())
             .spawn(move || {
@@ -244,6 +277,44 @@ impl ObjectParquetReader {
                         }
                         Err(failure) => {
                             let _ = initial_tx.send(Err(storage_error(failure)));
+                            return;
+                        }
+                    };
+                    let metadata_builder = match ParquetRecordBatchStreamBuilder::new(
+                        ParquetObjectReader::new(self.location.store.clone(), meta.clone()),
+                    )
+                    .await
+                    {
+                        Ok(builder) => builder,
+                        Err(failure) => {
+                            let _ = initial_tx.send(Err(storage_error(failure)));
+                            return;
+                        }
+                    };
+                    let (schema, output_projection) =
+                        match crate::parquet_reader::ordered_projection(
+                            metadata_builder.schema().clone(),
+                            self.columns.as_deref(),
+                        ) {
+                            Ok(projection) => projection,
+                            Err(failure) => {
+                                let _ = initial_tx.send(Err(failure));
+                                return;
+                            }
+                        };
+                    deferred_mode_for_worker.store(true, Ordering::Release);
+                    if initial_tx.send(Ok((schema, self.metrics.clone()))).is_err() {
+                        return;
+                    }
+                    if start_rx.recv().is_err() {
+                        return;
+                    }
+                    self.predicate = match runtime_predicate_for_worker.lock() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => {
+                            let _ = tx.send(Err(error(
+                                "object reader runtime-filter state was poisoned",
+                            )));
                             return;
                         }
                     };
@@ -337,20 +408,6 @@ impl ObjectParquetReader {
                             return;
                         }
                     };
-                    let (schema, output_projection) =
-                        match crate::parquet_reader::ordered_projection(
-                            stream.schema().clone(),
-                            self.columns.as_deref(),
-                        ) {
-                            Ok(projection) => projection,
-                            Err(failure) => {
-                                let _ = initial_tx.send(Err(failure));
-                                return;
-                            }
-                        };
-                    if initial_tx.send(Ok((schema, self.metrics.clone()))).is_err() {
-                        return;
-                    }
                     loop {
                         let start = std::time::Instant::now();
                         let next = stream.next().await;
@@ -393,6 +450,10 @@ impl ObjectParquetReader {
             receiver: rx,
             metrics,
             exhausted: false,
+            start: deferred_mode.load(Ordering::Acquire).then_some(start_tx),
+            runtime_predicate: deferred_mode
+                .load(Ordering::Acquire)
+                .then_some(runtime_predicate),
         })
     }
 }
@@ -499,6 +560,52 @@ mod tests {
                 .read_blocking()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn pushes_runtime_filter_before_object_decode() {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("table/runtime-filter.parquet");
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store.put(&path, bytes.into()))
+            .unwrap();
+
+        let mut source = ObjectParquetReader::new(store, path)
+            .with_columns(vec!["x".into()])
+            .with_late_materialisation(LateMaterialisation::Always)
+            .read_blocking()
+            .unwrap();
+        assert!(source
+            .apply_runtime_filter(
+                "x",
+                &[kaveon_core::ScalarValue::Int64(2), kaveon_core::ScalarValue::Int64(4)],
+            )
+            .unwrap());
+        let mut seen = Vec::new();
+        while let Some(batch) = source.next_batch().unwrap() {
+            seen.extend(
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied(),
+            );
+        }
+        assert_eq!(seen, vec![2, 4]);
     }
 
     /// The row filter over an object store: a LIKE over a text column
