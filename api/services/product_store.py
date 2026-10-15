@@ -157,6 +157,42 @@ def _request(sql: str, actor: str, role: str, transaction_id: Optional[str] = No
     )
 
 
+# ── Staging a commit in one round trip ────────────────────────────────────────
+# The Engine has no autocommit: product DML sent with no `transaction_id` is
+# refused with "transaction_id is required" (`execute_sql_request` in
+# engine/crates/server/src/transaction_api.rs), so a commit is always BEGIN,
+# then staging, then COMMIT. The only thing the API decides is how many round
+# trips the staging in the middle takes.
+#
+# `/v1/transaction/{id}/stage-sql-batch` stages a whole group in one request,
+# running each statement through the same parser and the same
+# `stage_product_commands` as the single-statement path. It therefore changes
+# the round-trip count and nothing else: the same expected-revision checks,
+# the same ownership refusals, the same rejection of a record touched twice.
+# Staging as a group is also strictly safer on failure — a refused statement
+# leaves nothing staged at all, rather than leaving its predecessors staged
+# for the rollback to undo. A commit is now three round trips whatever it
+# carries, instead of one per mutation plus two.
+#
+# This is a transport saving and not a fix for the slow product write. Against
+# a zero-work stub Engine on loopback, staging one statement per request costs
+# about 4.2 ms of API and transport time per statement — 0.42 s of the hundred
+# deletes a query-history retention sweep commits, and more over a real
+# network. The seconds a single product write takes are spent inside the
+# Engine, which re-reads, re-validates and re-encodes the whole family on
+# every commit; nothing on this side of the boundary can reach that.
+def _stage(statements: tuple[str, ...], actor: str, role: str, transaction_id: str):
+    """Stage every statement of one commit in a single authenticated request."""
+    return engine_bridge._request(
+        "POST",
+        f"/v1/transaction/{quote(transaction_id, safe='')}/stage-sql-batch",
+        "KAVEON_ENGINE_BRIDGE_TOKEN",
+        actor,
+        payload={"statements": list(statements)},
+        role=_role(role),
+    )
+
+
 def transact(mutations: Iterable[ProductMutation], actor: str, role: str) -> dict:
     """Atomically apply a bounded group of typed product mutations."""
     staged = tuple(mutations)
@@ -165,11 +201,12 @@ def transact(mutations: Iterable[ProductMutation], actor: str, role: str) -> dic
     statements = tuple(_statement(mutation) for mutation in staged)
     begun = _request("BEGIN", actor, role)
     transaction_id = begun.get("transaction_id") if isinstance(begun, dict) else None
-    if not transaction_id:
+    # A session identity is also a path segment from here on, so it has to be a
+    # string before anything is staged against it.
+    if not isinstance(transaction_id, str) or not transaction_id:
         raise HTTPException(502, "KaveonDB returned an invalid transaction session")
     try:
-        for statement in statements:
-            _request(statement, actor, role, transaction_id)
+        _stage(statements, actor, role, transaction_id)
         return _request("COMMIT", actor, role, transaction_id)
     except Exception:
         try:

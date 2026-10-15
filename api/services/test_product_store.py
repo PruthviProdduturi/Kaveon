@@ -30,16 +30,63 @@ class ProductStoreTests(unittest.TestCase):
             product_store.ProductMutation("update", "dashboard", "dash-1", {"charts": ["chart-1"]}, 4),
         ]
         with patch.object(product_store.engine_bridge, "_request", side_effect=[
-            {"transaction_id": "tx-1"}, {}, {}, {"generation": 8},
+            {"transaction_id": "tx-1"}, {}, {"generation": 8},
         ]) as request:
             result = product_store.transact(mutations, "alice@example.com", "Editor")
         self.assertEqual(result, {"generation": 8})
         payloads = [item.kwargs["payload"] for item in request.call_args_list]
         self.assertEqual(payloads[0], {"sql": "BEGIN"})
-        self.assertIn("'{\"name\":\"O''Reilly\",\"z\":2}'", payloads[1]["sql"])
-        self.assertIn("revision = 4", payloads[2]["sql"])
-        self.assertEqual(payloads[3], {"sql": "COMMIT", "transaction_id": "tx-1"})
+        statements = payloads[1]["statements"]
+        self.assertIn("'{\"name\":\"O''Reilly\",\"z\":2}'", statements[0])
+        self.assertIn("revision = 4", statements[1])
+        self.assertEqual(payloads[2], {"sql": "COMMIT", "transaction_id": "tx-1"})
         self.assertTrue(all(item.kwargs["role"] == "analyst" for item in request.call_args_list))
+
+    def test_a_transaction_stages_every_statement_in_one_round_trip(self):
+        # A retention sweep commits a hundred deletes. Staging them one request
+        # at a time was 102 round trips for one commit; the session, the write
+        # set and every revision guard are unchanged, so it is three.
+        mutations = [
+            product_store.ProductMutation("delete", "query_history", f"history-{index}",
+                                          expected_revision=index + 1)
+            for index in range(100)
+        ]
+        with patch.object(product_store.engine_bridge, "_request", side_effect=[
+            {"transaction_id": "tx-9"}, {}, {"generation": 11},
+        ]) as request:
+            product_store.transact(mutations, "alice@example.com", "Analyst")
+        self.assertEqual(request.call_count, 3)
+        staging = request.call_args_list[1]
+        self.assertEqual(staging.args[0], "POST")
+        self.assertEqual(staging.args[1], "/v1/transaction/tx-9/stage-sql-batch")
+        self.assertEqual(staging.kwargs["role"], "analyst")
+        statements = staging.kwargs["payload"]["statements"]
+        # Order is the write set's order, and every expected revision survives.
+        self.assertEqual(len(statements), 100)
+        self.assertIn("'history-0'", statements[0])
+        self.assertIn("revision = 1", statements[0])
+        self.assertIn("'history-99'", statements[99])
+        self.assertIn("revision = 100", statements[99])
+
+    def test_staging_refuses_a_session_identity_that_is_not_a_string(self):
+        # The session identity becomes a path segment, so a malformed one is
+        # refused before anything is staged against it.
+        mutation = product_store.ProductMutation("create", "chart", "chart-1", {"name": "x"})
+        with patch.object(product_store.engine_bridge, "_request",
+                          return_value={"transaction_id": 7}) as request:
+            with self.assertRaises(HTTPException) as error:
+                product_store.transact([mutation], "alice@example.com", "Analyst")
+        self.assertEqual(error.exception.status_code, 502)
+        self.assertEqual(request.call_count, 1)
+
+    def test_staging_path_encodes_the_session_identity(self):
+        mutation = product_store.ProductMutation("create", "chart", "chart-1", {"name": "x"})
+        with patch.object(product_store.engine_bridge, "_request", side_effect=[
+            {"transaction_id": "tx/9 b"}, {}, {"generation": 2},
+        ]) as request:
+            product_store.transact([mutation], "alice@example.com", "Analyst")
+        self.assertEqual(request.call_args_list[1].args[1],
+                         "/v1/transaction/tx%2F9%20b/stage-sql-batch")
 
     def test_stage_failure_attempts_rollback_and_preserves_original_error(self):
         failure = HTTPException(409, "conflict")
@@ -53,6 +100,9 @@ class ProductStoreTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[-1].kwargs["payload"], {
             "sql": "ROLLBACK", "transaction_id": "tx-2",
         })
+        # Refused staging is never followed by a commit.
+        self.assertTrue(all(item.kwargs["payload"].get("sql") != "COMMIT"
+                            for item in request.call_args_list))
 
     def test_invalid_mutation_fails_before_opening_a_session(self):
         mutation = product_store.ProductMutation("update", "dataset", "dataset-1", {"name": "x"})
