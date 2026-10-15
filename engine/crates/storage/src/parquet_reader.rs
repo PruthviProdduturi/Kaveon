@@ -914,7 +914,23 @@ pub(crate) fn ordered_projection(
             .project(&indices)
             .map_err(|e| storage_error(e.to_string()))?,
     );
-    Ok((output, Some(indices)))
+    // Parquet's projection mask emits selected columns in physical file
+    // order.  `indices` are positions in the full source schema, so they
+    // cannot be applied directly to that already-projected batch (a sparse
+    // request such as column 16 would otherwise address past its one-column
+    // batch).  Translate the caller's order into positions in the emitted
+    // physical-order projection.
+    let mut physical = indices.clone();
+    physical.sort_unstable();
+    let output_projection = indices
+        .iter()
+        .map(|index| {
+            physical
+                .binary_search(index)
+                .expect("projection index came from the source schema")
+        })
+        .collect();
+    Ok((output, Some(output_projection)))
 }
 
 pub(crate) fn projection_indices(schema: &SchemaRef, columns: &[String]) -> Result<Vec<usize>> {
