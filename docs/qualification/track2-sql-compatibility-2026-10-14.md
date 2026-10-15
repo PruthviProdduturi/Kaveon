@@ -36,6 +36,14 @@ closes at the same time as the producer completion signal. This validates the
 current pushed commit; it does not close the remaining cloud and broader
 Trino-compatibility boundaries below.
 
+## Single-row scalar subquery qualification — 2026-10-15
+
+The planner now admits scalar subqueries whose input is a statically single-row
+constant relation, including Trino's `SELECT (SELECT 42)`. Implicit scalar
+SELECTs and constant `UNNEST(ARRAY[...])` inputs are accepted only when every
+array has at most one element; scans and correlated subqueries remain
+fail-closed. The SQL planner suite passes 158 tests with zero failures.
+
 ## Workspace gate rerun — 2026-10-15
 
 After the JSON path and scalar-array compatibility changes, the complete
