@@ -26,7 +26,7 @@ snapshot, not a session diary.
 | 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, and telemetry exist. | Five-minute mixed workload, skew, disk exhaustion, and final-merge spill evidence. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
 | 9 | Worker-loss recovery | Open | Replacement-worker recovery preserves exact results for the declared bounded gate. | Node-drain and repeated-loss endurance with retained exact-result evidence. |
-| 10 | Coordinator restart | Open | Idle and active-query cleanup is fail-closed and exchange spools are reclaimed. | Multi-coordinator or failover evidence with in-flight query continuity. |
+| 10 | Coordinator restart | **Complete (bounded)** | Idle and active-query cleanup is fail-closed, exchange spools are reclaimed, workers reregister, and exact post-restart probes pass. | Multi-coordinator/failover continuity remains a separate future qualification. |
 | 11 | Snapshot consistency | Open | Catalog and Delta versions are pinned across statement fragments and retries. | Cross-coordinator recovery and concurrent source-version qualification. |
 | 12 | Runtime dynamic filtering | Open | Build-side runtime filters reduce probe work for supported joins. | Inject filters into Parquet/Delta scan pruning with exact-result and exchange tests. |
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
@@ -66,6 +66,8 @@ The positive graceful node-drain result is retained in
 `docs/qualification/track1-aks-node-drain-skew-2026-10-15.md`; repeated pod-loss
 evidence is retained in
 `docs/qualification/track1-aks-repeat-fault-2026-10-15.md`.
+Coordinator interruption, startup cleanup, and exact recovery are retained in
+`docs/qualification/track1-aks-coordinator-restart-2026-10-15.md`.
 
 ## Validation commands
 
