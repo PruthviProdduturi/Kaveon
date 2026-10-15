@@ -20722,6 +20722,14 @@ mod streamed_root_tests {
             serde_json::from_slice(&executed_body).expect("execute JSON");
         assert!(executed_json["id"].as_str().is_some());
         let query_id = executed_json["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            executed_json["nextUri"],
+            serde_json::json!(format!("/v1/trino/query/{query_id}/results/0"))
+        );
+        assert_eq!(
+            executed_json["partialCancelUri"],
+            serde_json::json!(format!("/v1/trino/query/{query_id}"))
+        );
         let page = get_trino_result_page(
             State(std::sync::Arc::clone(&state)),
             axum::extract::Path((query_id, 0)),
