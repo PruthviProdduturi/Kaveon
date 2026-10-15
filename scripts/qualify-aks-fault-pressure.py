@@ -655,7 +655,13 @@ def main() -> int:
             # cleanup evidence consumed by the Track 1 SLO merger. This is a
             # separate active query so the later worker-loss injection cannot
             # make cancellation look successful by terminating the pod.
-            cancel_case = dict(fault_case)
+            # Use the grouped pressure shape for cancellation.  The fault
+            # predicate is suitable for worker-loss timing, but a fast
+            # metadata/context response can finish between the RUNNING probe
+            # and DELETE.  The grouped scan creates a real exchange barrier
+            # and keeps the cancellation gate deterministic without changing
+            # the worker-loss query used below.
+            cancel_case = dict(pressure_case)
             cancel_case["name"] = "active_query_cancellation"
             cancel_before = engine.get("/v1/query")
             if isinstance(cancel_before, dict):
