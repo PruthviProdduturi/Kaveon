@@ -2899,6 +2899,11 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             })
         }
 
+        ast::Expr::TypedString {
+            data_type: ast::DataType::Decimal(_) | ast::DataType::Numeric(_),
+            value,
+        } => Ok(Expr::Literal(parse_decimal_literal(value)?)),
+
         // A DATE literal is its day number: the Engine's date columns are
         // days since the epoch, so `EventDate >= DATE '2013-07-01'` compares
         // integers with integers.
@@ -3299,6 +3304,42 @@ fn ast_value_to_expr(value: &ast::Value) -> Result<Expr> {
         ))),
         _ => Err(sql_err(format!("unsupported value: {value}"))),
     }
+}
+
+fn parse_decimal_literal(text: &str) -> Result<ScalarValue> {
+    let text = text.trim();
+    let unsigned = text
+        .strip_prefix('+')
+        .or_else(|| text.strip_prefix('-'))
+        .unwrap_or(text);
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    if whole.is_empty() && fraction.is_empty()
+        || !whole.chars().all(|c| c.is_ascii_digit())
+        || !fraction.chars().all(|c| c.is_ascii_digit())
+    {
+        return Err(sql_err(format!("invalid DECIMAL literal: '{text}'")));
+    }
+    let scale = i8::try_from(fraction.len())
+        .map_err(|_| sql_err("DECIMAL literal scale is too large"))?;
+    let digits = format!("{whole}{fraction}");
+    let magnitude = digits
+        .parse::<i128>()
+        .map_err(|_| sql_err(format!("DECIMAL literal is out of range: '{text}'")))?;
+    let value = if text.starts_with('-') {
+        magnitude
+            .checked_neg()
+            .ok_or_else(|| sql_err(format!("DECIMAL literal is out of range: '{text}'")))?
+    } else {
+        magnitude
+    };
+    let precision = u8::try_from(digits.trim_start_matches('0').len().max(1))
+        .unwrap_or(38)
+        .min(38);
+    Ok(ScalarValue::Decimal128 {
+        value,
+        precision: precision.max(scale.max(0) as u8 + 1),
+        scale,
+    })
 }
 
 fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
@@ -4377,6 +4418,20 @@ mod tests {
             Expr::Alias { expr, name }
                 if name == "d"
                     && matches!(expr.as_ref(), Expr::Cast { data_type: CastTarget::Date32, .. })
+        ));
+    }
+
+    #[test]
+    fn decimal_typed_literals_lower_to_exact_decimal_values() {
+        let plan = sql_to_logical_plan("SELECT DECIMAL '1.20' AS amount").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Alias { expr, name }
+                if name == "amount"
+                    && matches!(expr.as_ref(), Expr::Literal(ScalarValue::Decimal128 { value: 120, scale: 2, .. }))
         ));
     }
 
