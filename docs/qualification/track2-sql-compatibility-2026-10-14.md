@@ -44,3 +44,14 @@ implemented parity.
 
 This report is local evidence. AKS workload and external Trino-client
 qualification are separate gates in `docs/engineering/trino-parity-tracker.md`.
+
+## Scalar-query follow-up
+
+Commit `b6a80ec5` adds the missing Trino-compatible implicit single-row
+relation for scalar `SELECT` statements without `FROM`. The focused SQL suite
+passes 148 tests, the server suite passes 388 tests, and a rebuilt Docker
+coordinator returned `SELECT CAST(1 AS BIGINT) AS value` as one typed `Int64`
+row and `SELECT 1 UNION ALL SELECT 2 ORDER BY n DESC` as `2, 1`. The full
+workspace gate was rerun after the change and all targets passed. This closes
+that specific compatibility gap; recursive CTEs, broader lateral forms, and
+the other boundaries in the matrix remain open.
