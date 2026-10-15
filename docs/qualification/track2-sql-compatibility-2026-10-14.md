@@ -76,3 +76,6 @@ exact string on the internal wire and restores it losslessly. Core and SQL
 regressions pass, and Docker now completes `SELECT DECIMAL '1.20' AS n`,
 `SELECT 1.20 AS n`, and `SELECT DECIMAL '-0.005' AS n` with Decimal128 results
 and exact formatted values.
+
+The full workspace gate was rerun after the decimal wire change: all targets
+passed, including 389 server tests, 150 SQL tests, and the differential sweep.
