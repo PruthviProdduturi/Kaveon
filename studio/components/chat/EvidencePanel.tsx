@@ -101,8 +101,32 @@ function fmtMs(ms: number | null | undefined): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 }
 
+/** FastAPI's third `detail` shape: a list of `{msg, loc}` validation items.
+ *  `refusalMessage` reads the string and the object shapes and falls through to
+ *  its fallback on a list, so a refused body naming the field it refused came
+ *  out as a generic line. The server's own message is composed here instead. */
+function validationDetail(body: unknown): string | null {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (!Array.isArray(detail) || detail.length === 0) return null;
+  const parts = detail.flatMap(item => {
+    if (!item || typeof item !== "object") return [];
+    const msg = (item as { msg?: unknown }).msg;
+    if (typeof msg !== "string" || msg.length === 0) return [];
+    const loc = (item as { loc?: unknown }).loc;
+    const field = Array.isArray(loc)
+      ? [...loc].reverse().find((part): part is string => typeof part === "string")
+      : undefined;
+    return [field ? `${field}: ${msg}` : msg];
+  });
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 const row: React.CSSProperties = { display: "flex", gap: 10, padding: "3px 0", alignItems: "baseline" };
-const key: React.CSSProperties = { width: 84, flexShrink: 0, color: "var(--text-faint)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em" };
+// Muted, not faint: these label the value beside them, so they have to be read
+// rather than merely sensed. On the panel ground `--text-faint` measured
+// 3.02:1 in light and 3.00:1 in dark, under the 4.5:1 body-text threshold;
+// `--text-muted` measures 4.52:1 and 4.56:1 on the same two grounds.
+const key: React.CSSProperties = { width: 84, flexShrink: 0, color: "var(--text-muted)", fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em" };
 const val: React.CSSProperties = { color: "var(--text-secondary)", fontSize: 12, wordBreak: "break-word" };
 const button: React.CSSProperties = { background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 11, color: "var(--text-secondary)", padding: "3px 9px" };
 
@@ -136,7 +160,14 @@ export function EvidencePanel({ evidence, headline, canRunLive }: {
           setLive({ state: "quota", message: notice });
           return;
         }
-        setLive({ state: "failed", message: refusalMessage(body, "The live run was refused.") });
+        // The server's own account first, in whichever of FastAPI's three
+        // `detail` shapes it arrived in. Where it gave none, the status is
+        // carried rather than a cause this page has not established.
+        setLive({
+          state: "failed",
+          message: validationDetail(body)
+            ?? refusalMessage(body, `The live run was refused (HTTP ${res.status}).`),
+        });
         return;
       }
       setLive({
@@ -159,7 +190,11 @@ export function EvidencePanel({ evidence, headline, canRunLive }: {
         type="button"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
-        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--text-faint)", padding: 0, display: "flex", alignItems: "center", gap: 4 }}
+        // The only affordance that opens the panel, so it is read as a control:
+        // `--text-faint` measured 2.95:1 on the message ground in light and
+        // 3.27:1 in dark, both under the 4.5:1 threshold for text this size.
+        // `--text-secondary` measures 7.34:1 and 6.38:1 there.
+        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--text-secondary)", padding: 0, display: "flex", alignItems: "center", gap: 4 }}
       >
         <span>{open ? "▾" : "▸"}</span>
         <span>Evidence</span>
@@ -197,13 +232,28 @@ export function EvidencePanel({ evidence, headline, canRunLive }: {
                 )}
                 {live.state === "done" && (
                   <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
-                    Live{headlineKey ? ` for ${headlineKey}` : ""}: <strong style={{ color: "var(--text-primary)" }}>{live.headline == null ? "—" : String(live.headline)}</strong>
-                    {headlineValue != null && <span> · vs {String(headlineValue)} here · {formatDelta(headlineValue, live.headline)}</span>}
-                    <span> · {fmtMs(live.elapsedMs)}{live.rows != null ? ` · ${live.rows} rows` : ""}{live.detail ? ` · ${live.detail}` : ""}</span>
+                    {/* A reproduced grouped statement carries no ordering, so the
+                        live rows are matched on the headline's key. No match is
+                        not a value of zero and not an empty answer — it is a
+                        comparison that could not be made, and an em dash beside
+                        "vs 1,234 here" read as the live run disagreeing. */}
+                    {live.headline == null ? (
+                      <>The live run returned no row matching {headlineKey ? headlineKey : "this answer"}, so there is nothing to compare.</>
+                    ) : (
+                      <>
+                        Live{headlineKey ? ` for ${headlineKey}` : ""}: <strong style={{ color: "var(--text-primary)" }}>{String(live.headline)}</strong>
+                        {headlineValue != null && <span> · vs {String(headlineValue)} here · {formatDelta(headlineValue, live.headline)}</span>}
+                      </>
+                    )}
+                    <span> · {fmtMs(live.elapsedMs)}{live.rows != null ? ` · ${live.rows} ${live.rows === 1 ? "row" : "rows"}` : ""}{live.detail ? ` · ${live.detail}` : ""}</span>
                   </span>
                 )}
                 {live.state === "quota" && <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{live.message}</span>}
-                {live.state === "failed" && <span style={{ fontSize: 11.5, color: "#ef4444" }}>{live.message}</span>}
+                {/* `--danger` rather than a literal: #ef4444 measured 3.76:1 on
+                    the panel in light and 4.07:1 in dark, both under 4.5:1,
+                    and followed neither theme. The token measures 4.83:1 and
+                    5.54:1 on the same two grounds. */}
+                {live.state === "failed" && <span style={{ fontSize: 11.5, color: "var(--danger)" }}>{live.message}</span>}
               </div>
             </div>
           </div>

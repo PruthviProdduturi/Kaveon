@@ -11,6 +11,7 @@ import { useRole } from "../hooks/useRole";
 import { ConfirmModal } from "./ConfirmModal";
 import { useRecents, RecentItem } from "../hooks/useRecents";
 import { msalFetch } from "../utils/msalFetch";
+import { ReadFailure, UnknownLine, reasonFromStatus } from "./Reading";
 
 const SIDEBAR_COLLAPSED_KEY = "kaveon-sidebar-collapsed";
 const EXPANDED_WIDTH = 250;
@@ -417,6 +418,11 @@ export function Sidebar({ children }: SidebarProps) {
   // anything happens.
   const [pendingClear, setPendingClear] = useState<{ type?: RecentItem["type"]; conversations: number } | null>(null);
   const [clearing, setClearing] = useState(false);
+  // Deleting one conversation is the same destructive act as clearing them all,
+  // so it asks first — and it deletes the record rather than only the row.
+  const [pendingDelete, setPendingDelete] = useState<RecentItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [recentFilter, setRecentFilter] = useState<RecentItem["type"] | "all">("all");
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
   const [recentsCollapsed, setRecentsCollapsed] = useState(false);
@@ -427,7 +433,7 @@ export function Sidebar({ children }: SidebarProps) {
   const { isAdmin } = useRole();
   const pathname = usePathname();
 
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
+  const [collapsedPref, setCollapsedPref] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
     }
@@ -436,6 +442,15 @@ export function Sidebar({ children }: SidebarProps) {
 
   const [isMobile, setIsMobile] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  /**
+   * The drawer is always full width, so the desktop collapse preference must
+   * not reach it. It did: a sidebar collapsed on a desktop drew the 250px-wide
+   * drawer in icon-only mode on a phone — no labels beside the icons, and the
+   * entire recents list, which is the only place conversations are listed,
+   * withheld on account of a preference set on another machine.
+   */
+  const collapsed = isMobile ? false : collapsedPref;
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 768px)");
@@ -450,8 +465,8 @@ export function Sidebar({ children }: SidebarProps) {
 
   // Persist collapse state
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
-  }, [collapsed]);
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsedPref));
+  }, [collapsedPref]);
 
   // Cmd+K / Ctrl+K shortcut
   useEffect(() => {
@@ -599,7 +614,7 @@ export function Sidebar({ children }: SidebarProps) {
           transition: `padding ${TRANSITION}`,
         }}>
           {collapsed ? (
-            <button type="button" onClick={() => setCollapsed(false)} title="Expand sidebar" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <button type="button" onClick={() => setCollapsedPref(false)} title="Expand sidebar" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
               <div style={{ animation: "kaveon-breathe 3s ease-in-out infinite" }}>
                 <KaveonMark size={30} />
               </div>
@@ -616,8 +631,12 @@ export function Sidebar({ children }: SidebarProps) {
                   onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 </button>
-                {/* Collapse icon */}
-                <button type="button" onClick={() => setCollapsed(true)} title="Collapse sidebar" style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-muted)", display: "flex", alignItems: "center", transition: "color 0.15s" }}
+                {/* Collapse icon. On a phone there is nothing to collapse to —
+                    the drawer is full width or it is shut — and the preference
+                    no longer reaches it, so the same control shuts the drawer
+                    rather than doing nothing at all. It was also the only way
+                    out of the drawer other than the backdrop. */}
+                <button type="button" onClick={() => (isMobile ? setMobileOpen(false) : setCollapsedPref(true))} title={isMobile ? "Close menu" : "Collapse sidebar"} style={{ background: "none", border: "none", cursor: "pointer", padding: 6, borderRadius: 6, color: "var(--text-muted)", display: "flex", alignItems: "center", transition: "color 0.15s" }}
                   onMouseEnter={e => e.currentTarget.style.color = "var(--text-primary)"}
                   onMouseLeave={e => e.currentTarget.style.color = "var(--text-muted)"}>
                   <PanelLeftCloseIcon />
@@ -651,7 +670,15 @@ export function Sidebar({ children }: SidebarProps) {
                   borderRadius: 7,
                   justifyContent: collapsed ? "center" : "flex-start",
                   textDecoration: "none",
-                  color: active ? "var(--accent)" : "var(--text-secondary)",
+                  /* The selected section was the hardest thing in the sidebar
+                     to read: `--accent` over its own 8% tint on `--bg-primary`
+                     measures 2.48:1 in light, against 7.03:1 for every
+                     unselected item beside it. Selection is already carried by
+                     the accent rule on the left, the tint behind it and the
+                     weight, so the label takes `--text-primary` — 14.82:1
+                     light, 13.63:1 dark — which is also how the search
+                     palette's own tab strip marks its current tab. */
+                  color: active ? "var(--text-primary)" : "var(--text-secondary)",
                   background: active ? `rgba(var(--accent-rgb), 0.08)` : "transparent",
                   borderLeft: active ? "3px solid var(--accent)" : "3px solid transparent",
                   fontWeight: active ? 600 : 400,
@@ -696,7 +723,12 @@ export function Sidebar({ children }: SidebarProps) {
                       onClick={() => setRecentsCollapsed(v => !v)}
                       style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 600, color: "var(--text-muted)", userSelect: "none" }}
                     >
-                      <i className={`fas fa-chevron-${recentsCollapsed ? "right" : "down"}`} style={{ fontSize: 8, opacity: 0.5, transition: "transform 0.15s" }} />
+                      {/* No opacity multiplier: `--text-muted` at 50% measured
+                          1.88:1 against `--bg-primary`, and this chevron is the
+                          only thing that says whether the section is collapsed,
+                          so it needs the 3:1 a graphical control needs. At full
+                          strength it measures 4.21:1. */}
+                      <i className={`fas fa-chevron-${recentsCollapsed ? "right" : "down"}`} style={{ fontSize: 8, transition: "transform 0.15s" }} />
                       {recentFilter === "all" ? "Recents" : `Recents · ${RECENT_TYPES.find(t => t.key === recentFilter)?.label}`}
                     </button>
                     <button
@@ -710,8 +742,13 @@ export function Sidebar({ children }: SidebarProps) {
                     {recentMenuOpen && (
                       <>
                         <div style={{ position: "fixed", inset: 0, zIndex: 40 }} onClick={() => setRecentMenuOpen(false)} />
-                        <div style={{ position: "absolute", top: 28, right: 4, zIndex: 41, minWidth: 170, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 10, padding: 4, boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}>
-                          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-faint)", padding: "6px 10px 4px" }}>Filter</div>
+                        <div style={{ position: "absolute", top: 28, right: 4, zIndex: 41, minWidth: 170, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 10, padding: 4, boxShadow: "var(--shadow-lg)" }}>
+                          {/* Muted, not faint: faint measures 3.02:1 on
+                              `--bg-elevated` in light and 3.01:1 in dark, and
+                              both this heading and the counts below it are
+                              text a reader has to read, not de-emphasised
+                              figures. Muted measures 4.52:1 and 4.55:1. */}
+                          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.5px", textTransform: "uppercase", color: "var(--text-muted)", padding: "6px 10px 4px" }}>Filter</div>
                           {RECENT_TYPES.map((t) => {
                             const count = t.key === "all" ? recents.length : recents.filter((r) => r.type === t.key).length;
                             return (
@@ -722,10 +759,17 @@ export function Sidebar({ children }: SidebarProps) {
                                 onMouseLeave={(e) => (e.currentTarget.style.background = recentFilter === t.key ? "var(--bg-hover)" : "transparent")}
                               >
                                 <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  {recentFilter === t.key && <i className="fas fa-check" style={{ fontSize: 10, color: "var(--accent)" }} />}
+                                  {/* The tick is what says which filter is on —
+                                      the selected row's `--bg-hover` is barely
+                                      a shade apart from the menu ground. In the
+                                      accent it measured 2.86:1 on light, under
+                                      the 3:1 a control's own indicator needs;
+                                      in `--text-primary` it measures 14.82:1
+                                      light and 12.97:1 dark. */}
+                                  {recentFilter === t.key && <i className="fas fa-check" style={{ fontSize: 10, color: "var(--text-primary)" }} />}
                                   <span style={{ marginLeft: recentFilter === t.key ? 0 : 18 }}>{t.label}</span>
                                 </span>
-                                <span style={{ fontSize: 11, color: "var(--text-faint)" }}>{count}</span>
+                                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{count}</span>
                               </button>
                             );
                           })}
@@ -736,8 +780,13 @@ export function Sidebar({ children }: SidebarProps) {
                               setPendingClear({ type, conversations: conversationsClearedBy(type) });
                               setRecentMenuOpen(false);
                             }}
-                            style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 10px", border: "none", background: "transparent", color: "#f87171", fontSize: 13, cursor: "pointer", borderRadius: 6, textAlign: "left", fontFamily: "inherit" }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220,38,38,0.1)")}
+                            /* `#f87171` was the dark theme's danger value written
+                               out as a literal, so the light theme rendered a
+                               destructive action at 2.77:1 on `--bg-elevated`.
+                               The token resolves per theme: 4.83:1 light,
+                               5.54:1 dark. */
+                            style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 10px", border: "none", background: "transparent", color: "var(--danger)", fontSize: 13, cursor: "pointer", borderRadius: 6, textAlign: "left", fontFamily: "inherit" }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = "color-mix(in srgb, var(--danger) 10%, transparent)")}
                             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                           >
                             <i className="fas fa-trash" style={{ fontSize: 11 }} />
@@ -747,7 +796,70 @@ export function Sidebar({ children }: SidebarProps) {
                       </>
                     )}
                   </div>
-                  {!recentsCollapsed && (recentFilter === "all" ? recents : recents.filter((r) => r.type === recentFilter)).map((item) => (
+                  {!recentsCollapsed && (recentFilter === "all" ? recents : recents.filter((r) => r.type === recentFilter)).map((item) => {
+                  /**
+                   * The row's own menu, opened by pointer or by keyboard.
+                   *
+                   * It used to be reachable by hover alone: the control sat at
+                   * `display: none` until the pointer entered the row, carried
+                   * no tab stop and answered no key. So renaming or removing a
+                   * recent could not be done from a keyboard at all, and could
+                   * not be done on a touch screen either — there this sidebar
+                   * is a drawer and nothing ever hovers.
+                   */
+                  const openRowMenu = (anchor: HTMLElement) => {
+                    const rect = anchor.getBoundingClientRect();
+                    const menu = document.createElement("div");
+                    menu.style.cssText = `position:fixed;top:${rect.bottom + 4}px;left:${rect.left - 60}px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:4px;box-shadow:var(--shadow-lg);z-index:999;min-width:140px;`;
+                    const close = () => {
+                      menu.remove();
+                      document.removeEventListener("mousedown", dismiss);
+                      document.removeEventListener("keydown", onKey);
+                    };
+                    const dismiss = (ev: MouseEvent) => { if (!menu.contains(ev.target as Node)) close(); };
+                    const onKey = (ev: KeyboardEvent) => {
+                      if (ev.key === "Escape") { close(); anchor.focus(); }
+                    };
+                    const options = [
+                      ...(item.type === "chat" ? [{ label: "Rename", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>', action: () => {
+                        // A blank name would leave the row with nothing to
+                        // identify it by, so it is declined rather than saved.
+                        const newName = prompt("Rename:", item.label)?.trim();
+                        if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
+                      }}] : []),
+                      {
+                        label: item.type === "chat" ? "Delete" : "Close",
+                        svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+                        // A conversation is a record of its own, not a pointer
+                        // to one. Dropping the row left the conversation in the
+                        // conversation list, so it returned on the next load
+                        // and "Delete" had done nothing. It is now confirmed and
+                        // then actually deleted — the contract `clearRecents`
+                        // already keeps for the same act in bulk.
+                        action: item.type === "chat"
+                          ? () => { setDeleteError(null); setPendingDelete(item); }
+                          : () => { removeRecent(item.id); if (pathname === item.href) navigate("/home"); },
+                      },
+                    ];
+                    options.forEach(opt => {
+                      const btn = document.createElement("button");
+                      btn.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border:none;background:transparent;color:var(--text-secondary);font-size:13px;cursor:pointer;border-radius:6px;text-align:left;font-family:inherit;`;
+                      btn.onmouseenter = () => btn.style.background = "var(--bg-hover)";
+                      btn.onmouseleave = () => btn.style.background = "transparent";
+                      btn.innerHTML = `${opt.svg}<span>${opt.label}</span>`;
+                      btn.onclick = () => { opt.action(); close(); };
+                      menu.appendChild(btn);
+                    });
+                    document.body.appendChild(menu);
+                    // Focus follows the menu so a reader who opened it from the
+                    // keyboard is inside it, and Escape puts them back.
+                    (menu.firstElementChild as HTMLElement | null)?.focus();
+                    setTimeout(() => {
+                      document.addEventListener("mousedown", dismiss);
+                      document.addEventListener("keydown", onKey);
+                    }, 0);
+                  };
+                  return (
                     <button
                       key={item.id}
                       type="button"
@@ -770,13 +882,15 @@ export function Sidebar({ children }: SidebarProps) {
                       }}
                       onMouseEnter={(e) => {
                         e.currentTarget.style.background = "var(--bg-hover)";
-                        const close = e.currentTarget.querySelector("[data-close]") as HTMLElement;
-                        if (close) close.style.display = "flex";
+                        const more = e.currentTarget.querySelector("[data-close]") as HTMLElement;
+                        if (more) more.style.opacity = "1";
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.background = "transparent";
-                        const close = e.currentTarget.querySelector("[data-close]") as HTMLElement;
-                        if (close) close.style.display = "none";
+                        const more = e.currentTarget.querySelector("[data-close]") as HTMLElement;
+                        // Never hide the control while it holds focus: a reader
+                        // on the keyboard would be left on something invisible.
+                        if (more && !isMobile && more !== document.activeElement) more.style.opacity = "0";
                       }}
                     >
                       <span style={{ flexShrink: 0, display: "flex", alignItems: "center", color: "var(--text-secondary)" }}>
@@ -800,35 +914,29 @@ export function Sidebar({ children }: SidebarProps) {
                       <span
                         data-close
                         role="button"
+                        tabIndex={0}
+                        aria-label={`More options for ${item.label}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
-                          // Show context menu
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const menu = document.createElement("div");
-                          menu.style.cssText = `position:fixed;top:${rect.bottom + 4}px;left:${rect.left - 60}px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:999;min-width:140px;`;
-                          const options = [
-                            ...(item.type === "chat" ? [{ label: "Rename", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>', action: () => {
-                              const newName = prompt("Rename:", item.label);
-                              if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
-                            }}] : []),
-                            { label: item.type === "chat" ? "Delete" : "Close", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', action: () => { removeRecent(item.id); if (pathname === item.href) navigate("/home"); } },
-                          ];
-                          options.forEach(opt => {
-                            const btn = document.createElement("button");
-                            btn.style.cssText = `display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border:none;background:transparent;color:var(--text-secondary);font-size:13px;cursor:pointer;border-radius:6px;text-align:left;font-family:inherit;`;
-                            btn.onmouseenter = () => btn.style.background = "var(--bg-hover)";
-                            btn.onmouseleave = () => btn.style.background = "transparent";
-                            btn.innerHTML = `${opt.svg}<span>${opt.label}</span>`;
-                            btn.onclick = () => { opt.action(); menu.remove(); };
-                            menu.appendChild(btn);
-                          });
-                          document.body.appendChild(menu);
-                          const dismiss = (ev: MouseEvent) => { if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener("mousedown", dismiss); } };
-                          setTimeout(() => document.addEventListener("mousedown", dismiss), 0);
+                          openRowMenu(e.currentTarget);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter" && e.key !== " ") return;
+                          e.stopPropagation();
+                          e.preventDefault();
+                          openRowMenu(e.currentTarget);
+                        }}
+                        onFocus={(e) => { e.currentTarget.style.opacity = "1"; }}
+                        onBlur={(e) => {
+                          if (isMobile) return;
+                          // Still under the pointer: leave it showing, or it
+                          // would vanish from a row the reader is hovering.
+                          const row = e.currentTarget.parentElement;
+                          if (!row?.matches(":hover")) e.currentTarget.style.opacity = "0";
                         }}
                         style={{
-                          display: "none",
+                          display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
                           width: 20,
@@ -838,25 +946,39 @@ export function Sidebar({ children }: SidebarProps) {
                           color: "var(--text-muted)",
                           flexShrink: 0,
                           cursor: "pointer",
+                          // Quietened by opacity rather than removed by
+                          // `display`, so the control keeps its tab stop and
+                          // can show itself when focus reaches it. Where there
+                          // is no pointer to hover with, it simply stands open.
+                          opacity: isMobile ? 1 : 0,
+                          transition: "opacity 0.1s",
                         }}
                       >
                         ⋯
                       </span>
                     </button>
-                  ))}
+                  );
+                  })}
                   {!recentsCollapsed && recentFilter !== "all" && recents.filter((r) => r.type === recentFilter).length === 0 && (
-                    <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--text-faint)" }}>
+                    /* Faint measured 2.82:1 on `--bg-primary`, and muted only
+                       4.21:1 there, so a sentence the reader has to read sat
+                       under the 4.5:1 body-text threshold either way. Secondary
+                       measures 7.03:1 light and 6.85:1 dark. */
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--text-secondary)" }}>
                       No {RECENT_TYPES.find((t) => t.key === recentFilter)?.label.toLowerCase()} recently
                     </div>
                   )}
                 </>
               )}
               {recents.length === 0 && (
+                /* Muted at 60% opacity measured 2.17:1 on `--bg-primary` in
+                   light and 2.73:1 in dark — the only line in an empty sidebar
+                   was the least readable text in it. Secondary at full strength
+                   measures 7.03:1 and 6.85:1. */
                 <div style={{
                   padding: "16px 10px",
                   fontSize: 12,
-                  color: "var(--text-muted)",
-                  opacity: 0.6,
+                  color: "var(--text-secondary)",
                 }}>
                   Recent items will appear here
                 </div>
@@ -916,6 +1038,51 @@ export function Sidebar({ children }: SidebarProps) {
           }
         }}
         onCancel={() => { if (!clearing) setPendingClear(null); }}
+      />
+
+      <ConfirmModal
+        isOpen={pendingDelete !== null}
+        danger
+        busy={deleting}
+        title="Delete conversation"
+        message={
+          `This permanently deletes “${pendingDelete?.label ?? ""}”, with every question and `
+          + "answer in it. Conversations are only listed here, so there is nowhere to recover "
+          + "it from."
+          // A refusal is reported where the act was asked for, and nothing is
+          // removed from the list: the conversation is still there, and saying
+          // otherwise would only hide it until the next load.
+          + (deleteError ? ` ${deleteError}` : "")
+        }
+        confirmLabel="Delete"
+        onConfirm={async () => {
+          const item = pendingDelete;
+          if (!item) return;
+          setDeleting(true);
+          setDeleteError(null);
+          const sessionId = item.id.startsWith("chat-") ? item.id.slice(5) : item.id;
+          try {
+            const response = await msalFetch(
+              `/api/v1/chat/history/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+            if (!response.ok) {
+              // The server's own account of the refusal, rather than one fixed
+              // sentence for every status.
+              const detail = detailOf(await response.json().catch(() => null));
+              setDeleteError(detail
+                ?? `The server answered ${response.status}, so the conversation was not deleted.`);
+              return;
+            }
+          } catch {
+            setDeleteError("The request did not reach the server, so nothing was deleted.");
+            return;
+          } finally {
+            setDeleting(false);
+          }
+          removeRecent(item.id);
+          if (pathname === item.href) navigate("/home");
+          setPendingDelete(null);
+        }}
+        onCancel={() => { if (!deleting) { setDeleteError(null); setPendingDelete(null); } }}
       />
     </div>
   );
@@ -1053,7 +1220,14 @@ const PAGES: Candidate[] = [
     aliases: ["saved queries history statements sql log"],
   },
   {
+    // Admin, as every other way in already was: the user menu gates this
+    // destination behind the role and the only other link to it sits on an
+    // admin settings page. The palette was the one surface that offered it to
+    // everyone, so the same destination existed on one branch and not the
+    // other. (The console's API grants Viewer — if a Viewer is meant to reach
+    // it, the gate to lift is the one in the user menu, not this one.)
     id: "p-engine", label: "KaveonDB", href: "/engine", type: "page", glyph: "engine", boost: 0,
+    adminOnly: true,
     detail: "Engine activity, query history and execution detail",
     aliases: ["engine performance plans latency history execution"],
   },
@@ -1359,6 +1533,25 @@ function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * The server's own `detail`, in each of the three shapes the API sends it:
+ * a sentence, a list of validation items, or an object carrying a message.
+ * Null where it said nothing — the caller then distinguishes the status
+ * honestly rather than inventing a cause for it.
+ */
+function detailOf(body: unknown): string | null {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string") return detail.trim() || null;
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => str((item as { msg?: unknown })?.msg)).filter(Boolean);
+    return messages.length > 0 ? messages.join("; ") : null;
+  }
+  if (detail && typeof detail === "object") {
+    return str((detail as { message?: unknown }).message) || null;
+  }
+  return null;
+}
+
 const CHART_TYPE_LABELS: Record<string, string> = {
   bar: "Bar chart",
   stacked_bar: "Stacked bar chart",
@@ -1478,28 +1671,56 @@ const CORPUS_TTL_MS = 120_000;
 /** How long a fetch may run before the reader is told one is running. */
 const PROGRESS_AFTER_MS = 400;
 
-let corpusItems: Candidate[] | null = null;
-let corpusFetchedAt = 0;
-let corpusInFlight: Promise<Candidate[]> | null = null;
+/** What was read, and what — if anything — could not be. */
+interface CorpusRead {
+  items: Candidate[];
+  failure: ReadFailure | null;
+}
 
-function fetchCorpus(): Promise<Candidate[]> {
+let corpusItems: Candidate[] | null = null;
+let corpusFailure: ReadFailure | null = null;
+let corpusFetchedAt = 0;
+let corpusInFlight: Promise<CorpusRead> | null = null;
+
+function fetchCorpus(): Promise<CorpusRead> {
   if (corpusInFlight) return corpusInFlight;
-  const json = (path: string) => msalFetch(path)
-    .then((response) => (response.ok ? response.json() : null))
-    .catch(() => null);
+  /* A read that did not answer is kept as a failure rather than folded into an
+     empty list. All three were previously collapsed to `null` and then to no
+     candidates, so a palette that could not reach a single dashboard, chart or
+     dataset reported "Nothing here matches" over every one of them — a failed
+     read rendered as a verdict, which is the one thing `Reading` exists to
+     stop. */
+  const read = (path: string) => msalFetch(path)
+    .then(async (response) => (response.ok
+      ? { ok: true, payload: await response.json() as unknown, status: response.status, detail: null as string | null }
+      : { ok: false, payload: null, status: response.status, detail: detailOf(await response.json().catch(() => null)) }))
+    .catch(() => ({ ok: false, payload: null, status: null as number | null, detail: null as string | null }));
+
   corpusInFlight = Promise.all([
-    json("/api/v1/dashboards"),
-    json("/api/v1/charts"),
-    json("/api/v1/datasets/summary"),
-  ]).then(([dashboards, charts, datasets]) => {
+    read("/api/v1/dashboards"),
+    read("/api/v1/charts"),
+    read("/api/v1/datasets/summary"),
+  ]).then((reads) => {
+    const [dashboards, charts, datasets] = reads;
     const items = [
-      ...dashboardCandidates(dashboards),
-      ...chartCandidates(charts),
-      ...datasetCandidates(datasets),
+      ...dashboardCandidates(dashboards.payload),
+      ...chartCandidates(charts.payload),
+      ...datasetCandidates(datasets.payload),
     ];
+    const failed = reads.filter((entry) => !entry.ok);
+    // A reason is named only where every failed read agrees on the status that
+    // reports one. A mixed answer, or a status that says nothing about
+    // reachability, stays a plain unknown: no cause is invented here.
+    const statuses = new Set(failed.map((entry) => entry.status));
+    corpusFailure = failed.length === 0 ? null : {
+      what: failed.length === reads.length ? "Your saved content" : "Some of your saved content",
+      says: "whether anything saved matches what you typed",
+      reason: statuses.size === 1 ? reasonFromStatus([...statuses][0]) : null,
+      detail: failed.map((entry) => entry.detail).find(Boolean) ?? null,
+    };
     corpusItems = items;
     corpusFetchedAt = Date.now();
-    return items;
+    return { items, failure: corpusFailure };
   }).finally(() => { corpusInFlight = null; });
   return corpusInFlight;
 }
@@ -1567,6 +1788,7 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
   const { isAdmin } = useRole();
   const [query, setQuery] = useState("");
   const [corpus, setCorpus] = useState<Candidate[]>(() => corpusItems ?? []);
+  const [failure, setFailure] = useState<ReadFailure | null>(() => corpusFailure);
   const [loading, setLoading] = useState(false);
   const [pinnedTab, setPinnedTab] = useState<TabId | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1593,7 +1815,7 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
     const reveal: ReturnType<typeof setTimeout> | undefined = corpusItems
       ? undefined
       : setTimeout(() => { if (live) setLoading(true); }, PROGRESS_AFTER_MS);
-    fetchCorpus().then((items) => { if (live) setCorpus(items); })
+    fetchCorpus().then((read) => { if (live) { setCorpus(read.items); setFailure(read.failure); } })
       .finally(() => { if (live) { clearTimeout(reveal); setLoading(false); } });
     return () => { live = false; clearTimeout(reveal); };
   }, []);
@@ -1895,7 +2117,11 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
                     style={{
                       fontSize: 10.5, fontWeight: 600, fontVariantNumeric: "tabular-nums",
                       padding: "1px 5px", borderRadius: 999, minWidth: 16, textAlign: "center",
-                      color: current ? "var(--accent)" : "var(--text-muted)",
+                      // In the accent over its own 12% tint this count measured
+                      // 2.49:1 in light; the pill's tinted ground already marks
+                      // the current tab, so the figure itself takes
+                      // `--text-primary` at 14.88:1.
+                      color: current ? "var(--text-primary)" : "var(--text-muted)",
                       background: current ? "rgba(var(--accent-rgb), 0.12)" : "var(--bg-hover)",
                     }}
                   >
@@ -1929,8 +2155,17 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
           tabIndex={-1}
           style={{ maxHeight: "min(424px, 52vh)", overflowY: "auto", padding: 6, outline: "none" }}
         >
-          {visible.length === 0 && query.trim() && (
-            <div style={{ padding: "14px 12px", color: "var(--text-muted)", fontSize: 12.5 }}>
+          {/* Said whether or not anything matched, because a list drawn from an
+              incomplete corpus is incomplete even when it has rows in it. */}
+          {failure && (
+            <div style={{ padding: "12px 12px 4px" }}>
+              <UnknownLine {...failure} />
+            </div>
+          )}
+          {/* "Nothing here matches" is a claim about the content, so it is made
+              only where the content was actually read. */}
+          {visible.length === 0 && query.trim() && !failure && (
+            <div style={{ padding: "14px 12px", color: "var(--text-secondary)", fontSize: 12.5 }}>
               Nothing here matches &ldquo;{query.trim()}&rdquo;.
             </div>
           )}

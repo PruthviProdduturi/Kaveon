@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import ReactDOM from 'react-dom';
 
 interface ConfirmModalProps {
@@ -42,12 +42,55 @@ export function ConfirmModal({
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const ids = useId();
+  const titleId = `${ids}-title`;
+  const messageId = `${ids}-message`;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onCancel(); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [isOpen, busy, onCancel]);
+
+  /**
+   * Focus belonged to whatever opened the dialog, and stayed there: the overlay
+   * covered the page but not the tab order, so Tab walked the page behind it
+   * and Enter re-fired the control that had just opened this. The dialog takes
+   * focus on the least destructive action, keeps Tab inside itself, and hands
+   * focus back to the opener when it closes.
+   */
+  useEffect(() => {
+    if (!isOpen) return;
+    const opener = document.activeElement as HTMLElement | null;
+    cancelRef.current?.focus();
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusable = Array.from(
+        root.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !root.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !root.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', trap);
+    return () => {
+      window.removeEventListener('keydown', trap);
+      if (opener && document.body.contains(opener)) opener.focus();
+    };
+  }, [isOpen]);
 
   if (!isOpen || typeof document === 'undefined') return null;
 
@@ -64,8 +107,11 @@ export function ConfirmModal({
       onClick={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
         style={{
           background: 'var(--bg-surface)',
           border: '1px solid var(--border)',
@@ -91,10 +137,10 @@ export function ConfirmModal({
             />
           </div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
+            <div id={titleId} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
               {title}
             </div>
-            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>
+            <div id={messageId} style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>
               {message}
             </div>
           </div>
@@ -102,6 +148,8 @@ export function ConfirmModal({
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20, flexWrap: 'wrap' }}>
           <button
+            ref={cancelRef}
+            type="button"
             onClick={onCancel}
             disabled={busy}
             style={{

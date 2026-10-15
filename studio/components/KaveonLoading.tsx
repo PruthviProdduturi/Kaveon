@@ -102,7 +102,7 @@ export function KaveonLoading({
             style={{
               width: "35%",
               height: "100%",
-              background: "linear-gradient(90deg, transparent, #4A9EE8, transparent)",
+              background: "linear-gradient(90deg, transparent, var(--accent), transparent)",
               animation: "loadSlide 1.8s ease-in-out infinite",
             }}
           />

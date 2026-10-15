@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
+import { refusalMessage } from "../utils/demoQuota";
+import { unknownText } from "./Reading";
 import type { DlmArtifactHandle } from "../hooks/useDlmArtifact";
 
 /**
@@ -19,7 +21,21 @@ import type { DlmArtifactHandle } from "../hooks/useDlmArtifact";
 interface MetricSpec { display_name?: string; aliases?: string[]; additive?: boolean; default?: boolean; hidden?: boolean; }
 interface DimSpec { display_name?: string; aliases?: string[]; precompute?: boolean; top_n?: number; hidden?: boolean; }
 interface Spec { metrics?: Record<string, MetricSpec>; dimensions?: Record<string, DimSpec>; value_aliases?: Record<string, string>; default_metric?: string; }
-interface ContextResp { ok?: boolean; dataset_name?: string; effective?: Spec; }
+/**
+ * The curation record as it is stored, with the fields this form does not
+ * model left opaque. `PUT .../dlm/context` **replaces** the whole record
+ * (`UPDATE dlm_artifact SET curation = …` in `api/dlm/engine.py`), so anything
+ * this form omits from the payload is deleted — a curated `freshness_policy`
+ * and a metric's `approximate` flag were both destroyed on every save, because
+ * the form reads neither. It is kept here and merged back under the form's own
+ * values rather than dropped.
+ */
+type StoredCuration = Record<string, unknown> & {
+  metrics?: Record<string, Record<string, unknown>>;
+  dimensions?: Record<string, Record<string, unknown>>;
+  default_metric?: string;
+};
+interface ContextResp { ok?: boolean; dataset_name?: string; effective?: Spec; curation?: StoredCuration; }
 
 const sub: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", margin: "18px 0 8px" };
 const label: React.CSSProperties = { fontSize: 11, color: "var(--text-muted)", minWidth: 70 };
@@ -44,7 +60,14 @@ function Aliases({ items, onChange }: { items: string[]; onChange: (v: string[])
     <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", flex: 1 }}>
       {items.map((a) => (
         <span key={a} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: 999, background: "rgba(var(--accent-rgb),0.08)", fontSize: 12, color: "var(--text-primary)" }}>
-          {a}<i className="fas fa-xmark" aria-hidden="true" style={{ cursor: "pointer", opacity: 0.55, fontSize: 10 }} onClick={() => onChange(items.filter((x) => x !== a))} />
+          {/* Removing an alias was a click target on an <i> — no tab stop, no
+              key handler, nothing announced. A keyboard or screen-reader user
+              could add aliases and never remove one. */}
+          {a}<button type="button" onClick={() => onChange(items.filter((x) => x !== a))}
+            aria-label={`Remove alias ${a}`}
+            style={{ display: "inline-flex", alignItems: "center", padding: 0, border: 0, background: "transparent", cursor: "pointer", opacity: 0.55, color: "inherit", fontSize: 10, lineHeight: 1 }}>
+            <i className="fas fa-xmark" aria-hidden="true" />
+          </button>
         </span>
       ))}
       <input value={t} onChange={(e) => setT(e.target.value)}
@@ -70,21 +93,49 @@ export function DatasetContextEditor({ datasetId, dlm, className }: {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string>("");
   const [needsRegen, setNeedsRegen] = useState(false);
+  /** A read that did not answer, as distinct from a dataset with nothing to curate. */
+  const [readFailure, setReadFailure] = useState<string>("");
+  const stored = useRef<StoredCuration>({});
 
   const load = useCallback(async () => {
     if (!datasetId) return;
     try {
       const r = await msalFetch(`/api/v1/datasets/${datasetId}/dlm/context`);
-      if (!r.ok) { setReady(false); return; }
+      if (!r.ok) {
+        setReady(false);
+        // 404 is the route's answer for "no artifact has been compiled yet"
+        // (`reason: no_artifact`) — there is genuinely nothing to curate, and
+        // the Context card above already says so. Any other status is a read
+        // that did not answer, and hiding the whole control for it left the
+        // Customize section simply missing with nothing said.
+        setReadFailure(r.status === 404 ? "" : unknownText({
+          what: "The context spec",
+          says: "how this dataset's metrics and dimensions are curated",
+          detail: `The platform answered ${r.status}.`,
+        }));
+        return;
+      }
       const j: ContextResp = await r.json();
       const eff = j.effective || {};
+      stored.current = j.curation || {};
       setName(j.dataset_name || "");
       setMetrics({ ...(eff.metrics || {}) });
       setDims({ ...(eff.dimensions || {}) });
       setValiases(Object.entries(eff.value_aliases || {}));
-      setDflt(eff.default_metric || "");
+      // The effective spec always names a default metric — `_merge_spec` falls
+      // back to the first one — so reading it from there and sending it back
+      // froze a derived choice into explicit curation. Only a default the
+      // record actually carries is a default the user chose.
+      setDflt(stored.current.default_metric || "");
+      setReadFailure("");
       setReady(true);
-    } catch { setReady(false); }
+    } catch {
+      setReady(false);
+      setReadFailure(unknownText({
+        what: "The context spec",
+        says: "how this dataset's metrics and dimensions are curated",
+      }));
+    }
   }, [datasetId]);
   useEffect(() => { void load(); }, [load]);
 
@@ -125,19 +176,51 @@ export function DatasetContextEditor({ datasetId, dlm, className }: {
   const save = useCallback(async () => {
     if (!datasetId) return;
     setSaving(true); setMsg(""); setNeedsRegen(false);
+    // The PUT replaces the stored record, so the payload starts from it and the
+    // form's values go over the top — per entry as well as at the top level,
+    // so a metric's `approximate` and the dataset's `freshness_policy` survive
+    // a save made by a form that does not show them.
+    const mergeEntries = (kind: "metrics" | "dimensions", edited: Record<string, MetricSpec | DimSpec>): Record<string, unknown> => {
+      const base = stored.current[kind] || {};
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(edited)) {
+        const entry: Record<string, unknown> = { ...(base[key] || {}), ...value };
+        // A cleared display name is not a display name. It was persisted as
+        // "" and applied over the suggestion, leaving the dimension nameless
+        // everywhere the assistant quoted it.
+        if (typeof entry.display_name === "string" && !entry.display_name.trim()) delete entry.display_name;
+        out[key] = entry;
+      }
+      return out;
+    };
     const payload = {
-      metrics, dimensions: dims,
-      value_aliases: Object.fromEntries(valiases.filter(([k]) => k.trim())),
+      ...stored.current,
+      metrics: mergeEntries("metrics", metrics),
+      dimensions: mergeEntries("dimensions", dims),
+      // A half-filled row maps a phrase to nothing. The key was already
+      // guarded; the value was not, so an unfinished row saved an alias that
+      // resolved every question about that phrase to an empty value.
+      value_aliases: Object.fromEntries(valiases.filter(([k, v]) => k.trim() && v.trim())),
       default_metric: dflt || null,
     };
     try {
       const r = await msalFetch(`/api/v1/datasets/${datasetId}/dlm/context`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
-      const j = await r.json();
-      if (r.ok) { setNeedsRegen(!!j.needs_regenerate); setMsg(j.needs_regenerate ? "Saved — regenerate to apply the breakdown and depth changes." : "Saved. Aliases, defaults and value aliases are live now."); }
-      else setMsg("Save failed.");
-    } catch { setMsg("Save failed."); }
+      const j = await r.json().catch(() => null);
+      if (r.ok) {
+        setNeedsRegen(!!j?.needs_regenerate);
+        setMsg(j?.needs_regenerate ? "Saved — regenerate to apply the breakdown and depth changes." : "Saved. Aliases, defaults and value aliases are live now.");
+        // The record this form merges into is now what was just written.
+        stored.current = { ...payload } as StoredCuration;
+      } else {
+        // The route refuses this PUT below the Analyst role, and the demo
+        // deployment refuses every write — both say so in `detail`. A fixed
+        // "Save failed." threw that away and left the reader to guess whether
+        // to retry something that will never be allowed.
+        setMsg(refusalMessage(j, `Save failed — the platform answered ${r.status}.`));
+      }
+    } catch { setMsg("Save failed — the platform could not be reached."); }
     setSaving(false);
   }, [datasetId, metrics, dims, valiases, dflt]);
 
@@ -145,15 +228,41 @@ export function DatasetContextEditor({ datasetId, dlm, className }: {
     if (!datasetId) return;
     setSaving(true); setMsg("Regenerating context");
     try {
-      await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" });
-      setMsg("Context regenerated."); setNeedsRegen(false);
+      const r = await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" });
+      // The response was never read, so a refused regenerate — 403 below
+      // Analyst, 403 on the read-only demo, 404 for a dataset with no
+      // artifact — reported "Context regenerated." and cleared the prompt.
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        setMsg(refusalMessage(body, `Regenerate failed — the platform answered ${r.status}.`));
+      } else {
+        setMsg("Context regenerated."); setNeedsRegen(false);
+      }
       await dlm.reload();
+      await load();
     }
-    catch { setMsg("Regenerate failed."); }
+    catch { setMsg("Regenerate failed — the platform could not be reached."); }
     setSaving(false);
-  }, [datasetId, dlm]);
+  }, [datasetId, dlm, load]);
 
-  if (!ready) return null;
+  if (!ready) {
+    if (!readFailure) return null;
+    return (
+      <section className={className}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+          <i className="fas fa-sliders" aria-hidden="true" style={{ marginTop: 3, width: 13, textAlign: "center", fontSize: 12, color: "var(--text-muted)" }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Customize</div>
+            <p role="status" style={{ margin: "3px 0 0", fontSize: 12.5, lineHeight: 1.5, color: "var(--text-secondary)" }}>{readFailure}</p>
+            <button type="button" onClick={() => void load()}
+              style={{ marginTop: 8, padding: "5px 12px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-elevated)", color: "var(--text-secondary)", cursor: "pointer", fontSize: 12, fontWeight: 500 }}>
+              Try again
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className={className}>
@@ -236,7 +345,11 @@ export function DatasetContextEditor({ datasetId, dlm, className }: {
               <input style={{ ...input, width: 150 }} value={kk} placeholder="phrase" onChange={(e) => setValiases((a) => a.map((p, j) => j === i ? [e.target.value, p[1]] : p))} />
               <i className="fas fa-arrow-right" aria-hidden="true" style={{ fontSize: 10, color: "var(--text-muted)" }} />
               <input style={{ ...input, width: 150 }} value={vv} placeholder="actual value" onChange={(e) => setValiases((a) => a.map((p, j) => j === i ? [p[0], e.target.value] : p))} />
-              <i className="fas fa-xmark" aria-hidden="true" style={{ cursor: "pointer", opacity: 0.55 }} onClick={() => setValiases((a) => a.filter((_, j) => j !== i))} />
+              <button type="button" onClick={() => setValiases((a) => a.filter((_, j) => j !== i))}
+                aria-label={kk.trim() ? `Remove value alias ${kk}` : "Remove empty value alias row"}
+                style={{ display: "inline-flex", alignItems: "center", padding: 2, border: 0, background: "transparent", cursor: "pointer", opacity: 0.55, color: "var(--text-primary)" }}>
+                <i className="fas fa-xmark" aria-hidden="true" />
+              </button>
             </div>
           ))}
           <button type="button" onClick={() => setValiases((a) => [...a, ["", ""]])} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: 12, fontWeight: 600, padding: 0, marginTop: 2 }}>

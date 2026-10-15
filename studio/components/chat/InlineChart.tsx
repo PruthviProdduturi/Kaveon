@@ -7,7 +7,14 @@ import { useTheme } from "../../contexts/ThemeContext";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 
+/** The series palette. Literals rather than tokens because ECharts resolves
+ *  colours itself and never sees a `var()` — the same reason `echartsTheme`
+ *  remaps chart text. These are data colours, not chrome: the first is the
+ *  brand accent and the rest carry the product's status hues. */
 const COLORS = ["#4A9EE8", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
+
+/** How many rows the table form shows before it says it has stopped. */
+const TABLE_ROW_LIMIT = 20;
 
 export interface InlineChartProps {
   rows: (string | number | null)[][];
@@ -24,6 +31,32 @@ function getColIndex(columns: string[], name: string | null): number {
   return columns.findIndex((c) => c === name);
 }
 
+/**
+ * The column a chart draws, resolved by name and then by shape.
+ *
+ * The DLM names the axes from the question, so a statement that aliased the
+ * measure differently — or an answer whose axes were never named at all —
+ * left the index at -1. The KPI branch already fell back to a column and kept
+ * working; bar, line and pie did not, and drew a plot with its category
+ * labels in place and no series at all, which reads as the answer having no
+ * data rather than as the axis having gone unmatched.
+ */
+function resolveValueIndex(rows: InlineChartProps["rows"], columns: string[], name: string | null): number {
+  const named = getColIndex(columns, name);
+  if (named >= 0) return named;
+  const numeric = columns.findIndex((_, i) =>
+    rows.some((r) => r[i] !== null && r[i] !== "" && Number.isFinite(Number(r[i]))));
+  return numeric >= 0 ? numeric : columns.length - 1;
+}
+
+/** The category column, by name and then as the first column that is not the
+ *  measure. -1 only where there is no second column to use. */
+function resolveLabelIndex(columns: string[], name: string | null, valueIndex: number): number {
+  const named = getColIndex(columns, name);
+  if (named >= 0) return named;
+  return columns.findIndex((_, i) => i !== valueIndex);
+}
+
 function buildOption(
   rows: InlineChartProps["rows"],
   columns: string[],
@@ -31,8 +64,8 @@ function buildOption(
   xAxis: string | null,
   yAxis: string | null,
 ): object {
-  const xIdx = getColIndex(columns, xAxis);
-  const yIdx = getColIndex(columns, yAxis);
+  const yIdx = resolveValueIndex(rows, columns, yAxis);
+  const xIdx = resolveLabelIndex(columns, xAxis, yIdx);
 
   if (chartType === "pie") {
     const data = rows.map((row) => ({
@@ -48,7 +81,10 @@ function buildOption(
           type: "pie",
           radius: ["35%", "65%"],
           data,
-          label: { color: "inherit" },
+          // No `color: "inherit"` here. It drew each slice's label in that
+          // slice's own colour, so an amber label measured 2.15:1 against the
+          // card. Left unset, `applyChartTheme` hands labels the theme's text
+          // tone — 17.06:1 in light, 13.52:1 in dark.
         },
       ],
     };
@@ -89,6 +125,23 @@ export function InlineChart({ rows, columns, chartType, xAxis, yAxis, title, sql
     width: "100%",
   };
 
+  // An answer can carry a chart specification and no rows. Every branch below
+  // then drew its own shape of nothing — a blank canvas, a header row with no
+  // body, an em dash — and each of those reads as a chart that failed to
+  // render. This says what the component was actually given, and keeps the
+  // statement reachable so a reader can see what was asked.
+  if (rows.length === 0 || columns.length === 0) {
+    return (
+      <div style={containerStyle}>
+        <TitleBar title={title} chartType={chartType} />
+        <p style={{ margin: "14px 0 2px", fontSize: 13, lineHeight: 1.6, color: "var(--text-secondary)" }}>
+          This answer carried no rows, so there is nothing to chart.
+        </p>
+        <Footer sql={sql} title={title} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
+      </div>
+    );
+  }
+
   // KPI
   if (chartType === "kpi") {
     const yIdx = getColIndex(columns, yAxis);
@@ -126,7 +179,7 @@ export function InlineChart({ rows, columns, chartType, xAxis, yAxis, title, sql
 
   // Table
   if (chartType === "table") {
-    const displayRows = rows.slice(0, 20);
+    const displayRows = rows.slice(0, TABLE_ROW_LIMIT);
     return (
       <div style={containerStyle}>
         <TitleBar title={title} chartType={chartType} />
@@ -178,6 +231,14 @@ export function InlineChart({ rows, columns, chartType, xAxis, yAxis, title, sql
             </tbody>
           </table>
         </div>
+        {/* The slice above was silent, so twenty rows of a thousand read as the
+            whole answer. Say what was cut; the statement below reproduces the
+            rest. */}
+        {rows.length > displayRows.length && (
+          <p style={{ margin: "8px 0 0", fontSize: 11.5, color: "var(--text-secondary)" }}>
+            Showing the first {displayRows.length} of {rows.length.toLocaleString()} rows.
+          </p>
+        )}
         <Footer sql={sql} title={title} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
       </div>
     );
@@ -232,7 +293,7 @@ function TitleBar({ title, chartType }: { title: string; chartType: string }) {
           textTransform: "uppercase",
           letterSpacing: "0.08em",
           color: "var(--text-muted)",
-          background: "var(--bg-elevated, rgba(255,255,255,0.06))",
+          background: "var(--bg-elevated)",
           border: "1px solid var(--border)",
           borderRadius: 999,
           padding: "2px 8px",
@@ -269,13 +330,18 @@ function Footer({
         }}
       >
         <button
+          type="button"
           onClick={() => setSqlOpen(!sqlOpen)}
           style={{
             background: "none",
             border: "none",
             cursor: "pointer",
             fontSize: 12,
-            color: "var(--text-muted)",
+            // Both controls in this row are `--text-secondary` rather than
+            // `--text-muted`: on the card's `--bg-surface` ground muted
+            // measures 4.40:1 in light, just under the 4.5:1 body-text
+            // threshold, where secondary measures 7.34:1 and 6.38:1.
+            color: "var(--text-secondary)",
             padding: 0,
             display: "flex",
             alignItems: "center",
@@ -300,11 +366,17 @@ function Footer({
           }
           style={{
             fontSize: 12,
-            color: "var(--text-muted)",
+            color: "var(--text-secondary)",
             textDecoration: "none",
           }}
-          onMouseEnter={(e) => ((e.target as HTMLAnchorElement).style.color = "var(--text-primary)")}
-          onMouseLeave={(e) => ((e.target as HTMLAnchorElement).style.color = "var(--text-muted)")}
+          // The brightening was bound to the pointer alone, so a reader moving
+          // by keyboard got none of it; focus now does what hover does. The
+          // handlers read `currentTarget` so the anchor is what changes,
+          // whatever the event started on.
+          onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-primary)")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
+          onFocus={(e) => (e.currentTarget.style.color = "var(--text-primary)")}
+          onBlur={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
         >
           Open in SQL Lab →
         </a>
@@ -314,7 +386,7 @@ function Footer({
           style={{
             marginTop: 8,
             padding: "10px 12px",
-            background: "var(--bg-elevated, rgba(0,0,0,0.2))",
+            background: "var(--bg-elevated)",
             border: "1px solid var(--border)",
             borderRadius: 8,
             fontSize: 12,

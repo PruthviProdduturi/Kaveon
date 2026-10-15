@@ -39,8 +39,19 @@ export function CatalogPicker({ options, value, disabled = false, onSelect, meta
   const rootRef = useRef<HTMLDivElement | null>(null);
   const listId = useId();
 
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.id === value));
-  const selected = options[selectedIndex] ?? null;
+  // `value` is null until the Lab has settled on a catalog, and findIndex
+  // answers -1 for a value no longer in the list. Clamping that to 0 made the
+  // control display the first catalog as though it were the selection — with
+  // no tick beside it in the open list, because nothing was in fact selected —
+  // and left the "Select a catalog" label unreachable. The roving index still
+  // starts at the top of the list; the displayed name no longer does.
+  const selectedIndex = options.findIndex((option) => option.id === value);
+  const selected = selectedIndex >= 0 ? options[selectedIndex] : null;
+  const activeStart = selectedIndex >= 0 ? selectedIndex : 0;
+  // The list can be replaced while it is open, so the roving index is clamped
+  // rather than trusted: Enter on an index past the end committed nothing and
+  // closed the list, which reads as the control ignoring the keyboard.
+  const activeIndex = options.length === 0 ? -1 : Math.min(active, options.length - 1);
 
   const close = useCallback((restoreFocus = true) => {
     setOpen(false);
@@ -68,7 +79,7 @@ export function CatalogPicker({ options, value, disabled = false, onSelect, meta
     if (!open) {
       if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
         event.preventDefault();
-        setActive(selectedIndex);
+        setActive(activeStart);
         setOpen(true);
       }
       return;
@@ -97,7 +108,7 @@ export function CatalogPicker({ options, value, disabled = false, onSelect, meta
       case "Enter":
       case " ":
         event.preventDefault();
-        commit(active);
+        commit(activeIndex);
         break;
       case "Tab":
         close(false);
@@ -114,16 +125,25 @@ export function CatalogPicker({ options, value, disabled = false, onSelect, meta
         {meta && <span className="catalog-picker__meta">{meta}</span>}
       </div>
       <div className="catalog-picker__row">
+      {/* A drawn listbox announces nothing of its own: focus stays on this
+          control while the arrows move a roving index inside a list that never
+          takes focus, so a screen reader was told the list had opened and then
+          heard nothing as the reader moved through it. `combobox` is the role
+          that carries `aria-activedescendant`, which is what names the row the
+          arrows are on. */}
       <button
         type="button"
         className="catalog-picker__control"
         disabled={disabled || options.length === 0}
+        role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open && activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined}
         aria-labelledby={`${listId}-label`}
         onClick={() => {
           if (disabled || options.length === 0) return;
-          setActive(selectedIndex);
+          setActive(activeStart);
           setOpen((isOpen) => !isOpen);
         }}
       >
@@ -140,17 +160,18 @@ export function CatalogPicker({ options, value, disabled = false, onSelect, meta
       </div>
 
       {open && (
-        <ul className="catalog-picker__list" role="listbox" aria-labelledby={`${listId}-label`} tabIndex={-1}>
+        <ul id={listId} className="catalog-picker__list" role="listbox" aria-labelledby={`${listId}-label`} tabIndex={-1}>
           {options.map((option, index) => {
             const isSelected = option.id === value;
             return (
               <li
                 key={option.id}
+                id={`${listId}-option-${index}`}
                 role="option"
                 aria-selected={isSelected}
                 className={
                   "catalog-picker__option"
-                  + (index === active ? " catalog-picker__option--active" : "")
+                  + (index === activeIndex ? " catalog-picker__option--active" : "")
                   + (isSelected ? " catalog-picker__option--selected" : "")
                 }
                 onMouseEnter={() => setActive(index)}

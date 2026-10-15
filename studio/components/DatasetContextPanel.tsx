@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
+import { refusalMessage } from "../utils/demoQuota";
 import type { DlmArtifactHandle } from "../hooks/useDlmArtifact";
 
 function fmtMs(ms?: number): string {
@@ -40,6 +41,8 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
 }) {
   const [generating, setGenerating] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  /** What the platform said when it refused the generate. */
+  const [refusal, setRefusal] = useState<string>("");
 
   const artifact = dlm.artifact;
   const state = generating ? "generating" : dlm.state;
@@ -48,13 +51,60 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
     if (!datasetId) return;
     setShowConfirm(false);
     setGenerating(true);
+    setRefusal("");
     try {
-      await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" });
+      const r = await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" });
+      // The response was discarded. The route requires the Analyst role and
+      // the demo deployment refuses every write, so a Viewer pressed
+      // Generate, watched the spinner, and was returned to "Not built.
+      // Generate to answer questions …" — the same sentence as before, as
+      // though the build had simply produced nothing.
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        setRefusal(refusalMessage(body, `The platform answered ${r.status}.`));
+      }
+    } catch {
+      setRefusal("The platform could not be reached.");
     } finally {
       await dlm.reload();
       setGenerating(false);
     }
   }, [datasetId, dlm]);
+
+  const dialogIds = useId();
+  const dialogTitleId = `${dialogIds}-title`;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogCancelRef = useRef<HTMLButtonElement>(null);
+
+  /**
+   * Dialog semantics for a hand-rolled overlay: it had none. Nothing told a
+   * screen reader a dialog had opened, Escape did not dismiss it, focus stayed
+   * on the Regenerate button behind the overlay — so Enter reopened it — and
+   * Tab walked the page underneath.
+   */
+  useEffect(() => {
+    if (!showConfirm) return;
+    const opener = document.activeElement as HTMLElement | null;
+    dialogCancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setShowConfirm(false); return; }
+      if (e.key !== "Tab") return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusable = Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !root.contains(active))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (active === last || !root.contains(active))) { e.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (opener && document.body.contains(opener)) opener.focus();
+    };
+  }, [showConfirm]);
 
   const gen = artifact?.stats_rollup?.generation;
   const cols = artifact?.manifest?.columns ?? [];
@@ -118,6 +168,12 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
           </button>
         </div>
 
+        {refusal && (
+          <p role="alert" style={{ margin: "10px 0 0", fontSize: 12.5, lineHeight: 1.5, color: "var(--text-secondary)" }}>
+            The context was not regenerated. {refusal}
+          </p>
+        )}
+
         {hasContext && (dims.length > 0 || metrics.length > 0) && (
           <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6 }}>
             {dims.map((d) => <span key={d} style={chip}>{d}</span>)}
@@ -132,7 +188,11 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
           onClick={() => setShowConfirm(false)}
         >
           <div
-            style={{ width: 520, maxWidth: "92vw", borderRadius: 16, border: "1px solid var(--border)", background: "var(--bg-surface)", padding: "28px 32px", boxShadow: "var(--shadow-lg)" }}
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={dialogTitleId}
+            style={{ width: 520, maxWidth: "92vw", maxHeight: "86vh", overflowY: "auto", borderRadius: 16, border: "1px solid var(--border)", background: "var(--bg-surface)", padding: "28px 32px", boxShadow: "var(--shadow-lg)" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
@@ -140,7 +200,7 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
                 <i className="fas fa-bolt" aria-hidden="true" style={{ fontSize: 16, color: "var(--accent)" }} />
               </div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Regenerate context</div>
+                <div id={dialogTitleId} style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Regenerate context</div>
                 <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Every precomputed answer is recomputed from live data</div>
               </div>
             </div>
@@ -207,6 +267,7 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
               <button
+                ref={dialogCancelRef}
                 type="button"
                 onClick={() => setShowConfirm(false)}
                 style={{ padding: "8px 20px", background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
+import { unknownText } from "./Reading";
 import { preparePublicEntra } from "../auth/publicEntra";
 
 /** The app home. Middleware sends a signed-out visitor here with the page they asked for in ?callbackUrl. */
@@ -33,6 +34,20 @@ export function AuthScreen() {
 	const [microsoftProviderEnabled, setMicrosoftProviderEnabled] = useState(false);
 	const [microsoftOAuthEnabled, setMicrosoftOAuthEnabled] = useState(false);
 	const [githubProviderEnabled, setGithubProviderEnabled] = useState(false);
+	// Google is a configured NextAuth provider like the other two (`GOOGLE_ID` /
+	// `GOOGLE_SECRET` in auth.ts). It used to render as a permanently disabled
+	// "Coming soon" button that read the provider list for everything except
+	// Google — so an installation with Google configured offered a dead control
+	// and no way to use the provider it had.
+	const [googleProviderEnabled, setGoogleProviderEnabled] = useState(false);
+	/**
+	 * Whether the provider list was actually read. The panel's buttons are all
+	 * gated on that list, so a failed read empties it — and an empty sign-in
+	 * column reads as "this installation has no way in" when nothing of the
+	 * sort has been established. `null` while the read is in flight.
+	 */
+	const [providersRead, setProvidersRead] = useState<boolean | null>(null);
+	const [providersStatus, setProvidersStatus] = useState<number | null>(null);
 	// Present only when the installation has no real provider at all — see
 	// `localIdentityEnabled` in auth.ts. Without it a laptop with no OAuth
 	// configured showed a sign-in screen with nothing on it to click.
@@ -43,21 +58,26 @@ export function AuthScreen() {
 	useEffect(() => {
 		let active = true;
 		void fetch("/api/auth/providers", { cache: "no-store" })
-			.then(async (response): Promise<Record<string, unknown>> =>
-				response.ok ? await response.json() as Record<string, unknown> : {})
-			.then((providers) => {
-				if (active) {
-					setMicrosoftProviderEnabled(Boolean(providers?.["microsoft-entra-id"] || providers?.["entra-public"]));
-					setMicrosoftOAuthEnabled(Boolean(providers?.["microsoft-entra-id"]));
-					setGithubProviderEnabled(Boolean(providers?.github));
-					const local = providers?.["local-dev"] as { name?: string } | undefined;
-					setLocalIdentityEnabled(Boolean(local));
-					if (local?.name) setLocalName(local.name);
-				}
+			.then(async (response) => {
+				const providers = response.ok ? await response.json() as Record<string, unknown> : null;
+				if (!active) return;
+				setProvidersStatus(response.status);
+				if (!providers) { setProvidersRead(false); return; }
+				setMicrosoftProviderEnabled(Boolean(providers["microsoft-entra-id"] || providers["entra-public"]));
+				setMicrosoftOAuthEnabled(Boolean(providers["microsoft-entra-id"]));
+				setGithubProviderEnabled(Boolean(providers.github));
+				setGoogleProviderEnabled(Boolean(providers.google));
+				const local = providers["local-dev"] as { name?: string } | undefined;
+				setLocalIdentityEnabled(Boolean(local));
+				if (local?.name) setLocalName(local.name);
+				setProvidersRead(true);
 			})
 			.catch(() => {
-				if (active) setMicrosoftProviderEnabled(false);
-				if (active) setGithubProviderEnabled(false);
+				if (!active) return;
+				setMicrosoftProviderEnabled(false);
+				setGithubProviderEnabled(false);
+				setGoogleProviderEnabled(false);
+				setProvidersRead(false);
 			});
 		return () => { active = false; };
 	}, []);
@@ -341,15 +361,40 @@ export function AuthScreen() {
 							<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .6A11.4 11.4 0 0 0 8.4 22.9c.57.1.78-.25.78-.55v-2.14c-3.18.69-3.85-1.34-3.85-1.34-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.75 1.18 1.75 1.18 1.02 1.74 2.68 1.24 3.33.95.1-.74.4-1.24.73-1.53-2.54-.29-5.2-1.27-5.2-5.67 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.03 0 0 .97-.31 3.15 1.17a10.9 10.9 0 0 1 5.74 0c2.18-1.48 3.15-1.17 3.15-1.17.62 1.58.23 2.74.11 3.03.73.8 1.18 1.82 1.18 3.07 0 4.41-2.67 5.37-5.22 5.65.41.35.78 1.04.78 2.1v3.11c0 .3.21.65.79.54A11.4 11.4 0 0 0 12 .6Z" /></svg>
 							Continue with GitHub
 						</button>}
-						<button type="button" disabled style={{ ...btnBase, opacity: 0.45, cursor: "not-allowed" }} aria-label="Google sign-in coming soon">
+						{googleProviderEnabled && <button
+							type="button"
+							onClick={() => start("google")}
+							style={btnBase}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+						>
 							<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.35 12.23c0-.71-.06-1.4-.18-2.05H12v3.88h5.24a4.48 4.48 0 0 1-1.94 2.94v2.44h3.14c1.84-1.69 2.91-4.18 2.91-7.21Z"/><path fill="#34A853" d="M12 21.5c2.63 0 4.84-.87 6.45-2.36l-3.14-2.44c-.87.58-1.98.92-3.31.92-2.54 0-4.7-1.72-5.47-4.03H3.28v2.52A9.74 9.74 0 0 0 12 21.5Z"/><path fill="#FBBC05" d="M6.53 13.59a5.86 5.86 0 0 1 0-3.18V7.89H3.28a9.75 9.75 0 0 0 0 8.22l3.25-2.52Z"/><path fill="#EA4335" d="M12 6.38c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.42 14.63 2.5 12 2.5a9.74 9.74 0 0 0-8.72 5.39l3.25 2.52C7.3 8.1 9.46 6.38 12 6.38Z"/></svg>
-							Google · Coming soon
-						</button>
+							Continue with Google
+						</button>}
+						{/* The buttons above are all gated on the provider list. A read
+						    that did not answer leaves none of them rendered, and an empty
+						    column would say the installation has no way in — which has
+						    not been established. The sentence is `components/Reading`'s,
+						    in this panel's own type. */}
+						{providersRead === false && !microsoftPublicToken && (
+							<p role="status" style={{ margin: "2px 0 0", fontSize: 13, color: "#94a3b8", lineHeight: 1.45 }}>
+								{unknownText({
+									what: "The sign-in service",
+									says: "which identity providers this installation accepts",
+									detail: providersStatus ? `It answered ${providersStatus}. Refresh this page to retry.` : "Refresh this page to retry.",
+								})}
+							</p>
+						)}
 						{signInError && <p role="alert" style={{ margin: "2px 0 0", fontSize: 13, color: "#fca5a5", lineHeight: 1.4 }}>{signInError}</p>}
 
 					</div>
 
-					<p style={{ fontSize: 11, color: "#64748b", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
+					{/* One step up the same slate ramp. This panel is a deliberate
+					    theme-independent #171717 ground, so the literal stays, but
+					    #64748b measured 3.77:1 against it — under the 4.5:1 body-text
+					    threshold at 11px. #7c8ba1 is 5.17:1 and keeps the quiet
+					    register below the #94a3b8 used for the sub-copy. */}
+					<p style={{ fontSize: 11, color: "#7c8ba1", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
 						Open source &middot; Self-hosted &middot; MIT License
 					</p>
 				</div>
