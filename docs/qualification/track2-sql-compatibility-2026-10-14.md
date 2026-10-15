@@ -97,6 +97,10 @@ tie-aware fetch: `executes_grouping_sets_grand_total`,
 `fetch_percent_rejects_and_with_ties_preserves_rank_semantics` each passed
 with zero failures.
 
+The SQL planner's `COUNT_IF` coverage also passed in both supported forms:
+grouped `COUNT_IF` lowering and aggregate `FILTER` validation (`2 passed,
+0 failed`).
+
 ## JSON_FORMAT qualification — 2026-10-15
 
 `JSON_FORMAT(json)` now canonicalizes the Engine's validated UTF-8 JSON
