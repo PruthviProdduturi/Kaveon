@@ -584,6 +584,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_nth_value",
+        "SELECT country, NTH_VALUE(actions, 2) OVER (ORDER BY actions, country ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS n FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country LIMIT 6",
+        true,
+    ),
+    (
         "qualify_partitioned_row_number",
         "SELECT country, region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country) AS rn FROM {T} QUALIFY rn = 1 ORDER BY region, country",
         true,

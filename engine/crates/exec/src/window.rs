@@ -263,18 +263,31 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
     let mut floats = vec![0.0f64; batch.num_rows()];
     let mut aggregate_results: Vec<(usize, ArrayRef)> = Vec::new();
     let offset = if name == "LAG" || name == "LEAD" {
-        literal_offset(args.get(1), 1, false)?
+        literal_offset(args.get(1), 1)?
     } else {
         0
     };
     let tiles = if name == "NTILE" {
-        literal_offset(args.first(), 0, true)?
+        positive_literal_offset(args.first(), 0, "NTILE")?
+    } else {
+        1
+    };
+    let nth = if name == "NTH_VALUE" {
+        positive_literal_offset(args.get(1), 1, "NTH_VALUE")?
     } else {
         1
     };
     if matches!(
         name.as_str(),
-        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "SUM" | "AVG" | "MIN" | "MAX"
+        "LAG"
+            | "LEAD"
+            | "FIRST_VALUE"
+            | "LAST_VALUE"
+            | "NTH_VALUE"
+            | "SUM"
+            | "AVG"
+            | "MIN"
+            | "MAX"
     ) && col.is_none()
     {
         return Err(error(format!("{name} requires a value argument")));
@@ -330,7 +343,15 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                     };
                     indices[row] = source.map(|i| rows[i] as u32);
                 }
-                "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "FIRST_VALUE" | "LAST_VALUE" => {
+                "COUNT"
+                | "SUM"
+                | "AVG"
+                | "MIN"
+                | "MAX"
+                | "FIRST_VALUE"
+                | "LAST_VALUE"
+                | "NTH_VALUE" =>
+                {
                     let (start, end) =
                         frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
                     let selected = if distinct {
@@ -355,6 +376,9 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                         }
                         "FIRST_VALUE" => indices[row] = selected.first().map(|&i| i as u32),
                         "LAST_VALUE" => indices[row] = selected.last().map(|&i| i as u32),
+                        "NTH_VALUE" => {
+                            indices[row] = selected.get(nth - 1).map(|&i| i as u32)
+                        }
                         _ => aggregate_results.push((
                             row,
                             aggregate(aggregate_name, col.as_ref().unwrap(), &selected)?,
@@ -370,7 +394,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             Ok(Arc::new(Int64Array::from(ints)))
         }
         "PERCENT_RANK" | "CUME_DIST" => Ok(Arc::new(Float64Array::from(floats))),
-        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" => {
+        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" => {
             let col = col.as_ref().unwrap();
             let output = take(col.as_ref(), &UInt32Array::from(indices.clone()), None)?;
             if matches!(name.as_str(), "LAG" | "LEAD")
@@ -425,7 +449,7 @@ fn distinct_window_rows(col: Option<&ArrayRef>, rows: &[usize]) -> Result<Vec<us
     Ok(unique)
 }
 
-fn literal_offset(expr: Option<&Expr>, default: usize, positive: bool) -> Result<usize> {
+fn literal_offset(expr: Option<&Expr>, default: usize) -> Result<usize> {
     let value = match expr {
         None => default,
         Some(Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(n))) if *n >= 0 => {
@@ -433,9 +457,17 @@ fn literal_offset(expr: Option<&Expr>, default: usize, positive: bool) -> Result
         }
         _ => return Err(error("window offset must be a nonnegative integer literal")),
     };
-    if positive && value == 0 {
-        return Err(error("NTILE requires a positive integer"));
-    }
+    Ok(value)
+}
+
+fn positive_literal_offset(expr: Option<&Expr>, default: usize, function: &str) -> Result<usize> {
+    let value = match expr {
+        None => default,
+        Some(Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(n))) if *n > 0 => {
+            usize::try_from(*n).map_err(|_| error(format!("{function} offset is too large")))?
+        }
+        _ => return Err(error(format!("{function} requires a positive integer"))),
+    };
     Ok(value)
 }
 
@@ -894,6 +926,14 @@ mod tests {
             cume_dist,
             vec![Some(2.0 / 6.0), Some(2.0 / 6.0), Some(3.0 / 6.0), Some(4.0 / 6.0),
                 Some(5.0 / 6.0), Some(1.0)]
+        );
+        let mut nth_value = expression("NTH_VALUE", frame(Rows, UnboundedPreceding, CurrentRow));
+        if let Expr::WindowFunction { args, .. } = &mut nth_value {
+            args.push(Expr::Literal(ScalarValue::Int64(2)));
+        }
+        assert_eq!(
+            ints(nth_value, &input),
+            vec![None, Some(1), Some(1), Some(1), Some(1), Some(1)]
         );
         let mut lag = expression("LAG", None);
         if let Expr::WindowFunction { args, .. } = &mut lag {
