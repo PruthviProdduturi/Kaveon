@@ -303,19 +303,50 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
     return {"success": True, "catalogSource": row}
 
 
+# The fields an Admin may clear rather than change. A source always has a
+# storage type, a data format and an adapter; what it may not have is a
+# credential, because a managed or workload identity is supplied by the
+# platform and "Host identity" means there is no credential at all.
+_CLEARABLE_FIELDS = frozenset({"credential_kind", "credential_ref"})
+# Every field whose empty string means "cleared" rather than "set to empty".
+_NULLABLE_SOURCE_FIELDS = frozenset({"credential_kind", "credential_ref", "description"})
+
+
 @router.patch("/catalog-sources/{cs_id}")
 def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(require_min_role("Admin"))):
     if source_cutover_mutations.enabled():
         current = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, "Admin")
         if not current: raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})
+        # Clearing a credential is a legal edit, and this path used to refuse
+        # it. "Host identity" is the option that removes a credential
+        # altogether, so the editor sends `credential_kind: null` for it --
+        # and a bare membership test reads that null as an invalid value and
+        # answers 400, while the PostgreSQL branch below has always accepted
+        # it (`(value or "").strip() or None`, then membership only if
+        # truthy). Since every family reads from KaveonDB, the one path that
+        # refused the clear was the only path that runs.
+        #
+        # The two credential fields are clearable and the other three are not,
+        # which is exactly the asymmetry the branch below encodes: a source
+        # always has a storage type, a data format and an adapter.
         for field, allowed in (("storage_type",_VALID_STORAGE),("data_format",_VALID_FORMAT),
                                ("credential_kind",_VALID_CREDENTIAL),("adapter_type",_VALID_ADAPTER)):
-            if field in data and data[field] not in allowed:
+            if field not in data:
+                continue
+            value = str(data[field] or "").strip() or None
+            if value is None and field in _CLEARABLE_FIELDS:
+                continue
+            if value not in allowed:
                 raise HTTPException(400, f"{field} must be one of: {', '.join(sorted(allowed))}")
         field_map = {"name":"name", "engine_catalog":"catalog_identity", "description":"description",
                      "storage_type":"source_type", "data_format":"data_format", "credential_kind":"credential_kind",
                      "credential_ref":"credential_ref", "adapter_type":"adapter_type"}
-        changes = {target: data[source] for source, target in field_map.items() if source in data}
+        # Normalised the same way the membership test just read them, so a
+        # cleared field is stored as null rather than as the empty string the
+        # client happened to send.
+        changes = {target: (str(data[source] or "").strip() or None
+                            if source in _NULLABLE_SOURCE_FIELDS else data[source])
+                   for source, target in field_map.items() if source in data}
         for source, target in (("storage_config","storage_config"),("adapter_config","adapter_config")):
             if source in data:
                 changes[target] = _validate_json(json.dumps(data[source]) if isinstance(data[source],dict) else data[source], source)
