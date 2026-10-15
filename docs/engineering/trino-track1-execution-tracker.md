@@ -52,6 +52,13 @@ and graceful node-drain retry. These reports qualify worker discovery and
 scheduling for the declared three-worker topology; they do not qualify the
 exchange pressure gate now active below.
 
+The bounded ADLS-backed soak
+`docs/qualification/track1-aks-exchange-soak-2026-10-15.md` completed 416/416
+exact requests over 300 seconds with four-way concurrency, zero unexpected
+restarts, and zero retained exchange/spill files. Explicit cloud-storage fault
+injection, quota rejection, orphan-spool recovery, and longer endurance remain
+open for item 2.
+
 The positive graceful node-drain result is retained in
 `docs/qualification/track1-aks-node-drain-skew-2026-10-15.md`; repeated pod-loss
 evidence is retained in
