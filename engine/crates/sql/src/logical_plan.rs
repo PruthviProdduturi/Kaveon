@@ -2244,6 +2244,33 @@ fn bind_order_keys_to_projection(
     let visible = columns.clone();
     let mut hidden = Vec::new();
     for (key, _, _) in keys.iter_mut() {
+        // Trino treats a positive integer in ORDER BY as a one-based select
+        // item ordinal. Resolve it to the projected output name before the
+        // sort is planned; leaving it as a literal would silently produce an
+        // unsorted result.
+        if let Expr::Literal(ScalarValue::Int64(ordinal)) = key {
+            if let Some(position) = ordinal
+                .checked_sub(1)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|position| *position < columns.len())
+            {
+                let selected = columns[position].clone();
+                let name = match selected {
+                    Expr::Alias { name, .. } => name,
+                    Expr::Column(name) => name,
+                    other => {
+                        let name = format!("expr_{position}");
+                        columns[position] = Expr::Alias {
+                            expr: Box::new(other),
+                            name: name.clone(),
+                        };
+                        name
+                    }
+                };
+                *key = Expr::Column(name);
+            }
+            continue;
+        }
         if let Expr::Column(name) = key {
             // `ORDER BY u.country` when the query selects `u.country AS
             // user_country` orders by that output column.
@@ -4021,6 +4048,17 @@ mod tests {
                 (Expr::Column("k".into()), true, false)
             ]
         );
+    }
+
+    #[test]
+    fn order_by_select_ordinal_resolves_to_the_projected_output() {
+        let plan =
+            sql_to_logical_plan("SELECT k, COUNT(*) AS n FROM t GROUP BY k ORDER BY 2 DESC")
+                .unwrap();
+        let LogicalPlan::Sort { order_by, .. } = plan else {
+            panic!("sort");
+        };
+        assert_eq!(order_by, vec![(Expr::Column("n".into()), false, true)]);
     }
 
     #[test]

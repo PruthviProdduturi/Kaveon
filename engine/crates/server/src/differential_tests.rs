@@ -1183,18 +1183,18 @@ fn distributed_grouping_sets_match_the_local_result() {
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     let statement =
-        "SELECT region, platform, COUNT(*) AS n FROM events GROUP BY GROUPING SETS ((region), (platform))";
+        "SELECT region, platform, COUNT(*) AS n FROM events GROUP BY GROUPING SETS ((region), (platform)) ORDER BY 3 DESC, 1";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-grouping-sets", 32 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
-    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
     drop(local);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let actual = canonical_rows(
         &execute_distributed(statement, &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
-        false,
+        true,
     );
     assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
