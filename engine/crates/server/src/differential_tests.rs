@@ -1338,6 +1338,36 @@ fn distributed_join_qualified_wildcard_keeps_only_left_columns() {
 }
 
 #[test]
+fn distributed_outer_using_wildcard_matches_local_coalescing() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-outer-using-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    for statement in [
+        "SELECT * FROM events u RIGHT JOIN users p USING (user_id)",
+        "SELECT * FROM events u FULL JOIN users p USING (user_id)",
+    ] {
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-outer-using", 32 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+        let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+        drop(local);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool)
+                .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+            false,
+        );
+        assert_eq!(actual, expected, "{statement}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-differential-{}", uuid::Uuid::new_v4()));
