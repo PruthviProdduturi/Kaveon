@@ -4308,6 +4308,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
+        "JSON_FORMAT" => {
+            check_arity(name, args, 1)?;
+            let documents = as_string_array(&args[0])?;
+            let mut result = StringBuilder::new();
+            for row in 0..num_rows {
+                if documents.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let document = documents.value(row);
+                let value = serde_json::from_str::<serde_json::Value>(document).map_err(|_| {
+                    KaveonError::Execution(format!("invalid JSON value at row {row}"))
+                })?;
+                result.append_value(value.to_string());
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "LTRIM" => {
             check_arity(name, args, 1)?;
             let arr = as_string_array(&args[0])?;
@@ -15719,6 +15736,38 @@ mod tests {
         assert_eq!(values.value(0), r#"{"x":1}"#);
         assert!(values.is_null(1));
         assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_json_format_canonicalizes_documents_and_preserves_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"{ "b": 2, "a": [true, null] }"#),
+                None,
+                Some("not-json"),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_FORMAT".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let error = evaluate(&expr, &batch).unwrap_err();
+        assert!(error.to_string().contains("invalid JSON value at row 2"));
+
+        let valid_batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"{ "b": 2, "a": [true, null] }"#),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(&expr, &valid_batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), r#"{"b":2,"a":[true,null]}"#);
+        assert!(values.is_null(1));
     }
 
     #[test]
