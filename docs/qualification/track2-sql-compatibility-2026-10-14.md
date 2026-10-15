@@ -142,3 +142,9 @@ grouping order before persistence. The targeted regression passed, followed by
 the complete server suite: `393/393` tests passed, including the differential
 sweep. This validates deterministic cube artifacts without changing the
 remaining Track 1 cloud-pressure and operational gates.
+
+The clean workspace qualification was rerun after the deterministic ordering
+fix with output captured and an authoritative exit status. `cargo test
+--workspace --no-fail-fast --quiet` returned exit code `0`: server `393/393`,
+SQL `157/157`, execution `351 passed / 4 ignored`, and the remaining workspace
+targets all passed. The server differential sweep completed in 105.78 seconds.
