@@ -470,7 +470,8 @@ The same explicit allow-list now accepts the supported array-valued functions
 `ARRAY_CONCAT`, `ARRAY_DISTINCT`, `ARRAY_FLATTEN`, `ARRAY_REPEAT`,
 `ARRAY_REVERSE`, `ARRAY_SLICE`, `ARRAY_SORT`, and `ARRAY_ZIP` as constant
 `UNNEST` inputs. A distributed `ARRAY_CONCAT` plus zero-based offset regression
-passes exactly; arbitrary scalar functions are still rejected during lowering.
+and a correlated lateral `ARRAY_CONCAT` regression both pass exactly; arbitrary
+scalar functions are still rejected during lowering.
 
 ## Trino wire compatibility qualification
 
