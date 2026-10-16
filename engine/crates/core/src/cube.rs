@@ -5,7 +5,7 @@
 //! HyperLogLog sketches. A catalog object beside the table's statistics,
 //! versioned the same way; maintained incrementally from per-file partials.
 
-use crate::shape::{MeasureAggregate, ShapeAxis, TableShape};
+use crate::shape::{DeclinedPair, MeasureAggregate, ShapeAxis, TableShape};
 use crate::sketch::HllSketch;
 use crate::statistics::{SourceVersion, StatValue};
 use crate::{KaveonError, Result, TableId};
@@ -337,6 +337,18 @@ pub struct TableCube {
     pub groupings: Vec<CubeGrouping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded: Vec<ExcludedAxis>,
+    /// The pairs of axes the cube does not hold, and why.
+    ///
+    /// `excluded` has always recorded the axes left out; a pair could be
+    /// left out for four different reasons and none of them were written
+    /// down. That is how a default cap of 10,000 came to price every pair
+    /// in a table at 100,000,000 cells and decline all of them while the
+    /// build reported success. With `groupings` saying what is held and
+    /// this saying what is not, both at `source_version`, the cube can
+    /// state its coverage rather than leave it to be inferred from a cell
+    /// count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declined_pairs: Vec<DeclinedPair>,
     /// The files that contributed, by their labels, so a new listing tells
     /// what was added and what removed.
     #[serde(default)]
@@ -711,6 +723,7 @@ mod tests {
                 },
             ],
             excluded: Vec::new(),
+            declined_pairs: Vec::new(),
             files: vec!["a.parquet".into()],
             per_file_complete: true,
         };

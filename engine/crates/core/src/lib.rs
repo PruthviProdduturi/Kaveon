@@ -49,7 +49,8 @@ pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
 pub use process_memory::{CountingAllocator, ProcessMemory};
 pub use shape::{
-    MeasureAggregate, ShapeAxis, ShapeDimension, ShapeMeasure, ShapeTime, TableShape, TimeGrain,
+    DeclinedPair, MeasureAggregate, PairPlan, PairRefusal, ShapeAxis, ShapeDimension, ShapeMeasure,
+    ShapeTime, TableShape, TimeGrain,
 };
 pub use sketch::{HllSketch, KllSketch};
 pub use statistics::{

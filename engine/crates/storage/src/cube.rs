@@ -310,6 +310,7 @@ fn empty_cube(
             })
             .collect(),
         excluded: Vec::new(),
+        declined_pairs: Vec::new(),
         files: Vec::new(),
         per_file_complete: true,
     }
