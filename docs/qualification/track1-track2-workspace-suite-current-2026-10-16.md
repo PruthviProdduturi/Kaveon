@@ -66,6 +66,11 @@ narrow integer/Float32, and LargeUtf8 values, with deterministic nested
 array/map/row keys; focused array, map, and row set-key tests pass, and the sweep passed **1/1** after that extension
 (411 filtered server tests; 135.24 seconds).
 
+The differential corpus now also includes SQL-level array and map
+`INTERSECT` cases plus a composite multi-column row `EXCEPT` case; the exact
+local/distributed sweep passed **1/1** after those additions (411 filtered
+server tests; 134.00 seconds).
+
 After that change, the complete server target suite was rerun from the same
 source:
 
