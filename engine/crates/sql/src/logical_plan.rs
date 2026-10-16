@@ -7601,6 +7601,17 @@ mod tests {
     }
 
     #[test]
+    fn bounded_linear_recursive_cte_lowers_to_sequence_unnest() {
+        let plan = sql_to_logical_plan(
+            "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 5) SELECT * FROM numbers",
+        )
+        .expect("bounded linear recursion should lower through SEQUENCE");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("name: \"SEQUENCE\""), "{debug}");
+        assert!(debug.contains("Unnest"), "{debug}");
+    }
+
+    #[test]
     fn values_relation_lowers_to_columnar_unnest() {
         let plan = sql_to_logical_plan("VALUES (1, 'a'), (2, 'b')").unwrap();
         let LogicalPlan::Unnest {

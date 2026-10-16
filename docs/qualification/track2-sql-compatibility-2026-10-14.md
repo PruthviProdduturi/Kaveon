@@ -684,3 +684,34 @@ it is compatibility evidence, not a claim of complete Trino JSON or window
 coverage. Recursive CTEs, complete JSON path/coercion semantics, broader
 window modifiers, and the remaining distributed-window shapes stay open in
 the parity matrix.
+
+## Bounded recursive CTE qualification — 2026-10-16
+
+The parser and logical planner now support one finite recursive shape by
+lowering it to the existing `SEQUENCE`/`UNNEST` relation:
+
+```sql
+WITH RECURSIVE numbers(n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM numbers WHERE n < 5
+)
+SELECT * FROM numbers
+```
+
+The lowerer accepts one integer column, one monotonic arithmetic step, and a
+strict or inclusive finite bound. The planner regression verifies the
+`SEQUENCE(1, 4, 1)` equivalent and the parser regression verifies that the
+recursive keyword is removed only after the safe rewrite. A malformed or
+non-linear recursive CTE still reaches the explicit unsupported-recursion
+diagnostic; general recursive graphs, multiple members, joins, and cycle
+detection are not claimed.
+
+Validation on the clean checkout:
+
+```text
+kaveon-sql parser tests: 16 passed
+kaveon-sql full tests: 181 passed
+differential_tests: 33 passed, 0 failed, 0 ignored
+clippy (-D warnings): passed
+```
