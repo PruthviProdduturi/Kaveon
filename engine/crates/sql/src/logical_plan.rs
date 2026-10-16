@@ -887,15 +887,101 @@ fn select_to_plan(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> 
     Ok(select_to_plan_with_bindings(select, ctes)?.0)
 }
 
+fn resolve_named_window(
+    name: &str,
+    definitions: &HashMap<String, ast::NamedWindowExpr>,
+    visiting: &mut Vec<String>,
+) -> Result<ast::WindowSpec> {
+    if visiting.iter().any(|candidate| candidate == name) {
+        return Err(sql_err(format!(
+            "cyclic named window reference involving '{name}'"
+        )));
+    }
+    let definition = definitions
+        .get(name)
+        .ok_or_else(|| sql_err(format!("unknown named window '{name}'")))?;
+    visiting.push(name.to_owned());
+    let mut spec = match definition {
+        ast::NamedWindowExpr::WindowSpec(spec) => {
+            let mut inherited = spec
+                .window_name
+                .as_ref()
+                .map(|parent| resolve_named_window(&parent.value, definitions, visiting))
+                .transpose()?
+                .unwrap_or(ast::WindowSpec {
+                    window_name: None,
+                    partition_by: Vec::new(),
+                    order_by: Vec::new(),
+                    window_frame: None,
+                });
+            if !spec.partition_by.is_empty() {
+                inherited.partition_by = spec.partition_by.clone();
+            }
+            if !spec.order_by.is_empty() {
+                inherited.order_by = spec.order_by.clone();
+            }
+            if spec.window_frame.is_some() {
+                inherited.window_frame = spec.window_frame.clone();
+            }
+            inherited
+        }
+        ast::NamedWindowExpr::NamedWindow(parent) => {
+            resolve_named_window(&parent.value, definitions, visiting)?
+        }
+    };
+    visiting.pop();
+    // The name is useful only while resolving the declaration. Keeping it in
+    // the expanded spec would make the normal WindowSpec path try to resolve
+    // it again, so the physical planner receives a fully concrete definition.
+    spec.window_name = None;
+    Ok(spec)
+}
+
+/// Expand the SQL `WINDOW name AS (...)` shorthand before lowering expressions.
+/// The normal expression lowerer deliberately accepts only concrete specs; doing
+/// this at the AST boundary keeps that invariant while supporting direct and
+/// chained named-window declarations.
+fn expand_named_windows(select: &ast::Select) -> Result<ast::Select> {
+    if select.named_window.is_empty() {
+        return Ok(select.clone());
+    }
+    let definitions = select
+        .named_window
+        .iter()
+        .map(|definition| (definition.0.value.clone(), definition.1.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut expanded = select.clone();
+    let mut error = None;
+    let mut rewrite = |expr: &mut ast::Expr| {
+        let ast::Expr::Function(function) = expr else {
+            return ControlFlow::<()>::Continue(());
+        };
+        let Some(ast::WindowType::NamedWindow(name)) = &function.over else {
+            return ControlFlow::Continue(());
+        };
+        match resolve_named_window(&name.value, &definitions, &mut Vec::new()) {
+            Ok(spec) => function.over = Some(ast::WindowType::WindowSpec(spec)),
+            Err(err) => {
+                error = Some(err);
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    };
+    let _ = visit_expressions_mut(&mut expanded, &mut rewrite);
+    error.map_or(Ok(expanded), Err)
+}
+
 fn select_to_plan_with_bindings(
     select: &ast::Select,
     ctes: &Lowering,
 ) -> Result<(LogicalPlan, ExpressionBindings)> {
+    let select = expand_named_windows(select)?;
     let qualify = select.qualify.as_ref().map(ast_expr_to_expr).transpose()?;
     // Projection scalar subqueries are lowered after the outer aggregation and
     // window stages.  That keeps their single-row relation available to the
     // final projection without making it a grouping key or aggregate input.
-    let (projection, projection_scalars) = replace_projection_scalars(select, ctes)?;
+    let (projection, projection_scalars) = replace_projection_scalars(&select, ctes)?;
     let mut aliases = Vec::new();
     for item in &projection {
         if let ast::SelectItem::ExprWithAlias { expr, alias } = item {
@@ -903,22 +989,22 @@ fn select_to_plan_with_bindings(
         }
     }
     let qualify = qualify.map(|predicate| replace_bound_expression(predicate, &aliases));
-    let plan = build_from_clause(select, ctes)?;
-    let plan = build_where(plan, select, ctes)?;
+    let plan = build_from_clause(&select, ctes)?;
+    let plan = build_where(plan, &select, ctes)?;
 
     let has_aggregates = select.projection.iter().any(contains_aggregate_select_item)
         || select.having.as_ref().is_some_and(contains_aggregate_expr)
         || matches!(&select.group_by, ast::GroupByExpr::Expressions(exprs, _) if !exprs.is_empty());
 
     let plan = if has_aggregates {
-        build_aggregate(plan, select, ctes.approximate)?
+        build_aggregate(plan, &select, ctes.approximate)?
     } else {
         plan
     };
 
-    let (plan, having_scalars) = build_having(plan, select, ctes)?;
+    let (plan, having_scalars) = build_having(plan, &select, ctes)?;
 
-    let window_exprs = collect_window_exprs(select)?;
+    let window_exprs = collect_window_exprs(&select)?;
     let plan = if window_exprs.is_empty() {
         plan
     } else {
@@ -6740,6 +6826,24 @@ mod tests {
             }
             other => panic!("expected Decimal128 literal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn expands_direct_and_chained_named_windows() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(amount) OVER ordered, ROW_NUMBER() OVER partitioned FROM t WINDOW base AS (PARTITION BY region), partitioned AS (base), ordered AS (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(
+            debug.contains("partition_by: [Column(\"region\")]"),
+            "{debug}"
+        );
+        assert!(
+            debug.contains("order_by: [(Column(\"id\"), true, false)]"),
+            "{debug}"
+        );
+        assert!(debug.contains("Rows"), "{debug}");
     }
 
     #[test]
