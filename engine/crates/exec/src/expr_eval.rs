@@ -4931,6 +4931,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 DataType::Date64 => {
                     map_element_at_primitive::<Date64Type>(map_keys, &requested, row, start, end)
                 }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
+                    map_element_at_primitive::<TimestampSecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None) => {
+                    map_element_at_primitive::<TimestampMillisecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => {
+                    map_element_at_primitive::<TimestampMicrosecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None) => {
+                    map_element_at_primitive::<TimestampNanosecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                }
                 DataType::Decimal128(_, _) => {
                     map_element_at_primitive::<arrow::datatypes::Decimal128Type>(
                         map_keys, &requested, row, start, end,
