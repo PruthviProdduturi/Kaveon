@@ -872,10 +872,12 @@ impl Binder<'_> {
         let mut right_outer = outer.to_vec();
         right_outer.push(left_scope.clone());
         // A positive LIMIT cannot change the truth value of EXISTS: the
-        // predicate only asks whether at least one row survives. Remove the
-        // top-level limit before binding so correlated EXISTS can still be
-        // decorrelated into a keyed semi/anti join. LIMIT 0 remains intact,
-        // and IN keeps its limit because multiplicity/set membership matters.
+        // predicate only asks whether at least one row survives. Remove a
+        // positive top-level limit before binding so correlated EXISTS can
+        // still be decorrelated into a keyed semi/anti join. LIMIT 0 becomes
+        // an empty relation (always false for EXISTS, always true for NOT
+        // EXISTS), and IN keeps its limit because multiplicity/set membership
+        // matters.
         let right = if matches!(right_key, Expr::Literal(_)) {
             strip_positive_exists_limit(right)
         } else {
@@ -1827,6 +1829,19 @@ fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
 fn strip_positive_exists_limit(plan: LogicalPlan) -> LogicalPlan {
     match plan {
         LogicalPlan::Limit { input, count } if count > 0 => *input,
+        LogicalPlan::Limit { count: 0, .. } => LogicalPlan::Filter {
+            input: Box::new(LogicalPlan::Unnest {
+                expressions: vec![Expr::Function {
+                    name: "ARRAY".to_owned(),
+                    args: vec![Expr::Literal(kaveon_core::ScalarValue::Int64(0))],
+                }],
+                columns: vec!["_kaveon_empty".to_owned()],
+                with_ordinality: false,
+                ordinality_column: "ordinality".to_owned(),
+                ordinality_start: 1,
+            }),
+            predicate: Expr::Literal(kaveon_core::ScalarValue::Bool(false)),
+        },
         plan => plan,
     }
 }
@@ -2599,17 +2614,20 @@ mod tests {
     }
 
     #[test]
-    fn correlated_exists_zero_limit_remains_empty() {
+    fn correlated_exists_zero_limit_becomes_empty_relation() {
         let mut plan = sql_to_logical_plan_for_binder(
             "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey LIMIT 0)",
         )
         .unwrap();
         qualify(&mut plan);
-        let error = bind(plan, &catalog()).unwrap_err().to_string();
-        assert!(
-            error.contains("LIMIT inside a correlated subquery"),
-            "{error}"
-        );
+        let plan = bind(plan, &catalog()).unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected outer projection")
+        };
+        let LogicalPlan::SemiJoin { right, .. } = *input else {
+            panic!("expected semi join")
+        };
+        assert!(matches!(*right, LogicalPlan::Filter { .. }), "{right:?}");
     }
 
     #[test]

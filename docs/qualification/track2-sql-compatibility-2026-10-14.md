@@ -237,13 +237,13 @@ The core contract regression verifies that every conjunction child is applied.
 The binder now removes a positive top-level `LIMIT` from a correlated
 `EXISTS`/`NOT EXISTS` subquery before decorrelation. Existence only depends on
 whether at least one row survives, so `LIMIT 1` and other positive limits do
-not change the predicate's truth value. `LIMIT 0` remains rejected in the
-correlated path, and limits in correlated `IN` or scalar subqueries are not
+not change the predicate's truth value. `LIMIT 0` is lowered to an empty
+relation, while limits in correlated `IN` or scalar subqueries are not
 rewritten because their cardinality affects semantics.
 
 The optimizer suite passes `23/23`, including
 `correlated_exists_positive_limit_is_decorrelated` and
-`correlated_exists_zero_limit_remains_empty`. This is a local binder
+`correlated_exists_zero_limit_becomes_empty_relation`. This is a local binder
 qualification. The shared local/distributed differential corpus also includes
 the grouped `correlated_exists_positive_limit` query and compares both paths
 against the same exact result.
