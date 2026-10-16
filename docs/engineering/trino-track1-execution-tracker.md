@@ -173,7 +173,7 @@ restoration of the production limits.
 The current complete workspace suite is recorded in
 `docs/qualification/track1-track2-workspace-suite-current-2026-10-16.md`: 1,534
 tests listed, zero failures, and six intentional/benchmark ignores on the
-release source. The
+release source (including the JSON object-constructor regression). The
 earlier run remains in `track1-track2-workspace-suite-2026-10-15.md`. This strengthens the local
 implementation evidence but does not substitute for the remaining distributed
 join, aggregate, window, ordering, connector, upgrade, and full mixed-workload
