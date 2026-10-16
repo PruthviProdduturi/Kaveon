@@ -342,6 +342,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "date_diff_timestamp_and_calendar_units",
+        "SELECT DATE_DIFF('NANOSECOND', TIMESTAMP '2026-01-01 00:00:00.000000001', TIMESTAMP '2026-01-01 00:00:00.000000009') AS nanos, DATE_DIFF('MICROSECOND', TIMESTAMP '2026-01-01 00:00:00.000001', TIMESTAMP '2026-01-01 00:00:00.000009') AS micros, DATE_DIFF('MILLISECOND', TIMESTAMP '2026-01-01 00:00:00.001', TIMESTAMP '2026-01-01 00:00:00.009') AS millis, DATE_DIFF('SECOND', TIMESTAMP '2026-01-01 00:00:01', TIMESTAMP '2026-01-01 00:00:09') AS seconds, DATE_DIFF('MINUTE', TIMESTAMP '2026-01-01 00:01:00', TIMESTAMP '2026-01-01 00:09:00') AS minutes, DATE_DIFF('HOUR', TIMESTAMP '2026-01-01 01:00:00', TIMESTAMP '2026-01-01 09:00:00') AS hours, DATE_DIFF('QUARTER', DATE '2026-01-01', DATE '2027-01-01') AS quarters, DATE_DIFF('YEAR', DATE '2026-01-01', DATE '2028-01-01') AS years FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "date_add_trino_units",
         "SELECT DATE_ADD('week', 2, DATE '2026-01-01') AS plus_weeks, DATE_ADD('quarter', 1, DATE '2026-01-31') AS plus_quarter, DATE_ADD('hour', 3, TIMESTAMP '2026-01-01 00:00:00') AS plus_hours, DATE_ADD('millisecond', 1, TIMESTAMP '2026-01-01 00:00:00') AS plus_millis FROM {T} LIMIT 1",
         false,
