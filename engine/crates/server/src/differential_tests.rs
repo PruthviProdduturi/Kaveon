@@ -596,6 +596,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "correlated_not_in_ordered_positive_limit",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id NOT IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id ORDER BY i.actions DESC LIMIT 1)",
+        false,
+    ),
+    (
         "correlated_scalar_aggregate_zero_limit",
         "SELECT COUNT(*) AS n FROM {T} e WHERE e.actions > (SELECT AVG(i.actions) FROM {T} i WHERE i.user_id = e.user_id LIMIT 0)",
         false,

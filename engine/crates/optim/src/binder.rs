@@ -2954,6 +2954,18 @@ mod tests {
     }
 
     #[test]
+    fn a_correlated_not_in_ordered_positive_limit_drops_order_before_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey NOT IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey ORDER BY l_quantity DESC LIMIT 1)",
+        );
+        assert!(matches!(
+            plan,
+            LogicalPlan::Project { input, .. }
+                if matches!(*input, LogicalPlan::AntiJoin { .. })
+        ));
+    }
+
+    #[test]
     fn a_correlated_in_zero_limit_is_an_empty_semi_join() {
         let plan = bound(
             "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey LIMIT 0)",
