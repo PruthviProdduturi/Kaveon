@@ -1,8 +1,8 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `50a9cef5` (the workspace gate includes the
-correlated array-function and map-key regressions)
+**Source:** `origin/dev` at `ff2dea22` (the workspace gate includes the
+correlated array-function, map-key, and map-entry regressions)
 
 The complete Rust workspace test command was run from `engine/`:
 
@@ -10,10 +10,10 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --quiet
 ```
 
-The command completed with **1,515 passed, 6 ignored, and 0 failed** across
+The command completed with **1,517 passed, 6 ignored, and 0 failed** across
 all workspace test binaries. The long server differential sweep completed
 successfully. Component totals were 74 catalog, 212 CLI, 87 core, 375
-execution, 68 optimizer, 406 server, 174 SQL, and 125 storage tests.
+execution, 68 optimizer, 407 server, 175 SQL, and 125 storage tests.
 
 The release lint commands also passed:
 
