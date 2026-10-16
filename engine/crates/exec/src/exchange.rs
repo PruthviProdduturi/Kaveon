@@ -421,8 +421,13 @@ mod tests {
         let map_entries = StructArray::new(
             map_fields.clone(),
             vec![
-                Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as Arc<_>,
-                Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as Arc<_>,
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    Some("b"),
+                    Some("a"),
+                ])) as Arc<_>,
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(2), Some(1)])) as Arc<_>,
             ],
             None,
         );
@@ -440,7 +445,7 @@ mod tests {
         )]));
         let map = MapArray::try_new(
             Arc::new(Field::new("entries", DataType::Struct(map_fields), false)),
-            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2_i32])),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2_i32, 4_i32])),
             map_entries,
             None,
             false,
@@ -456,6 +461,13 @@ mod tests {
                 .iter()
                 .map(|part| part.num_rows())
                 .sum::<usize>(),
+            2
+        );
+        assert_eq!(
+            map_partitions
+                .iter()
+                .filter(|partition| partition.num_rows() > 0)
+                .count(),
             1
         );
 
