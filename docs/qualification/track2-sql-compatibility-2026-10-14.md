@@ -86,10 +86,17 @@ aggregate, where the aggregate already produces one row. Correlated `LIMIT 0`
 in `IN`/`NOT IN` lowers to an empty semi/anti-join input. A one-column scalar
 `LIMIT 0` lowers to one NULL row, preserving outer rows and three-valued
 comparison semantics even when the scalar is correlated. Uncorrelated limits,
-multi-column scalar limits, positive correlated `OFFSET`, limits in
+multi-column scalar limits, positive `OFFSET` in non-aggregate scalar forms,
+limits in
 non-aggregate correlated scalar forms, `UNION`, multi-level outer references,
 and lateral/derived relation forms remain explicitly outside the contract and
 continue to fail closed.
+
+Positive `OFFSET` over an ungrouped scalar aggregate is the corresponding
+empty scalar case: the one aggregate row is skipped and the scalar becomes
+NULL. The SQL regression and distributed differential sweep cover a correlated
+`AVG(... OFFSET 1)` comparison; residual correlated `OFFSET` under
+`EXISTS`/`NOT EXISTS` remains outside the current decorrelation contract.
 
 An ordered keyed membership query such as `ORDER BY i.actions DESC LIMIT 1`
 is covered by the same existential rule. The SQL lowering removes the hidden
