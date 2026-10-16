@@ -52,6 +52,14 @@ The bracketed identifier check covers the Studio-generated
 function error. The differential gate covers the distributed SQL corpus over
 the current parser and planner.
 
+After that workspace snapshot, the planner also began hash-partitioning
+`DISTINCT` and `UNION DISTINCT` projections whose expressions have stable
+output names. Two planner tests verify the exchange keys and worker count, and
+the full distributed differential sweep was rerun with expression-shaped
+`DISTINCT` and `UNION DISTINCT` cases; it passed **1/1** (422 filtered server
+tests; 140.30 seconds). Expressions are evaluated by each branch before the
+exchange, removing the coordinator-only fallback without changing results.
+
 The TopN operator gate also passes **17/17** focused tests, including a
 sorted-string worker merge. That path now merges already-sorted non-integer
 and multi-key candidates by their heads while retaining the existing Arrow
