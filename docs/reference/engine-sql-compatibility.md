@@ -134,9 +134,12 @@ unchanged; nothing is approximated unless the statement writes an
 - Scalar optimizer statistics beyond row count. Native `ANALYZE` persists the
   exact row count and an immutable statistics document, but histogram/selectivity
   planning is not yet implemented.
-- Dynamic filtering. Exchange output streams while a task runs and the
-  consumer decodes through a bounded replayable spool, but build-side keys are
-  not yet propagated into probe scans at runtime.
+- Dynamic filtering beyond the qualified scan paths. Build-side keys are
+  propagated for supported single-key and composite-key joins into Parquet,
+  Delta, Iceberg, and object-store readers before decode; exact-result local
+  and distributed regressions cover those paths. A representative cloud
+  dataset with measurable file or row-group pruning, broader type/exchange
+  coverage, and cross-coordinator snapshot qualification remain open.
 - `DATE_DIFF` is supported for fixed units from nanoseconds through weeks and
   for calendar month, quarter, and year boundaries over DATE and all supported
   timestamp units. Month-family differences count complete calendar boundaries
