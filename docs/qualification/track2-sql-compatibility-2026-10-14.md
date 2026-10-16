@@ -466,6 +466,12 @@ Focused SQL, leaf-executor, lateral-executor, and three-worker distributed
 tests pass on the current commit. Other table functions remain intentionally
 unsupported.
 
+The same explicit allow-list now accepts the supported array-valued functions
+`ARRAY_CONCAT`, `ARRAY_DISTINCT`, `ARRAY_FLATTEN`, `ARRAY_REPEAT`,
+`ARRAY_REVERSE`, `ARRAY_SLICE`, `ARRAY_SORT`, and `ARRAY_ZIP` as constant
+`UNNEST` inputs. A distributed `ARRAY_CONCAT` plus zero-based offset regression
+passes exactly; arbitrary scalar functions are still rejected during lowering.
+
 ## Trino wire compatibility qualification
 
 The focused Trino compatibility gate passed on the same workspace commit:

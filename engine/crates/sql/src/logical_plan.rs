@@ -1138,6 +1138,17 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     // is evaluated by the expression engine into a typed
                     // LIST, so it is safe to use as a row-producing input.
                     || name.eq_ignore_ascii_case("SEQUENCE")
+                    // These functions are also typed LIST producers. Keep
+                    // the allow-list explicit so scalar functions and
+                    // arbitrary table functions remain fail-closed.
+                    || name.eq_ignore_ascii_case("ARRAY_CONCAT")
+                    || name.eq_ignore_ascii_case("ARRAY_DISTINCT")
+                    || name.eq_ignore_ascii_case("ARRAY_FLATTEN")
+                    || name.eq_ignore_ascii_case("ARRAY_REPEAT")
+                    || name.eq_ignore_ascii_case("ARRAY_REVERSE")
+                    || name.eq_ignore_ascii_case("ARRAY_SLICE")
+                    || name.eq_ignore_ascii_case("ARRAY_SORT")
+                    || name.eq_ignore_ascii_case("ARRAY_ZIP")
         )
 }
 
@@ -5303,6 +5314,18 @@ mod tests {
     #[test]
     fn parses_sequence_array_unnest_in_from() {
         let plan = sql_to_logical_plan("SELECT * FROM UNNEST(SEQUENCE(1, 3)) AS t(value)").unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest { columns, .. } if columns == vec!["value"]
+        ));
+    }
+
+    #[test]
+    fn parses_array_function_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(ARRAY_CONCAT(ARRAY[1], ARRAY[2, 3])) AS t(value)",
+        )
+        .unwrap();
         assert!(matches!(
             plan,
             LogicalPlan::Unnest { columns, .. } if columns == vec!["value"]
