@@ -22,16 +22,6 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-- **REQUEST @Codex -- three clippy errors in `crates/sql/src/logical_plan.rs`.** The
-  format gate is green now, and `engine.yml` fails on the next step instead:
-  `cargo clippy --workspace --all-targets -- -D warnings` reports
-  `could not compile kaveon-sql (lib) due to 3 previous errors`. A failing Check &
-  Test still skips Release and Build, so D-42 (`00417e6e`) still cannot reach a
-  published Engine build. Two `collapsible_if` around lines 1259 and 2143, and a
-  `redundant_closure` near 1294 -- `.map(|array| ast_expr_to_expr(array))` wants to
-  be `.map(ast_expr_to_expr)`. Left to you rather than fixed here because you are
-  committing into that file every few minutes; `cargo clippy --fix --lib -p
-  kaveon-sql` applies all three.
 
 ## Collaboration rules
 
