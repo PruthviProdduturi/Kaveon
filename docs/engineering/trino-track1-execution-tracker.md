@@ -18,7 +18,7 @@ snapshot, not a session diary.
 | # | Capability | Status | What is already true | Completion gate |
 |---:|---|---|---|---|
 | 1 | Worker discovery and scheduling | **Complete (bounded)** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Reopen for additional topologies or endurance evidence; the declared three-worker topology is qualified. |
-| 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
+| 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and current-image AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
 | 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current image now also has exact-repeat forced join-spill, post-query cleanup, exact retry after forced worker loss during a distributed scan, a bounded high-cardinality 504M-row self-join, exact join results in the ten-round mixed workload, and a current-image three-worker join-gates run covering left outer, full outer cross-source, and skewed grouped joins. | bounded AKS spill-quota exhaustion, larger input volumes, physical disk exhaustion, and repeated/node-loss endurance. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget, plus exact-repeat full-table grouped aggregates over 504M rows and a latest five-run sample with observed p95 22.578s. | Skew behavior, sustained mixed-workload spill evidence, and a larger statistical sample for an SLO. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current AKS image now also has exact-repeat mixed-key `ROW_NUMBER()`/`QUALIFY` evidence across three workers. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
@@ -71,6 +71,12 @@ JSON. Left outer, full outer cross-source, and skewed grouped joins each
 finished twice with identical results across three catalog-compatible workers.
 This strengthens the bounded join evidence; disk exhaustion, larger inputs,
 and repeated node-loss endurance remain open.
+
+The current-image object-store fault report is retained in
+`docs/qualification/track1-aks-storage-fault-current-2026-10-16.md` and its raw
+JSON. A scoped ADLS egress fault produced an observed stage retry, the exact
+504M-row result, and zero retained exchange or spill files after cleanup.
+Cross-region storage and physical disk exhaustion remain open.
 
 ## Active item: 3 — distributed joins
 
