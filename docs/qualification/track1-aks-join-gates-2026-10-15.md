@@ -71,6 +71,15 @@ This qualifies bounded spill recovery across one worker loss. Disk exhaustion, l
 
 Raw evidence: [`track1-aks-join-spill-worker-loss-2026-10-15.json`](./track1-aks-join-spill-worker-loss-2026-10-15.json).
 
+## Local spill-device refusal regression (2026-10-16)
+
+The server differential suite now forces a distributed join through a 64 KiB
+query budget and a 16-byte spill-device quota. The join fails closed with the
+stable `spill limit exceeded` error, releases the query reservation, reports
+zero retained spill bytes, commits no partial run, and leaves no spill
+artifact. This proves the local refusal and cleanup contract; it does not
+substitute for the live AKS disk-exhaustion gate above.
+
 
 ## Distributed aggregate spill qualification (bounded, 2026-10-15)
 
