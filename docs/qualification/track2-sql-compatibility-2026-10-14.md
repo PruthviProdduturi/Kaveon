@@ -655,3 +655,32 @@ offset form uses the dialect-supported `AS u(value) WITH OFFSET AS pos` alias
 ordering. Constant UNNEST continues to use the zero-input leaf path. Arbitrary
 table functions and deeper nested/lateral combinations remain outside this
 qualification.
+
+## Current JSON and value-window regression gate — 2026-10-16
+
+The current source adds bounded SQL-standard JSON constructor coverage and
+value-window null modifiers. `JSON_OBJECT` accepts the supported comma-pair,
+colon, and `VALUE` forms; `ABSENT ON NULL` omits null-valued members, while
+null keys and duplicate keys fail closed. `JSON_ARRAY` likewise supports the
+bounded `ABSENT ON NULL` form. These are deliberately bounded semantics:
+`FORMAT`, `RETURNING`, and the complete unique-key clause remain outside the
+implemented surface.
+
+The value-window path now has exact differential cases for `NTH_VALUE`,
+`FIRST_VALUE`, `LAST_VALUE`, `LAG`, and `LEAD` with `IGNORE NULLS`. The cases
+use deterministic tie-breakers so the local and distributed result comparison
+does not confuse peer ordering with an execution mismatch.
+
+Validation from the clean checkout:
+
+```text
+evaluates_json_object_constructor_with_nulls_and_rejects_duplicate_keys: 1 passed
+parses_trino_typed_json_literal: 1 passed
+differential_tests: 33 passed, 0 failed, 0 ignored
+```
+
+The differential run covers all registered local/distributed parquet layouts;
+it is compatibility evidence, not a claim of complete Trino JSON or window
+coverage. Recursive CTEs, complete JSON path/coercion semantics, broader
+window modifiers, and the remaining distributed-window shapes stay open in
+the parity matrix.
