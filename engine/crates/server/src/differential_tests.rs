@@ -243,7 +243,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "array_scalar_functions",
-        "SELECT CARDINALITY(ARRAY[1, 2, 3]) AS card, ARRAY_POSITION(ARRAY[1, 2, 3], 2) AS pos, ARRAY_JOIN(ARRAY['a', 'b'], '-') AS joined, ARRAYS_OVERLAP(ARRAY[1, 2], ARRAY[2, 3]) AS overlap, ARRAY_HAS_DUPLICATES(ARRAY[1, 1, 2]) AS has_duplicates FROM {T} LIMIT 1",
+        "SELECT CARDINALITY(ARRAY[1, 2, 3]) AS card, ARRAY_POSITION(ARRAY[1, 2, 3], 2) AS pos, ARRAY_JOIN(ARRAY['a', 'b'], '-') AS joined, ARRAYS_OVERLAP(ARRAY[1, 2], ARRAY[2, 3]) AS overlap, ARRAY_HAS_DUPLICATES(ARRAY[1, 1, 2]) AS has_duplicates, ARRAY_CUM_SUM(ARRAY[1, 2, 3]) AS cumulative FROM {T} LIMIT 1",
         false,
     ),
     (
