@@ -80,3 +80,11 @@ This qualifies bounded distributed aggregate spill, exact repeatability, and cle
 
 Raw evidence: [`track1-aks-aggregate-spill-2026-10-15.json`](./track1-aks-aggregate-spill-2026-10-15.json).
 
+
+## Mixed-key partitioned window qualification (bounded AKS, 2026-10-15)
+
+The current three-worker AKS image ran a partitioned `ROW_NUMBER()` with a two-column ordering and `QUALIFY rn <= 2` twice against a prunable bounded slice of `OpenSource.public.kaveon_events_enriched`. Both runs returned the same 12 rows, finished successfully, created three stages and seven tasks, and used all three catalog-compatible workers.
+
+This qualifies the current-image mixed-key partitioned `ROW_NUMBER()`/`QUALIFY` shape. Unpartitioned windows, broader frame/modifier combinations, and sustained window pressure remain open.
+
+Raw evidence: [`track1-aks-window-qualification-2026-10-15.json`](./track1-aks-window-qualification-2026-10-15.json).
