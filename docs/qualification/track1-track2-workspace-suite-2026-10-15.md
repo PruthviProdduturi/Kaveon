@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification
 
 **Date:** 2026-10-15  
-**Source:** `origin/dev` at `c41f728a`
+**Source:** `origin/dev` at `b1535f42`
 
 The complete Rust workspace test command was run from `engine/`:
 
@@ -22,3 +22,16 @@ outage, or the broader AKS endurance and mixed-workload gates still require
 release-image evidence. Track 2 remains bounded by the compatibility rows in
 the parity tracker, including full JSON coercion/path semantics, broader
 external-client coverage, and unsupported correlated/lateral shapes.
+
+## Release lint gate — commit `b1535f42`
+
+The release lint command also passed from the clean pushed tree:
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Both commands completed successfully. The clippy cleanup is behavior-neutral,
+and the full workspace test result above was rerun on the same change. This
+closes the repository lint gate; cloud qualification boundaries remain open.
