@@ -171,7 +171,7 @@ high-cardinality exchange with HTTP 507 and retained zero exchange files after
 restoration of the production limits.
 
 The current complete workspace suite is recorded in
-`docs/qualification/track1-track2-workspace-suite-current-2026-10-16.md`: 1,513
+`docs/qualification/track1-track2-workspace-suite-current-2026-10-16.md`: 1,515
 tests passed with zero failures and six ignored on the release source. The
 earlier run remains in `track1-track2-workspace-suite-2026-10-15.md`. This strengthens the local
 implementation evidence but does not substitute for the remaining distributed
