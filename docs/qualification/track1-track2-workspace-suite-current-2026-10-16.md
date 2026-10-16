@@ -6,7 +6,8 @@ correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions, plus nested null-safe array/map/row comparison, LargeList map
 constructors, primitive numeric map keys, date/decimal map keys, decimal
-map-key regression coverage, explicit and wildcard-derived `JOIN ... USING`)
+map-key regression coverage, explicit, wildcard-derived, and nested-derived
+`JOIN ... USING`)
 
 The complete Rust workspace test command was run from `engine/`:
 
@@ -14,7 +15,7 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets --no-fail-fast --quiet
 ```
 
-The command completed with **1,557 listed tests, 1,551 passed, 0 failed, and 6
+The command completed with **1,558 listed tests, 1,552 passed, 0 failed, and 6
 ignored** across all workspace test binaries. The long server differential
 sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
 core, 386 execution, 69 optimizer, 412 server, 185 SQL, and 125 storage tests.
