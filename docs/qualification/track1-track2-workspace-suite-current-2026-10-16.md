@@ -166,7 +166,7 @@ The complete targets were rerun after the histogram type extension:
 
 ```text
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-387 passed, 0 failed, 4 ignored (14.79s)
+388 passed, 0 failed, 4 ignored (15.39s)
 
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
 423 passed, 0 failed, 0 ignored (155.27s)
