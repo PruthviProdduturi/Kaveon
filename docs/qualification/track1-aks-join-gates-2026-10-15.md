@@ -71,3 +71,11 @@ This qualifies bounded spill recovery across one worker loss. Disk exhaustion, l
 
 Raw evidence: [`track1-aks-join-spill-worker-loss-2026-10-15.json`](./track1-aks-join-spill-worker-loss-2026-10-15.json).
 
+
+## Distributed aggregate spill qualification (bounded, 2026-10-15)
+
+The current three-worker AKS image ran an ordered 10,000-group aggregation twice with a 4 MiB per-query budget, one local worker thread, disabled result caching and statistics, and a prunable date plus `user_id` range. Both runs returned the same 10,000 rows. The final merge wrote three spill runs totaling 164,184 bytes, and all three workers reported zero retained spill files afterward.
+
+This qualifies bounded distributed aggregate spill, exact repeatability, and cleanup. Larger-scale AKS pressure, skew behavior, published p95 latency, disk exhaustion, and sustained mixed-workload endurance remain open.
+
+Raw evidence: [`track1-aks-aggregate-spill-2026-10-15.json`](./track1-aks-aggregate-spill-2026-10-15.json).
