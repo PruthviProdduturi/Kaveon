@@ -19,7 +19,7 @@ snapshot, not a session diary.
 |---:|---|---|---|---|
 | 1 | Worker discovery and scheduling | **Complete (bounded)** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Reopen for additional topologies or endurance evidence; the declared three-worker topology is qualified. |
 | 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
-| 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current image now also has exact-repeat forced join-spill, post-query cleanup, exact retry after forced worker loss during a distributed scan, a bounded high-cardinality 504M-row self-join, and exact join results in the ten-round mixed workload. | bounded AKS spill-quota exhaustion, larger input volumes, physical disk exhaustion, and repeated/node-loss endurance. |
+| 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current image now also has exact-repeat forced join-spill, post-query cleanup, exact retry after forced worker loss during a distributed scan, a bounded high-cardinality 504M-row self-join, exact join results in the ten-round mixed workload, and a current-image three-worker join-gates run covering left outer, full outer cross-source, and skewed grouped joins. | bounded AKS spill-quota exhaustion, larger input volumes, physical disk exhaustion, and repeated/node-loss endurance. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget, plus exact-repeat full-table grouped aggregates over 504M rows and a latest five-run sample with observed p95 22.578s. | Skew behavior, sustained mixed-workload spill evidence, and a larger statistical sample for an SLO. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current AKS image now also has exact-repeat mixed-key `ROW_NUMBER()`/`QUALIFY` evidence across three workers. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
 | 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current AKS image also has exact-repeat three-worker evidence for multi-column ordering with OFFSET and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
@@ -64,6 +64,13 @@ The graceful node-drain observation is retained in
 JSON. The active scan returned the exact baseline and the replacement worker
 rejoined with the pinned snapshot, but eviction completed before a retry could
 be observed; it is intentionally not counted as a retry qualification.
+
+The current-image join-gates report is retained in
+`docs/qualification/track1-aks-join-gates-current-2026-10-16.md` and its raw
+JSON. Left outer, full outer cross-source, and skewed grouped joins each
+finished twice with identical results across three catalog-compatible workers.
+This strengthens the bounded join evidence; disk exhaustion, larger inputs,
+and repeated node-loss endurance remain open.
 
 ## Active item: 3 — distributed joins
 
