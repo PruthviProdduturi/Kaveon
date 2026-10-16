@@ -13694,8 +13694,11 @@ mod tests {
         let map = |value: Expr| Expr::Function {
             name: "MAP".into(),
             args: vec![
-                array(vec![Expr::Literal(ScalarValue::Utf8("k".into()))]),
-                array(vec![value]),
+                array(vec![
+                    Expr::Literal(ScalarValue::Utf8("k".into())),
+                    Expr::Literal(ScalarValue::Utf8("null".into())),
+                ]),
+                array(vec![value, Expr::Literal(ScalarValue::Null)]),
             ],
         };
         let map_equal = evaluate(
