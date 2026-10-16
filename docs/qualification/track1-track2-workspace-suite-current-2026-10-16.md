@@ -1,7 +1,8 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `32459a81`
+**Source:** `origin/dev` at `282a28ca` (the tested Engine code is unchanged
+from qualification tip `32459a81`; the follow-up commit records the evidence)
 
 The complete Rust workspace test command was run from `engine/`:
 
