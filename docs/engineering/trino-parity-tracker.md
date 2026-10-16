@@ -33,7 +33,7 @@ evidence passes against exact-result references.
 | Connector federation | Partial | Native Parquet/Delta/Iceberg paths exist; registered SQL sources are passthrough API paths. | Authenticated multi-source pushdown and cross-source execution qualification. |
 | Upgrade, rollback, and sustained soak | Missing | Deployment artifacts exist; the full operational acceptance run is not complete. | Upgrade/rollback rehearsal and sustained mixed workload. |
 
-The current AKS wire corpus is retained in `docs/qualification/track2-aks-wire-corpus-2026-10-15.md` and its raw JSON. Ten baseline SQL shapes passed twice with identical results. The follow-up `docs/qualification/track2-aks-wire-corpus-lateral-2026-10-15.md` adds the constant `CROSS JOIN LATERAL UNNEST(...)` shape; all eleven shapes passed twice on the immutable `sha256:6a4fa35e…` image.
+The current AKS wire corpus is retained in `docs/qualification/track2-aks-wire-corpus-lateral-current-2026-10-16.md` and its raw JSON. All eleven declared SQL shapes passed twice with identical results on the current immutable `sha256:6a4fa35e…` Engine image, with three catalog-compatible workers. The earlier baseline and lateral reports remain available for history.
 
 ## Track 2 — SQL compatibility and types
 
