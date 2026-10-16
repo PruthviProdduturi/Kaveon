@@ -504,4 +504,80 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn runtime_filter_is_accepted_before_first_object_delta_batch() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let schema = Arc::new(Schema::new(
+            std::iter::once(Field::new("x", DataType::Int64, false))
+                .chain((0..4).map(|i| Field::new(format!("payload_{i}"), DataType::Utf8, false)))
+                .collect::<Vec<_>>(),
+        ));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            std::iter::once(Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as _)
+                .chain((0..4).map(|_| {
+                    Arc::new(arrow::array::StringArray::from(vec![
+                        "payload-a",
+                        "payload-b",
+                        "payload-c",
+                        "payload-d",
+                    ])) as _
+                }))
+                .collect(),
+        )
+        .unwrap();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(store.put(
+                &Path::from("table/part-00000.parquet"),
+                writer.into_inner().unwrap().into(),
+            ))
+            .unwrap();
+        runtime
+            .block_on(store.put(
+                &Path::from("table/_delta_log/00000000000000000000.json"),
+                br#"{"add":{"path":"part-00000.parquet"}}"#.to_vec().into(),
+            ))
+            .unwrap();
+
+        let mut source = ObjectDeltaReader::new(store, Path::from("table"))
+            .with_columns(
+                std::iter::once("x".to_owned())
+                    .chain((0..4).map(|i| format!("payload_{i}")))
+                    .collect(),
+            )
+            .read_blocking()
+            .unwrap();
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "x",
+                    &[
+                        kaveon_core::ScalarValue::Int64(2),
+                        kaveon_core::ScalarValue::Int64(4)
+                    ],
+                )
+                .unwrap()
+        );
+        assert_eq!(source.metrics().snapshot().runtime_filters_applied, 1);
+        assert_eq!(source.metrics().snapshot().runtime_filter_values, 2);
+
+        let mut values = Vec::new();
+        while let Some(batch) = source.next_batch().unwrap() {
+            values.extend(
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied(),
+            );
+        }
+        assert_eq!(values, vec![2, 4]);
+    }
 }
