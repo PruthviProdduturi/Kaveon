@@ -806,7 +806,10 @@ mod tests {
         assert!(err(&["missing"], &[], None).contains("not a column"));
         assert!(err(&["score"], &[], None).contains("cannot be grouped by"));
         assert!(err(&[], &["region:sum"], None).contains("cannot be kept under sum"));
-        assert!(err(&[], &[], Some("order_date:month")).contains("day grain"));
+        TableShape::parse(&[], &[], Some("order_date:month"))
+            .unwrap()
+            .check_against(&columns())
+            .unwrap();
         assert!(err(&[], &[], Some("region:day")).contains("cannot be bucketed"));
         TableShape::parse(&[], &[], Some("at:month"))
             .unwrap()
