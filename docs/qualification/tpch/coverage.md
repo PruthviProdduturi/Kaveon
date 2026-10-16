@@ -160,9 +160,6 @@ cell against an independent computation on both paths.
 
 ## Other limits the binder reports by name
 
-- `COUNT` in a correlated scalar subquery (its result for an unmatched row
-  is zero, which no join row carries — the rewrite would need an outer join
-  plus `COALESCE`).
 - `LIMIT`/`OFFSET` or a set operation inside a correlated subquery.
 - A correlated `EXISTS` with no equality at all (only non-equalities): a
   nested-loop semi join, refused rather than run as one.
