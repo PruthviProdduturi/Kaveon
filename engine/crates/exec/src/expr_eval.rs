@@ -4629,12 +4629,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             map.nulls().cloned(),
         )?));
     }
-    if upper == "CONTAINS_KEY" {
+    if matches!(upper.as_str(), "CONTAINS_KEY" | "MAP_CONTAINS_KEY") {
         check_arity(name, args, 2)?;
-        let map = args[0]
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .ok_or_else(|| KaveonError::Execution("CONTAINS_KEY requires a MAP value".into()))?;
+        let map = args[0].as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            KaveonError::Execution("MAP_CONTAINS_KEY requires a MAP value".into())
+        })?;
         let map_keys = map.keys();
         let requested = compute::cast(&args[1], map_keys.data_type())?;
         let mut result = BooleanBuilder::with_capacity(num_rows);
@@ -4668,7 +4667,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 other => {
                     return Err(KaveonError::Execution(format!(
-                        "CONTAINS_KEY does not support key type {other}"
+                        "MAP_CONTAINS_KEY does not support key type {other}"
                     )));
                 }
             };
@@ -12568,6 +12567,16 @@ mod tests {
                 .unwrap();
         assert_eq!(
             contains.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+        let trino_contains = eval_scalar_function(
+            "MAP_CONTAINS_KEY",
+            &[Arc::clone(&map), Arc::clone(&needle)],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            trino_contains.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true)]
         );
         let value = eval_scalar_function(
