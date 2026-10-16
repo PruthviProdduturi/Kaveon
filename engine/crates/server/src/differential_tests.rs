@@ -556,6 +556,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "union_all_complex_values",
+        "SELECT ARRAY[1, 2] AS values UNION ALL SELECT ARRAY[3, NULL]",
+        false,
+    ),
+    (
         "cte_aggregate_projection",
         "WITH regional AS (SELECT region, SUM(actions) AS actions FROM {T} GROUP BY region) SELECT region, actions FROM regional ORDER BY region",
         true,
