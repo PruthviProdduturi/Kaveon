@@ -1,0 +1,345 @@
+{
+  "runs": [
+    {
+      "id": "1517a99c-30c1-4d1b-881c-01509e9b7ee9",
+      "rows": [
+        [
+          "Africa",
+          17712
+        ],
+        [
+          "Asia",
+          161352
+        ],
+        [
+          "Europe",
+          75600
+        ],
+        [
+          "North America",
+          79128
+        ],
+        [
+          "Oceania",
+          5724
+        ],
+        [
+          "South America",
+          20484
+        ]
+      ],
+      "rows_sha256": "9f045c73f737481c6fe9b05d55063f7b24e1b3d217d9e710ba45567a37825d55",
+      "run": 1,
+      "stage_count": 5,
+      "state": "FINISHED",
+      "status": 200,
+      "task_count": 13,
+      "tasks": [
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 943016,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 0
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 0,
+          "stage_id": 0
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 0,
+          "stage_id": 0
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 705344,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 1
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 0,
+          "stage_id": 1
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 0,
+          "stage_id": 1
+        },
+        {
+          "join_spill_bytes_written": 1043328,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 32,
+          "memory_peak_bytes": 549053,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 1208448,
+          "stage_id": 2
+        },
+        {
+          "join_spill_bytes_written": 1041024,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 32,
+          "memory_peak_bytes": 550196,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 1205376,
+          "stage_id": 2
+        },
+        {
+          "join_spill_bytes_written": 1043328,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 32,
+          "memory_peak_bytes": 549254,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 1206912,
+          "stage_id": 2
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 582647,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 3
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 619123,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 0,
+          "stage_id": 3
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 619352,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 0,
+          "stage_id": 3
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 17420,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 4
+        }
+      ]
+    },
+    {
+      "id": "4c924e76-435e-4e96-b99c-23ce6e0ccf55",
+      "rows": [
+        [
+          "Africa",
+          17712
+        ],
+        [
+          "Asia",
+          161352
+        ],
+        [
+          "Europe",
+          75600
+        ],
+        [
+          "North America",
+          79128
+        ],
+        [
+          "Oceania",
+          5724
+        ],
+        [
+          "South America",
+          20484
+        ]
+      ],
+      "rows_sha256": "9f045c73f737481c6fe9b05d55063f7b24e1b3d217d9e710ba45567a37825d55",
+      "run": 2,
+      "stage_count": 5,
+      "state": "FINISHED",
+      "status": 200,
+      "task_count": 13,
+      "tasks": [
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 943016,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 0
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 0,
+          "stage_id": 0
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 0,
+          "stage_id": 0
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 705344,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 1
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 0,
+          "stage_id": 1
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 0,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 0,
+          "stage_id": 1
+        },
+        {
+          "join_spill_bytes_written": 1043328,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 32,
+          "memory_peak_bytes": 549053,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 1208448,
+          "stage_id": 2
+        },
+        {
+          "join_spill_bytes_written": 1041024,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 32,
+          "memory_peak_bytes": 550196,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 1205376,
+          "stage_id": 2
+        },
+        {
+          "join_spill_bytes_written": 1043328,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 32,
+          "memory_peak_bytes": 549254,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 1206912,
+          "stage_id": 2
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 582647,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 3
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 619160,
+          "node_id": "kaveon-worker-1-3968d777-192f-4f85-a184-aa13f34254a9",
+          "spill_bytes_written": 0,
+          "stage_id": 3
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 619352,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "spill_bytes_written": 0,
+          "stage_id": 3
+        },
+        {
+          "join_spill_bytes_written": 0,
+          "join_spill_depth": 0,
+          "join_spill_partitions": 0,
+          "memory_peak_bytes": 17420,
+          "node_id": "kaveon-worker-0-e95082d6-5919-4bf3-a710-2a0d1c003506",
+          "spill_bytes_written": 0,
+          "stage_id": 4
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "local_parallelism": 1,
+    "query_memory_limit_bytes": 1048576,
+    "result_cache": false,
+    "use_statistics": false
+  },
+  "sql": "SELECT a.region, COUNT(*) AS matches FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id BETWEEN 1 AND 10000 AND b.user_id BETWEEN 1 AND 10000 AND a.event_date = DATE '2026-07-04' AND b.event_date = DATE '2026-07-04' GROUP BY a.region ORDER BY a.region",
+  "date": "2026-10-15",
+  "environment": "kaveon-aks",
+  "namespace": "kaveon",
+  "engine_image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+  "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+  "topology": {
+    "active_workers": 3,
+    "compatible_workers": 3,
+    "worker_restarts_during_probe": 0
+  },
+  "spill_cleanup": {
+    "worker_0_files": 0,
+    "worker_1_files": 0,
+    "worker_2_files": 0,
+    "worker_0_bytes": 4096,
+    "worker_1_bytes": 4096,
+    "worker_2_bytes": 4096
+  },
+  "qualification": {
+    "forced_join_spill": "QUALIFIED (bounded)",
+    "exact_repeat": true,
+    "all_runs_finished": true,
+    "all_workers_spilled": true,
+    "cleanup_verified": true,
+    "boundary": "This qualifies bounded AKS join spill, exact repeat, and local spill cleanup. Disk exhaustion, forced spill recovery after worker loss, larger high-cardinality joins, and sustained mixed-workload endurance remain open."
+  }
+}

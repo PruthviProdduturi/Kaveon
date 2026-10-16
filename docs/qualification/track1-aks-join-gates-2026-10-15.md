@@ -54,3 +54,11 @@ A low-memory probe against the current 504M-row `OpenSource.public.kaveon_events
 The probe recorded zero `join_spill_bytes_written`, zero spill partitions, and zero spill depth, so this is **not** a forced join-spill qualification. It is retained as negative evidence and confirms cancellation cleanup. The next gate needs a purpose-built high-cardinality fixture or a prunable snapshot that completes within the qualification window and records exact spill/recovery counters.
 
 Raw evidence: [`track1-aks-join-spill-negative-2026-10-15.json`](./track1-aks-join-spill-negative-2026-10-15.json).
+
+## Forced join-spill qualification (bounded, 2026-10-15)
+
+The current three-worker AKS image was run twice with a 1 MiB per-query budget, one local worker thread, disabled result caching and statistics, and a prunable date plus `user_id` range against `OpenSource.public.kaveon_events_enriched`. Both runs finished successfully with the same ordered six-row result. Each worker wrote 32 join-spill partitions (about 1.04 MiB of join spill per worker) and completed the final merge. A follow-up check found zero spill files on all three workers, and all three workers remained catalog-compatible with no restarts.
+
+This qualifies bounded forced join spill, exact repeatability, and post-query cleanup. It does not qualify disk exhaustion, spill recovery after worker loss, larger high-cardinality joins, or sustained mixed-workload endurance; those remain open in the tracker.
+
+Raw evidence: [`track1-aks-join-spill-qualification-2026-10-15.json`](./track1-aks-join-spill-qualification-2026-10-15.json).
