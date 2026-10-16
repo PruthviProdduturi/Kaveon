@@ -16455,6 +16455,21 @@ mod tests {
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true), Some(false), None]
         );
+
+        let mut large_lists = LargeListBuilder::new(Int64Builder::new());
+        large_lists.values().append_value(7);
+        large_lists.values().append_value(7);
+        large_lists.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_HAS_DUPLICATES",
+            &[Arc::new(large_lists.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
     }
 
     #[test]
