@@ -1091,6 +1091,7 @@ mod tests {
             shape,
             groupings,
             excluded: Vec::new(),
+            declined_pairs: Vec::new(),
             files: vec!["t.parquet".into()],
             per_file_complete: true,
         }

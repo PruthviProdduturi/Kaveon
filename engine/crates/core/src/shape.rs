@@ -24,6 +24,58 @@ pub const CUBE_PAIR_MAX_CELLS: u64 = 1_000_000;
 /// (`KAVEON_CUBE_MAX_CELLS`).
 pub const DEFAULT_CUBE_MAX_CELLS: u64 = 1_000_000;
 
+/// Why a pair of axes is not a grouping of the cube.
+///
+/// A cube that cannot say what it declined is a cube nobody can audit. The
+/// pair rule used to drop a pair by `continue`, which is how a default cap
+/// of 10,000 came to price every pair in a table at 100,000,000 cells and
+/// decline all of them while the build reported success: the refusals were
+/// real, uniform and invisible. Naming them makes the absence of a grouping
+/// a fact the planner states rather than one an operator has to infer from
+/// a cell count that happens not to add up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "reason")]
+pub enum PairRefusal {
+    /// At least one axis has no observed count, so the pair cannot be
+    /// priced. An axis is unknown when nothing counted it or when it was
+    /// left out of the cube.
+    CountUnknown,
+    /// An axis observed no values at all, so the pair holds nothing.
+    AxisEmpty,
+    /// The pair holds more cells than [`CUBE_PAIR_MAX_CELLS`]. This is the
+    /// per-pair ceiling and is a property of the pair alone.
+    PairLimit,
+    /// The pair fits the per-pair ceiling but the cube has no room left
+    /// for it. Unlike the others this refusal is about the cube rather
+    /// than the pair, so it is the one an operator can answer, by raising
+    /// the cube's cell limit.
+    CubeCellBudget,
+}
+
+/// A pair of axes the cube does not hold, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclinedPair {
+    /// The two axis indexes, in the order [`TableShape::axes`] gives them.
+    pub axes: Vec<usize>,
+    /// The cells the pair would hold, when both counts are known. `None`
+    /// under [`PairRefusal::CountUnknown`], where that is the whole point.
+    pub cells: Option<u64>,
+    pub refusal: PairRefusal,
+}
+
+/// What the observed counts admit and what they refuse, from one pass.
+///
+/// Both halves come from the same walk so they cannot drift: every pair of
+/// axes appears in exactly one of them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairPlan {
+    /// The pairs the cube holds, each with the cells it holds, cheapest
+    /// first and then in axis order.
+    pub admitted: Vec<(Vec<usize>, u64)>,
+    /// The pairs it does not, in axis order.
+    pub declined: Vec<DeclinedPair>,
+}
+
 /// An aggregate a measure is declared under. `Sum`, `Count`, `Min` and
 /// `Max` are additive: a file's contribution folds in and, from the
 /// per-file partials, folds out. `CountDistinct` is not: it is kept as a
@@ -552,27 +604,64 @@ impl TableShape {
     /// Every pair that rule admits this one admits too — an observed
     /// count never exceeds its cap — so this only ever widens the cube.
     pub fn observed_pairs(&self, observed: &[Option<u64>]) -> Vec<(Vec<usize>, u64)> {
+        self.observed_pair_plan(observed).admitted
+    }
+
+    /// What the observed counts admit and what they refuse, from one pass.
+    ///
+    /// The same rule as [`TableShape::observed_pairs`], which now reads its
+    /// answer from here, and additionally the pairs it turned down with the
+    /// reason for each. Every pair of axes lands in exactly one half, so a
+    /// cube's coverage and its refusals are the same walk and cannot
+    /// disagree about a pair.
+    ///
+    /// This exists because the refusals were the bug. A pair was dropped by
+    /// `continue`, so a default cap of 10,000 priced every pair in a table
+    /// at 100,000,000 cells, declined all of them, and the build reported
+    /// success -- the refusal was uniform, total and unobservable, and what
+    /// caught it was arithmetic on a cell count rather than anything the
+    /// planner said.
+    pub fn observed_pair_plan(&self, observed: &[Option<u64>]) -> PairPlan {
         let axes = self.axes();
-        let mut pairs = Vec::new();
+        let mut plan = PairPlan::default();
         for left in 0..axes.len() {
             for right in left + 1..axes.len() {
+                let pair = vec![left, right];
                 let (Some(left_cells), Some(right_cells)) = (
                     observed.get(left).copied().flatten(),
                     observed.get(right).copied().flatten(),
                 ) else {
+                    // Nothing counted this axis, or it is not in the cube.
+                    plan.declined.push(DeclinedPair {
+                        axes: pair,
+                        cells: None,
+                        refusal: PairRefusal::CountUnknown,
+                    });
                     continue;
                 };
                 let cells = left_cells.saturating_mul(right_cells);
-                // Nothing to hold when either axis holds nothing, and no
-                // pair beyond the pair limit.
-                if cells == 0 || cells > CUBE_PAIR_MAX_CELLS {
+                if cells == 0 {
+                    plan.declined.push(DeclinedPair {
+                        axes: pair,
+                        cells: Some(0),
+                        refusal: PairRefusal::AxisEmpty,
+                    });
                     continue;
                 }
-                pairs.push((vec![left, right], cells));
+                if cells > CUBE_PAIR_MAX_CELLS {
+                    plan.declined.push(DeclinedPair {
+                        axes: pair,
+                        cells: Some(cells),
+                        refusal: PairRefusal::PairLimit,
+                    });
+                    continue;
+                }
+                plan.admitted.push((pair, cells));
             }
         }
-        pairs.sort_by_key(|(axes, cells)| (*cells, axes[0], axes[1]));
-        pairs
+        plan.admitted
+            .sort_by_key(|(axes, cells)| (*cells, axes[0], axes[1]));
+        plan
     }
 
     /// The cells the cube is planned at: the caps' products over every
@@ -845,5 +934,118 @@ mod tests {
             Some(StatValue::Date(5))
         );
         assert_eq!(TimeGrain::Month.truncate(&StatValue::Date(5)), None);
+    }
+
+    #[test]
+    fn a_declined_pair_says_why_it_was_declined() {
+        // The bug this exists for: at the default cap nothing pairs, and
+        // the planner used to say nothing at all about it.
+        let shape = TableShape::parse(
+            &["region".into(), "platform".into(), "license".into()],
+            &["total:sum".into()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            shape.groupings(),
+            vec![vec![], vec![0], vec![1], vec![2]],
+            "three dimensions at the default cap plan no pair"
+        );
+
+        // Observed counts admit all three pairs, and nothing is declined.
+        let plan = shape.observed_pair_plan(&[Some(6), Some(3), Some(4)]);
+        assert_eq!(
+            plan.admitted,
+            vec![(vec![1, 2], 12), (vec![0, 1], 18), (vec![0, 2], 24)]
+        );
+        assert!(plan.declined.is_empty());
+
+        // An axis nothing counted: the pair cannot be priced, and that is
+        // the refusal rather than a silent omission. `cells` is None here
+        // because not knowing the size is the whole point.
+        let plan = shape.observed_pair_plan(&[Some(6), None, Some(4)]);
+        assert_eq!(plan.admitted, vec![(vec![0, 2], 24)]);
+        assert_eq!(
+            plan.declined,
+            vec![
+                DeclinedPair {
+                    axes: vec![0, 1],
+                    cells: None,
+                    refusal: PairRefusal::CountUnknown,
+                },
+                DeclinedPair {
+                    axes: vec![1, 2],
+                    cells: None,
+                    refusal: PairRefusal::CountUnknown,
+                },
+            ]
+        );
+
+        // An empty axis holds nothing, which is a different fact from a
+        // pair being too big.
+        let plan = shape.observed_pair_plan(&[Some(6), Some(0), Some(4)]);
+        assert_eq!(plan.admitted, vec![(vec![0, 2], 24)]);
+        assert_eq!(
+            plan.declined
+                .iter()
+                .map(|pair| pair.refusal)
+                .collect::<Vec<_>>(),
+            vec![PairRefusal::AxisEmpty, PairRefusal::AxisEmpty]
+        );
+
+        // Beyond the per-pair ceiling the refusal carries the size, which
+        // is what makes it auditable: 2 x CUBE_PAIR_MAX_CELLS over the
+        // limit is a number an operator can act on.
+        let plan = shape.observed_pair_plan(&[Some(CUBE_PAIR_MAX_CELLS), Some(2), Some(1)]);
+        assert_eq!(
+            plan.declined,
+            vec![DeclinedPair {
+                axes: vec![0, 1],
+                cells: Some(2 * CUBE_PAIR_MAX_CELLS),
+                refusal: PairRefusal::PairLimit,
+            }]
+        );
+        assert_eq!(
+            plan.admitted,
+            vec![(vec![1, 2], 2), (vec![0, 2], CUBE_PAIR_MAX_CELLS)]
+        );
+    }
+
+    #[test]
+    fn every_pair_is_either_held_or_declined() {
+        // The property that makes coverage auditable: a pair cannot fall
+        // out of both halves, which is exactly how the original hole
+        // stayed invisible.
+        let shape = TableShape::parse(
+            &["a".into(), "b".into(), "c:3".into(), "d:5".into()],
+            &["total:sum".into()],
+            Some("at:day"),
+        )
+        .unwrap();
+        let axes = shape.axes().len();
+        let expected = axes * (axes - 1) / 2;
+        for observed in [
+            vec![Some(2), Some(3), Some(4), Some(5), Some(6)],
+            vec![Some(2), None, Some(4), None, Some(6)],
+            vec![None, None, None, None, None],
+            vec![Some(0), Some(3), Some(4), Some(5), Some(6)],
+            vec![
+                Some(CUBE_PAIR_MAX_CELLS),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+            ],
+            vec![],
+        ] {
+            let plan = shape.observed_pair_plan(&observed);
+            assert_eq!(
+                plan.admitted.len() + plan.declined.len(),
+                expected,
+                "every pair accounted for, observed {observed:?}"
+            );
+            // And `observed_pairs` still answers exactly the admitted half.
+            assert_eq!(shape.observed_pairs(&observed), plan.admitted);
+        }
     }
 }

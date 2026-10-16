@@ -9287,6 +9287,17 @@ async fn read_cube_groupings(
     Ok(reads.into_iter().zip(answers).collect())
 }
 
+/// The pairs a build reads and the pairs it will not, from one planning
+/// pass. The refusals are carried out of here rather than dropped so the
+/// build can state its coverage: a cube that cannot say what it declined
+/// is a cube nobody can audit.
+#[derive(Debug, PartialEq)]
+struct CubePairWave {
+    wave: Vec<Vec<usize>>,
+    cells_held: u64,
+    declined: Vec<kaveon_core::DeclinedPair>,
+}
+
 /// The pair groupings a build reads, from what its single axes observed.
 /// The pairs the declaration itself plans come first and are read as they
 /// always were; the ones only the observed counts admit follow, cheapest
@@ -9300,32 +9311,48 @@ fn cube_pair_wave(
     observed: &[Option<u64>],
     cells_held: u64,
     max_cells: u64,
-) -> Vec<Vec<usize>> {
-    let observed_pairs = shape.observed_pairs(observed);
+) -> CubePairWave {
+    let plan = shape.observed_pair_plan(observed);
     let declared = |pair: &[usize]| planned.iter().any(|grouping| grouping == pair);
     let mut cells = cells_held;
     let mut wave: Vec<Vec<usize>> = Vec::new();
-    for (pair, pair_cells) in &observed_pairs {
+    for (pair, pair_cells) in &plan.admitted {
         if declared(pair) {
             cells = cells.saturating_add(*pair_cells);
             wave.push(pair.clone());
         }
     }
-    for (pair, pair_cells) in &observed_pairs {
+    // The pairs the counts admit but the cube has no room for. The budget
+    // is the third way a pair goes missing -- after an unknown count and
+    // the per-pair ceiling -- and it was the one that said least: the loop
+    // broke and the remaining pairs were simply never mentioned. Recorded
+    // with the room that was left, because unlike the other two this
+    // refusal is about the cube rather than the pair, and raising
+    // `KAVEON_CUBE_MAX_CELLS` is the operator's answer to it.
+    let mut budget_declined: Vec<kaveon_core::DeclinedPair> = Vec::new();
+    for (pair, pair_cells) in &plan.admitted {
         if declared(pair) {
             continue;
         }
         match cells.checked_add(*pair_cells) {
-            Some(total) if total <= max_cells => {
+            Some(total) if total <= max_cells && budget_declined.is_empty() => {
                 cells = total;
                 wave.push(pair.clone());
             }
             // Cheapest first, so once one does not fit none of the rest
-            // does either.
-            _ => break,
+            // does either -- but each is still named.
+            _ => budget_declined.push(kaveon_core::DeclinedPair {
+                axes: pair.clone(),
+                cells: Some(*pair_cells),
+                refusal: kaveon_core::PairRefusal::CubeCellBudget,
+            }),
         }
     }
-    wave
+    CubePairWave {
+        wave,
+        cells_held: cells,
+        declined: plan.declined.into_iter().chain(budget_declined).collect(),
+    }
 }
 
 /// The cube built on the workers: every single axis first (a few
@@ -9371,6 +9398,7 @@ async fn build_cube_on_workers(
         shape: shape.clone(),
         groupings: Vec::new(),
         excluded: Vec::new(),
+        declined_pairs: Vec::new(),
         files: statistics
             .per_file
             .iter()
@@ -9454,9 +9482,12 @@ async fn build_cube_on_workers(
             }
         }
     }
-    // The pairs.
+    // The pairs, and what the planner would not hold.
     let pairs = cube_pair_wave(shape, &planned, &observed, cube.cell_count(), max_cells);
-    for (grouping_read, rows) in read(pairs).await? {
+    // Stated on the document before the reads, so a build that fails part
+    // way still records what it was never going to cover.
+    cube.declined_pairs = pairs.declined;
+    for (grouping_read, rows) in read(pairs.wave).await? {
         cube.groupings.push(
             cube_grouping_from_rows(shape, &statistics.columns, &grouping_read.axes, &rows)
                 .map_err(failed)?,
@@ -15330,26 +15361,74 @@ mod tests {
         // what the two-minute scan was answering.
         let observed = [Some(6), Some(3), Some(4)];
         assert_eq!(
-            super::cube_pair_wave(&shape, &planned, &observed, 14, 1_000_000),
+            super::cube_pair_wave(&shape, &planned, &observed, 14, 1_000_000).wave,
             vec![vec![1, 2], vec![0, 1], vec![0, 2]]
         );
         // An axis excluded for its cap has no observed count, so no pair
         // over it is read.
         assert_eq!(
-            super::cube_pair_wave(&shape, &planned, &[Some(6), None, Some(4)], 11, 1_000_000),
+            super::cube_pair_wave(&shape, &planned, &[Some(6), None, Some(4)], 11, 1_000_000).wave,
             vec![vec![0, 2]]
         );
         // The cell limit bounds the wave by what each pair can hold, and
         // the cheapest-first order means the first pair that does not fit
         // ends it: 14 held + 12 + 18 = 44, and 24 more would be 68.
         assert_eq!(
-            super::cube_pair_wave(&shape, &planned, &observed, 14, 44),
+            super::cube_pair_wave(&shape, &planned, &observed, 14, 44).wave,
             vec![vec![1, 2], vec![0, 1]]
         );
         assert!(
-            super::cube_pair_wave(&shape, &planned, &observed, 14, 20).is_empty(),
+            super::cube_pair_wave(&shape, &planned, &observed, 14, 20)
+                .wave
+                .is_empty(),
             "no pair is read when the limit has room for none"
         );
+        // And the pairs the budget turned down are named rather than left
+        // to the end of a loop. This is the third way a pair goes missing
+        // and it was the quietest: the loop broke and said nothing.
+        let refused = super::cube_pair_wave(&shape, &planned, &observed, 14, 20);
+        assert_eq!(
+            refused
+                .declined
+                .iter()
+                .map(|pair| (pair.axes.clone(), pair.cells, pair.refusal))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    vec![1, 2],
+                    Some(12),
+                    kaveon_core::PairRefusal::CubeCellBudget
+                ),
+                (
+                    vec![0, 1],
+                    Some(18),
+                    kaveon_core::PairRefusal::CubeCellBudget
+                ),
+                (
+                    vec![0, 2],
+                    Some(24),
+                    kaveon_core::PairRefusal::CubeCellBudget
+                ),
+            ],
+            "every pair the cube had no room for, with the cells it wanted"
+        );
+        // A pair whose axis nothing counted is refused for that reason,
+        // not for the budget: the two are different facts and an operator
+        // can only act on one of them.
+        let unknown =
+            super::cube_pair_wave(&shape, &planned, &[Some(6), None, Some(4)], 11, 1_000_000);
+        assert_eq!(
+            unknown
+                .declined
+                .iter()
+                .map(|pair| pair.refusal)
+                .collect::<Vec<_>>(),
+            vec![
+                kaveon_core::PairRefusal::CountUnknown,
+                kaveon_core::PairRefusal::CountUnknown
+            ]
+        );
+        assert_eq!(unknown.cells_held, 11 + 24);
         // A pair the declaration plans is read whatever the limit says:
         // it was always part of the cube the limit admitted.
         let declared = kaveon_core::TableShape::parse(
@@ -15361,7 +15440,7 @@ mod tests {
         let declared_planned = declared.groupings();
         assert!(declared_planned.contains(&vec![0, 1]));
         assert_eq!(
-            super::cube_pair_wave(&declared, &declared_planned, &[Some(6), Some(3)], 9, 1),
+            super::cube_pair_wave(&declared, &declared_planned, &[Some(6), Some(3)], 9, 1).wave,
             vec![vec![0, 1]]
         );
     }

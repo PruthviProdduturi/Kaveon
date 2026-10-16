@@ -1381,6 +1381,7 @@ mod tests {
                 }],
             }],
             excluded: Vec::new(),
+            declined_pairs: Vec::new(),
             files: files.iter().map(|f| (*f).to_owned()).collect(),
             per_file_complete: true,
         }
