@@ -201,8 +201,8 @@ def _release_retention_sweep(owner: str) -> None:
         _RETENTION_SWEEPS.discard(owner)
 
 
-def _history_records(owner: str) -> list:
-    """The owner's history, read as one consistent snapshot.
+def _history_records(owner: str) -> tuple[list, bool]:
+    """The owner's history and whether it ran past the ceiling.
 
     The listing is paged a hundred at a time and refuses to span a snapshot
     that moved underneath it. On the request path that never happened, because
@@ -218,8 +218,15 @@ def _history_records(owner: str) -> list:
     """
     for attempt in range(_RETENTION_LIST_ATTEMPTS):
         try:
-            return product_store.list_records(
-                "query_history", owner, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+            # Capped rather than bounded, and at the transport ceiling rather
+            # than the retention bound. `list_records` raises the moment a
+            # family passes the bound it was given, so asking for
+            # MAX_HISTORY_PER_OWNER meant an owner already over it could not be
+            # listed -- and this sweep, the one thing that would have brought
+            # them back under, failed in exactly the same way as the read it
+            # exists to repair. An owner past the ceiling could only grow.
+            return product_store.list_records_capped(
+                "query_history", owner, "Viewer", limit=HISTORY_LIST_CEILING)
         except HTTPException as error:
             if error.status_code != 409 or attempt == _RETENTION_LIST_ATTEMPTS - 1:
                 raise
@@ -237,11 +244,18 @@ def run_retention_sweep(owner: str) -> int:
     over it until this finishes is correct, while a reader waiting eight
     seconds for it is not.
     """
-    records = _history_records(owner)
-    _remember_history_count(owner, len(records))
-    over = len(records) - MAX_HISTORY_PER_OWNER
-    if over < 0:
-        return 0
+    records, truncated = _history_records(owner)
+    if truncated:
+        # More than the ceiling, so the exact population is unknown and the
+        # remembered count must not claim otherwise -- an owner here is the
+        # one case where every read of their history already fails.
+        _forget_history_count(owner)
+        over = len(records) - MAX_HISTORY_PER_OWNER
+    else:
+        _remember_history_count(owner, len(records))
+        over = len(records) - MAX_HISTORY_PER_OWNER
+        if over < 0:
+            return 0
 
     def ordering(record):
         item = record.get("document") or {}
@@ -263,7 +277,14 @@ def run_retention_sweep(owner: str) -> int:
     if not mutations:
         return 0
     product_store.transact(mutations, owner, "Analyst")
-    _remember_history_count(owner, len(records) - len(mutations))
+    if truncated:
+        # The listing stopped at the ceiling, so `records` is a floor and not
+        # a population: subtracting what was trimmed would record a count that
+        # is wrong in the one direction that matters, low enough to stop the
+        # next sweep from running and leave the owner stuck over the ceiling.
+        _forget_history_count(owner)
+    else:
+        _remember_history_count(owner, len(records) - len(mutations))
     return len(mutations)
 
 
