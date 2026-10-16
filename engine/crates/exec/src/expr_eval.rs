@@ -3890,16 +3890,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     }
     if upper == "MAP" {
         check_arity(name, args, 2)?;
-        let keys = args[0]
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .ok_or_else(|| KaveonError::Execution("MAP keys must be an ARRAY/List value".into()))?;
-        let values = args[1]
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                KaveonError::Execution("MAP values must be an ARRAY/List value".into())
-            })?;
+        let as_list = |array: &ArrayRef, label: &str| -> Result<ArrayRef> {
+            match array.data_type() {
+                DataType::List(_) => Ok(Arc::clone(array)),
+                // Arrow MapArray uses 32-bit offsets.  Accept a LargeList
+                // when its offsets fit that representation, matching the
+                // ordinary MAP constructor while keeping overflow explicit.
+                DataType::LargeList(field) => compute::cast(array, &DataType::List(field.clone()))
+                    .map_err(|error| {
+                        KaveonError::Execution(format!(
+                            "MAP {label} LargeList cannot be represented: {error}"
+                        ))
+                    }),
+                _ => Err(KaveonError::Execution(format!(
+                    "MAP {label} must be an ARRAY/List value"
+                ))),
+            }
+        };
+        let keys_array = as_list(&args[0], "keys")?;
+        let values_array = as_list(&args[1], "values")?;
+        let keys = keys_array.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = values_array.as_any().downcast_ref::<ListArray>().unwrap();
         if keys.offsets().as_ref() != values.offsets().as_ref() {
             return Err(KaveonError::Execution(
                 "MAP keys and values must have matching list offsets".into(),
@@ -12121,6 +12132,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("MAP keys cannot contain NULL"));
+    }
+
+    #[test]
+    fn map_constructor_accepts_small_large_lists() {
+        let mut keys = LargeListBuilder::new(LargeStringBuilder::new());
+        keys.values().append_value("wide");
+        keys.append(true);
+        let mut values = LargeListBuilder::new(Int64Builder::new());
+        values.values().append_value(7);
+        values.append(true);
+        let result = eval_scalar_function(
+            "MAP",
+            &[
+                Arc::new(keys.finish()) as ArrayRef,
+                Arc::new(values.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_string::<i64>().value(0), "wide");
+        assert_eq!(map.values().as_primitive::<Int64Type>().value(0), 7);
     }
 
     #[test]
