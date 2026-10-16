@@ -26,3 +26,7 @@ The same execution slice also qualifies the numeric `IS_FINITE`, `IS_INFINITE`,
 and `IS_NAN` predicates, including positive/negative infinity, NaN, and NULL
 inputs. Their regression is
 `cargo test -p kaveon-exec numeric_finiteness_predicates_preserve_nulls --quiet`.
+
+The distributed differential corpus includes all four functions in
+`the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`;
+that run passed 426 filtered cases with zero failures in 150.92 seconds.
