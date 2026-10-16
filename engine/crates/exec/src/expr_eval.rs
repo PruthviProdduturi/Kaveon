@@ -8167,6 +8167,66 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let unit_arr = as_string_array(&args[0])?;
             eval_date_diff(unit_arr, &args[1], &args[2], num_rows)
         }
+        "WIDTH_BUCKET" => {
+            if args.len() != 4 {
+                return Err(KaveonError::Execution(
+                    "WIDTH_BUCKET requires 4 arguments (value, min, max, buckets)".into(),
+                ));
+            }
+            let value = compute::cast(&args[0], &DataType::Float64)?;
+            let min = compute::cast(&args[1], &DataType::Float64)?;
+            let max = compute::cast(&args[2], &DataType::Float64)?;
+            let buckets = compute::cast(&args[3], &DataType::Int64)?;
+            let value = value
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("WIDTH_BUCKET value must be numeric".into())
+                })?;
+            let min = min
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| KaveonError::Execution("WIDTH_BUCKET min must be numeric".into()))?;
+            let max = max
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| KaveonError::Execution("WIDTH_BUCKET max must be numeric".into()))?;
+            let buckets = buckets
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("WIDTH_BUCKET buckets must be an integer".into())
+                })?;
+            let mut result = Int64Builder::with_capacity(num_rows);
+            for row in 0..num_rows {
+                if value.is_null(row)
+                    || min.is_null(row)
+                    || max.is_null(row)
+                    || buckets.is_null(row)
+                {
+                    result.append_null();
+                    continue;
+                }
+                let value = value.value(row);
+                let min = min.value(row);
+                let max = max.value(row);
+                let buckets = buckets.value(row);
+                if buckets <= 0 || !min.is_finite() || !max.is_finite() || min >= max {
+                    return Err(KaveonError::Execution(
+                        "WIDTH_BUCKET requires min < max and a positive bucket count".into(),
+                    ));
+                }
+                let bucket = if value < min {
+                    0
+                } else if value >= max {
+                    buckets.saturating_add(1)
+                } else {
+                    (((value - min) / (max - min)) * buckets as f64).floor() as i64 + 1
+                };
+                result.append_value(bucket);
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "TO_CHAR" | "DATE_FORMAT" => {
             check_arity(name, args, 2)?;
             let source = &args[0];
@@ -11489,6 +11549,42 @@ mod tests {
             error.to_string().contains("unsupported DATE_DIFF unit"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn width_bucket_matches_trino_boundaries_and_nulls() {
+        let values = Arc::new(Float64Array::from(vec![
+            Some(-1.0),
+            Some(0.0),
+            Some(0.1),
+            Some(9.999),
+            Some(10.0),
+            None,
+        ]));
+        let min = Arc::new(Float64Array::from(vec![Some(0.0); 6]));
+        let max = Arc::new(Float64Array::from(vec![Some(10.0); 6]));
+        let buckets = Arc::new(Int64Array::from(vec![Some(10); 6]));
+        let result = eval_scalar_function("WIDTH_BUCKET", &[values, min, max, buckets], 6).unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(1), Some(10), Some(11), None]
+        );
+
+        let error = eval_scalar_function(
+            "WIDTH_BUCKET",
+            &[
+                Arc::new(Float64Array::from(vec![Some(1.0)])),
+                Arc::new(Float64Array::from(vec![Some(2.0)])),
+                Arc::new(Float64Array::from(vec![Some(2.0)])),
+                Arc::new(Int64Array::from(vec![Some(4)])),
+            ],
+            1,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("min < max"), "{error}");
     }
 
     #[test]
