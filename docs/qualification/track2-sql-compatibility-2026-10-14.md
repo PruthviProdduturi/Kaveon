@@ -614,6 +614,10 @@ expressions that reference columns from the left relation. The operator
 evaluates each array per input batch, repeats the left row for the longest
 array, null-pads additional arrays, and emits the requested ordinality base.
 The local planner/executor regression and the distributed fragment regression
-both pass exact rows for two input rows and `ARRAY[id, 2]`. Constant UNNEST
-continues to use the zero-input leaf path. Arbitrary table functions and
-deeper nested/lateral combinations remain outside this qualification.
+both pass exact rows for two input rows and `ARRAY[id, 2]`. The exact contract
+covers per-row expansion, left-row repetition, and NULL padding across
+multiple arrays. Constant UNNEST continues to use the zero-input leaf path and
+supports ordinality and offset. The parser still rejects ordinality or offset
+attached to the lateral function form, so that syntax remains open. Arbitrary
+table functions and deeper nested/lateral combinations remain outside this
+qualification.
