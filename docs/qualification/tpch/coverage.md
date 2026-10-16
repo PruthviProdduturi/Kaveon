@@ -152,8 +152,9 @@ cell against an independent computation on both paths.
   of the two `lineitem` projections. At SF100, the remaining qualification is
   pressure and spill behavior for those build buckets rather than a
   coordinator-wide broadcast.
-- The retained build rows have no spill: a build side over the query's
-  budget fails closed.
+- Refused build partitions are repartitioned and spilled with bounded depth;
+  the remaining gate is sustained SF100 pressure with retained spill metrics,
+  not correctness of the in-memory path.
 - `NOT EXISTS` on a NULL probe key without a residual still takes NOT IN's
   rule (dropped rather than kept); the residual path takes EXISTS's. TPC-H
   keys are never NULL.
