@@ -4003,6 +4003,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     let mut name = canonical_function_name(func);
     let is_count_if = name == "COUNT_IF";
     let is_json_object = name == "JSON_OBJECT";
+    let is_json_array = name == "JSON_ARRAY";
     if name == "MAP" {
         // MAP is lowered as a regular function. The executor validates that
         // both arguments are list values with matching offsets.
@@ -4010,7 +4011,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     let mut json_object_absent_on_null = false;
     let mut args: Vec<Expr> = match &func.args {
         ast::FunctionArguments::List(arg_list) => {
-            if is_json_object {
+            if is_json_object || is_json_array {
                 for clause in &arg_list.clauses {
                     if matches!(
                         clause,
@@ -4066,6 +4067,8 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
 
     if is_json_object && json_object_absent_on_null {
         name = "JSON_OBJECT_ABSENT_ON_NULL".into();
+    } else if is_json_array && json_object_absent_on_null {
+        name = "JSON_ARRAY_ABSENT_ON_NULL".into();
     }
 
     // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A

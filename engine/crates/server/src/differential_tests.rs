@@ -327,6 +327,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_array_absent_on_null",
+        "SELECT JSON_ARRAY(7, NULL, 'x' ABSENT ON NULL) AS constructed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_object_constructor",
         "SELECT JSON_OBJECT('answer', 7, 'label', 'x') AS constructed FROM {T} LIMIT 1",
         false,

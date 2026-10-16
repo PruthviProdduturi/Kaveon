@@ -4370,12 +4370,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .into();
             Ok(Arc::new(result))
         }
-        "JSON_ARRAY" => {
+        "JSON_ARRAY" | "JSON_ARRAY_ABSENT_ON_NULL" => {
+            let omit_nulls = upper == "JSON_ARRAY_ABSENT_ON_NULL";
             let mut result = StringBuilder::new();
             for row in 0..num_rows {
                 let mut values = Vec::with_capacity(args.len());
                 for argument in args {
                     if argument.is_null(row) {
+                        if omit_nulls {
+                            continue;
+                        }
                         values.push(serde_json::Value::Null);
                     } else {
                         values.push(json_scalar_value(argument, row)?.ok_or_else(|| {

@@ -45,7 +45,8 @@ floating-point, and text needles. It preserves NULL inputs, returns NULL for
 malformed JSON, and returns `false` for valid non-array JSON values.
 
 `JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
-SQL NULL arguments as JSON `null`. `JSON_OBJECT(key : value, ...)` (or the
+SQL NULL arguments as JSON `null`; its bounded `ABSENT ON NULL` form omits
+NULL elements. `JSON_OBJECT(key : value, ...)` (or the
 equivalent `key VALUE value` form) constructs an object from scalar pairs; the
 bounded surface also accepts comma-separated key/value pairs, preserves SQL
 NULL values as JSON `null`, supports `ABSENT ON NULL`, and rejects null or
