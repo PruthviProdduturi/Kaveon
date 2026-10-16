@@ -302,6 +302,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "arrays_overlap",
+        "SELECT ARRAYS_OVERLAP(ARRAY[1, 2], ARRAY[2, 3]) AS overlaps, ARRAYS_OVERLAP(ARRAY[1], ARRAY[2]) AS disjoint FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
