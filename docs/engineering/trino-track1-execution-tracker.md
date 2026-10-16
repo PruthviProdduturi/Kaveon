@@ -28,7 +28,7 @@ snapshot, not a session diary.
 | 9 | Worker-loss recovery | **Qualified (bounded)** | Replacement-worker recovery preserves exact results for the declared bounded gate; the current image also passes a forced worker loss during a distributed scan with exact retry, replacement, cleanup, and post-recovery probe. A graceful node-drain run also returned the exact result and restored three catalog-compatible workers, but Kubernetes evicted the pod before a retry was observable. | Node-drain interruption/retry and repeated-loss endurance with retained exact-result evidence. |
 | 10 | Coordinator restart | **Complete (bounded)** | Idle and active-query cleanup is fail-closed, exchange spools are reclaimed, workers reregister, and exact post-restart probes pass. The current AKS image also passed an observed active-query coordinator restart with fail-closed interruption, three-worker recovery, exact post-restart probe, and no retained-file growth. | Multi-coordinator/failover continuity remains a separate future qualification. |
 | 11 | Snapshot consistency | Open | Catalog and Delta versions are pinned across statement fragments and retries. | Cross-coordinator recovery and concurrent source-version qualification. |
-| 12 | Runtime dynamic filtering | Open | Build-side runtime filters reduce probe work for supported joins. | Inject filters into Parquet/Delta scan pruning with exact-result and exchange tests. |
+| 12 | Runtime dynamic filtering | Open | Build-side runtime filters reduce probe work for supported joins; the current image has an exact-repeat three-worker runtime-filter-eligible join probe. | Inject filters into Parquet/Delta scan pruning with exact-result and exchange tests, and publish application counters. |
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
 | 14 | Connector federation | Open | Native Parquet, Delta, and Iceberg paths exist; registered SQL sources use passthrough API paths. | Authenticated pushdown and cross-source execution qualification. |
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
@@ -111,6 +111,13 @@ The current-image global-order report is retained in
 raw JSON. A multi-column `NULLS LAST` query with OFFSET and LIMIT finished
 twice with the exact same 20-row result across three workers. Fully parallel
 ordered streaming and pressure qualification remain open.
+
+The current-image runtime-filter-eligible join probe is retained in
+`docs/qualification/track1-aks-runtime-filter-join-current-2026-10-16.md` and
+its raw JSON. It finished twice with identical results across three workers.
+It does not claim scan pruning because the current query-history schema has no
+dedicated runtime-filter application counter; storage-pruning and cloud
+snapshot gates remain open.
 
 ## Active item: 3 — distributed joins
 

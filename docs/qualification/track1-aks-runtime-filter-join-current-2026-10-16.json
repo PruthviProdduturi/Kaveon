@@ -1,0 +1,192 @@
+{
+  "all_finished": true,
+  "date": "2026-10-16",
+  "environment": "kaveon-aks",
+  "exact_repeat": true,
+  "image": {
+    "active_workers": 3,
+    "compatible_workers": 3,
+    "coordinator": {
+      "address": "https://kaveon-coordinator.kaveon.svc.cluster.local:8080",
+      "admission": {
+        "admitted": 35,
+        "admitted_bytes": 0,
+        "limit_bytes": 8589934592,
+        "peak_admitted_bytes": 4294967296,
+        "queue_depth": 0,
+        "queue_limit": 64,
+        "queued": 0,
+        "rejected": 0,
+        "withdrawn": 0
+      },
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "environment": "aks",
+      "last_heartbeat": 1792121014,
+      "memory_allocated_bytes": 25491346,
+      "memory_limit_bytes": 11811160064,
+      "memory_rss_bytes": 471871488,
+      "node_id": "kaveon-coordinator-0",
+      "resource_groups": [
+        {
+          "admitted": 35,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "max_concurrent": 4,
+          "max_queued": 64,
+          "name": "default",
+          "queued": 0,
+          "queued_total": 0,
+          "rejected": 0,
+          "running": 0,
+          "wait_ms_p50": 0,
+          "wait_ms_p95": 0,
+          "weight": 10,
+          "withdrawn": 0
+        },
+        {
+          "admitted": 0,
+          "admitted_bytes": 0,
+          "limit_bytes": 2147483648,
+          "max_concurrent": 2,
+          "max_queued": 32,
+          "name": "maintenance",
+          "queued": 0,
+          "queued_total": 0,
+          "rejected": 0,
+          "running": 0,
+          "weight": 1,
+          "withdrawn": 0
+        }
+      ],
+      "result_cache": {
+        "budget_bytes": 268435456,
+        "bytes": 0,
+        "enabled": true,
+        "entries": 0,
+        "evictions": 0,
+        "expirations": 0,
+        "hit_latency_ns_max": 0,
+        "hit_latency_ns_total": 0,
+        "hit_latency_samples": 0,
+        "hits": 0,
+        "misses": 0,
+        "refused": 0,
+        "ttl_seconds": 600
+      },
+      "role": "coordinator",
+      "uptime_secs": 483,
+      "version": "0.1.0"
+    },
+    "environment": "aks",
+    "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+    "total_nodes": 4,
+    "workers": [
+      {
+        "address": "https://kaveon-worker-2.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 58,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 8,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792121009,
+        "memory_allocated_bytes": 4703510,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 399609856,
+        "node_id": "kaveon-worker-2-840e6d0f-66ec-4e39-9bc7-bd7d4ec8e8a5",
+        "role": "worker",
+        "uptime_secs": 462,
+        "version": "0.1.0"
+      },
+      {
+        "address": "https://kaveon-worker-0.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 107,
+          "admitted_bytes": 6442450944,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 12,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792121013,
+        "memory_allocated_bytes": 13798086,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 502587392,
+        "node_id": "kaveon-worker-0-43086b31-8dc1-4bf4-842e-f02632b2685d",
+        "role": "worker",
+        "uptime_secs": 452,
+        "version": "0.1.0"
+      },
+      {
+        "address": "https://kaveon-worker-1.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 56,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 8,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792121006,
+        "memory_allocated_bytes": 13122048,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 497508352,
+        "node_id": "kaveon-worker-1-c8de0f5d-c4f4-4f4c-b554-91b233fea4a8",
+        "role": "worker",
+        "uptime_secs": 452,
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "principal": "kaveon-operator",
+  "runs": [
+    {
+      "hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "id": "14982da0-1575-41ef-903b-bb043a56820e",
+      "rows": [],
+      "run": 1,
+      "stages": 4,
+      "state": "FINISHED",
+      "status": 200,
+      "tasks": 10,
+      "workers": [
+        "kaveon-worker-0-43086b31-8dc1-4bf4-842e-f02632b2685d",
+        "kaveon-worker-1-c8de0f5d-c4f4-4f4c-b554-91b233fea4a8",
+        "kaveon-worker-2-840e6d0f-66ec-4e39-9bc7-bd7d4ec8e8a5"
+      ]
+    },
+    {
+      "hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "id": "b2058ce4-4224-477e-a2db-dfe41db6892e",
+      "rows": [],
+      "run": 2,
+      "stages": 4,
+      "state": "FINISHED",
+      "status": 200,
+      "tasks": 10,
+      "workers": [
+        "kaveon-worker-0-43086b31-8dc1-4bf4-842e-f02632b2685d",
+        "kaveon-worker-1-c8de0f5d-c4f4-4f4c-b554-91b233fea4a8",
+        "kaveon-worker-2-840e6d0f-66ec-4e39-9bc7-bd7d4ec8e8a5"
+      ]
+    }
+  ],
+  "sql": "SELECT d.region, COUNT(*) AS n, SUM(e.actions) AS total_actions FROM kaveon_events_enriched e JOIN kaveon_events_dashboard d ON e.region = d.region WHERE e.event_date = DATE '2026-07-04' GROUP BY d.region ORDER BY d.region"
+}
