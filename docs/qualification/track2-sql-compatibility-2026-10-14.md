@@ -244,8 +244,9 @@ rewritten because their cardinality affects semantics.
 The optimizer suite passes `23/23`, including
 `correlated_exists_positive_limit_is_decorrelated` and
 `correlated_exists_zero_limit_remains_empty`. This is a local binder
-qualification; distributed and external-client coverage for this shape still
-belongs to the broader wire corpus.
+qualification. The shared local/distributed differential corpus also includes
+the grouped `correlated_exists_positive_limit` query and compares both paths
+against the same exact result.
 
 ## Explicit remaining boundaries
 
