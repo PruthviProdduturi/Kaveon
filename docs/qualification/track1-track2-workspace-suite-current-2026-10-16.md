@@ -166,6 +166,9 @@ Float32 and Float64 histogram keys are also supported. NaN values are
 canonicalized into one bucket and signed zero values share one bucket; a unit
 regression covers both behaviors.
 
+The differential corpus now includes an explicit DOUBLE histogram case; the
+local/distributed sweep passed **1/1** after adding it (147.33 seconds).
+
 The complete targets were rerun after the histogram type extension:
 
 ```text
