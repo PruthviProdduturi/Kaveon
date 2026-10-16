@@ -11,3 +11,6 @@ kaveon-sql = { path = "../sql" }
 kaveon-storage = { path = "../storage" }
 arrow = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
