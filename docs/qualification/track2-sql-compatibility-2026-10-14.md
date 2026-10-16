@@ -249,11 +249,11 @@ qualification. The shared local/distributed differential corpus also includes
 the grouped `correlated_exists_positive_limit` and `correlated_exists_zero_offset`
 queries and compares both paths against the same exact results.
 
-The binder now lowers bounded positive correlated `OFFSET` when there is one
-equality correlation and no residual predicate: it counts rows per key and
-retains keys whose count exceeds the offset. Positive offsets with residual or
-multiple correlations still fail closed with an explicit diagnostic rather than
-evaluating an incorrect semi-join.
+The binder now lowers bounded positive correlated `OFFSET` when there are one
+or more equality correlations and no residual predicate: it counts rows per
+composite key and retains keys whose count exceeds the offset. Positive offsets
+with residual correlations still fail closed with an explicit diagnostic rather
+than evaluating an incorrect semi-join.
 
 ## Explicit remaining boundaries
 
