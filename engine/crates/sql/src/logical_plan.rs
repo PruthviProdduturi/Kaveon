@@ -6852,15 +6852,21 @@ mod tests {
             "SELECT ROW_NUMBER() OVER missing FROM t WINDOW declared AS (ORDER BY id)",
         )
         .unwrap_err();
-        assert!(unknown.to_string().contains("unknown named window 'missing'"));
+        assert!(
+            unknown
+                .to_string()
+                .contains("unknown named window 'missing'")
+        );
 
         let cyclic = sql_to_logical_plan(
             "SELECT ROW_NUMBER() OVER first_window FROM t WINDOW first_window AS (second_window), second_window AS (first_window)",
         )
         .unwrap_err();
-        assert!(cyclic
-            .to_string()
-            .contains("cyclic named window reference involving 'first_window'"));
+        assert!(
+            cyclic
+                .to_string()
+                .contains("cyclic named window reference involving 'first_window'")
+        );
     }
 
     #[test]
