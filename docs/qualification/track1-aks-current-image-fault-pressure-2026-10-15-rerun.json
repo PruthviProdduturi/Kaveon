@@ -1,0 +1,6211 @@
+{
+  "started_at_utc": "2026-10-16T00:44:52.065048+00:00",
+  "context": "kaveon-aks",
+  "namespace": "kaveon",
+  "credential_material_recorded": false,
+  "subscription_policy_changed": false,
+  "failure_mode": "pod",
+  "checks": {
+    "three_catalog_compatible_workers_before": true,
+    "concurrent_exact_results": true,
+    "cancellation_cleanup": true,
+    "worker_loss_exact_retry_and_recovery": true,
+    "bounded_pressure_exact_no_unexpected_restart_or_file_growth": true,
+    "no_preexisting_retained_exchange_or_spill_files": true,
+    "post_recovery_exact_probe": true
+  },
+  "passed": true,
+  "shell_current_context": "kaveon-aks",
+  "explicit_target_context": "kaveon-aks",
+  "pods_before": {
+    "kaveon-api-6758744588-st566": {
+      "uid": "6dc8481c-bd5e-4b38-9d76-e4889e7da015",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "6Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-availability-guard-29868524-tb5mt": {
+      "uid": "ea28207e-479a-44c9-8e17-5453ca78381c",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "192Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868510-7hjqb": {
+      "uid": "5f89416c-f9e2-49e6-884b-a34359422083",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868515-rpv92": {
+      "uid": "82d22581-ab48-4cd6-8f96-3fd8c59c4aa5",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868520-8w62r": {
+      "uid": "189d9640-3c8e-4f2b-b75f-03a42ec4c6a0",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-coordinator-0": {
+      "uid": "9f822b8f-7d4a-4cef-bce4-072d76571736",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-system-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3",
+          "ephemeral-storage": "8Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "2Gi",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868377-h24fj": {
+      "uid": "c1b04a87-6701-4ad6-9db1-f168625e4127",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868437-rdr7p": {
+      "uid": "f2a7217e-bcc9-428f-98a6-198ef653657b",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868497-vlj5z": {
+      "uid": "17e44596-36bf-40b1-80c9-a7b3e8a63c84",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-portal-d5bc89fd8-cbszz": {
+      "uid": "c3b4fdfc-0be7-402a-abad-a86bdb0620de",
+      "image": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "image_id": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "3Gi"
+        },
+        "requests": {
+          "cpu": "200m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-worker-0": {
+      "uid": "c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-1": {
+      "uid": "c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-2": {
+      "uid": "491f080a-0550-4e96-8c59-b9ff2218e0dd",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    }
+  },
+  "retained_files_before": {
+    "coordinator_exchange": 0,
+    "kaveon-worker-0_spill": 0,
+    "kaveon-worker-1_spill": 0,
+    "kaveon-worker-2_spill": 0
+  },
+  "principal": "kaveon-operator",
+  "cluster_before": {
+    "environment": "aks",
+    "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+    "active_workers": 3,
+    "compatible_workers": 3,
+    "total_nodes": 4,
+    "workers": [
+      {
+        "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "memory_rss_bytes": 87912448
+      },
+      {
+        "node_id": "kaveon-worker-1-c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "memory_rss_bytes": 54136832
+      },
+      {
+        "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "memory_rss_bytes": 71745536
+      }
+    ]
+  },
+  "concurrent_exact": {
+    "concurrency": 2,
+    "rounds": 2,
+    "requests": [
+      {
+        "name": "borough_count",
+        "sql": "SELECT COUNT(*) FROM nyc_taxi_borough",
+        "status": 200,
+        "id": "f8f500b0-8288-48e9-8ab9-37772073cb2a",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 788,
+        "client_elapsed_ms": 1156.0,
+        "result_sha256": "77471ebe3613f4714666523fa961eb443f57dc2396a31528afdbbea86fadc8f8",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            5
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "dashboard_count",
+        "sql": "SELECT COUNT(*) FROM kaveon_events_dashboard",
+        "status": 200,
+        "id": "e93b1408-f94c-47be-bfd8-108c08269730",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 848,
+        "client_elapsed_ms": 1203.0,
+        "result_sha256": "84377fa78279b94980226e19983054b7c579c97cdbc8921c843b174d35fd0012",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            24
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "enriched_count",
+        "sql": "SELECT COUNT(*) FROM kaveon_events_enriched",
+        "status": 200,
+        "id": "ae87ee13-61d7-49b8-b7e0-b0e79c3083dc",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 676,
+        "client_elapsed_ms": 906.0,
+        "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            504000000
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "dashboard_count",
+        "sql": "SELECT COUNT(*) FROM kaveon_events_dashboard",
+        "status": 200,
+        "id": "9b6c85e0-670a-4b04-a8f8-3f8d7f978914",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 968,
+        "client_elapsed_ms": 1360.0,
+        "result_sha256": "84377fa78279b94980226e19983054b7c579c97cdbc8921c843b174d35fd0012",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            24
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 2,
+        "exact": true
+      },
+      {
+        "name": "borough_count",
+        "sql": "SELECT COUNT(*) FROM nyc_taxi_borough",
+        "status": 200,
+        "id": "840a4758-7454-4fa2-ab92-a16c8563b93b",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 1039,
+        "client_elapsed_ms": 1438.0,
+        "result_sha256": "77471ebe3613f4714666523fa961eb443f57dc2396a31528afdbbea86fadc8f8",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            5
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 2,
+        "exact": true
+      },
+      {
+        "name": "enriched_count",
+        "sql": "SELECT COUNT(*) FROM kaveon_events_enriched",
+        "status": 200,
+        "id": "fb99b693-5462-4146-811b-891da4112e41",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 649,
+        "client_elapsed_ms": 906.0,
+        "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            504000000
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 2,
+        "exact": true
+      }
+    ]
+  },
+  "cancellation": {
+    "query_id": "93479645-51d2-4075-87ef-7c22db8cf15b",
+    "delete_status": 204,
+    "statement_response_status": 409,
+    "final_state": "CANCELED",
+    "retained_files_after": {
+      "coordinator_exchange": 0,
+      "kaveon-worker-0_spill": 0,
+      "kaveon-worker-1_spill": 0,
+      "kaveon-worker-2_spill": 0
+    },
+    "cleanup": true
+  },
+  "worker_loss": {
+    "target": "kaveon-worker-1-c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+    "target_pod": "kaveon-worker-1",
+    "target_node": "aks-workers-15909223-vmss000002",
+    "old_uid": "c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+    "replacement_uid": "507f5aad-b51c-4b43-8e91-a948fdabad4b",
+    "query_observed_running": true,
+    "target_selected_from_longest_baseline_task": {
+      "stage_id": 0,
+      "task_id": "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.1.0",
+      "node_id": "kaveon-worker-1-c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+      "elapsed_us": 15254216
+    },
+    "forced_termination_after_running_ms": 5000,
+    "retry_attempt_observed": true,
+    "baseline": {
+      "name": "enriched_scan_fault",
+      "sql": "SELECT COUNT(*) FROM kaveon_events_enriched WHERE actions >= 0",
+      "status": 200,
+      "id": "0816426e-e1ac-4f22-9542-2f7a0d3587a0",
+      "state": "FINISHED",
+      "error": null,
+      "elapsed_ms": 15912,
+      "client_elapsed_ms": 16172.0,
+      "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+      "row_count": 1,
+      "admission_refusals": 0,
+      "data": [
+        [
+          504000000
+        ]
+      ],
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "stage_count": 2,
+      "task_count": 4,
+      "worker_ids": [
+        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "kaveon-worker-1-c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+      ],
+      "task_ids": [
+        "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.0.0",
+        "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.1.0",
+        "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.2.0",
+        "0816426e-e1ac-4f22-9542-2f7a0d3587a0.1.0.0"
+      ],
+      "tasks": [
+        {
+          "stage_id": 0,
+          "task_id": "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 15246735
+        },
+        {
+          "stage_id": 0,
+          "task_id": "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.1.0",
+          "node_id": "kaveon-worker-1-c6b46ff8-a3f1-4992-a54b-3c6595eaf2c2",
+          "elapsed_us": 15254216
+        },
+        {
+          "stage_id": 0,
+          "task_id": "0816426e-e1ac-4f22-9542-2f7a0d3587a0.0.2.0",
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 14454130
+        },
+        {
+          "stage_id": 1,
+          "task_id": "0816426e-e1ac-4f22-9542-2f7a0d3587a0.1.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 4654
+        }
+      ],
+      "scan_metrics_complete": false
+    },
+    "during_loss": {
+      "name": "enriched_scan_fault",
+      "sql": "SELECT COUNT(*) FROM kaveon_events_enriched WHERE actions >= 0",
+      "status": 200,
+      "id": "214d5512-fdd0-47b7-a188-abd5a7377f64",
+      "state": "FINISHED",
+      "error": null,
+      "elapsed_ms": 45476,
+      "client_elapsed_ms": 45843.0,
+      "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+      "row_count": 1,
+      "admission_refusals": 0,
+      "data": [
+        [
+          504000000
+        ]
+      ],
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "stage_count": 2,
+      "task_count": 4,
+      "worker_ids": [
+        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+      ],
+      "task_ids": [
+        "214d5512-fdd0-47b7-a188-abd5a7377f64.0.0.0",
+        "214d5512-fdd0-47b7-a188-abd5a7377f64.0.1.1",
+        "214d5512-fdd0-47b7-a188-abd5a7377f64.0.2.0",
+        "214d5512-fdd0-47b7-a188-abd5a7377f64.1.0.0"
+      ],
+      "tasks": [
+        {
+          "stage_id": 0,
+          "task_id": "214d5512-fdd0-47b7-a188-abd5a7377f64.0.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 13959332
+        },
+        {
+          "stage_id": 0,
+          "task_id": "214d5512-fdd0-47b7-a188-abd5a7377f64.0.1.1",
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 14407618
+        },
+        {
+          "stage_id": 0,
+          "task_id": "214d5512-fdd0-47b7-a188-abd5a7377f64.0.2.0",
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 13822956
+        },
+        {
+          "stage_id": 1,
+          "task_id": "214d5512-fdd0-47b7-a188-abd5a7377f64.1.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 5009
+        }
+      ],
+      "scan_metrics_complete": false
+    },
+    "exact_match": true,
+    "cluster_after_recovery": {
+      "environment": "aks",
+      "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "active_workers": 3,
+      "compatible_workers": 3,
+      "total_nodes": 4,
+      "workers": [
+        {
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "memory_rss_bytes": 29851648
+        },
+        {
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "memory_rss_bytes": 87986176
+        },
+        {
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "memory_rss_bytes": 80986112
+        }
+      ]
+    }
+  },
+  "recovery_probe": {
+    "name": "borough_count",
+    "sql": "SELECT COUNT(*) FROM nyc_taxi_borough",
+    "status": 200,
+    "id": "9fbe3caf-8f40-4ef5-8b6e-9528b3499393",
+    "state": "FINISHED",
+    "error": null,
+    "elapsed_ms": 556,
+    "client_elapsed_ms": 797.0,
+    "result_sha256": "77471ebe3613f4714666523fa961eb443f57dc2396a31528afdbbea86fadc8f8",
+    "row_count": 1,
+    "admission_refusals": 0,
+    "data": [
+      [
+        5
+      ]
+    ],
+    "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+    "stage_count": 0,
+    "task_count": 0,
+    "worker_ids": [],
+    "task_ids": [],
+    "tasks": [],
+    "scan_metrics_complete": true,
+    "exact": true
+  },
+  "pressure": {
+    "concurrency": 2,
+    "rounds": 2,
+    "requests": [
+      {
+        "name": "yellow_group_pressure_1",
+        "sql": "SELECT region, COUNT(*), SUM(actions) FROM kaveon_events_enriched GROUP BY region ORDER BY region",
+        "status": 200,
+        "id": "1eebe205-5152-4da7-b605-82788df54407",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 68998,
+        "client_elapsed_ms": 70031.0,
+        "result_sha256": "41f347df6010edbda5fd47781702eee7be0bf20f841898fdff38cce69b8736e8",
+        "row_count": 6,
+        "admission_refusals": 0,
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 3,
+        "task_count": 7,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ],
+        "task_ids": [
+          "1eebe205-5152-4da7-b605-82788df54407.0.0.0",
+          "1eebe205-5152-4da7-b605-82788df54407.0.1.0",
+          "1eebe205-5152-4da7-b605-82788df54407.0.2.0",
+          "1eebe205-5152-4da7-b605-82788df54407.1.0.0",
+          "1eebe205-5152-4da7-b605-82788df54407.1.1.0",
+          "1eebe205-5152-4da7-b605-82788df54407.1.2.0",
+          "1eebe205-5152-4da7-b605-82788df54407.2.0.0"
+        ],
+        "tasks": [
+          {
+            "stage_id": 0,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.0.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 32292390
+          },
+          {
+            "stage_id": 0,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.0.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 35060606
+          },
+          {
+            "stage_id": 0,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.0.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 31952855
+          },
+          {
+            "stage_id": 1,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.1.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 5444
+          },
+          {
+            "stage_id": 1,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.1.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 14203
+          },
+          {
+            "stage_id": 1,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.1.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 4127
+          },
+          {
+            "stage_id": 2,
+            "task_id": "1eebe205-5152-4da7-b605-82788df54407.2.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 2087
+          }
+        ],
+        "scan_metrics_complete": false,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "yellow_group_pressure_2",
+        "sql": "SELECT region, COUNT(*), SUM(actions) FROM kaveon_events_enriched GROUP BY region ORDER BY region",
+        "status": 200,
+        "id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 69631,
+        "client_elapsed_ms": 70015.0,
+        "result_sha256": "41f347df6010edbda5fd47781702eee7be0bf20f841898fdff38cce69b8736e8",
+        "row_count": 6,
+        "admission_refusals": 0,
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 3,
+        "task_count": 7,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ],
+        "task_ids": [
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.0.0.0",
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.0.1.0",
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.0.2.0",
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.1.0.0",
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.1.1.0",
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.1.2.0",
+          "9558e4d1-34cb-448b-bd5f-0d5c3c026974.2.0.0"
+        ],
+        "tasks": [
+          {
+            "stage_id": 0,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.0.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 32630495
+          },
+          {
+            "stage_id": 0,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.0.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 33905945
+          },
+          {
+            "stage_id": 0,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.0.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 31542498
+          },
+          {
+            "stage_id": 1,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.1.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 7781
+          },
+          {
+            "stage_id": 1,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.1.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 11318
+          },
+          {
+            "stage_id": 1,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.1.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 9703
+          },
+          {
+            "stage_id": 2,
+            "task_id": "9558e4d1-34cb-448b-bd5f-0d5c3c026974.2.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 2531
+          }
+        ],
+        "scan_metrics_complete": false,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "yellow_group_pressure_1",
+        "sql": "SELECT region, COUNT(*), SUM(actions) FROM kaveon_events_enriched GROUP BY region ORDER BY region",
+        "status": 200,
+        "id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 69384,
+        "client_elapsed_ms": 69734.0,
+        "result_sha256": "41f347df6010edbda5fd47781702eee7be0bf20f841898fdff38cce69b8736e8",
+        "row_count": 6,
+        "admission_refusals": 0,
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 3,
+        "task_count": 7,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ],
+        "task_ids": [
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.0.0.0",
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.0.1.0",
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.0.2.0",
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.1.0.0",
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.1.1.0",
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.1.2.0",
+          "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.2.0.0"
+        ],
+        "tasks": [
+          {
+            "stage_id": 0,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.0.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 33271646
+          },
+          {
+            "stage_id": 0,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.0.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 34246193
+          },
+          {
+            "stage_id": 0,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.0.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 30991632
+          },
+          {
+            "stage_id": 1,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.1.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 6319
+          },
+          {
+            "stage_id": 1,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.1.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 3956
+          },
+          {
+            "stage_id": 1,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.1.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 5411
+          },
+          {
+            "stage_id": 2,
+            "task_id": "4ce6d105-24ab-4550-bcf9-45b1b0e08f54.2.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 2402
+          }
+        ],
+        "scan_metrics_complete": false,
+        "round": 2,
+        "exact": true
+      },
+      {
+        "name": "yellow_group_pressure_2",
+        "sql": "SELECT region, COUNT(*), SUM(actions) FROM kaveon_events_enriched GROUP BY region ORDER BY region",
+        "status": 200,
+        "id": "190292ec-6ad4-4c5d-bedb-03679be73025",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 68842,
+        "client_elapsed_ms": 69734.0,
+        "result_sha256": "41f347df6010edbda5fd47781702eee7be0bf20f841898fdff38cce69b8736e8",
+        "row_count": 6,
+        "admission_refusals": 0,
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 3,
+        "task_count": 7,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ],
+        "task_ids": [
+          "190292ec-6ad4-4c5d-bedb-03679be73025.0.0.0",
+          "190292ec-6ad4-4c5d-bedb-03679be73025.0.1.0",
+          "190292ec-6ad4-4c5d-bedb-03679be73025.0.2.0",
+          "190292ec-6ad4-4c5d-bedb-03679be73025.1.0.0",
+          "190292ec-6ad4-4c5d-bedb-03679be73025.1.1.0",
+          "190292ec-6ad4-4c5d-bedb-03679be73025.1.2.0",
+          "190292ec-6ad4-4c5d-bedb-03679be73025.2.0.0"
+        ],
+        "tasks": [
+          {
+            "stage_id": 0,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.0.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 32640688
+          },
+          {
+            "stage_id": 0,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.0.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 34576198
+          },
+          {
+            "stage_id": 0,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.0.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 31382348
+          },
+          {
+            "stage_id": 1,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.1.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 6213
+          },
+          {
+            "stage_id": 1,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.1.1.0",
+            "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "elapsed_us": 4653
+          },
+          {
+            "stage_id": 1,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.1.2.0",
+            "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+            "elapsed_us": 9472
+          },
+          {
+            "stage_id": 2,
+            "task_id": "190292ec-6ad4-4c5d-bedb-03679be73025.2.0.0",
+            "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "elapsed_us": 3309
+          }
+        ],
+        "scan_metrics_complete": false,
+        "round": 2,
+        "exact": true
+      }
+    ],
+    "baseline": {
+      "name": "enriched_group_pressure",
+      "sql": "SELECT region, COUNT(*), SUM(actions) FROM kaveon_events_enriched GROUP BY region ORDER BY region",
+      "status": 200,
+      "id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac",
+      "state": "FINISHED",
+      "error": null,
+      "elapsed_ms": 35342,
+      "client_elapsed_ms": 35594.0,
+      "result_sha256": "41f347df6010edbda5fd47781702eee7be0bf20f841898fdff38cce69b8736e8",
+      "row_count": 6,
+      "admission_refusals": 0,
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "stage_count": 3,
+      "task_count": 7,
+      "worker_ids": [
+        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+      ],
+      "task_ids": [
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.0.0.0",
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.0.1.0",
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.0.2.0",
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.1.0.0",
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.1.1.0",
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.1.2.0",
+        "84bde03c-f05d-4d4a-bbf6-c73a32802cac.2.0.0"
+      ],
+      "tasks": [
+        {
+          "stage_id": 0,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.0.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 32804223
+        },
+        {
+          "stage_id": 0,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.0.1.0",
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 34680148
+        },
+        {
+          "stage_id": 0,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.0.2.0",
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 31756000
+        },
+        {
+          "stage_id": 1,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.1.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 8141
+        },
+        {
+          "stage_id": 1,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.1.1.0",
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 4506
+        },
+        {
+          "stage_id": 1,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.1.2.0",
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 8079
+        },
+        {
+          "stage_id": 2,
+          "task_id": "84bde03c-f05d-4d4a-bbf6-c73a32802cac.2.0.0",
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 4469
+        }
+      ],
+      "scan_metrics_complete": false
+    },
+    "baseline_group_count": 6,
+    "known_input_rows": 504000000,
+    "resource_samples": [
+      {
+        "at_utc": "2026-10-16T00:47:12.893914+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "147m",
+            "cpu_millicores": 147,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "434m",
+            "cpu_millicores": 434,
+            "memory": "42Mi",
+            "memory_bytes": 44040192
+          },
+          "kaveon-worker-1": {
+            "cpu": "40m",
+            "cpu_millicores": 40,
+            "memory": "7Mi",
+            "memory_bytes": 7340032
+          },
+          "kaveon-worker-2": {
+            "cpu": "455m",
+            "cpu_millicores": 455,
+            "memory": "49Mi",
+            "memory_bytes": 51380224
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:14.665274+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:15.912977+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "147m",
+            "cpu_millicores": 147,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "434m",
+            "cpu_millicores": 434,
+            "memory": "42Mi",
+            "memory_bytes": 44040192
+          },
+          "kaveon-worker-1": {
+            "cpu": "40m",
+            "cpu_millicores": 40,
+            "memory": "7Mi",
+            "memory_bytes": 7340032
+          },
+          "kaveon-worker-2": {
+            "cpu": "455m",
+            "cpu_millicores": 455,
+            "memory": "49Mi",
+            "memory_bytes": 51380224
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:17.083202+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:18.237380+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "147m",
+            "cpu_millicores": 147,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "434m",
+            "cpu_millicores": 434,
+            "memory": "42Mi",
+            "memory_bytes": 44040192
+          },
+          "kaveon-worker-1": {
+            "cpu": "40m",
+            "cpu_millicores": 40,
+            "memory": "7Mi",
+            "memory_bytes": 7340032
+          },
+          "kaveon-worker-2": {
+            "cpu": "455m",
+            "cpu_millicores": 455,
+            "memory": "49Mi",
+            "memory_bytes": 51380224
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:19.441133+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:20.613873+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:21.774493+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:22.949958+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:24.138489+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:25.327057+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:26.500197+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:27.671483+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:28.844210+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:30.013136+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:31.184009+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:32.404218+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:33.598115+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:34.777916+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:35.955251+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:37.134169+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:38.326180+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:39.497279+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:40.687468+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:41.879648+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:43.071016+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:44.245657+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:45.432561+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:46.603131+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:47.793744+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:48.966977+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:50.138525+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:51.312763+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:52.500777+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:53.674046+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:54.831042+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "9m",
+            "cpu_millicores": 9,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "65m",
+            "cpu_millicores": 65,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "243m",
+            "cpu_millicores": 243,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "302m",
+            "cpu_millicores": 302,
+            "memory": "17Mi",
+            "memory_bytes": 17825792
+          },
+          "kaveon-worker-2": {
+            "cpu": "333m",
+            "cpu_millicores": 333,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:55.986384+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:57.221184+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:58.376525+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:47:59.581190+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:00.737441+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:01.909407+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:03.094100+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:04.320595+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:05.494645+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:06.686418+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:07.906086+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:09.064143+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:10.220766+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:11.392073+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:12.579224+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:13.766921+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:14.938930+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:16.155787+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "28m",
+            "cpu_millicores": 28,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "2m",
+            "cpu_millicores": 2,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "611m",
+            "cpu_millicores": 611,
+            "memory": "43Mi",
+            "memory_bytes": 45088768
+          },
+          "kaveon-worker-1": {
+            "cpu": "736m",
+            "cpu_millicores": 736,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "638m",
+            "cpu_millicores": 638,
+            "memory": "50Mi",
+            "memory_bytes": 52428800
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:17.354778+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:18.525039+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:19.731660+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:20.922349+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:22.092591+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:23.276520+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:24.498072+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:25.682758+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:26.868784+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:28.052344+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:29.239553+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:30.416009+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:31.608805+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:32.768810+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:33.978562+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:35.168361+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:36.338740+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:37.558231+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:38.717866+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:39.908032+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:41.093032+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:42.312631+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:43.499289+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:44.668571+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:45.852909+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:47.026872+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:48.212309+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:49.401659+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:50.602841+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:51.757826+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:52.929437+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "58m",
+            "cpu_millicores": 58,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1232m",
+            "cpu_millicores": 1232,
+            "memory": "45Mi",
+            "memory_bytes": 47185920
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "22Mi",
+            "memory_bytes": 23068672
+          },
+          "kaveon-worker-2": {
+            "cpu": "1196m",
+            "cpu_millicores": 1196,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:54.112031+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:55.314097+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:56.755838+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:57.940382+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:48:59.109583+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:00.296459+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:01.483930+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:02.641136+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:03.841996+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:05.030825+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:06.218178+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:07.404598+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:08.576119+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:09.744440+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:10.901235+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:12.086665+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:13.243420+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:14.412314+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:15.596579+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:16.771983+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "55m",
+            "cpu_millicores": 55,
+            "memory": "786Mi",
+            "memory_bytes": 824180736
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "3m",
+            "cpu_millicores": 3,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1251m",
+            "cpu_millicores": 1251,
+            "memory": "39Mi",
+            "memory_bytes": 40894464
+          },
+          "kaveon-worker-1": {
+            "cpu": "1320m",
+            "cpu_millicores": 1320,
+            "memory": "24Mi",
+            "memory_bytes": 25165824
+          },
+          "kaveon-worker-2": {
+            "cpu": "1282m",
+            "cpu_millicores": 1282,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:17.964574+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:19.136534+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:20.289312+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:21.507408+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:22.757590+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:23.961759+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:25.134363+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:26.287308+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:27.448241+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:28.635564+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:29.824115+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "72m",
+            "cpu_millicores": 72,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "6m",
+            "cpu_millicores": 6,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1167m",
+            "cpu_millicores": 1167,
+            "memory": "41Mi",
+            "memory_bytes": 42991616
+          },
+          "kaveon-worker-1": {
+            "cpu": "1303m",
+            "cpu_millicores": 1303,
+            "memory": "29Mi",
+            "memory_bytes": 30408704
+          },
+          "kaveon-worker-2": {
+            "cpu": "1138m",
+            "cpu_millicores": 1138,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:30.978525+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:32.167205+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      },
+      {
+        "at_utc": "2026-10-16T00:49:33.335217+00:00",
+        "pods": {
+          "kaveon-api-6758744588-st566": {
+            "cpu": "10m",
+            "cpu_millicores": 10,
+            "memory": "208Mi",
+            "memory_bytes": 218103808
+          },
+          "kaveon-coordinator-0": {
+            "cpu": "69m",
+            "cpu_millicores": 69,
+            "memory": "774Mi",
+            "memory_bytes": 811597824
+          },
+          "kaveon-portal-d5bc89fd8-cbszz": {
+            "cpu": "5m",
+            "cpu_millicores": 5,
+            "memory": "71Mi",
+            "memory_bytes": 74448896
+          },
+          "kaveon-worker-0": {
+            "cpu": "1113m",
+            "cpu_millicores": 1113,
+            "memory": "40Mi",
+            "memory_bytes": 41943040
+          },
+          "kaveon-worker-1": {
+            "cpu": "1312m",
+            "cpu_millicores": 1312,
+            "memory": "25Mi",
+            "memory_bytes": 26214400
+          },
+          "kaveon-worker-2": {
+            "cpu": "1128m",
+            "cpu_millicores": 1128,
+            "memory": "52Mi",
+            "memory_bytes": 54525952
+          }
+        }
+      }
+    ],
+    "peak_resources": {
+      "kaveon-api-6758744588-st566": {
+        "cpu_millicores": 10,
+        "memory_bytes": 218103808
+      },
+      "kaveon-coordinator-0": {
+        "cpu_millicores": 147,
+        "memory_bytes": 824180736
+      },
+      "kaveon-portal-d5bc89fd8-cbszz": {
+        "cpu_millicores": 6,
+        "memory_bytes": 74448896
+      },
+      "kaveon-worker-0": {
+        "cpu_millicores": 1251,
+        "memory_bytes": 47185920
+      },
+      "kaveon-worker-1": {
+        "cpu_millicores": 1320,
+        "memory_bytes": 30408704
+      },
+      "kaveon-worker-2": {
+        "cpu_millicores": 1282,
+        "memory_bytes": 54525952
+      }
+    },
+    "sampled_engine_memory_within_pod_limits": true
+  },
+  "pods_after": {
+    "kaveon-api-6758744588-st566": {
+      "uid": "6dc8481c-bd5e-4b38-9d76-e4889e7da015",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "6Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-availability-guard-29868529-pxlzm": {
+      "uid": "33d266f0-eab5-4a6d-896c-6755149341e1",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "192Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868515-rpv92": {
+      "uid": "82d22581-ab48-4cd6-8f96-3fd8c59c4aa5",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868520-8w62r": {
+      "uid": "189d9640-3c8e-4f2b-b75f-03a42ec4c6a0",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868525-ll5bc": {
+      "uid": "a2e1d591-bf68-4a7e-8841-00b319308aec",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-coordinator-0": {
+      "uid": "9f822b8f-7d4a-4cef-bce4-072d76571736",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-system-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3",
+          "ephemeral-storage": "8Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "2Gi",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868377-h24fj": {
+      "uid": "c1b04a87-6701-4ad6-9db1-f168625e4127",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868437-rdr7p": {
+      "uid": "f2a7217e-bcc9-428f-98a6-198ef653657b",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:53a33181b19ce6e846f992722192626c641f62236b7e2a467159cd00de6bd93d",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868497-vlj5z": {
+      "uid": "17e44596-36bf-40b1-80c9-a7b3e8a63c84",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-portal-d5bc89fd8-cbszz": {
+      "uid": "c3b4fdfc-0be7-402a-abad-a86bdb0620de",
+      "image": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "image_id": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "3Gi"
+        },
+        "requests": {
+          "cpu": "200m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-worker-0": {
+      "uid": "c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-1": {
+      "uid": "507f5aad-b51c-4b43-8e91-a948fdabad4b",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-2": {
+      "uid": "491f080a-0550-4e96-8c59-b9ff2218e0dd",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    }
+  },
+  "retained_files_after": {
+    "coordinator_exchange": 0,
+    "kaveon-worker-0_spill": 0,
+    "kaveon-worker-1_spill": 0,
+    "kaveon-worker-2_spill": 0
+  },
+  "unexpected_restart_deltas": {},
+  "completed_at_utc": "2026-10-16T00:49:40.393817+00:00"
+}

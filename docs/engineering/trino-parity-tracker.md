@@ -19,7 +19,7 @@ evidence passes against exact-result references.
 |---|---|---|---|
 | Worker discovery and scheduling | Qualified (bounded) | Coordinator assigns fragments and retries tasks across compatible workers; the declared three-worker Docker/AKS topology has exact skew, forced-loss, repeated-pressure, and graceful node-drain evidence. | Additional supported topologies and endurance qualification. |
 | Hash exchange and repartition | Qualified (bounded) | Authenticated Arrow exchange, stable partitioning, bounded payloads, replayable spools, fail-closed live quota rejection, cleanup, 900-second ADLS soak, and a qualified AKS object-store fault/retry run with zero retained files. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
-| Distributed joins | Partial | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, measured local join spill, and bounded AKS outer-join/skew evidence. | AKS disk-exhaustion, forced join-spill recovery, and larger high-cardinality qualification. |
+| Distributed joins | Partial | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, measured local join spill, bounded AKS outer-join/skew evidence, and a clean-baseline AKS fault/pressure rerun with forced worker-loss retry and exact recovery. | AKS disk-exhaustion, larger high-cardinality joins, and sustained mixed-workload qualification. |
 | Distributed aggregates | Implemented | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, hybrid final merge. | Larger-scale AKS pressure and published p95 SLO. |
 | Windows | Partial | Distributed row-number and compatible partitioned windows are qualified; mixed-key and unpartitioned windows remain centralized for correctness. | Parallel execution for the remaining window shapes. |
 | Global ORDER BY and TopN | Partial | Inputs distribute and a coordinator merge preserves exact global ordering; ordinal keys that survive wildcard expansion are rebound to the final output scope, generic `ORDER BY … LIMIT` is applied only after the global merge, `FETCH FIRST/NEXT … WITH TIES` preserves the boundary peer set, and already-sorted integer worker candidates use a bounded k-way merge fast path. | Fully parallel ordered result stream without a coordinator bottleneck. |
@@ -72,4 +72,5 @@ A parity claim requires the exact-result reference, workload inputs, image or
 commit digest, latency/resource measurements, and failure count to be retained
 under `docs/qualification/`. Passing focused tests alone does not qualify a
 three-worker, cloud, or broad federated claim.
+
 
