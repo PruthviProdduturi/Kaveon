@@ -684,13 +684,34 @@ because the result cache serves them, not because a cuboid does. `platform x
 license` has at most 12 cells and still scanned, so cell count is not the
 reason.
 
-The build did run a pairs wave — its statements are visible in the failures of
-the earlier attempts — and reported `cube_cells: 290`, where the ten axes sum
-to 148 cells plus a grand total. So 141 cells are unaccounted for and the cube
-evidently holds more than the singles, yet no pair query is answered from it.
-Whether the pair cuboids are stored and not matched, or counted and not
-stored, is an Engine question and is deliberately left open here rather than
-guessed at: two readings of that 290 were already wrong.
+The build reported `cube_cells: 290`, and that number is now fully accounted
+for: 1 grand total + 233 single-axis cells + 56 `event_date` days = 290.
+Eleven axes, not ten.
+
+Two earlier readings of that 290 were wrong and are corrected here rather than
+left standing. The first assumed ten axes summing to 148 cells and concluded
+141 cells were unaccounted for, which suggested the cube held pair cuboids it
+would not serve. It did not. The time axis was the missing eleventh and one
+country count was short by 85; there was never a surplus.
+
+The open question — whether pair cuboids were stored and not matched, or
+counted and not stored — has an answer, and it is neither. **No pair was ever
+planned.** `TableShape::groupings` admitted a pair only when
+`cap_left x cap_right` fit `CUBE_PAIR_MAX_CELLS` (1,000,000), and a dimension
+with no declared cap takes `DEFAULT_DIMENSION_CAP` of 10,000, so every pair in
+the table priced at 100,000,000 cells and every pair was declined. The build
+reported success because by its own rule it had succeeded. `platform x license`
+is twelve cells and was priced at a hundred million.
+
+Fixed in `cec6a098`: pairs are admitted on the product of the counts the build
+actually observed. The silence that hid it is fixed separately — a declined
+pair was dropped with a `continue`, so the planner now returns a refusal with
+one of four reasons (`CountUnknown`, `AxisEmpty`, `PairLimit`,
+`CubeCellBudget`) and the cube document records them in `declined_pairs`
+beside the groupings it holds.
+
+Residual: the build goes from twelve statements to sixty-six, and the first
+read of a pair is not cheap even once planned.
 
 Consequence for the product: a chart grouping on one dimension is now about
 fifty times faster than before, and a two-dimension chart costs about two
