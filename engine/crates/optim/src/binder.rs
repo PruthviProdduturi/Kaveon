@@ -1984,6 +1984,11 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<&str> {
                 .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table)),
         ),
         LogicalPlan::Filter { input, .. } => relation_qualifier(input),
+        LogicalPlan::Project { input, columns }
+            if columns.len() == 1 && matches!(columns.first(), Some(Expr::Star)) =>
+        {
+            relation_qualifier(input)
+        }
         _ => None,
     }
 }

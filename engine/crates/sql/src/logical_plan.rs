@@ -1419,6 +1419,25 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             }
             if let Some(alias) = alias
                 && alias.columns.is_empty()
+                && let LogicalPlan::Scan {
+                    alias: scan_alias, ..
+                } = &mut plan
+            {
+                *scan_alias = Some(alias.name.value.clone());
+            }
+            if let Some(alias) = alias
+                && alias.columns.is_empty()
+                && let LogicalPlan::Project { input, columns } = &mut plan
+                && columns.len() == 1
+                && matches!(columns.first(), Some(Expr::Star))
+                && let LogicalPlan::Scan {
+                    alias: scan_alias, ..
+                } = input.as_mut()
+            {
+                *scan_alias = Some(alias.name.value.clone());
+            }
+            if let Some(alias) = alias
+                && alias.columns.is_empty()
                 && let Some(columns) = plan_output_columns(&plan)
             {
                 plan = LogicalPlan::Project {
@@ -1756,7 +1775,10 @@ fn join_relation_qualifier(plan: &LogicalPlan) -> Option<String> {
                 .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
         ),
         LogicalPlan::Filter { input, .. } => join_relation_qualifier(input),
-        LogicalPlan::Project { columns, .. } => {
+        LogicalPlan::Project { input, columns } => {
+            if columns.len() == 1 && matches!(columns.first(), Some(Expr::Star)) {
+                return join_relation_qualifier(input);
+            }
             let mut qualifiers = columns.iter().filter_map(|column| match column {
                 Expr::Alias { name, .. } => name.rsplit_once('.').map(|(qualifier, _)| qualifier),
                 _ => None,
@@ -5965,6 +5987,26 @@ mod tests {
         let plan =
             sql_to_logical_plan("SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)")
                 .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected top-level projection")
+        };
+        let LogicalPlan::Join {
+            condition: Some(Expr::BinaryOp { left, right, .. }),
+            ..
+        } = *input
+        else {
+            panic!("expected qualified USING join")
+        };
+        assert_eq!(*left, Expr::Column("u.id".into()));
+        assert_eq!(*right, Expr::Column("o.id".into()));
+    }
+
+    #[test]
+    fn lowers_using_over_a_wildcard_derived_scan() {
+        let plan = sql_to_logical_plan(
+            "SELECT u.id, o.amount FROM (SELECT * FROM users) u JOIN orders o USING (id)",
+        )
+        .unwrap();
         let LogicalPlan::Project { input, .. } = plan else {
             panic!("expected top-level projection")
         };
