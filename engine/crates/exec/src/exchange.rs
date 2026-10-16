@@ -281,7 +281,9 @@ mod tests {
     use super::{
         BoundedExchangeBuffer, HashPartitioner, SPILL_PARTITION_SALT, THREAD_PARTITION_SALT,
     };
-    use arrow::array::{DictionaryArray, Int32Array, Int64Array, StringArray};
+    use arrow::array::{
+        DictionaryArray, Int32Array, Int32Builder, Int64Array, ListBuilder, StringArray,
+    };
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
@@ -340,6 +342,28 @@ mod tests {
         assert_eq!(
             partition(f64::NAN),
             partition(f64::from_bits(0x7ff8_0000_0000_1234))
+        );
+    }
+
+    #[test]
+    fn nested_array_keys_can_be_partitioned() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        )]));
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_value(3);
+        builder.append(true);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish())]).unwrap();
+        let partitioner = HashPartitioner::try_new(&schema, &["key".into()], 3).unwrap();
+        let partitions = partitioner.partition(&batch).unwrap();
+        assert_eq!(
+            partitions.iter().map(|part| part.num_rows()).sum::<usize>(),
+            2
         );
     }
 
