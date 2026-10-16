@@ -3759,6 +3759,16 @@ mod tests {
                 "SELECT id + 1 AS shifted FROM items EXCEPT SELECT id + 1 AS shifted FROM customers",
                 "Except",
             ),
+            (
+                "query-expression-intersect-all",
+                "SELECT id + 1 AS shifted FROM items INTERSECT ALL SELECT id + 1 AS shifted FROM customers",
+                "Intersect",
+            ),
+            (
+                "query-expression-except-all",
+                "SELECT id + 1 AS shifted FROM items EXCEPT ALL SELECT id + 1 AS shifted FROM customers",
+                "Except",
+            ),
         ] {
             let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
             qualify_tables(&mut plan, "test", "default");

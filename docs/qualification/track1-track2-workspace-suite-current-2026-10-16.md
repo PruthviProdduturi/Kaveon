@@ -139,3 +139,7 @@ The complete server target was then rerun against this source:
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
 423 passed, 0 failed, 0 ignored (147.17s)
 ```
+
+The differential gate also covers expression-shaped `INTERSECT ALL` and
+`EXCEPT ALL` projections; both passed with exact local/distributed results in
+143.25 seconds.
