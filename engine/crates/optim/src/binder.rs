@@ -2934,6 +2934,23 @@ mod tests {
     }
 
     #[test]
+    fn correlated_scalar_offset_with_residual_fails_closed() {
+        let mut plan = sql_to_logical_plan_for_binder(
+            "SELECT e.o_orderkey FROM orders e WHERE e.o_orderdate > (SELECT i.o_orderdate FROM orders i WHERE i.o_custkey = e.o_custkey AND i.o_orderdate > e.o_orderdate ORDER BY i.o_orderdate OFFSET 1 LIMIT 1)",
+        )
+        .unwrap();
+        qualify(&mut plan);
+        let error = bind(plan, &catalog())
+            .expect_err("residual correlated scalar OFFSET requires Apply semantics");
+        assert!(
+            error
+                .to_string()
+                .contains("OFFSET inside a correlated subquery is not supported"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
     fn a_correlated_in_with_the_projected_key_is_a_keyed_semi_join() {
         let plan = bound(
             "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l_orderkey = o_orderkey)",
