@@ -3655,37 +3655,19 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
 /// expression model. `IS DISTINCT FROM` is always boolean: two NULLs compare
 /// equal, and a NULL compares different from every non-NULL value.
 fn null_safe_comparison(left: Expr, right: Expr, not_distinct: bool) -> Expr {
-    let left_is_null = Expr::IsNull(Box::new(left.clone()));
-    let right_is_null = Expr::IsNull(Box::new(right.clone()));
-    let right_is_not_null = Expr::IsNotNull(Box::new(right.clone()));
-    let equal = Expr::BinaryOp {
-        left: Box::new(left.clone()),
-        op: BinaryOp::Eq,
-        right: Box::new(right.clone()),
-    };
-    let different = Expr::BinaryOp {
-        left: Box::new(left),
-        op: BinaryOp::Ne,
-        right: Box::new(right),
-    };
-    if not_distinct {
-        Expr::Case {
-            operand: None,
-            when_then: vec![
-                (left_is_null, right_is_null.clone()),
-                (right_is_null, Expr::Literal(ScalarValue::Bool(false))),
-            ],
-            else_expr: Some(Box::new(equal)),
+    // Keep this as a first-class evaluator operation.  Rewriting to CASE plus
+    // ordinary equality loses nested NULL semantics: for example, Trino
+    // considers ARRAY[1, NULL] IS NOT DISTINCT FROM ARRAY[1, NULL] true.
+    // Ordinary equality must remain three-valued, while this operation is
+    // deliberately two-valued at every nested level.
+    Expr::Function {
+        name: if not_distinct {
+            "KAVEON_IS_NOT_DISTINCT_FROM"
+        } else {
+            "KAVEON_IS_DISTINCT_FROM"
         }
-    } else {
-        Expr::Case {
-            operand: None,
-            when_then: vec![
-                (left_is_null, right_is_not_null),
-                (right_is_null, Expr::Literal(ScalarValue::Bool(true))),
-            ],
-            else_expr: Some(Box::new(different)),
-        }
+        .into(),
+        args: vec![left, right],
     }
 }
 
@@ -6405,15 +6387,23 @@ mod tests {
     }
 
     #[test]
-    fn null_safe_comparisons_lower_to_null_total_case_expressions() {
+    fn null_safe_comparisons_lower_to_recursive_null_safe_functions() {
         for (sql, expected) in [
-            ("SELECT * FROM t WHERE a IS DISTINCT FROM b", "Ne"),
-            ("SELECT * FROM t WHERE a IS NOT DISTINCT FROM b", "Eq"),
+            (
+                "SELECT * FROM t WHERE a IS DISTINCT FROM b",
+                "KAVEON_IS_DISTINCT_FROM",
+            ),
+            (
+                "SELECT * FROM t WHERE a IS NOT DISTINCT FROM b",
+                "KAVEON_IS_NOT_DISTINCT_FROM",
+            ),
         ] {
             let plan = sql_to_logical_plan(sql).unwrap();
             let debug = format!("{plan:?}");
-            assert!(debug.contains("Case"), "{sql} did not lower to CASE");
-            assert!(debug.contains(expected), "{sql} lost its comparison");
+            assert!(
+                debug.contains(expected),
+                "{sql} lost its null-safe operator"
+            );
         }
     }
 

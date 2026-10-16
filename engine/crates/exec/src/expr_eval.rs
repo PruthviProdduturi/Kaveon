@@ -2998,8 +2998,173 @@ fn array_sequence(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     Ok(Arc::new(builder.finish()))
 }
 
+/// Compare nested values with SQL's null-safe equality semantics.
+///
+/// `comparison(..., Eq)` intentionally implements three-valued SQL equality,
+/// which is correct for `=` but cannot implement `IS [NOT] DISTINCT FROM` for
+/// arrays, maps, or rows containing NULL fields.  This helper keeps the
+/// distinction explicit and recursively treats two NULL values as equal.
+fn null_safe_equal(left: &ArrayRef, right: &ArrayRef) -> Result<BooleanArray> {
+    if left.len() != right.len() {
+        return Err(KaveonError::Execution(
+            "null-safe comparison requires matching row counts".into(),
+        ));
+    }
+    let mut rows = Vec::with_capacity(left.len());
+    for row in 0..left.len() {
+        rows.push(Some(null_safe_equal_value(
+            &left.slice(row, 1),
+            &right.slice(row, 1),
+        )?));
+    }
+    Ok(BooleanArray::from(rows))
+}
+
+fn null_safe_equal_value(left: &ArrayRef, right: &ArrayRef) -> Result<bool> {
+    debug_assert_eq!(left.len(), 1);
+    debug_assert_eq!(right.len(), 1);
+    if left.is_null(0) || right.is_null(0) {
+        return Ok(left.is_null(0) == right.is_null(0));
+    }
+
+    let left_list = match left.data_type() {
+        DataType::List(_) | DataType::LargeList(_) => Some(left),
+        _ => None,
+    };
+    let right_list = match right.data_type() {
+        DataType::List(_) | DataType::LargeList(_) => Some(right),
+        _ => None,
+    };
+    if let (Some(left), Some(right)) = (left_list, right_list) {
+        let left = if matches!(left.data_type(), DataType::LargeList(_)) {
+            compute::cast(
+                left,
+                &DataType::List(match left.data_type() {
+                    DataType::LargeList(field) => field.clone(),
+                    _ => unreachable!(),
+                }),
+            )?
+        } else {
+            Arc::clone(left)
+        };
+        let right = if matches!(right.data_type(), DataType::LargeList(_)) {
+            compute::cast(
+                right,
+                &DataType::List(match right.data_type() {
+                    DataType::LargeList(field) => field.clone(),
+                    _ => unreachable!(),
+                }),
+            )?
+        } else {
+            Arc::clone(right)
+        };
+        let left = left.as_any().downcast_ref::<ListArray>().unwrap();
+        let right = right.as_any().downcast_ref::<ListArray>().unwrap();
+        let left_values = left.value(0);
+        let right_values = right.value(0);
+        if left_values.len() != right_values.len() {
+            return Ok(false);
+        }
+        for index in 0..left_values.len() {
+            if !null_safe_equal_value(&left_values.slice(index, 1), &right_values.slice(index, 1))?
+            {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if let (Some(left), Some(right)) = (
+        left.as_any().downcast_ref::<MapArray>(),
+        right.as_any().downcast_ref::<MapArray>(),
+    ) {
+        let left_start = left.value_offsets()[0] as usize;
+        let left_end = left.value_offsets()[1] as usize;
+        let right_start = right.value_offsets()[0] as usize;
+        let right_end = right.value_offsets()[1] as usize;
+        if left_end - left_start != right_end - right_start {
+            return Ok(false);
+        }
+        let mut matched = vec![false; right_end - right_start];
+        for left_index in left_start..left_end {
+            let left_key = compute::take(
+                left.keys(),
+                &Int64Array::from(vec![left_index as i64]),
+                None,
+            )?;
+            let left_value = compute::take(
+                left.values(),
+                &Int64Array::from(vec![left_index as i64]),
+                None,
+            )?;
+            let mut found = false;
+            for (offset, right_index) in (right_start..right_end).enumerate() {
+                if matched[offset] {
+                    continue;
+                }
+                let right_key = compute::take(
+                    right.keys(),
+                    &Int64Array::from(vec![right_index as i64]),
+                    None,
+                )?;
+                if !null_safe_equal_value(&left_key, &right_key)? {
+                    continue;
+                }
+                let right_value = compute::take(
+                    right.values(),
+                    &Int64Array::from(vec![right_index as i64]),
+                    None,
+                )?;
+                if null_safe_equal_value(&left_value, &right_value)? {
+                    matched[offset] = true;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if let (Some(left), Some(right)) = (
+        left.as_any().downcast_ref::<StructArray>(),
+        right.as_any().downcast_ref::<StructArray>(),
+    ) {
+        if left.num_columns() != right.num_columns() || left.column_names() != right.column_names()
+        {
+            return Ok(false);
+        }
+        for (left_field, right_field) in left.columns().iter().zip(right.columns()) {
+            if !null_safe_equal_value(&left_field.slice(0, 1), &right_field.slice(0, 1))? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    let equality = comparison(left, right, CompareKind::Eq)?;
+    Ok(equality.is_valid(0) && equality.value(0))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
+    if matches!(
+        upper.as_str(),
+        "KAVEON_IS_NOT_DISTINCT_FROM" | "KAVEON_IS_DISTINCT_FROM"
+    ) {
+        if args.len() != 2 {
+            return Err(KaveonError::Execution(
+                "null-safe comparison requires two arguments".into(),
+            ));
+        }
+        let equal = null_safe_equal(&args[0], &args[1])?;
+        if upper == "KAVEON_IS_NOT_DISTINCT_FROM" {
+            return Ok(Arc::new(equal));
+        }
+        return Ok(Arc::new(compute::not(&equal)?));
+    }
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
         return eval_array_quantified_compare(&upper, args, num_rows);
     }
@@ -13481,6 +13646,80 @@ mod tests {
         )
         .unwrap();
         assert!(nullable.as_boolean().is_null(0));
+    }
+
+    #[test]
+    fn null_safe_comparison_recurses_through_arrays_rows_and_maps() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let null_safe = |left: Expr, right: Expr| Expr::Function {
+            name: "KAVEON_IS_NOT_DISTINCT_FROM".into(),
+            args: vec![left, right],
+        };
+        let equal = evaluate(
+            &null_safe(
+                array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Null),
+                ]),
+                array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Null),
+                ]),
+            ),
+            &batch,
+        )
+        .unwrap();
+        assert!(equal.as_boolean().value(0));
+
+        let row = |value: Expr| Expr::Function {
+            name: "ROW".into(),
+            args: vec![value],
+        };
+        let row_equal = evaluate(
+            &null_safe(
+                row(Expr::Literal(ScalarValue::Int64(7))),
+                row(Expr::Literal(ScalarValue::Int64(7))),
+            ),
+            &batch,
+        )
+        .unwrap();
+        assert!(row_equal.as_boolean().value(0));
+
+        let map = |value: Expr| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                array(vec![Expr::Literal(ScalarValue::Utf8("k".into()))]),
+                array(vec![value]),
+            ],
+        };
+        let map_equal = evaluate(
+            &null_safe(
+                map(Expr::Literal(ScalarValue::Int64(9))),
+                map(Expr::Literal(ScalarValue::Int64(9))),
+            ),
+            &batch,
+        )
+        .unwrap();
+        assert!(map_equal.as_boolean().value(0));
+
+        let distinct = evaluate(
+            &Expr::Function {
+                name: "KAVEON_IS_DISTINCT_FROM".into(),
+                args: vec![
+                    array(vec![Expr::Literal(ScalarValue::Null)]),
+                    array(vec![Expr::Literal(ScalarValue::Int64(1))]),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(distinct.as_boolean().value(0));
     }
 
     #[test]
