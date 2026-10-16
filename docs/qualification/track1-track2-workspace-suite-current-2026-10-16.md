@@ -157,3 +157,13 @@ The unit test and local/distributed differential sweep passed; the sweep took
 `ARRAY_HISTOGRAM` coverage now also supports boolean and DATE32 keys, in
 addition to integer and UTF-8 keys. The exact local/distributed differential
 sweep passed **1/1** after this extension (145.94 seconds).
+
+The complete targets were rerun after the histogram type extension:
+
+```text
+cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
+387 passed, 0 failed, 4 ignored (14.79s)
+
+cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
+423 passed, 0 failed, 0 ignored (155.27s)
+```
