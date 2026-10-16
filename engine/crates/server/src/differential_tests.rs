@@ -272,6 +272,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_from_entries_and_projection",
+        "SELECT MAP_ELEMENT_AT(MAP_FROM_ENTRIES(ARRAY[ROW('a', 10), ROW('b', 20)]), 'b') AS value, MAP_KEYS(MAP_FROM_ENTRIES(ARRAY[ROW('a', 10), ROW('b', 20)])) AS keys FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_nullable_equality",
         "SELECT MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) = MAP(ARRAY['b', 'a'], ARRAY[NULL, 10]) AS same, MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) = MAP(ARRAY['a', 'b'], ARRAY[11, NULL]) AS different FROM {T} LIMIT 1",
         false,
