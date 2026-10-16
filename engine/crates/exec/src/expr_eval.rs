@@ -1,6 +1,6 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
-    Decimal128Array, Decimal128Builder, Float32Array, Float64Array, Float64Builder,
+    Decimal128Array, Decimal128Builder, Float32Array, Float32Builder, Float64Array, Float64Builder,
     GenericListArray, Int8Array, Int16Array, Int32Array, Int32Builder, Int32DictionaryArray,
     Int64Array, Int64Builder, LargeListArray, LargeListBuilder, LargeStringArray,
     LargeStringBuilder, ListArray, ListBuilder, MapArray, NullBuilder, OffsetSizeTrait,
@@ -2854,6 +2854,8 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         DataType::UInt16 => array_histogram_primitive::<L, UInt16Type>(list),
         DataType::UInt32 => array_histogram_primitive::<L, UInt32Type>(list),
         DataType::UInt64 => array_histogram_primitive::<L, UInt64Type>(list),
+        DataType::Float32 => array_histogram_float32(list),
+        DataType::Float64 => array_histogram_float64(list),
         DataType::Boolean => {
             let mut keys = ListBuilder::new(BooleanBuilder::new());
             let mut counts = ListBuilder::new(Int64Builder::new());
@@ -2991,6 +2993,94 @@ where
             }
         }
         for (value, count) in histogram {
+            keys.values().append_value(value);
+            counts.values().append_value(count);
+        }
+        keys.append(true);
+        counts.append(true);
+    }
+    eval_scalar_function(
+        "MAP",
+        &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+        list.len(),
+    )
+}
+
+fn array_histogram_float32<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    let mut keys = ListBuilder::new(Float32Builder::new());
+    let mut counts = ListBuilder::new(Int64Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            keys.append(false);
+            counts.append(false);
+            continue;
+        }
+        let inner = list.value(row);
+        let values = inner.as_primitive::<Float32Type>();
+        let mut histogram = std::collections::HashMap::<u32, (f32, i64)>::new();
+        for index in 0..values.len() {
+            if !values.is_null(index) {
+                let value = values.value(index);
+                let key = if value.is_nan() {
+                    f32::NAN.to_bits()
+                } else if value == 0.0 {
+                    0
+                } else {
+                    value.to_bits()
+                };
+                let entry = histogram.entry(key).or_insert((value, 0));
+                entry.1 = entry.1.checked_add(1).ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                })?;
+            }
+        }
+        let mut values = histogram.into_values().collect::<Vec<_>>();
+        values.sort_by(|left, right| left.0.total_cmp(&right.0));
+        for (value, count) in values {
+            keys.values().append_value(value);
+            counts.values().append_value(count);
+        }
+        keys.append(true);
+        counts.append(true);
+    }
+    eval_scalar_function(
+        "MAP",
+        &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+        list.len(),
+    )
+}
+
+fn array_histogram_float64<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    let mut keys = ListBuilder::new(Float64Builder::new());
+    let mut counts = ListBuilder::new(Int64Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            keys.append(false);
+            counts.append(false);
+            continue;
+        }
+        let inner = list.value(row);
+        let values = inner.as_primitive::<Float64Type>();
+        let mut histogram = std::collections::HashMap::<u64, (f64, i64)>::new();
+        for index in 0..values.len() {
+            if !values.is_null(index) {
+                let value = values.value(index);
+                let key = if value.is_nan() {
+                    f64::NAN.to_bits()
+                } else if value == 0.0 {
+                    0
+                } else {
+                    value.to_bits()
+                };
+                let entry = histogram.entry(key).or_insert((value, 0));
+                entry.1 = entry.1.checked_add(1).ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                })?;
+            }
+        }
+        let mut values = histogram.into_values().collect::<Vec<_>>();
+        values.sort_by(|left, right| left.0.total_cmp(&right.0));
+        for (value, count) in values {
             keys.values().append_value(value);
             counts.values().append_value(count);
         }
@@ -11824,6 +11914,32 @@ mod tests {
         let map = value.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map.keys().as_primitive::<Int32Type>().values(), &[1, 3]);
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn array_histogram_supports_float_elements_with_canonical_specials() {
+        let list = ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float64, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 5_i32])),
+            Arc::new(Float64Array::from(vec![
+                Some(2.5),
+                Some(-0.0),
+                Some(0.0),
+                Some(f64::NAN),
+                Some(f64::NAN),
+            ])),
+            None,
+        )
+        .unwrap();
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        let keys = map.keys().as_primitive::<Float64Type>();
+        assert_eq!(keys.len(), 3);
+        assert_eq!(
+            map.values().as_primitive::<Int64Type>().values(),
+            &[2, 1, 2]
+        );
+        assert!(keys.value(2).is_nan());
     }
 
     #[test]

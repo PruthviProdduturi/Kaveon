@@ -162,11 +162,15 @@ The histogram path now covers the primitive integer family used by the engine
 (Int8/16/32/64 and UInt8/16/32/64). A narrow-element Int32 unit regression
 preserves deterministic ordering, null-element omission, and overflow checks.
 
+Float32 and Float64 histogram keys are also supported. NaN values are
+canonicalized into one bucket and signed zero values share one bucket; a unit
+regression covers both behaviors.
+
 The complete targets were rerun after the histogram type extension:
 
 ```text
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-388 passed, 0 failed, 4 ignored (15.39s)
+389 passed, 0 failed, 4 ignored (16.16s)
 
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
 423 passed, 0 failed, 0 ignored (155.27s)
