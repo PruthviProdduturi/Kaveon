@@ -7,7 +7,7 @@ window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions, plus nested null-safe array/map/row comparison, LargeList map
 constructors, primitive numeric map keys, date/decimal map keys, decimal
 map-key regression coverage, explicit, wildcard-derived, nested-derived,
-derived column-list aliases, equality-correlated, and uncorrelated-lateral
+derived column-list aliases, equality-correlated, residual-inner, and uncorrelated-lateral
 `JOIN ... USING`)
 
 The complete Rust workspace test command was run from `engine/`:
@@ -16,10 +16,10 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets --no-fail-fast --quiet
 ```
 
-The command completed with **1,563 listed tests, 1,557 passed, 0 failed, and 6
+The command completed with **1,565 listed tests, 1,559 passed, 0 failed, and 6
 ignored** across all workspace test binaries. The long server differential
 sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
-core, 386 execution, 69 optimizer, 412 server, 185 SQL, and 125 storage tests.
+core, 389 execution, 69 optimizer, 418 server, 191 SQL, and 125 storage tests.
 
 The release lint commands also passed:
 
@@ -91,7 +91,7 @@ source:
 
 ```text
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-412 passed, 0 failed, 0 ignored (145.30s)
+418 passed, 0 failed, 0 ignored (150.36s)
 ```
 
 This includes the planner regression for projected-key `UNION DISTINCT` and
@@ -107,7 +107,7 @@ The complete execution crate target suite was also rerun on this source:
 
 ```text
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-382 passed, 0 failed, 4 ignored (14.83s)
+385 passed, 0 failed, 4 ignored (15.35s)
 ```
 
 This is repository-level evidence only. It does not close the remaining Track

@@ -580,20 +580,27 @@ impl Binder<'_> {
                 if correlated_count {
                     right.plan = coalesce_count_projection(right.plan);
                 }
-                let keys = lateral
-                    .into_iter()
-                    .map(|correlation| match correlation {
-                        Correlation::Key { inner, outer, .. } => Ok(Expr::BinaryOp {
+                let mut keys = Vec::new();
+                let mut residuals = Vec::new();
+                for correlation in lateral {
+                    match correlation {
+                        Correlation::Key { inner, outer, .. } => keys.push(Expr::BinaryOp {
                             left: Box::new(Expr::Column(outer)),
                             op: BinaryOp::Eq,
                             right: Box::new(Expr::Column(inner)),
                         }),
-                        Correlation::Residual { predicate, .. } => Err(KaveonError::Sql(format!(
-                            "a correlated predicate other than an equality is supported only in EXISTS and NOT EXISTS: {predicate:?}"
-                        ))),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let condition = conjoin(condition.into_iter().chain(keys).collect());
+                        Correlation::Residual { predicate, .. } => residuals.push(predicate),
+                    }
+                }
+                if !residuals.is_empty() && !matches!(join_type, JoinType::Inner | JoinType::Cross)
+                {
+                    return Err(KaveonError::Sql(
+                        "residual correlated predicates are supported only for inner lateral joins"
+                            .into(),
+                    ));
+                }
+                let condition =
+                    conjoin(condition.into_iter().chain(keys).chain(residuals).collect());
                 let Some(condition) = condition else {
                     return Ok(Bound {
                         plan: LogicalPlan::Join {

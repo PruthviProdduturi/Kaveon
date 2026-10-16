@@ -2057,6 +2057,31 @@ fn correlated_equality_lateral_join_using_matches_the_local_result() {
 }
 
 #[test]
+fn correlated_residual_lateral_join_using_matches_the_local_result() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-correlated-residual-lateral-using-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT u.user_id, o.actions FROM users u JOIN LATERAL (SELECT user_id, actions FROM events WHERE events.user_id = u.user_id AND actions > u.user_id) o USING (user_id) ORDER BY u.user_id, o.actions LIMIT 10";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("correlated-residual-lateral-using", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_join_using_wildcard_suppresses_the_right_key() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-join-using-star-{}", uuid::Uuid::new_v4()));
