@@ -45,7 +45,7 @@ impl CachedTaskResult {
         execution_metrics_header: Option<String>,
     ) -> Result<Self, String> {
         CACHED_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes.capacity() as u64)
                     .filter(|total| *total <= 512 * 1024 * 1024)
             })
@@ -256,7 +256,7 @@ async fn receive_with_limit(
             return Err("Arrow payload exceeds receive limit".into());
         }
         RETAINED_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes)
                     .filter(|total| *total <= PROCESS_SPOOL_BYTES)
             })
@@ -544,7 +544,7 @@ async fn pump_chunks<S>(
                 return;
             }
             if RETAINED_BYTES
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                     used.checked_add(bytes)
                         .filter(|total| *total <= PROCESS_SPOOL_BYTES)
                 })

@@ -196,7 +196,7 @@ impl DecodedBatchCache {
         loop {
             if self
                 .live_bytes
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                     current
                         .checked_add(bytes)
                         .filter(|&next| next <= self.limit_bytes)
@@ -362,7 +362,7 @@ struct CacheReservation(usize);
 impl CacheReservation {
     fn try_new(bytes: usize) -> Option<Self> {
         FULL_OBJECT_CACHE_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
                     .filter(|&next| next <= PROCESS_FULL_OBJECT_CACHE_LIMIT)

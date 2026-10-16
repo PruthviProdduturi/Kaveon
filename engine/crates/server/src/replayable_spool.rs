@@ -186,7 +186,7 @@ impl SpoolWriter {
         if let Some(quota) = self.inner.quota {
             quota
                 .counter
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                     used.checked_add(bytes.len() as u64)
                         .filter(|total| *total <= quota.limit)
                 })
