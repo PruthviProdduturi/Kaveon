@@ -3747,6 +3747,40 @@ mod tests {
     }
 
     #[test]
+    fn expression_set_operations_partition_matching_projected_outputs() {
+        for (name, sql, operator) in [
+            (
+                "query-expression-intersect",
+                "SELECT id + 1 AS shifted FROM items INTERSECT SELECT id + 1 AS shifted FROM customers",
+                "Intersect",
+            ),
+            (
+                "query-expression-except",
+                "SELECT id + 1 AS shifted FROM items EXCEPT SELECT id + 1 AS shifted FROM customers",
+                "Except",
+            ),
+        ] {
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            qualify_tables(&mut plan, "test", "default");
+            let graph = build_stage_graph(name, &plan, 4).unwrap();
+            let set_op = graph
+                .stages
+                .iter()
+                .find(|stage| stage.plan.operator == operator)
+                .expect("set-operation stage");
+            assert_eq!(set_op.task_count, 4);
+            assert!(graph.exchanges.iter().any(|exchange| {
+                exchange.target_stage == set_op.id
+                    && matches!(
+                        &exchange.partitioning,
+                        Partitioning::Hash { columns, partition_count: 4 }
+                            if columns == &["shifted".to_owned()]
+                    )
+            }));
+        }
+    }
+
+    #[test]
     fn set_operations_consume_every_exchange_input() {
         for (sql, expected) in [
             (

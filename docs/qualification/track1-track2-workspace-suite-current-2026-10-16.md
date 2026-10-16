@@ -56,7 +56,7 @@ After that workspace snapshot, the planner also began hash-partitioning
 `DISTINCT` and `UNION DISTINCT` projections whose expressions have stable
 output names. Two planner tests verify the exchange keys and worker count, and
 the full distributed differential sweep was rerun with expression-shaped
-`DISTINCT` and `UNION DISTINCT` cases; it passed **1/1** (421 filtered server
+`DISTINCT` and `UNION DISTINCT` cases; it passed **1/1** (422 filtered server
 tests; 140.30 seconds). Expressions are evaluated by each branch before the
 exchange, removing the coordinator-only fallback without changing results.
 
@@ -130,3 +130,5 @@ cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
 parity trackers and require their corresponding live or differential evidence.
+
+The same gate also covers expression-shaped INTERSECT and EXCEPT projections, including the non-empty constant-key difference case; both local and distributed results matched exactly.
