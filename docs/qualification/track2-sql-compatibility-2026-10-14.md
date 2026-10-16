@@ -80,10 +80,24 @@ binder lowers to executable joins: keyed `EXISTS`, `NOT EXISTS`, `IN`, and
 execution over the same Parquet inputs. This is qualified coverage for those
 shapes, not a general Apply implementation. Positive top-level `LIMIT` on
 correlated `EXISTS`/`NOT EXISTS` is now removed before decorrelation because it
-cannot change existence; correlated `OFFSET`, `LIMIT 0`, limits in correlated
-`IN`/scalar forms, `UNION`, multi-level outer references, and lateral/derived
-relation forms remain explicitly outside the contract and continue to fail
-closed.
+cannot change existence. Positive top-level `LIMIT` is also removed for keyed
+correlated `IN`/`NOT IN` membership and for an ungrouped correlated scalar
+aggregate, where the aggregate already produces one row. Correlated `LIMIT 0`
+in `IN`/`NOT IN` lowers to an empty semi/anti-join input. Uncorrelated limits,
+zero-row scalar limits, positive correlated `OFFSET`, limits in non-aggregate
+correlated scalar forms, `UNION`, multi-level outer references, and
+lateral/derived relation forms remain explicitly outside the contract and
+continue to fail closed.
+
+## Correlated scalar aggregate limit qualification — 2026-10-15
+
+The SQL lowering now recognizes a positive top-level `LIMIT` around an
+ungrouped scalar aggregate as a one-row no-op before scalar-subquery
+validation. This enables correlated forms such as `AVG(i.actions)` grouped by
+the equality key during binding, without introducing a general Apply operator.
+The SQL regression verifies the scalar shape, and the distributed differential
+sweep includes a correlated `AVG … LIMIT 1` result comparison across local and
+three-fragment execution.
 
 ## Fresh clean workspace gate — commit `33ad59e1` — 2026-10-15
 

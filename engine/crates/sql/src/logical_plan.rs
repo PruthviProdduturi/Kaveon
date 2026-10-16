@@ -1747,6 +1747,14 @@ fn replace_scalar_subqueries(
 /// expression. Anything else could yield several rows, which a scalar
 /// position cannot take.
 fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
+    // An ungrouped aggregate is already a one-row relation. A positive
+    // top-level LIMIT cannot change that scalar value, so remove it before
+    // validating the scalar shape. LIMIT 0 is retained: an empty scalar
+    // requires null-fill/Apply semantics that this lowering does not provide.
+    let plan = match plan {
+        LogicalPlan::Limit { input, count } if count > 0 => *input,
+        plan => plan,
+    };
     let LogicalPlan::Project { input, columns } = plan else {
         return Err(sql_err("a scalar subquery must select exactly one column"));
     };
@@ -5707,6 +5715,15 @@ mod tests {
                 "{sql}: expected `{expected}` in `{error}`"
             );
         }
+    }
+
+    #[test]
+    fn scalar_aggregate_positive_limit_keeps_the_scalar_shape() {
+        let plan = sql_to_logical_plan("SELECT (SELECT avg(b) FROM t LIMIT 1) AS answer FROM t")
+            .expect("a positive limit cannot change an ungrouped aggregate's one row");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(!debug.contains("Limit"), "{debug}");
     }
 
     #[test]
