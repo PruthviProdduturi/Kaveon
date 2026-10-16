@@ -1314,6 +1314,29 @@ fn distributed_unnest_with_offset_is_zero_based() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// `SEQUENCE` is a typed Trino array constructor, so the row-producing
+/// function must survive the same distributed leaf-fragment path as a literal
+/// ARRAY rather than being rejected as an arbitrary table function.
+#[test]
+fn distributed_sequence_unnest_matches_trino_rows() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-unnest-sequence-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT * FROM UNNEST(SEQUENCE(2, 6, 2)) WITH ORDINALITY AS t(value, ord) ORDER BY ord";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-sequence", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["2\u{1f}1", "4\u{1f}2", "6\u{1f}3"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// The Trino spelling uses a function table factor for a constant lateral
 /// UNNEST. It must reach the same distributed leaf operator and preserve the
 /// left relation's row for each unnested value.
@@ -1332,6 +1355,32 @@ fn distributed_constant_lateral_unnest_matches_trino_shape() {
         canonical_rows(&batches, true),
         vec!["1\u{1f}10", "1\u{1f}20"]
     );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_correlated_sequence_unnest_repeats_each_left_row() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-sequence-unnest-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.stop, u.value FROM (VALUES (1), (3)) AS x(stop) CROSS JOIN LATERAL UNNEST(SEQUENCE(1, x.stop)) AS u(value) ORDER BY x.stop, u.value";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-correlated-sequence", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["1\u{1f}1", "3\u{1f}1", "3\u{1f}2", "3\u{1f}3"]);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
