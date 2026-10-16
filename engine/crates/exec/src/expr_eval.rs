@@ -2491,61 +2491,6 @@ enum ArraySetOp {
     Except,
 }
 
-/// Trino's `arrays_overlap`: return true when two arrays share a non-null
-/// value, false when they do not overlap and contain no nulls, and NULL when
-/// no non-null value overlaps but either array contains a null element.
-fn array_overlaps_generic<L: OffsetSizeTrait>(
-    left: &GenericListArray<L>,
-    right: &GenericListArray<L>,
-) -> Result<ArrayRef> {
-    if left.len() != right.len() || left.value_type() != right.value_type() {
-        return Err(KaveonError::Execution(
-            "arrays_overlap requires matching row counts and element types".into(),
-        ));
-    }
-    let mut builder = BooleanBuilder::with_capacity(left.len());
-    for row in 0..left.len() {
-        if left.is_null(row) || right.is_null(row) {
-            builder.append_null();
-            continue;
-        }
-        let left_values = left.value(row);
-        let right_values = right.value(row);
-        let mut has_null = false;
-        let mut overlaps = false;
-        'outer: for left_index in 0..left_values.len() {
-            if left_values.is_null(left_index) {
-                has_null = true;
-                continue;
-            }
-            let candidate = left_values.slice(left_index, 1);
-            for right_index in 0..right_values.len() {
-                if right_values.is_null(right_index) {
-                    has_null = true;
-                    continue;
-                }
-                let equal = comparison(
-                    &candidate,
-                    &right_values.slice(right_index, 1),
-                    CompareKind::Eq,
-                )?;
-                if equal.value(0) {
-                    overlaps = true;
-                    break 'outer;
-                }
-            }
-        }
-        if overlaps {
-            builder.append_value(true);
-        } else if has_null {
-            builder.append_null();
-        } else {
-            builder.append_value(false);
-        }
-    }
-    Ok(Arc::new(builder.finish()))
-}
-
 fn array_set_operation<L: OffsetSizeTrait>(
     left: &GenericListArray<L>,
     right: &GenericListArray<L>,
@@ -3466,53 +3411,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         return Err(KaveonError::Execution(
             "FLATTEN requires an ARRAY of ARRAY values".into(),
         ));
-    }
-    if upper == "ARRAYS_OVERLAP" {
-        check_arity(name, args, 2)?;
-        if args
-            .iter()
-            .any(|arg| matches!(arg.data_type(), DataType::LargeList(_)))
-        {
-            let normalized = args
-                .iter()
-                .map(|arg| match arg.data_type() {
-                    DataType::LargeList(_) => Ok(Arc::clone(arg)),
-                    DataType::List(field) => {
-                        compute::cast(arg, &DataType::LargeList(field.clone()))
-                            .map_err(KaveonError::from)
-                    }
-                    other => Err(KaveonError::Execution(format!(
-                        "ARRAYS_OVERLAP requires ARRAY/List values, got {other}"
-                    ))),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let left = normalized[0]
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .ok_or_else(|| {
-                    KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into())
-                })?;
-            let right = normalized[1]
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .ok_or_else(|| {
-                    KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into())
-                })?;
-            return array_overlaps_generic(left, right);
-        }
-        let left = args[0]
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into())
-            })?;
-        let right = args[1]
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into())
-            })?;
-        return array_overlaps_generic(left, right);
     }
     if matches!(
         upper.as_str(),
@@ -10994,63 +10892,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("between 0 and 1000000"));
-    }
-
-    #[test]
-    fn arrays_overlap_is_null_aware_for_regular_lists() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
-        )])
-        .unwrap();
-        let expression = |left: Vec<ScalarValue>, right: Vec<ScalarValue>| Expr::Function {
-            name: "ARRAYS_OVERLAP".into(),
-            args: vec![
-                Expr::Function {
-                    name: "ARRAY".into(),
-                    args: left.into_iter().map(Expr::Literal).collect(),
-                },
-                Expr::Function {
-                    name: "ARRAY".into(),
-                    args: right.into_iter().map(Expr::Literal).collect(),
-                },
-            ],
-        };
-        let values = [
-            evaluate(
-                &expression(
-                    vec![ScalarValue::Int64(1), ScalarValue::Int64(2)],
-                    vec![ScalarValue::Int64(2), ScalarValue::Int64(3)],
-                ),
-                &batch,
-            )
-            .unwrap(),
-            evaluate(
-                &expression(vec![ScalarValue::Int64(1)], vec![ScalarValue::Int64(2)]),
-                &batch,
-            )
-            .unwrap(),
-            evaluate(
-                &expression(
-                    vec![ScalarValue::Null, ScalarValue::Int64(1)],
-                    vec![ScalarValue::Int64(2)],
-                ),
-                &batch,
-            )
-            .unwrap(),
-        ];
-        assert_eq!(
-            values[0].as_boolean().iter().collect::<Vec<_>>(),
-            vec![Some(true); 3]
-        );
-        assert_eq!(
-            values[1].as_boolean().iter().collect::<Vec<_>>(),
-            vec![Some(false); 3]
-        );
-        assert_eq!(
-            values[2].as_boolean().iter().collect::<Vec<_>>(),
-            vec![None; 3]
-        );
     }
 
     #[test]
