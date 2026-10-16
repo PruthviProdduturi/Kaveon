@@ -352,6 +352,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "date_trunc_and_format",
+        "SELECT DATE_TRUNC('month', TIMESTAMP '2026-02-17 12:34:56.789') AS month_start, DATE_TRUNC('hour', TIMESTAMP '2026-02-17 12:34:56.789') AS hour_start, DATE_FORMAT(TIMESTAMP '2026-02-17 12:34:56.789', '%Y-%m-%d %H:%i:%s') AS formatted FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "width_bucket_and_finiteness",
         "SELECT WIDTH_BUCKET(CAST(2.5 AS DOUBLE), 0, 10, 10) AS bucket, IS_FINITE(CAST(2.5 AS DOUBLE)) AS finite, IS_INFINITE(CAST('Infinity' AS DOUBLE)) AS infinite, IS_NAN(CAST('NaN' AS DOUBLE)) AS nan FROM {T} LIMIT 1",
         false,

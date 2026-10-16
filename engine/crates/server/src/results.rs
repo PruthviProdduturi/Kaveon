@@ -324,12 +324,15 @@ impl ResultWriter {
                 mebibytes(shared.query_bytes)
             )));
         }
-        shared
-            .used
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+        kaveon_core::try_update_u64(
+            &shared.used,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |used| {
                 used.checked_add(bytes)
                     .filter(|total| *total <= shared.process_bytes)
-            })
+            },
+        )
             .map_err(|_| {
                 std::io::Error::other(format!(
                     "process result disk quota exceeded ({}); raise KAVEON_RESULT_DISK_LIMIT_BYTES on the coordinator, or wait for results to expire",
