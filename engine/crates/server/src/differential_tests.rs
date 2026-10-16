@@ -347,6 +347,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "string_scalar_compatibility",
+        "SELECT CONCAT_WS('-', 'kaveon', 'trino') AS joined, REGEXP_LIKE('Kaveon engine', 'engine') AS matched, REGEXP_EXTRACT('run-42', '([0-9]+)', 1) AS extracted, TRY_CAST('not-a-number' AS INTEGER) AS invalid_cast FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "timestamp_decimal_array_functions",
         "SELECT CARDINALITY(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)]) AS timestamp_card, ARRAY_POSITION(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)], CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)) AS timestamp_pos, CARDINALITY(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_card, ARRAY_POSITION(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))], CAST(2.30 AS DECIMAL(10, 2))) AS decimal_pos FROM {T} LIMIT 1",
         false,
