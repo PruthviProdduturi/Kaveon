@@ -115,9 +115,9 @@ ordered streaming and pressure qualification remain open.
 The current-image runtime-filter-eligible join probe is retained in
 `docs/qualification/track1-aks-runtime-filter-join-current-2026-10-16.md` and
 its raw JSON. It finished twice with identical results across three workers.
-It does not claim scan pruning because the current query-history schema has no
-dedicated runtime-filter application counter; storage-pruning and cloud
-snapshot gates remain open.
+The deployed scan telemetry records three accepted runtime filters carrying
+four values per run. The probe did not reduce files or row groups, so storage-
+pruning and cloud snapshot gates remain open.
 
 ## Active item: 3 — distributed joins
 
