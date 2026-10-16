@@ -891,7 +891,7 @@ impl Binder<'_> {
             let right = strip_exists_noop_paging(right);
             peel_positive_exists_offset(right)
         } else if matches!(&right_key, Expr::Column(name) if name == "*") {
-            (strip_correlated_in_noop_limit(right), None)
+            (strip_correlated_in_paging(right), None)
         } else {
             (right, None)
         };
@@ -1957,11 +1957,26 @@ fn strip_exists_noop_paging(plan: LogicalPlan) -> LogicalPlan {
 /// A keyed correlated IN is existential with respect to the enclosing row:
 /// once its projected equality key matches, retaining any one row is enough
 /// to determine membership. A positive top-level LIMIT therefore cannot
-/// change the result. LIMIT 0 is deliberately retained because it makes the
-/// subquery empty (and NOT IN has additional NULL semantics).
-fn strip_correlated_in_noop_limit(plan: LogicalPlan) -> LogicalPlan {
+/// change the result. LIMIT 0 is lowered to an explicit empty relation;
+/// OFFSET 0 is a no-op, while a positive OFFSET remains because it changes
+/// the tested set.
+fn strip_correlated_in_paging(plan: LogicalPlan) -> LogicalPlan {
     match plan {
         LogicalPlan::Limit { input, count } if count > 0 => *input,
+        LogicalPlan::Limit { count: 0, .. } => LogicalPlan::Filter {
+            input: Box::new(LogicalPlan::Unnest {
+                expressions: vec![Expr::Function {
+                    name: "ARRAY".to_owned(),
+                    args: vec![Expr::Literal(kaveon_core::ScalarValue::Int64(0))],
+                }],
+                columns: vec!["_kaveon_empty".to_owned()],
+                with_ordinality: false,
+                ordinality_column: "ordinality".to_owned(),
+                ordinality_start: 1,
+            }),
+            predicate: Expr::Literal(kaveon_core::ScalarValue::Bool(false)),
+        },
+        LogicalPlan::Offset { input, count: 0 } => *input,
         plan => plan,
     }
 }
@@ -2877,6 +2892,28 @@ mod tests {
     fn a_correlated_not_in_positive_limit_is_an_anti_join() {
         let plan = bound(
             "SELECT o_orderkey FROM orders o WHERE o_orderkey NOT IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey LIMIT 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(*input, LogicalPlan::AntiJoin { .. }));
+    }
+
+    #[test]
+    fn a_correlated_in_zero_limit_is_an_empty_semi_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey LIMIT 0)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(*input, LogicalPlan::SemiJoin { .. }));
+    }
+
+    #[test]
+    fn a_correlated_not_in_zero_limit_is_an_empty_anti_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey NOT IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey LIMIT 0)",
         );
         let LogicalPlan::Project { input, .. } = plan else {
             panic!("projection");
