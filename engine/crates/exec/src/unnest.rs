@@ -215,4 +215,29 @@ mod tests {
             &[0, 1]
         );
     }
+
+    #[test]
+    fn expands_sequence_array_constructor() {
+        let expression = Expr::Function {
+            name: "SEQUENCE".into(),
+            args: vec![
+                Expr::Literal(kaveon_core::ScalarValue::Int64(2)),
+                Expr::Literal(kaveon_core::ScalarValue::Int64(6)),
+            ],
+        };
+        let mut operator =
+            UnnestOperator::new(&[expression], vec!["value".into()], false, "ordinality", 1)
+                .unwrap();
+        let batch = operator.next_batch().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 5);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[2, 3, 4, 5, 6]
+        );
+    }
 }

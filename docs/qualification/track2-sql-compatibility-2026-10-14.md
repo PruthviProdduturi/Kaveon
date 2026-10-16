@@ -454,6 +454,17 @@ SELECT * FROM UNNEST(ARRAY[10, 20]) WITH OFFSET AS off ORDER BY off;
 Correlated/lateral UNNEST and arbitrary table-function expressions remain
 outside this qualification.
 
+## Sequence-backed UNNEST support — 2026-10-16
+
+`SEQUENCE(start, stop[, step])` is now recognized as a typed array expression
+for row-producing `UNNEST`. This covers both constant relations such as
+`UNNEST(SEQUENCE(1, 3))` and correlated lateral expressions such as
+`CROSS JOIN LATERAL UNNEST(SEQUENCE(1, x.stop))`. The existing list expansion
+path supplies the element type, preserves input-row repetition, and keeps the
+same ordinality/offset and multi-array NULL-padding rules as literal arrays.
+Focused SQL, leaf-executor, and lateral-executor tests pass on the current
+commit. Other table functions remain intentionally unsupported.
+
 ## Trino wire compatibility qualification
 
 The focused Trino compatibility gate passed on the same workspace commit:

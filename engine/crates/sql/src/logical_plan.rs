@@ -1132,7 +1132,12 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
     matches!(expression, Expr::Column(_))
         || matches!(
             expression,
-            Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY")
+            Expr::Function { name, .. }
+                if name.eq_ignore_ascii_case("ARRAY")
+                    // SEQUENCE is a first-class Trino array constructor.  It
+                    // is evaluated by the expression engine into a typed
+                    // LIST, so it is safe to use as a row-producing input.
+                    || name.eq_ignore_ascii_case("SEQUENCE")
         )
 }
 
@@ -5292,6 +5297,15 @@ mod tests {
                 with_ordinality: false,
                 ..
             } if columns == vec!["value"]
+        ));
+    }
+
+    #[test]
+    fn parses_sequence_array_unnest_in_from() {
+        let plan = sql_to_logical_plan("SELECT * FROM UNNEST(SEQUENCE(1, 3)) AS t(value)").unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest { columns, .. } if columns == vec!["value"]
         ));
     }
 
