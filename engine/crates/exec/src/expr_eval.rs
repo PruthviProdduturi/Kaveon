@@ -8051,6 +8051,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::to_radians)
         }
+        "MOD" => {
+            check_arity(name, args, 2)?;
+            arithmetic(&args[0], BinaryOp::Modulo, &args[1])
+        }
         "SIGN" | "SIGNUM" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::signum)
