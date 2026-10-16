@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `65414bd4` (the workspace gate includes the
+**Source:** `origin/dev` at `f8a21532` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -74,6 +74,10 @@ map-plus-array UNNEST cases also pass in the same sweep: `UNNEST(MAP(...))`
 is normalized to `MAP_ENTRIES`, the lateral operator expands each struct entry
 into aliased key/value columns, and mixed expressions preserve padding and
 ordinality (411 filtered server tests; 133.68 seconds).
+
+The map cardinality case also passed in the exact-result sweep (411 filtered
+server tests; 134.19 seconds), covering `CARDINALITY(MAP(...))` across the
+local and distributed execution paths.
 
 After that change, the complete server target suite was rerun from the same
 source:
