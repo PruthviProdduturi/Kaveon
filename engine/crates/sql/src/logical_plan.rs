@@ -195,10 +195,9 @@ pub enum LogicalPlan {
         alias: Option<String>,
         columns: Option<Vec<String>>,
     },
-    /// A constant array expanded into rows by `UNNEST` in `FROM`.
-    ///
-    /// Constant ARRAY expressions expanded into rows by `UNNEST` in `FROM`.
-    /// Correlated/lateral arrays remain an explicit planner boundary.
+    /// Constant array expressions expanded into rows by `UNNEST` in `FROM`.
+    /// Correlated/lateral arrays remain an explicit planner boundary; the
+    /// constant `CROSS JOIN LATERAL UNNEST(...)` spelling uses this same node.
     Unnest {
         expressions: Vec<Expr>,
         columns: Vec<String>,
