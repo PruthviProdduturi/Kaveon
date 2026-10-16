@@ -12,7 +12,7 @@ The focused execution regression covers:
 
 - arrays containing NULL elements;
 - ROW values;
-- MAP values; and
+- MAP values with typed NULL entries; and
 - the inverse `IS DISTINCT FROM` result.
 
 The focused gates passed:
