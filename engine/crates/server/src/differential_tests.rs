@@ -288,7 +288,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "null_safe_complex_equality",
-        "SELECT ARRAY[1, NULL] IS NOT DISTINCT FROM ARRAY[1, NULL] AS arrays_same, MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) IS NOT DISTINCT FROM MAP(ARRAY['b', 'a'], ARRAY[NULL, 10]) AS maps_same, ROW(ARRAY[1, NULL]) IS NOT DISTINCT FROM ROW(ARRAY[1, NULL]) AS rows_same FROM {T} LIMIT 1",
+        "SELECT ARRAY[1, NULL] IS NOT DISTINCT FROM ARRAY[1, NULL] AS arrays_same, MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) IS NOT DISTINCT FROM MAP(ARRAY['b', 'a'], ARRAY[NULL, 10]) AS maps_same, ROW(ARRAY[1, NULL]) IS NOT DISTINCT FROM ROW(ARRAY[1, NULL]) AS rows_same, ROW(NULL) IS NOT DISTINCT FROM ROW(NULL) AS null_rows_same FROM {T} LIMIT 1",
         false,
     ),
     (

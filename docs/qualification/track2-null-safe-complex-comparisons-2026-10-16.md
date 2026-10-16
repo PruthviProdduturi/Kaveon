@@ -11,7 +11,8 @@ semantics.
 The focused execution regression covers:
 
 - arrays containing NULL elements;
-- ROW values, including untyped `NULL` fields;
+- ROW values, including untyped `NULL` fields, through the distributed
+  differential path;
 - MAP values with typed NULL entries; and
 - the inverse `IS DISTINCT FROM` result.
 
@@ -34,7 +35,7 @@ cargo fmt --all -- --check
 passed
 
 cargo test -p kaveon-server the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
-1 passed, 0 failed, 411 filtered out, 140.56s
+1 passed, 0 failed, 411 filtered out, 140.41s
 
 node scripts/validate-docs.mjs
 194 Markdown files, 39 routes, 9 SVGs; passed
