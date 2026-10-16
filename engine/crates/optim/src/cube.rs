@@ -3,8 +3,8 @@
 //! answered from its cells (`answer`) with no scan. Exactly this set:
 //!
 //! - one table, `GROUP BY` a subset of the declared dimensions (none is
-//!   the grand total), the time dimension at its grain (the date column
-//!   itself at day grain, or `DATE_TRUNC('day' | 'month', ts)` at the
+//!   the grand total), the time dimension at its grain (a date column at
+//!   day or month grain, or `DATE_TRUNC('day' | 'month', ts)` at the
 //!   declared grain), or both — at most two axes counting the predicate's;
 //! - aggregates `COUNT(*)`, and `SUM`, `COUNT`, `MIN`, `MAX` of a column
 //!   declared under that aggregate; `APPROX_COUNT_DISTINCT(col)` — or a
@@ -264,8 +264,8 @@ pub fn match_cube_query(
                     axis.column == column
                         && match axis.grain {
                             None => true,
-                            // The time column itself is at its grain only
-                            // for a date at day grain.
+                            // DATE columns can be grouped at day grain;
+                            // month-grain DATE expressions use DATE_TRUNC.
                             Some(grain) => {
                                 grain == TimeGrain::Day
                                     && matches!(column_type(&column), Some(DataType::Date32))
@@ -287,7 +287,7 @@ pub fn match_cube_query(
                         && axis.grain == Some(grain)
                         && matches!(
                             column_type(column),
-                            Some(DataType::Timestamp(TimeUnit::Microsecond, _))
+                            Some(DataType::Timestamp(TimeUnit::Microsecond, _) | DataType::Date32)
                         )
                 })?
             }
@@ -921,6 +921,10 @@ mod tests {
         match_cube_query(&optimized(sql, false), &shape(), &schema())
     }
 
+    fn matched_with_shape(sql: &str, shape: &TableShape) -> Option<CubeQuery> {
+        match_cube_query(&optimized(sql, false), shape, &schema())
+    }
+
     #[test]
     fn covered_statements_match_with_their_axes_measures_predicates_and_names() {
         let total = matched("SELECT COUNT(*), SUM(total) AS s FROM t").unwrap();
@@ -1071,6 +1075,22 @@ mod tests {
         assert!(!ordered.order_by[0].ascending);
         assert_eq!(ordered.offset, 1);
         assert_eq!(ordered.limit, Some(3));
+    }
+
+    #[test]
+    fn cube_matches_month_truncation_over_date_columns() {
+        let monthly = TableShape::parse(
+            &["region:10".into(), "status:10".into()],
+            &["total:sum".into()],
+            Some("day:month:100"),
+        )
+        .unwrap();
+        let query = matched_with_shape(
+            "SELECT date_trunc('month', day) AS month, SUM(total) FROM t GROUP BY date_trunc('month', day)",
+            &monthly,
+        )
+        .unwrap();
+        assert_eq!(query.group_axes, vec![2]);
     }
 
     /// A hand-built cube over region × status with sums, counts and a

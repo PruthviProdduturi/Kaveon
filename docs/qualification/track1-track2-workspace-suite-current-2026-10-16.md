@@ -33,6 +33,9 @@ and the timestamp map-key compatibility work.
   decimal, date, UTF-8, and timezone-less timestamp key families.
 - Correlated lateral and residual outer-join cases are checked against local
   results before distributed qualification.
+- Date and timestamp time axes can be grouped at their declared day or month
+  grain; `DATE_TRUNC` over a `DATE` column is validated against the scanned
+  result before the cube path answers it.
 
 ## Remaining qualification gates
 

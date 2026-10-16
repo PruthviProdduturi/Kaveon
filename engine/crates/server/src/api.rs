@@ -8577,8 +8577,8 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
 use arrow::datatypes::DataType;
 
 /// The SQL of one cube grouping as the workers run it: the axes (a
-/// timestamp time axis at its grain through `DATE_TRUNC`; a date column
-/// at day grain is itself), `COUNT(*)`, then the measures in slot order —
+/// timestamp or date time axis at its grain through `DATE_TRUNC`; a date
+/// column at day grain is itself, `COUNT(*)`, then the measures in slot order —
 /// a distinct count as its sketch state — grouped by the axes. A
 /// single-axis grouping is read to `cap + 1` rows: one row over the cap
 /// excludes the axis, and the read stops there.
@@ -8600,12 +8600,18 @@ pub(crate) fn cube_grouping_read(
         .map(|index| {
             let axis = &shape_axes[*index];
             let column = quote_identifier(&axis.column);
-            let timestamp = columns
+            let data_type = columns
                 .iter()
                 .find(|c| c.name == axis.column)
-                .is_some_and(|c| matches!(logical_type(&c.data_type), DataType::Timestamp(_, _)));
+                .map(|c| logical_type(&c.data_type));
             match axis.grain {
-                Some(grain) if timestamp => format!("DATE_TRUNC('{}', {column})", grain.name()),
+                Some(grain)
+                    if matches!(data_type, Some(DataType::Timestamp(_, _)))
+                        || (grain == kaveon_core::TimeGrain::Month
+                            && matches!(data_type, Some(DataType::Date32))) =>
+                {
+                    format!("DATE_TRUNC('{}', {column})", grain.name())
+                }
                 _ => column,
             }
         })
@@ -19030,8 +19036,8 @@ mod tests {
         );
         assert_eq!(document["shape"]["time"]["grain"], "day");
         // A shape alone answers nothing.
-        let (_, record) = submit_and_record(&state, statements[2]).await;
-        assert_ne!(record["execution"]["mode"], "context");
+        let (_, shape_record) = submit_and_record(&state, statements[2]).await;
+        assert_ne!(shape_record["execution"]["mode"], "context");
 
         let (status, body) = submit(
             &state,
@@ -19086,6 +19092,40 @@ mod tests {
                 assert!(record["execution"]["approximate"].is_null(), "{sql}");
             }
         }
+        // A DATE time axis at month grain uses the same DATE_TRUNC semantics
+        // as the row path, but can still answer from the cube.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ALTER TABLE events SET SHAPE (dimensions = ARRAY['name:100'], \
+             measures = ARRAY['id:sum,count,min,max,count_distinct', 'score:sum,max'], time = 'day:month:500')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (cube = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let monthly_sql = "SELECT DATE_TRUNC('month', day) AS month, SUM(id) AS total FROM events GROUP BY DATE_TRUNC('month', day) ORDER BY month";
+        let (status, scanned_body) = submit(
+            &state,
+            &admin(),
+            monthly_sql,
+            serde_json::json!({"result_cache": false, "use_statistics": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{monthly_sql}: {scanned_body}");
+        let scanned_record = record(scanned_body["id"].as_str().unwrap(), &admin()).await;
+        assert_ne!(scanned_record["execution"]["mode"], "context");
+        let (cube_body, cube_record) = submit_and_record(&state, monthly_sql).await;
+        assert_eq!(cube_record["execution"]["mode"], "context");
+        assert_eq!(cube_body["columns"], scanned_body["columns"]);
+        assert_eq!(cube_body["data"], scanned_body["data"]);
         // What the cube does not cover scans.
         for sql in uncovered {
             let (_, record) = submit_and_record(&state, sql).await;
