@@ -170,6 +170,14 @@ an explicit JSON null, false for a missing path, and SQL NULL for NULL inputs.
 The focused executor regression covers all four cases. Invalid or unsupported
 paths remain conservative NULL results under the existing JSON path contract.
 
+## ARRAY_HAS_DUPLICATES qualification
+
+`ARRAY_HAS_DUPLICATES(array)` returns TRUE when an array contains repeated
+values, including repeated NULL elements, FALSE for distinct values, and NULL
+for a NULL array. Regular and large list inputs use the same distinctness
+contract; unsupported complex coercions remain bounded by the existing array
+comparison surface.
+
 ## ARRAY_JOIN qualification — 2026-10-15
 
 `ARRAY_JOIN(array, delimiter[, null_replacement])` now handles regular and
