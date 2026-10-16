@@ -70,6 +70,7 @@ exchange/spill files. Evidence is retained in
 `docs/qualification/track1-aks-current-image-soak-900-2026-10-15.md` and its
 raw JSON report. Together with the fault, quota, and object-store reports
 below, this closes the declared bounded exchange pressure gate.
+The clean-baseline rerun is retained in `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15-rerun.md` and its raw JSON. All seven checks passed on Engine image `sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6`, including zero retained files before and after the run. This closes the earlier pre-existing-file precondition gap; larger high-cardinality joins, disk exhaustion, and sustained mixed-workload endurance remain open.
 The current-image fault/pressure qualification
 `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15.md`
 passed concurrent exact results, active-query cancellation, forced worker-loss
@@ -123,6 +124,7 @@ The local differential spill gate is also covered by
 the partitioned-join spill tests in the workspace suite. Those tests prove
 exact local spill/replay and cleanup; they do not substitute for the AKS
 high-cardinality and disk-pressure gate.
+
 
 
 
