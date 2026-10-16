@@ -1636,9 +1636,14 @@ impl StageGraphBuilder {
                         partition_count: self.worker_count,
                     }
                 } else {
-                    Partitioning::Single
+                    union_partitioning(inputs, self.exchange_partition_count)
+                        .unwrap_or(Partitioning::Single)
                 };
-                let task_count = if *all { self.worker_count } else { 1 };
+                let task_count = if matches!(partitioning, Partitioning::Single) {
+                    1
+                } else {
+                    self.worker_count
+                };
                 let target =
                     self.add_exchange_stage("Union", physical.attributes, task_count, stages.len());
                 for stage in stages {
@@ -2787,6 +2792,25 @@ fn set_operation_partitioning(
     })
 }
 
+/// A UNION DISTINCT can deduplicate independently when every branch exposes
+/// the same projected column names. Equal rows then hash to the same worker,
+/// so the final DISTINCT never needs a coordinator-only gather. Expressions,
+/// aliases with different output names, and mixed projections retain the
+/// conservative single-task path.
+fn union_partitioning(inputs: &[LogicalPlan], partition_count: usize) -> Option<Partitioning> {
+    let mut iter = inputs.iter();
+    let first = distinct_partition_columns(iter.next()?)?;
+    if first.is_empty()
+        || !iter.all(|input| distinct_partition_columns(input) == Some(first.clone()))
+    {
+        return None;
+    }
+    Some(Partitioning::Hash {
+        columns: first,
+        partition_count,
+    })
+}
+
 fn unqualify(column: &str) -> String {
     column.rsplit('.').next().unwrap_or(column).to_owned()
 }
@@ -3776,6 +3800,28 @@ mod tests {
         assert!(exchanges.iter().all(|exchange| matches!(
             exchange.partitioning,
             Partitioning::RoundRobin { partition_count: 4 }
+        )));
+    }
+
+    #[test]
+    fn union_distinct_hash_partitions_simple_projected_keys() {
+        let graph = graph("SELECT id FROM items UNION SELECT id FROM customers");
+        let target = graph
+            .stages
+            .iter()
+            .find(|stage| stage.plan.operator == "Union")
+            .expect("union stage");
+        assert_eq!(target.task_count, 4);
+        let exchanges = graph
+            .exchanges
+            .iter()
+            .filter(|exchange| exchange.target_stage == target.id)
+            .collect::<Vec<_>>();
+        assert_eq!(exchanges.len(), 2);
+        assert!(exchanges.iter().all(|exchange| matches!(
+            &exchange.partitioning,
+            Partitioning::Hash { columns, partition_count: 4 }
+                if columns == &vec!["id".to_owned()]
         )));
     }
 
