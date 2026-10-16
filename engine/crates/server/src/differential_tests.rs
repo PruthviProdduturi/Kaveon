@@ -804,6 +804,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_last_value_ignore_nulls",
+        "SELECT country, LAST_VALUE(industry) IGNORE NULLS OVER (ORDER BY actions, country, industry NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS last_industry FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country, industry NULLS LAST LIMIT 6",
+        true,
+    ),
+    (
         "window_lag_ignore_nulls",
         "SELECT country, LAG(industry) IGNORE NULLS OVER (ORDER BY actions, country, industry NULLS LAST) AS previous_industry FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country, industry NULLS LAST LIMIT 6",
         true,
@@ -811,6 +816,11 @@ const CASES: &[(&str, &str, bool)] = &[
     (
         "window_lead_ignore_nulls",
         "SELECT country, LEAD(industry) IGNORE NULLS OVER (ORDER BY actions, country, industry NULLS LAST) AS next_industry FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country, industry NULLS LAST LIMIT 6",
+        true,
+    ),
+    (
+        "window_lag_lead_ignore_nulls_with_defaults",
+        "SELECT country, LAG(industry, 2, 'missing') IGNORE NULLS OVER (ORDER BY actions, country, industry NULLS LAST) AS previous_industry, LEAD(industry, 2, 'missing') IGNORE NULLS OVER (ORDER BY actions, country, industry NULLS LAST) AS next_industry FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country, industry NULLS LAST LIMIT 6",
         true,
     ),
     (
