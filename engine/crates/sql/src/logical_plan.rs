@@ -1197,26 +1197,44 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 if expressions.iter().any(expression_contains_column) {
                     return Err(sql_err("correlated UNNEST requires CROSS JOIN LATERAL"));
                 }
+                let output_aliases = alias
+                    .as_ref()
+                    .map(|alias| {
+                        alias
+                            .columns
+                            .len()
+                            .saturating_sub(usize::from(*with_ordinality))
+                    })
+                    .unwrap_or(expressions.len());
                 let columns = alias
                     .as_ref()
                     .map(|alias| {
-                        expressions
-                            .iter()
-                            .enumerate()
-                            .map(|(index, _)| {
-                                alias
-                                    .columns
-                                    .get(index)
-                                    .map(|column| column.name.value.clone())
-                                    .unwrap_or_else(|| {
-                                        if index == 0 {
-                                            "unnest".to_owned()
-                                        } else {
-                                            format!("unnest_{}", index + 1)
-                                        }
-                                    })
-                            })
-                            .collect()
+                        if output_aliases > expressions.len() {
+                            alias
+                                .columns
+                                .iter()
+                                .take(output_aliases)
+                                .map(|column| column.name.value.clone())
+                                .collect()
+                        } else {
+                            expressions
+                                .iter()
+                                .enumerate()
+                                .map(|(index, _)| {
+                                    alias
+                                        .columns
+                                        .get(index)
+                                        .map(|column| column.name.value.clone())
+                                        .unwrap_or_else(|| {
+                                            if index == 0 {
+                                                "unnest".to_owned()
+                                            } else {
+                                                format!("unnest_{}", index + 1)
+                                            }
+                                        })
+                                })
+                                .collect()
+                        }
                     })
                     .unwrap_or_else(|| {
                         (0..expressions.len())
@@ -1231,7 +1249,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     });
                 let ordinality_column = alias
                     .as_ref()
-                    .and_then(|alias| alias.columns.get(expressions.len()))
+                    .and_then(|alias| alias.columns.get(output_aliases))
                     .map(|column| column.name.value.clone())
                     .unwrap_or_else(|| "ordinality".to_owned());
                 return Ok(LogicalPlan::Unnest {
@@ -1336,23 +1354,31 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             let columns = alias
                 .as_ref()
                 .map(|alias| {
-                    expressions
-                        .iter()
-                        .enumerate()
-                        .map(|(index, _)| {
-                            alias
-                                .columns
-                                .get(index)
-                                .map(|column| column.name.value.clone())
-                                .unwrap_or_else(|| {
-                                    if index == 0 {
-                                        "unnest".to_owned()
-                                    } else {
-                                        format!("unnest_{}", index + 1)
-                                    }
-                                })
-                        })
-                        .collect()
+                    if alias.columns.len() > expressions.len() {
+                        alias
+                            .columns
+                            .iter()
+                            .map(|column| column.name.value.clone())
+                            .collect()
+                    } else {
+                        expressions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| {
+                                alias
+                                    .columns
+                                    .get(index)
+                                    .map(|column| column.name.value.clone())
+                                    .unwrap_or_else(|| {
+                                        if index == 0 {
+                                            "unnest".to_owned()
+                                        } else {
+                                            format!("unnest_{}", index + 1)
+                                        }
+                                    })
+                            })
+                            .collect()
+                    }
                 })
                 .unwrap_or_else(|| {
                     (0..expressions.len())
@@ -1404,23 +1430,36 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             let columns = alias
                 .as_ref()
                 .map(|alias| {
-                    expressions
-                        .iter()
-                        .enumerate()
-                        .map(|(index, _)| {
-                            alias
-                                .columns
-                                .get(index)
-                                .map(|column| column.name.value.clone())
-                                .unwrap_or_else(|| {
-                                    if index == 0 {
-                                        "unnest".to_owned()
-                                    } else {
-                                        format!("unnest_{}", index + 1)
-                                    }
-                                })
-                        })
-                        .collect()
+                    let output_aliases = alias
+                        .columns
+                        .len()
+                        .saturating_sub(usize::from(*with_offset || *with_ordinality));
+                    if output_aliases > expressions.len() {
+                        alias
+                            .columns
+                            .iter()
+                            .take(output_aliases)
+                            .map(|column| column.name.value.clone())
+                            .collect()
+                    } else {
+                        expressions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, _)| {
+                                alias
+                                    .columns
+                                    .get(index)
+                                    .map(|column| column.name.value.clone())
+                                    .unwrap_or_else(|| {
+                                        if index == 0 {
+                                            "unnest".to_owned()
+                                        } else {
+                                            format!("unnest_{}", index + 1)
+                                        }
+                                    })
+                            })
+                            .collect()
+                    }
                 })
                 .unwrap_or_else(|| {
                     (0..expressions.len())
@@ -5350,12 +5389,12 @@ mod tests {
     #[test]
     fn parses_map_entries_array_unnest_in_from() {
         let plan = sql_to_logical_plan(
-            "SELECT * FROM UNNEST(MAP_ENTRIES(MAP(ARRAY['a'], ARRAY[1]))) AS t(entry)",
+            "SELECT * FROM UNNEST(MAP_ENTRIES(MAP(ARRAY['a'], ARRAY[1]))) AS t(key, value)",
         )
         .unwrap();
         assert!(matches!(
             plan,
-            LogicalPlan::Unnest { columns, .. } if columns == vec!["entry"]
+            LogicalPlan::Unnest { columns, .. } if columns == vec!["key", "value"]
         ));
     }
 
