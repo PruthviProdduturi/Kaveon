@@ -7981,6 +7981,36 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Ok(Arc::new(result))
             }
         }
+        "TRUNCATE" | "TRUNC" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(KaveonError::Execution(
+                    "TRUNCATE requires 1 or 2 arguments".into(),
+                ));
+            }
+            let values = compute::cast(&args[0], &DataType::Float64)?;
+            let values = values.as_primitive::<Float64Type>();
+            if args.len() == 1 {
+                return Ok(Arc::new(
+                    values
+                        .iter()
+                        .map(|value| value.map(f64::trunc))
+                        .collect::<Float64Array>(),
+                ));
+            }
+            let precision = compute::cast(&args[1], &DataType::Int64)?;
+            let precision = precision.as_primitive::<Int64Type>();
+            let result: Float64Array = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) || precision.is_null(i) {
+                        None
+                    } else {
+                        let factor = 10_f64.powi(precision.value(i) as i32);
+                        Some((values.value(i) * factor).trunc() / factor)
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "POWER" | "POW" => {
             check_arity(name, args, 2)?;
             let base = compute::cast(&args[0], &DataType::Float64)?;

@@ -367,6 +367,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "truncate_scalar_compatibility",
+        "SELECT TRUNCATE(CAST(12.987 AS DOUBLE)) AS whole, TRUNCATE(CAST(-12.987 AS DOUBLE), 2) AS scaled, TRUNC(CAST(12.345 AS DOUBLE), 1) AS alias FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "timestamp_decimal_array_functions",
         "SELECT CARDINALITY(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)]) AS timestamp_card, ARRAY_POSITION(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)], CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)) AS timestamp_pos, CARDINALITY(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_card, ARRAY_POSITION(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))], CAST(2.30 AS DECIMAL(10, 2))) AS decimal_pos FROM {T} LIMIT 1",
         false,
