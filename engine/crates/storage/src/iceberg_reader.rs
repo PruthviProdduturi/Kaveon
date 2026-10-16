@@ -160,6 +160,7 @@ impl IcebergReader {
             Some(predicate) => snapshot.files_may_match(predicate),
             None => vec![true; snapshot.files.len()],
         };
+        let table_schema = snapshot.schema.clone();
         let schema = if let Some(columns) = self.columns {
             let mut seen = BTreeSet::new();
             let fields = columns
@@ -183,24 +184,23 @@ impl IcebergReader {
             snapshot.schema
         };
         let mut skipped = 0u64;
-        let files = snapshot
-            .files
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| self.partition.is_none_or(|p| p.contains(*i)))
-            .filter_map(|(i, f)| {
-                if admitted[i] {
-                    Some(f)
-                } else {
-                    skipped += 1;
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_iter();
+        let mut files = Vec::new();
+        let mut file_facts = Vec::new();
+        for (i, file) in snapshot.files.into_iter().enumerate() {
+            if !self.partition.is_none_or(|p| p.contains(i)) || !admitted[i] {
+                skipped += 1;
+                continue;
+            }
+            files.push(file);
+            file_facts.push(snapshot.facts[i].clone());
+        }
         metrics.files_skipped(skipped);
         Ok(IcebergSource {
             files,
+            file_facts,
+            next_file: 0,
+            table_schema,
+            predicate: self.predicate,
             schema,
             current: None,
             batch_size: self.batch_size,
@@ -211,7 +211,11 @@ impl IcebergReader {
 }
 
 pub struct IcebergSource {
-    files: std::vec::IntoIter<String>,
+    files: Vec<String>,
+    file_facts: Vec<IcebergFileFacts>,
+    next_file: usize,
+    table_schema: SchemaRef,
+    predicate: Option<StoragePredicate>,
     schema: SchemaRef,
     current: Option<Box<dyn BatchSource>>,
     batch_size: usize,
@@ -227,6 +231,58 @@ impl BatchSource for IcebergSource {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
+    fn apply_runtime_filter(
+        &mut self,
+        column: &str,
+        values: &[kaveon_core::ScalarValue],
+    ) -> Result<bool> {
+        if self.current.is_some() || values.is_empty() {
+            return Ok(false);
+        }
+        let filter = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        let predicate = match self.predicate.take() {
+            Some(existing) => StoragePredicate::And(vec![existing, filter]),
+            None => filter,
+        };
+        let remaining = IcebergSnapshot {
+            metadata_uri: String::new(),
+            snapshot_id: None,
+            schema: self.table_schema.clone(),
+            files: self.files[self.next_file..].to_vec(),
+            facts: self.file_facts[self.next_file..].to_vec(),
+            row_count: 0,
+            total_bytes: 0,
+            partition_columns: Vec::new(),
+        };
+        let admitted = remaining.files_may_match(&predicate);
+        let mut kept_files = Vec::new();
+        let mut kept_facts = Vec::new();
+        let mut skipped = 0u64;
+        for ((file, facts), keep) in remaining
+            .files
+            .into_iter()
+            .zip(remaining.facts)
+            .zip(admitted)
+        {
+            if keep {
+                kept_files.push(file);
+                kept_facts.push(facts);
+            } else {
+                skipped += 1;
+            }
+        }
+        self.files.truncate(self.next_file);
+        self.files.extend(kept_files);
+        self.file_facts.truncate(self.next_file);
+        self.file_facts.extend(kept_facts);
+        self.predicate = Some(predicate);
+        self.metrics.files_skipped(skipped);
+        self.metrics.runtime_filter_applied(values.len());
+        Ok(true)
+    }
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if let Some(source) = &mut self.current {
@@ -235,9 +291,10 @@ impl BatchSource for IcebergSource {
                 }
                 self.current = None;
             }
-            let Some(file) = self.files.next() else {
+            let Some(file) = self.files.get(self.next_file).cloned() else {
                 return Ok(None);
             };
+            self.next_file += 1;
             let source: Box<dyn BatchSource> = if is_object(&file) {
                 let location = self.io.location(&file)?;
                 Box::new(
@@ -1061,6 +1118,19 @@ mod tests {
         assert_eq!(metrics.files_skipped, 1);
         assert_eq!(metrics.files_opened, 1);
         assert_eq!(metrics.files_considered, 2);
+        let mut runtime_filtered = IcebergReader::new(&f.metadata).read_blocking().unwrap();
+        assert!(
+            runtime_filtered
+                .apply_runtime_filter("renamed", &[ScalarValue::Int64(4)])
+                .unwrap()
+        );
+        let runtime_metrics = runtime_filtered.metrics();
+        assert_eq!(values(runtime_filtered), vec![3, 4]);
+        let runtime_metrics = runtime_metrics.snapshot();
+        assert_eq!(runtime_metrics.files_skipped, 1);
+        assert_eq!(runtime_metrics.files_opened, 1);
+        assert_eq!(runtime_metrics.runtime_filters_applied, 1);
+        assert_eq!(runtime_metrics.runtime_filter_values, 1);
         let source = IcebergReader::new(&f.metadata)
             .with_predicate(compare(CompareOp::Gt, 4))
             .read_blocking()
