@@ -61,7 +61,7 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
 /// ```text
 /// WITH RECURSIVE n(value) AS (
 ///   SELECT 1
-///   UNION ALL
+///   UNION [ALL]
 ///   SELECT value + 1 FROM n WHERE value < 5
 /// ) SELECT * FROM n
 /// ```
@@ -103,7 +103,10 @@ fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
     if outer.is_empty() || outer.starts_with(',') {
         return None;
     }
-    let (seed_sql, recursive_sql) = split_top_level_union_all(body)?;
+    // The generated sequence is unique, so the bounded monotonic shape has
+    // identical results for UNION and UNION ALL. Accept both spellings while
+    // keeping general recursive UNION graphs explicitly unsupported.
+    let (seed_sql, recursive_sql) = split_top_level_union(body)?;
     let seed = parse_single_integer_select(seed_sql.trim())?;
     let tokens = recursive_sql.split_whitespace().collect::<Vec<_>>();
     if tokens.len() != 10
@@ -200,7 +203,7 @@ fn matching_sql_paren(sql: &str, open: usize) -> Option<usize> {
     None
 }
 
-fn split_top_level_union_all(body: &str) -> Option<(&str, &str)> {
+fn split_top_level_union(body: &str) -> Option<(&str, &str)> {
     let bytes = body.as_bytes();
     let mut depth = 0usize;
     let mut quote = None;
@@ -228,11 +231,31 @@ fn split_top_level_union_all(body: &str) -> Option<(&str, &str)> {
             b')' => depth = depth.checked_sub(1)?,
             _ => {}
         }
-        if depth == 0 && body[cursor..].to_ascii_uppercase().starts_with("UNION ALL") {
+        if depth == 0 && body[cursor..].to_ascii_uppercase().starts_with("UNION") {
             let before = if cursor == 0 { b' ' } else { bytes[cursor - 1] };
-            let after = bytes.get(cursor + 9).copied().unwrap_or(b' ');
+            let union_end = cursor + 5;
+            let after = bytes.get(union_end).copied().unwrap_or(b' ');
             if !before.is_ascii_alphanumeric() && !after.is_ascii_alphanumeric() {
-                return Some((&body[..cursor], &body[cursor + 9..]));
+                let mut consumed = 5;
+                let whitespace = body
+                    .as_bytes()
+                    .get(union_end..)
+                    .unwrap_or_default()
+                    .iter()
+                    .take_while(|byte| byte.is_ascii_whitespace())
+                    .count();
+                let all_start = union_end + whitespace;
+                if body
+                    .get(all_start..all_start + 3)
+                    .is_some_and(|token| token.eq_ignore_ascii_case("ALL"))
+                    && !body
+                        .as_bytes()
+                        .get(all_start + 3)
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                {
+                    consumed = all_start + 3 - cursor;
+                }
+                return Some((&body[..cursor], &body[cursor + consumed..]));
             }
         }
         cursor += 1;
@@ -924,6 +947,15 @@ mod tests {
         .expect("inclusive recursive CTE should parse");
         let rendered = statements[0].to_string();
         assert!(rendered.contains("SEQUENCE(1, 7, 2)"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_linear_recursive_cte_accepts_distinct_union() {
+        let source = "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION SELECT n + 1 FROM numbers WHERE n < 3) SELECT * FROM numbers";
+        let statements = parse_sql(source).expect("bounded UNION should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("SEQUENCE(1, 3, 1)"), "{rendered}");
+        assert!(!rendered.contains("WITH RECURSIVE"), "{rendered}");
     }
 
     #[test]
