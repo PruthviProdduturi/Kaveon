@@ -4002,23 +4002,71 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     let mut name = canonical_function_name(func);
     let is_count_if = name == "COUNT_IF";
+    let is_json_object = name == "JSON_OBJECT";
     if name == "MAP" {
         // MAP is lowered as a regular function. The executor validates that
         // both arguments are list values with matching offsets.
     }
+    let mut json_object_absent_on_null = false;
     let mut args: Vec<Expr> = match &func.args {
-        ast::FunctionArguments::List(arg_list) => arg_list
-            .args
-            .iter()
-            .map(|arg| match arg {
-                ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)) => ast_expr_to_expr(e),
-                ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard) => Ok(Expr::Star),
-                _ => Err(sql_err(format!("unsupported function argument: {arg}"))),
-            })
-            .collect::<Result<_>>()?,
+        ast::FunctionArguments::List(arg_list) => {
+            if is_json_object {
+                for clause in &arg_list.clauses {
+                    if matches!(
+                        clause,
+                        ast::FunctionArgumentClause::JsonNullClause(
+                            ast::JsonNullClause::AbsentOnNull
+                        )
+                    ) {
+                        json_object_absent_on_null = true;
+                    }
+                }
+            }
+            let mut lowered = Vec::new();
+            for arg in &arg_list.args {
+                match arg {
+                    ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)) => {
+                        lowered.push(ast_expr_to_expr(e)?);
+                    }
+                    ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard) => {
+                        lowered.push(Expr::Star);
+                    }
+                    ast::FunctionArg::ExprNamed { name, arg, .. } if is_json_object => {
+                        lowered.push(ast_expr_to_expr(name)?);
+                        match arg {
+                            ast::FunctionArgExpr::Expr(e) => lowered.push(ast_expr_to_expr(e)?),
+                            ast::FunctionArgExpr::Wildcard => lowered.push(Expr::Star),
+                            _ => {
+                                return Err(sql_err(format!(
+                                    "unsupported JSON_OBJECT value argument: {arg}"
+                                )));
+                            }
+                        }
+                    }
+                    ast::FunctionArg::Named { name, arg, .. } if is_json_object => {
+                        lowered.push(Expr::Literal(ScalarValue::Utf8(name.value.clone())));
+                        match arg {
+                            ast::FunctionArgExpr::Expr(e) => lowered.push(ast_expr_to_expr(e)?),
+                            ast::FunctionArgExpr::Wildcard => lowered.push(Expr::Star),
+                            _ => {
+                                return Err(sql_err(format!(
+                                    "unsupported JSON_OBJECT value argument: {arg}"
+                                )));
+                            }
+                        }
+                    }
+                    _ => return Err(sql_err(format!("unsupported function argument: {arg}"))),
+                }
+            }
+            lowered
+        }
         ast::FunctionArguments::None => Vec::new(),
         _ => return Err(sql_err(format!("unsupported function arguments in {name}"))),
     };
+
+    if is_json_object && json_object_absent_on_null {
+        name = "JSON_OBJECT_ABSENT_ON_NULL".into();
+    }
 
     // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A
     // safe cast is the most common and most useful form in lake queries, and

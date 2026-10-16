@@ -4389,12 +4389,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
-        "JSON_OBJECT" => {
+        "JSON_OBJECT" | "JSON_OBJECT_ABSENT_ON_NULL" => {
             if !args.len().is_multiple_of(2) {
                 return Err(KaveonError::Execution(
                     "JSON_OBJECT requires alternating key and value arguments".into(),
                 ));
             }
+            let omit_nulls = upper == "JSON_OBJECT_ABSENT_ON_NULL";
             let mut result = StringBuilder::new();
             for row in 0..num_rows {
                 let mut object = serde_json::Map::new();
@@ -4402,6 +4403,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let key = text_value(&pair[0], row)?.ok_or_else(|| {
                         KaveonError::Execution("JSON_OBJECT does not accept a NULL key".into())
                     })?;
+                    if omit_nulls && pair[1].is_null(row) {
+                        continue;
+                    }
                     if object.contains_key(key) {
                         return Err(KaveonError::Execution(format!(
                             "JSON_OBJECT contains duplicate key {key:?}"
