@@ -262,6 +262,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_zip_padding",
+        "SELECT CARDINALITY(ZIP(ARRAY[1, 2], ARRAY['a'])) AS zipped_cardinality FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_scalar_functions",
         "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
         false,
