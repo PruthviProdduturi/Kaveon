@@ -193,3 +193,7 @@ The typed map lookup expansion (`MAP_ELEMENT_AT` and
 `MAP_CONTAINS_KEY`) was then rerun through the complete server target suite:
 **423 passed, 0 failed, 0 ignored** (154.34 seconds). A direct Int32-key
 regression confirms narrow primitive map keys resolve to the typed value.
+
+The differential corpus now includes the same narrow integer map lookup through
+the fragment planner; the local/distributed sweep passed **1/1** (153.34
+seconds).
