@@ -661,6 +661,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "bounded_recursive_cte_descending",
+        "WITH RECURSIVE countdown(n) AS (SELECT 5 UNION ALL SELECT n - 1 FROM countdown WHERE n > 1) SELECT n FROM countdown ORDER BY n",
+        false,
+    ),
+    (
         "subquery_in",
         "SELECT COUNT(*) AS n FROM {T} WHERE country IN (SELECT country FROM {U} WHERE locale = 'ja-JP' GROUP BY country)",
         false,

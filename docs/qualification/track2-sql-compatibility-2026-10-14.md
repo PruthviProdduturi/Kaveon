@@ -700,8 +700,8 @@ SELECT * FROM numbers
 ```
 
 The lowerer accepts one integer column, one monotonic arithmetic step, and a
-strict or inclusive finite bound. The planner regression verifies the
-`SEQUENCE(1, 4, 1)` equivalent and the parser regression verifies that the
+strict or inclusive finite bound in either direction. The planner regression
+verifies the `SEQUENCE(1, 5, 1)` equivalent and the parser regression verifies that the
 recursive keyword is removed only after the safe rewrite. A malformed or
 non-linear recursive CTE still reaches the explicit unsupported-recursion
 diagnostic; general recursive graphs, multiple members, joins, and cycle

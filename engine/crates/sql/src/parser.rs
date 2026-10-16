@@ -114,20 +114,25 @@ fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
         || !tokens[5].eq_ignore_ascii_case(&cte_name)
         || !tokens[6].eq_ignore_ascii_case("WHERE")
         || !tokens[7].eq_ignore_ascii_case(&column)
-        || !matches!(tokens[8], "<" | "<=")
+        || !matches!(tokens[8], "<" | "<=" | ">" | ">=")
     {
         return None;
     }
-    let step = tokens[3].parse::<i64>().ok()?;
+    let magnitude = tokens[3].parse::<i64>().ok()?;
+    let step = if tokens[2] == "-" {
+        magnitude.checked_neg()?
+    } else {
+        magnitude
+    };
     let bound = tokens[9].parse::<i64>().ok()?;
     if step == 0 {
         return None;
     }
     let stop = match (step.signum(), tokens[8]) {
-        (1, "<") => bound.checked_sub(1)?,
-        (1, "<=") => bound,
-        (-1, "<") => bound.checked_add(1)?,
-        (-1, "<=") => bound,
+        (1, "<") => bound,
+        (1, "<=") => bound.checked_add(step)?,
+        (-1, ">") => bound,
+        (-1, ">=") => bound.checked_add(step)?,
         _ => return None,
     };
     Some(format!(
@@ -900,8 +905,25 @@ mod tests {
         )
         .expect("bounded recursive CTE should parse");
         let rendered = statements[0].to_string();
-        assert!(rendered.contains("SEQUENCE(1, 4, 1)"), "{rendered}");
+        assert!(rendered.contains("SEQUENCE(1, 5, 1)"), "{rendered}");
         assert!(!rendered.contains("WITH RECURSIVE"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_recursive_cte_supports_descending_and_inclusive_bounds() {
+        let source = "WITH RECURSIVE countdown(n) AS (SELECT 5 UNION ALL SELECT n - 1 FROM countdown WHERE n > 1) SELECT * FROM countdown";
+        let rewritten = normalize_bounded_linear_recursive_cte(source);
+        assert!(rewritten.is_some(), "{rewritten:?}");
+        let statements = parse_sql(source).expect("descending recursive CTE should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("SEQUENCE(5, 1, -1)"), "{rendered}");
+
+        let statements = parse_sql(
+            "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 2 FROM numbers WHERE n <= 5) SELECT * FROM numbers",
+        )
+        .expect("inclusive recursive CTE should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("SEQUENCE(1, 7, 2)"), "{rendered}");
     }
 
     #[test]
