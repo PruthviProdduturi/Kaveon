@@ -2197,6 +2197,33 @@ fn array_distinct_nested<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
     )?))
 }
 
+fn array_cum_sum_i32<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    let mut builder = GenericListBuilder::<L, Int32Builder>::new(Int32Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            builder.append(false);
+            continue;
+        }
+        let values = list.value(row);
+        let values = values.as_primitive::<Int32Type>();
+        let mut total = 0_i32;
+        let mut null_seen = false;
+        for index in 0..values.len() {
+            if null_seen || values.is_null(index) {
+                null_seen = true;
+                builder.values().append_null();
+            } else {
+                total = total.checked_add(values.value(index)).ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_CUM_SUM INTEGER overflow".into())
+                })?;
+                builder.values().append_value(total);
+            }
+        }
+        builder.append(true);
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 fn array_cum_sum_i64<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let mut builder = GenericListBuilder::<L, Int64Builder>::new(Int64Builder::new());
     for row in 0..list.len() {
@@ -5717,6 +5744,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         "ARRAY_CUM_SUM" => {
             check_arity(name, args, 1)?;
             match args[0].data_type() {
+                DataType::List(field) if field.data_type() == &DataType::Int32 => {
+                    array_cum_sum_i32(args[0].as_any().downcast_ref::<ListArray>().ok_or_else(
+                        || {
+                            KaveonError::Execution(
+                                "ARRAY_CUM_SUM requires an ARRAY/List value".into(),
+                            )
+                        },
+                    )?)
+                }
+                DataType::LargeList(field) if field.data_type() == &DataType::Int32 => {
+                    array_cum_sum_i32(
+                        args[0]
+                            .as_any()
+                            .downcast_ref::<LargeListArray>()
+                            .ok_or_else(|| {
+                                KaveonError::Execution(
+                                    "ARRAY_CUM_SUM requires an ARRAY/List value".into(),
+                                )
+                            })?,
+                    )
+                }
                 DataType::List(field) if field.data_type() == &DataType::Int64 => {
                     array_cum_sum_i64(args[0].as_any().downcast_ref::<ListArray>().ok_or_else(
                         || {
@@ -5760,7 +5808,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     )
                 }
                 other => Err(KaveonError::Execution(format!(
-                    "ARRAY_CUM_SUM supports ARRAY<BIGINT> and ARRAY<DOUBLE>, found {other}"
+                    "ARRAY_CUM_SUM supports ARRAY<INTEGER>, ARRAY<BIGINT>, and ARRAY<DOUBLE>, found {other}"
                 ))),
             }
         }
@@ -16553,6 +16601,20 @@ mod tests {
             values.iter().collect::<Vec<_>>(),
             vec![Some(1), Some(3), None, None]
         );
+
+        let mut integer_lists = ListBuilder::new(Int32Builder::new());
+        integer_lists.values().append_value(1);
+        integer_lists.values().append_value(2);
+        integer_lists.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_CUM_SUM",
+            &[Arc::new(integer_lists.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = result.value(0);
+        assert_eq!(inner.as_primitive::<Int32Type>().values(), &[1, 3]);
 
         let mut large_lists = LargeListBuilder::new(Float64Builder::new());
         for value in [1.5_f64, 2.0] {
