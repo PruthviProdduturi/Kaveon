@@ -2598,6 +2598,10 @@ mod tests {
                 "correlated HAVING",
             ),
             (
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey OFFSET 1)",
+                "OFFSET inside a correlated subquery is not supported",
+            ),
+            (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem l WHERE l.l_orderkey = o_orderkey AND x.l_quantity > 1)",
                 "belongs neither to the subquery nor to the enclosing query",
             ),

@@ -249,6 +249,10 @@ qualification. The shared local/distributed differential corpus also includes
 the grouped `correlated_exists_positive_limit` and `correlated_exists_zero_offset`
 queries and compares both paths against the same exact results.
 
+The binder also regression-tests positive correlated `OFFSET` rejection. It
+fails closed with an explicit unsupported-correlated-subquery diagnostic rather
+than evaluating an incorrect semi-join.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
