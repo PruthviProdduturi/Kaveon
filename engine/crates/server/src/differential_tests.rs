@@ -327,6 +327,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_array_length",
+        "SELECT JSON_ARRAY_LENGTH(JSON_PARSE('[1, 2, 3]')) AS length FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
