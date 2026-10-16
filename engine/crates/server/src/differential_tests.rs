@@ -337,6 +337,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_query_array_wildcard",
+        "SELECT JSON_QUERY(JSON_PARSE('{\"items\":[{\"id\":1},{\"id\":2}]}'), '$.items[*].id') AS ids FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_array_length",
         "SELECT JSON_ARRAY_LENGTH(JSON_PARSE('[1, 2, 3]')) AS length FROM {T} LIMIT 1",
         false,
