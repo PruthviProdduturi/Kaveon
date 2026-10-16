@@ -83,10 +83,12 @@ correlated `EXISTS`/`NOT EXISTS` is now removed before decorrelation because it
 cannot change existence. Positive top-level `LIMIT` is also removed for keyed
 correlated `IN`/`NOT IN` membership and for an ungrouped correlated scalar
 aggregate, where the aggregate already produces one row. Correlated `LIMIT 0`
-in `IN`/`NOT IN` lowers to an empty semi/anti-join input. Uncorrelated limits,
-zero-row scalar limits, positive correlated `OFFSET`, limits in non-aggregate
-correlated scalar forms, `UNION`, multi-level outer references, and
-lateral/derived relation forms remain explicitly outside the contract and
+in `IN`/`NOT IN` lowers to an empty semi/anti-join input. A one-column scalar
+`LIMIT 0` lowers to one NULL row, preserving outer rows and three-valued
+comparison semantics even when the scalar is correlated. Uncorrelated limits,
+multi-column scalar limits, positive correlated `OFFSET`, limits in
+non-aggregate correlated scalar forms, `UNION`, multi-level outer references,
+and lateral/derived relation forms remain explicitly outside the contract and
 continue to fail closed.
 
 An ordered keyed membership query such as `ORDER BY i.actions DESC LIMIT 1`
