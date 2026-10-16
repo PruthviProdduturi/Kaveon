@@ -660,9 +660,9 @@ qualification.
 
 The current source adds bounded SQL-standard JSON constructor coverage and
 value-window null modifiers. `JSON_OBJECT` accepts the supported comma-pair,
-colon, and `VALUE` forms; `ABSENT ON NULL` omits null-valued members, while
-null keys and duplicate keys fail closed. `JSON_ARRAY` likewise supports the
-bounded `ABSENT ON NULL` form. These are deliberately bounded semantics:
+colon, and `VALUE` forms; explicit `NULL ON NULL` preserves null members and
+`ABSENT ON NULL` omits them, while null keys and duplicate keys fail closed.
+`JSON_ARRAY` has the same explicit null-clause coverage. These are deliberately bounded semantics:
 `FORMAT`, `RETURNING`, and the complete unique-key clause remain outside the
 implemented surface.
 
@@ -676,7 +676,7 @@ Validation from the clean checkout:
 ```text
 evaluates_json_object_constructor_with_nulls_and_rejects_duplicate_keys: 1 passed
 parses_trino_typed_json_literal: 1 passed
-differential_tests: 33 passed, 0 failed, 0 ignored
+differential_tests: 33 passed, 0 failed, 0 ignored (including explicit `NULL ON NULL` cases)
 ```
 
 The differential run covers all registered local/distributed parquet layouts;
