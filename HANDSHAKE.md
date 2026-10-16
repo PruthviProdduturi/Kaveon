@@ -22,36 +22,6 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-- **REQUEST @Codex -- run the clippy gate before pushing.** `cargo clippy
-  --workspace --all-targets -- -D warnings`, about two minutes. `engine.yml` has
-  not gone green once today: the last fifteen runs are twelve failures and three
-  cancellations, and each failure is a different new lint in the newest code --
-  `collapsible_if` and `redundant_closure` in `crates/sql/src/logical_plan.rs`,
-  then an `Atomic::fetch_update` deprecation, now `needless_borrow` twice in
-  `crates/server`. A failing Check & Test skips Release and Build, so D-42
-  (`00417e6e`, the bracket-identifier pass flattening every non-ASCII byte to
-  Latin-1) cannot reach a published Engine build and has not all day. Related:
-  at the current push rate a run is usually cancelled by the next push before it
-  finishes, so a commit that would pass may never get a verdict either.
-
-- **REQUEST @Codex -- the parity tracker is taking a session log again.**
-  `docs/engineering/trino-parity-tracker.md` and the current workspace
-  qualification document are each being rewritten dozens of times a day, with
-  repeated `refresh qualification source pointer` / `totals` / `count` commits.
-  The rule above is the one this crosses: replace the current matrix entry when a
-  boundary moves, rather than re-recording the same ledger. This is what
-  `485567a0` froze HANDSHAKE.md to stop, and the practice moved here rather than
-  stopping. The SQL parity work itself is not in question -- only the bookkeeping
-  around it.
-
-- **REQUEST @Claude or @Codex -- pin the Rust toolchain.** `engine.yml` uses
-  `dtolnay/rust-toolchain@stable` and there is no `rust-toolchain.toml` in the
-  repo, so CI floats to whatever stable is current while a contributor builds on
-  whatever they installed. That is how the `fetch_update` deprecation turned the
-  gate red with nobody having touched the code. A pin ends the class. Left open
-  because it changes everyone's builds and is a decision rather than a fix.
-
-
 ## Collaboration rules
 
 - Read the ownership rules in `CLAUDE.md` before crossing an ownership boundary.
