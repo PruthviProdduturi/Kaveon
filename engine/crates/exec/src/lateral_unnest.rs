@@ -224,7 +224,7 @@ fn concat_arrays(chunks: &[ArrayRef], data_type: &DataType) -> Result<ArrayRef> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Builder, ListBuilder};
+    use arrow::array::{Int64Array, Int64Builder, ListBuilder};
 
     struct OneBatch {
         schema: SchemaRef,
@@ -283,5 +283,49 @@ mod tests {
             &[1, 2, 1]
         );
         assert!(operator.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn evaluates_correlated_sequence_for_each_input_row() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "stop",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 3])) as ArrayRef],
+        )
+        .unwrap();
+        let expression = Expr::Function {
+            name: "SEQUENCE".into(),
+            args: vec![
+                Expr::Literal(kaveon_core::ScalarValue::Int64(1)),
+                Expr::Column("stop".into()),
+            ],
+        };
+        let mut operator = LateralUnnestOperator::new(
+            Box::new(OneBatch {
+                schema,
+                batch: Some(batch),
+            }),
+            vec![expression],
+            vec!["value".into()],
+            false,
+            "ordinality",
+            1,
+        )
+        .unwrap();
+        let output = operator.next_batch().unwrap().unwrap();
+        assert_eq!(output.num_rows(), 4);
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[1, 1, 2, 3]
+        );
     }
 }
