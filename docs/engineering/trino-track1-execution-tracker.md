@@ -21,7 +21,7 @@ snapshot, not a session diary.
 | 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
 | 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current AKS image now also has exact-repeat forced join-spill, post-query cleanup, and one-worker-loss retry evidence under a 1 MiB budget. | AKS disk exhaustion, larger high-cardinality joins, and sustained mixed-workload endurance. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget. | Larger-scale cluster run with p95 latency, skew behavior, and sustained mixed-workload spill evidence. |
-| 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
+| 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current AKS image now also has exact-repeat mixed-key `ROW_NUMBER()`/`QUALIFY` evidence across three workers. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
 | 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
 | 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, and telemetry exist. | Five-minute mixed workload, skew, disk exhaustion, and final-merge spill evidence. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
@@ -123,6 +123,7 @@ The local differential spill gate is also covered by
 the partitioned-join spill tests in the workspace suite. Those tests prove
 exact local spill/replay and cleanup; they do not substitute for the AKS
 high-cardinality and disk-pressure gate.
+
 
 
 
