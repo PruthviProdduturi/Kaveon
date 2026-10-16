@@ -250,6 +250,11 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
                 .as_primitive::<arrow::datatypes::UInt64Type>()
                 .value(row) as i64,
         )),
+        DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) | DataType::Struct(_) => {
+            Ok(AggregateValue::Utf8(crate::distinct::complex_value_key(
+                array, row,
+            )?))
+        }
         DataType::Date32 => Ok(AggregateValue::Int32(
             array
                 .as_primitive::<arrow::datatypes::Date32Type>()
@@ -333,7 +338,7 @@ mod tests {
 
     use arrow::array::{
         ArrayRef, Date32Array, Decimal128Array, DictionaryArray, Float32Array, Int32Array,
-        LargeStringArray, StringArray, UInt8Array,
+        Int32Builder, LargeStringArray, ListArray, ListBuilder, StringArray, UInt8Array,
     };
     use arrow::datatypes::{Field, Schema};
 
@@ -525,6 +530,34 @@ mod tests {
                 .as_primitive::<arrow::datatypes::UInt8Type>()
                 .value(0),
             2
+        );
+
+        let lists = |rows: &[&[i32]]| -> ArrayRef {
+            let mut builder = ListBuilder::new(Int32Builder::new());
+            for row in rows {
+                for value in *row {
+                    builder.values().append_value(*value);
+                }
+                builder.append(true);
+            }
+            Arc::new(builder.finish())
+        };
+        let mut list_op = SetOpOperator::new(
+            side(lists(&[&[1, 2], &[3]])),
+            side(lists(&[&[3], &[4]])),
+            SetOpMode::Intersect,
+        );
+        let list_batch = list_op.next_batch().unwrap().unwrap();
+        let list = list_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(
+            list.value(0)
+                .as_primitive::<arrow::datatypes::Int32Type>()
+                .values(),
+            &[3]
         );
     }
 }

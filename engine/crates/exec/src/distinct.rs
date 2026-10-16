@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use ahash::{AHashMap, AHashSet};
-use arrow::array::{Array, ArrayRef, AsArray, RecordBatch};
+use arrow::array::{
+    Array, ArrayRef, AsArray, LargeListArray, ListArray, MapArray, RecordBatch, StructArray,
+};
 use arrow::datatypes::{
     DataType, Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UInt8Type,
     UInt16Type, UInt32Type, UInt64Type,
@@ -384,6 +386,85 @@ fn distinct_rows_by_code(batch: &RecordBatch) -> Option<Vec<u32>> {
 
 /// Convert a scalar cell to the canonical equality key shared by distinct
 /// execution paths, including window-frame distinct aggregates.
+///
+/// Nested values use a stable, type-tagged textual key. Arrays retain their
+/// element order, rows retain field order and names, and maps sort their
+/// entry keys before encoding so logically equal maps do not depend on input
+/// insertion order.
+pub(crate) fn complex_value_key(array: &dyn Array, row: usize) -> Result<String> {
+    Ok(format!(
+        "\\0nested:{:?}:{}",
+        array.data_type(),
+        nested_value_token(array, row)?
+    ))
+}
+
+fn nested_value_token(array: &dyn Array, row: usize) -> Result<String> {
+    if array.is_null(row) {
+        return Ok("null".to_owned());
+    }
+    match array.data_type() {
+        DataType::List(_) => {
+            let list = array
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("LIST key is not a ListArray".into()))?;
+            let values = list.value(row);
+            let mut items = Vec::with_capacity(values.len());
+            for index in 0..values.len() {
+                items.push(nested_value_token(values.as_ref(), index)?);
+            }
+            Ok(format!("[{}]", items.join(",")))
+        }
+        DataType::LargeList(_) => {
+            let list = array
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("LARGE LIST key is not a LargeListArray".into())
+                })?;
+            let values = list.value(row);
+            let mut items = Vec::with_capacity(values.len());
+            for index in 0..values.len() {
+                items.push(nested_value_token(values.as_ref(), index)?);
+            }
+            Ok(format!("[{}]", items.join(",")))
+        }
+        DataType::Struct(_) => {
+            let record = array
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| KaveonError::Execution("ROW key is not a StructArray".into()))?;
+            let mut fields = Vec::with_capacity(record.num_columns());
+            for (field, values) in record.fields().iter().zip(record.columns()) {
+                fields.push(format!(
+                    "{}={}",
+                    field.name(),
+                    nested_value_token(values.as_ref(), row)?
+                ));
+            }
+            Ok(format!("{{{}}}", fields.join(",")))
+        }
+        DataType::Map(_, _) => {
+            let map = array
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .ok_or_else(|| KaveonError::Execution("MAP key is not a MapArray".into()))?;
+            let start = map.value_offsets()[row] as usize;
+            let end = map.value_offsets()[row + 1] as usize;
+            let mut entries = Vec::with_capacity(end.saturating_sub(start));
+            for index in start..end {
+                let key = nested_value_token(map.keys().as_ref(), index)?;
+                let value = nested_value_token(map.values().as_ref(), index)?;
+                entries.push(format!("{key}=>{value}"));
+            }
+            entries.sort();
+            Ok(format!("{{{}}}", entries.join(",")))
+        }
+        _ => Ok(format!("{:?}", extract_value(array, row)?)),
+    }
+}
+
 pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
     if array.is_null(row) {
         return Ok(AggregateValue::Null);
@@ -437,6 +518,9 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
                 .as_primitive::<arrow::datatypes::UInt64Type>()
                 .value(row) as i64,
         )),
+        DataType::List(_) | DataType::LargeList(_) | DataType::Map(_, _) | DataType::Struct(_) => {
+            Ok(AggregateValue::Utf8(complex_value_key(array, row)?))
+        }
         DataType::Date32 => Ok(AggregateValue::Int32(
             array
                 .as_primitive::<arrow::datatypes::Date32Type>()
