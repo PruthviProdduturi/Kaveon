@@ -342,6 +342,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "date_add_trino_units",
+        "SELECT DATE_ADD('week', 2, DATE '2026-01-01') AS plus_weeks, DATE_ADD('quarter', 1, DATE '2026-01-31') AS plus_quarter, DATE_ADD('hour', 3, TIMESTAMP '2026-01-01 00:00:00') AS plus_hours FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "width_bucket_and_finiteness",
         "SELECT WIDTH_BUCKET(CAST(2.5 AS DOUBLE), 0, 10, 10) AS bucket, IS_FINITE(CAST(2.5 AS DOUBLE)) AS finite, IS_INFINITE(CAST('Infinity' AS DOUBLE)) AS infinite, IS_NAN(CAST('NaN' AS DOUBLE)) AS nan FROM {T} LIMIT 1",
         false,

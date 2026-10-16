@@ -4174,6 +4174,72 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         name = "JSON_ARRAY_ABSENT_ON_NULL".into();
     }
 
+    // Trino exposes calendar arithmetic as DATE_ADD(unit, amount, value).
+    // Keep the unit validation in the SQL layer, then reuse the typed
+    // vectorized date operators used by interval arithmetic.  The amount is
+    // intentionally left as an expression so column-driven offsets retain
+    // their per-row semantics.
+    if name == "DATE_ADD" {
+        let [unit, amount, value] = args.as_slice() else {
+            return Err(sql_err(
+                "DATE_ADD requires a unit, amount, and date or timestamp",
+            ));
+        };
+        let Expr::Literal(ScalarValue::Utf8(unit)) = unit else {
+            return Err(sql_err("DATE_ADD unit must be a string literal"));
+        };
+        let unit = unit.to_ascii_lowercase();
+        let (operator, multiplier) = match unit.as_str() {
+            "day" => ("DATE_ADD_DAYS", 1_i64),
+            "week" => ("DATE_ADD_DAYS", 7),
+            "month" => ("DATE_ADD_MONTHS", 1),
+            "quarter" => ("DATE_ADD_MONTHS", 3),
+            "year" => ("DATE_ADD_MONTHS", 12),
+            "hour" => ("DATE_ADD_SECONDS", 3_600),
+            "minute" => ("DATE_ADD_SECONDS", 60),
+            "second" => ("DATE_ADD_SECONDS", 1),
+            other => {
+                return Err(sql_err(format!("DATE_ADD does not support unit '{other}'")));
+            }
+        };
+        let amount = if multiplier == 1 {
+            amount.clone()
+        } else if let Expr::Literal(ScalarValue::Int64(value)) = amount {
+            Expr::Literal(ScalarValue::Int64(
+                value
+                    .checked_mul(multiplier)
+                    .ok_or_else(|| sql_err("DATE_ADD amount overflows INT64"))?,
+            ))
+        } else {
+            Expr::BinaryOp {
+                left: Box::new(amount.clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(multiplier))),
+            }
+        };
+        if let (
+            Expr::Literal(ScalarValue::Int64(days)),
+            Expr::Literal(ScalarValue::Int64(offset)),
+        ) = (value, &amount)
+        {
+            return Ok(Expr::Literal(ScalarValue::Int64(match operator {
+                "DATE_ADD_DAYS" => days
+                    .checked_add(*offset)
+                    .ok_or_else(|| sql_err("DATE_ADD day offset overflows INT64"))?,
+                "DATE_ADD_MONTHS" => add_months(*days, *offset),
+                _ => {
+                    return Err(sql_err(
+                        "DATE_ADD hour/minute/second requires a timestamp operand",
+                    ));
+                }
+            })));
+        }
+        return Ok(Expr::Function {
+            name: operator.into(),
+            args: vec![value.clone(), amount],
+        });
+    }
+
     // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A
     // safe cast is the most common and most useful form in lake queries, and
     // JSON_PARSE has the same row-local failure contract.  Lower both forms
@@ -5455,6 +5521,22 @@ mod tests {
         assert!(sql_to_logical_plan("SELECT INTERVAL '1' DAY FROM t").is_err());
         assert!(
             sql_to_logical_plan("SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '1' HOUR")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn date_add_lowers_trino_units_to_typed_operators() {
+        let plan = sql_to_logical_plan(
+            "SELECT DATE_ADD('week', 2, DATE '2026-01-01'), DATE_ADD('quarter', 1, DATE '2026-01-01'), DATE_ADD('hour', 3, TIMESTAMP '2026-01-01 00:00:00') FROM t",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("DATE_ADD_SECONDS"));
+        assert!(debug.contains("Literal(Int64(20468))"), "{debug}");
+        assert!(debug.contains("Literal(Int64(20544))"), "{debug}");
+        assert!(
+            sql_to_logical_plan("SELECT DATE_ADD('millisecond', 1, CURRENT_TIMESTAMP) FROM t")
                 .is_err()
         );
     }
