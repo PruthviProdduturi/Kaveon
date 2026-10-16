@@ -1529,13 +1529,18 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             {
                 return Err(sql_err("UNNEST in FROM requires an ARRAY expression"));
             }
+            let output_aliases = alias
+                .as_ref()
+                .map(|alias| {
+                    alias
+                        .columns
+                        .len()
+                        .saturating_sub(usize::from(*with_offset || *with_ordinality))
+                })
+                .unwrap_or(expressions.len());
             let columns = alias
                 .as_ref()
                 .map(|alias| {
-                    let output_aliases = alias
-                        .columns
-                        .len()
-                        .saturating_sub(usize::from(*with_offset || *with_ordinality));
                     if output_aliases > expressions.len() {
                         alias
                             .columns
@@ -1581,14 +1586,14 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     .or_else(|| {
                         alias
                             .as_ref()
-                            .and_then(|alias| alias.columns.get(expressions.len()))
+                            .and_then(|alias| alias.columns.get(output_aliases))
                             .map(|column| column.name.value.clone())
                     })
                     .unwrap_or_else(|| "offset".to_owned())
             } else {
                 alias
                     .as_ref()
-                    .and_then(|alias| alias.columns.get(expressions.len()))
+                    .and_then(|alias| alias.columns.get(output_aliases))
                     .map(|column| column.name.value.clone())
                     .unwrap_or_else(|| "ordinality".to_owned())
             };
@@ -5571,6 +5576,17 @@ mod tests {
             Expr::Function { name, args }
                 if name == "MAP_ENTRIES" && args.len() == 1
         ));
+    }
+
+    #[test]
+    fn parses_correlated_map_array_unnest_with_ordinality() {
+        let plan = sql_to_logical_plan(
+            "SELECT x.id, entries.key, entries.value, entries.extra, entries.ord FROM (VALUES (1), (2)) AS x(id) CROSS JOIN LATERAL UNNEST(MAP(ARRAY['id'], ARRAY[x.id]), ARRAY[x.id, x.id + 10]) WITH ORDINALITY AS entries(key, value, extra, ord) ORDER BY x.id, entries.ord",
+        )
+        .unwrap();
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("columns: [\"key\", \"value\", \"extra\"]"));
+        assert!(rendered.contains("ordinality_column: \"ord\""));
     }
 
     #[test]
