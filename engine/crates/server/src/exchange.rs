@@ -74,7 +74,7 @@ struct DownloadPermit(usize);
 impl DownloadPermit {
     fn new(bytes: usize) -> ExchangeResult<Self> {
         DOWNLOAD_BYTES
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
                 |used| {
