@@ -1,10 +1,10 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `37049fbb` (the workspace gate includes the
+**Source:** `origin/dev` at `13ab1b03` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
-regressions)
+regressions, plus nested null-safe array/map/row comparison)
 
 The complete Rust workspace test command was run from `engine/`:
 
@@ -12,10 +12,10 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets --no-fail-fast --quiet
 ```
 
-The command completed with **1,547 listed tests, 1,541 passed, 0 failed, and 6
+The command completed with **1,549 listed tests, 1,543 passed, 0 failed, and 6
 ignored** across all workspace test binaries. The long server differential
 sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
-core, 384 execution, 68 optimizer, 412 server, 185 SQL, and 125 storage tests.
+core, 385 execution, 69 optimizer, 412 server, 185 SQL, and 125 storage tests.
 
 The release lint commands also passed:
 
@@ -24,8 +24,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-The workspace Clippy gate was rerun after the TopN change and exited with code
-0 in 12.06 seconds.
+The workspace Clippy gate exited with code 0.
 
 Against the current source above, `cargo fmt --all -- --check` and
 `cargo clippy --locked --workspace --all-targets -- -D warnings` both exited
@@ -40,7 +39,7 @@ cargo test -p kaveon-sql bracketed_identifiers -- --nocapture
 1 passed, 0 failed
 
 cargo test -p kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
-1 passed, 0 failed (410 filtered out; 135.21s)
+1 passed, 0 failed (411 filtered out; 140.31s)
 ```
 
 The bracketed identifier check covers the Studio-generated
@@ -88,7 +87,7 @@ source:
 
 ```text
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-412 passed, 0 failed, 0 ignored (139.13s)
+412 passed, 0 failed, 0 ignored (144.33s)
 ```
 
 This includes the planner regression for projected-key `UNION DISTINCT` and
@@ -104,7 +103,7 @@ The complete execution crate target suite was also rerun on this source:
 
 ```text
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-380 passed, 0 failed, 4 ignored (15.05s)
+381 passed, 0 failed, 4 ignored (15.16s)
 ```
 
 This is repository-level evidence only. It does not close the remaining Track
