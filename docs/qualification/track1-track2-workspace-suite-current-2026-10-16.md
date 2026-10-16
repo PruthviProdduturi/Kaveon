@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `b8c73e49` (the workspace gate includes the
+**Source:** `origin/dev` at `df894fbe` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions, plus nested null-safe array/map/row comparison, LargeList map
