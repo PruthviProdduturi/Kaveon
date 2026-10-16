@@ -4788,6 +4788,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let start = map.value_offsets()[row] as usize;
             let end = map.value_offsets()[row + 1] as usize;
             let found = match map_keys.data_type() {
+                DataType::Boolean => {
+                    let keys = map_keys.as_boolean();
+                    let needle = requested.as_boolean().value(row);
+                    (start..end).any(|index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::Int8 => {
+                    map_element_at_primitive::<Int8Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::Int16 => {
+                    map_element_at_primitive::<Int16Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::Int32 => {
+                    map_element_at_primitive::<Int32Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
                 DataType::Float64 => {
                     let keys = map_keys.as_primitive::<Float64Type>();
                     let needle = requested.as_primitive::<Float64Type>().value(row);
@@ -4797,6 +4814,40 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let keys = map_keys.as_primitive::<Int64Type>();
                     let needle = requested.as_primitive::<Int64Type>().value(row);
                     (start..end).any(|index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::UInt8 => {
+                    map_element_at_primitive::<UInt8Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::UInt16 => {
+                    map_element_at_primitive::<UInt16Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::UInt32 => {
+                    map_element_at_primitive::<UInt32Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::UInt64 => {
+                    map_element_at_primitive::<UInt64Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::Float32 => {
+                    map_element_at_primitive::<Float32Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::Date32 => {
+                    map_element_at_primitive::<Date32Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::Date64 => {
+                    map_element_at_primitive::<Date64Type>(map_keys, &requested, row, start, end)
+                        .is_some()
+                }
+                DataType::Decimal128(_, _) => {
+                    map_element_at_primitive::<arrow::datatypes::Decimal128Type>(
+                        map_keys, &requested, row, start, end,
+                    )
+                    .is_some()
                 }
                 DataType::Utf8 => {
                     let keys = map_keys.as_string::<i32>();
@@ -4835,6 +4886,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let start = map.value_offsets()[row] as usize;
             let end = map.value_offsets()[row + 1] as usize;
             let found = match map_keys.data_type() {
+                DataType::Boolean => {
+                    let keys = map_keys.as_boolean();
+                    let needle = requested.as_boolean().value(row);
+                    (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::Int8 => {
+                    map_element_at_primitive::<Int8Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::Int16 => {
+                    map_element_at_primitive::<Int16Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::Int32 => {
+                    map_element_at_primitive::<Int32Type>(map_keys, &requested, row, start, end)
+                }
                 DataType::Float64 => {
                     let keys = map_keys.as_primitive::<Float64Type>();
                     let needle = requested.as_primitive::<Float64Type>().value(row);
@@ -4844,6 +4909,32 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let keys = map_keys.as_primitive::<Int64Type>();
                     let needle = requested.as_primitive::<Int64Type>().value(row);
                     (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::UInt8 => {
+                    map_element_at_primitive::<UInt8Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::UInt16 => {
+                    map_element_at_primitive::<UInt16Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::UInt32 => {
+                    map_element_at_primitive::<UInt32Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::UInt64 => {
+                    map_element_at_primitive::<UInt64Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::Float32 => {
+                    map_element_at_primitive::<Float32Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::Date32 => {
+                    map_element_at_primitive::<Date32Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::Date64 => {
+                    map_element_at_primitive::<Date64Type>(map_keys, &requested, row, start, end)
+                }
+                DataType::Decimal128(_, _) => {
+                    map_element_at_primitive::<arrow::datatypes::Decimal128Type>(
+                        map_keys, &requested, row, start, end,
+                    )
                 }
                 DataType::Utf8 => {
                     let keys = map_keys.as_string::<i32>();
@@ -9850,6 +9941,18 @@ fn array_remove_generic<L: OffsetSizeTrait>(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
+}
+
+fn map_element_at_primitive<T: ArrowPrimitiveType>(
+    map_keys: &ArrayRef,
+    requested: &ArrayRef,
+    row: usize,
+    start: usize,
+    end: usize,
+) -> Option<usize> {
+    let keys = map_keys.as_primitive::<T>();
+    let needle = requested.as_primitive::<T>().value(row);
+    (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
 }
 
 fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Result<bool> {
