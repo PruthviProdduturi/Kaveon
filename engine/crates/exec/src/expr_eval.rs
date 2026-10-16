@@ -4389,6 +4389,39 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
+        "JSON_OBJECT" => {
+            if !args.len().is_multiple_of(2) {
+                return Err(KaveonError::Execution(
+                    "JSON_OBJECT requires alternating key and value arguments".into(),
+                ));
+            }
+            let mut result = StringBuilder::new();
+            for row in 0..num_rows {
+                let mut object = serde_json::Map::new();
+                for pair in args.chunks(2) {
+                    let key = text_value(&pair[0], row)?.ok_or_else(|| {
+                        KaveonError::Execution("JSON_OBJECT does not accept a NULL key".into())
+                    })?;
+                    if object.contains_key(key) {
+                        return Err(KaveonError::Execution(format!(
+                            "JSON_OBJECT contains duplicate key {key:?}"
+                        )));
+                    }
+                    let value = if pair[1].is_null(row) {
+                        serde_json::Value::Null
+                    } else {
+                        json_scalar_value(&pair[1], row)?.ok_or_else(|| {
+                            KaveonError::Execution(
+                                "JSON_OBJECT could not materialize a scalar value".into(),
+                            )
+                        })?
+                    };
+                    object.insert(key.to_owned(), value);
+                }
+                result.append_value(serde_json::Value::Object(object).to_string());
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "JSON_ARRAY_LENGTH" => {
             check_arity(name, args, 1)?;
             let documents = &args[0];
@@ -17145,6 +17178,46 @@ mod tests {
         let result = result_array.as_string::<i32>();
         assert_eq!(result.value(0), r#"[7,"x"]"#);
         assert_eq!(result.value(1), r#"[null,"x"]"#);
+    }
+
+    #[test]
+    fn evaluates_json_object_constructor_with_nulls_and_rejects_duplicate_keys() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "key",
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int64Array::from(vec![Some(7), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_OBJECT".into(),
+            args: vec![
+                Expr::Column("key".into()),
+                Expr::Column("value".into()),
+                Expr::Literal(ScalarValue::Utf8("label".into())),
+                Expr::Literal(ScalarValue::Utf8("x".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), r#"{"a":7,"label":"x"}"#);
+        assert_eq!(values.value(1), r#"{"b":null,"label":"x"}"#);
+
+        let duplicate = Expr::Function {
+            name: "JSON_OBJECT".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("a".into())),
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Utf8("a".into())),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        let error = evaluate(&duplicate, &batch).unwrap_err();
+        assert!(error.to_string().contains("duplicate key"));
     }
 
     #[test]
