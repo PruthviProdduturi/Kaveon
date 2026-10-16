@@ -3999,7 +3999,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         if !matches!(
             key_type,
             DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
                 | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
                 | DataType::Float64
                 | DataType::Utf8
                 | DataType::LargeUtf8
@@ -9430,19 +9438,27 @@ fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Res
     if left.is_null(left_index) || left.is_null(right_index) {
         return Ok(false);
     }
+    macro_rules! primitive_keys_equal {
+        ($array:ty) => {{
+            let values = left.as_any().downcast_ref::<$array>().unwrap();
+            values.value(left_index) == values.value(right_index)
+        }};
+    }
     Ok(match left.data_type() {
         DataType::Boolean => {
             let values = left.as_any().downcast_ref::<BooleanArray>().unwrap();
             values.value(left_index) == values.value(right_index)
         }
-        DataType::Int64 => {
-            let values = left.as_any().downcast_ref::<Int64Array>().unwrap();
-            values.value(left_index) == values.value(right_index)
-        }
-        DataType::Float64 => {
-            let values = left.as_any().downcast_ref::<Float64Array>().unwrap();
-            values.value(left_index) == values.value(right_index)
-        }
+        DataType::Int8 => primitive_keys_equal!(Int8Array),
+        DataType::Int16 => primitive_keys_equal!(Int16Array),
+        DataType::Int32 => primitive_keys_equal!(Int32Array),
+        DataType::Int64 => primitive_keys_equal!(Int64Array),
+        DataType::UInt8 => primitive_keys_equal!(UInt8Array),
+        DataType::UInt16 => primitive_keys_equal!(UInt16Array),
+        DataType::UInt32 => primitive_keys_equal!(UInt32Array),
+        DataType::UInt64 => primitive_keys_equal!(UInt64Array),
+        DataType::Float32 => primitive_keys_equal!(Float32Array),
+        DataType::Float64 => primitive_keys_equal!(Float64Array),
         DataType::Utf8 => {
             let values = left.as_any().downcast_ref::<StringArray>().unwrap();
             values.value(left_index) == values.value(right_index)
@@ -12710,6 +12726,47 @@ mod tests {
         )
         .expect_err("duplicate map keys must fail closed");
         assert!(error.to_string().contains("duplicate keys"), "{error}");
+    }
+
+    #[test]
+    fn map_from_entries_accepts_supported_numeric_key_types() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", DataType::Int32, false)),
+            Arc::new(arrow::datatypes::Field::new("value", DataType::Utf8, true)),
+        ]
+        .into();
+        let rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("one"), Some("two")])) as ArrayRef,
+            ],
+            None,
+        );
+        let list = ListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields.clone()),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            Arc::new(rows),
+            None,
+        );
+        let input = RecordBatch::try_from_iter([("entries", Arc::new(list) as ArrayRef)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            result.keys().as_primitive::<Int32Type>().values(),
+            &[1_i32, 2_i32]
+        );
     }
 
     #[test]
