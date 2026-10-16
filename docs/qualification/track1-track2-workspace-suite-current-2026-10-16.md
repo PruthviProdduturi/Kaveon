@@ -188,3 +188,8 @@ cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
 423 passed, 0 failed, 0 ignored (155.27s)
 ```
+
+The typed map lookup expansion (`MAP_ELEMENT_AT` and
+`MAP_CONTAINS_KEY`) was then rerun through the complete server target suite:
+**423 passed, 0 failed, 0 ignored** (154.34 seconds). A direct Int32-key
+regression confirms narrow primitive map keys resolve to the typed value.
