@@ -666,6 +666,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "bounded_recursive_cte_multistep",
+        "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 2 FROM numbers WHERE n < 5) SELECT n FROM numbers ORDER BY n",
+        false,
+    ),
+    (
         "subquery_in",
         "SELECT COUNT(*) AS n FROM {T} WHERE country IN (SELECT country FROM {U} WHERE locale = 'ja-JP' GROUP BY country)",
         false,

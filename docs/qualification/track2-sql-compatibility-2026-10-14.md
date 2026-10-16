@@ -712,6 +712,6 @@ Validation on the clean checkout:
 ```text
 kaveon-sql parser tests: 16 passed
 kaveon-sql full tests: 181 passed
-differential_tests: 33 passed, 0 failed, 0 ignored (including the bounded recursive CTE case)
+differential_tests: 33 passed, 0 failed, 0 ignored (including ascending, descending, and multi-step bounded recursive CTE cases)
 clippy (-D warnings): passed
 ```
