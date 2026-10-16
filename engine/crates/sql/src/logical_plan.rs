@@ -5399,6 +5399,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_row_array_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(ARRAY[ROW(1, 'a'), ROW(2, 'b')]) AS t(id, label)",
+        )
+        .unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest { columns, .. } if columns == vec!["id", "label"]
+        ));
+    }
+
+    #[test]
     fn parses_lateral_function_unnest_in_from() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[10, 20]) AS u(value)",
