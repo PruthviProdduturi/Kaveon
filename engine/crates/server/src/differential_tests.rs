@@ -859,6 +859,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "expression_intersect_all_partition_key",
+        "SELECT 1 + 1 AS shifted FROM {T} INTERSECT ALL SELECT 1 + 1 AS shifted FROM {U} ORDER BY shifted",
+        true,
+    ),
+    (
+        "expression_except_all_partition_key",
+        "SELECT 1 + 1 AS shifted FROM {T} EXCEPT ALL SELECT 2 + 1 AS shifted FROM {T} ORDER BY shifted",
+        true,
+    ),
+    (
         "string_concat",
         "SELECT country || ' / ' || region AS place, COUNT(*) AS n FROM {T} WHERE event_date = '2026-07-04' AND surface = 'Chat' GROUP BY country || ' / ' || region ORDER BY n DESC, place LIMIT 3",
         true,
