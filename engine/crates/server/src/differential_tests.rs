@@ -302,6 +302,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_narrow_integer_lookup",
+        "SELECT MAP_ELEMENT_AT(MAP(ARRAY[CAST(42 AS INTEGER)], ARRAY[7]), CAST(42 AS INTEGER)) AS value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_concat_and_projection",
         "SELECT MAP_ELEMENT_AT(MAP_CONCAT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), MAP(ARRAY['b', 'c'], ARRAY[30, 40])), 'b') AS replaced, MAP_KEYS(MAP_CONCAT(MAP(ARRAY['a'], ARRAY[10]), MAP(ARRAY['b'], ARRAY[20]))) AS keys FROM {T} LIMIT 1",
         false,
