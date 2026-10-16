@@ -1,199 +1,53 @@
-# Track 1 and Track 2 workspace qualification — current source
+# Track 1 and Track 2 workspace qualification
 
-**Date:** 2026-10-16  
-**Source:** `origin/dev` at `0c3a9c7a` (the workspace gate includes the
-correlated array-function, map-key, map-entry, per-row map-concat, named
-window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
-regressions, plus nested null-safe array/map/row comparison, LargeList map
-constructors, primitive numeric map keys, date/decimal map keys, decimal
-map-key regression coverage, explicit, wildcard-derived, nested-derived,
-derived column-list aliases, equality-correlated, residual-inner,
-residual-left-outer, and uncorrelated-lateral
-`JOIN ... USING`)
+This file is the current qualification snapshot. Update the rows below when
+the boundary or evidence changes; do not append session notes or duplicate
+historical ledgers. Detailed implementation history remains in git history and
+the parity tracker.
 
-The complete Rust workspace test command was run from `engine/`:
+**Source:** `origin/dev` at `6623c000` (timestamp map-key containment and
+timezone-less timestamp map lookup support).
 
-```text
-cargo test --workspace --all-targets --no-fail-fast --quiet
-```
+## Current evidence
 
-The command completed with **1,567 listed tests, 1,561 passed, 0 failed, and 6
-ignored** across all workspace test binaries. The long server differential
-sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
-core, 389 execution, 69 optimizer, 420 server, 191 SQL, and 125 storage tests.
+| Area | Command or scope | Result |
+| --- | --- | --- |
+| Server distributed execution | `cargo test -p kaveon-server --all-targets --no-fail-fast --quiet` | **423 passed, 0 failed, 0 ignored**; includes joins, aggregates, exchange, spill, retry, cancellation, worker-loss, set operations, lateral joins, and the differential sweep (151.33 s) |
+| Execution operators | `cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet` | **390 passed, 0 failed, 4 ignored** |
+| SQL compatibility | Differential local/distributed corpus | Exact results for qualified array/map/row operations, set operations, typed histograms, map lookup, nested keys, and the current Trino compatibility cases |
+| Parser regression | `cargo test -p kaveon-sql bracketed_identifiers -- --nocapture` | **1 passed, 0 failed**; covers Studio-generated bracketed identifiers such as `SELECT DISTINCT [year] ...` |
+| Formatting | `cargo fmt --all -- --check` | Passed |
+| Lint gate | `cargo clippy --workspace --all-targets -- -D warnings` | Passed on Rust 1.98.1 |
 
-The release lint commands also passed:
+## Implemented qualification boundaries
+
+- Distributed DISTINCT, UNION, INTERSECT, and EXCEPT paths use stable
+  expression keys where supported; unsupported shapes retain an explicit
+  single-task fallback.
+- Exchange partitioning has deterministic primitive and nested array/map/row
+  keys, including reversed map-entry order.
+- Typed `ARRAY_HISTOGRAM` covers integer, unsigned integer, floating-point,
+  decimal, boolean, date, date64, UTF-8, large UTF-8, and timezone-less
+  timestamp values with deterministic ordering and null handling.
+- `MAP_ELEMENT_AT` and `MAP_CONTAINS_KEY` cover the supported primitive,
+  decimal, date, UTF-8, and timezone-less timestamp key families.
+- Correlated lateral and residual outer-join cases are checked against local
+  results before distributed qualification.
+
+## Remaining qualification gates
+
+This repository evidence does not close the live Track 1 AKS gates or every
+Track 2 compatibility boundary. The parity tracker remains authoritative for
+those open boundaries, including live fault injection, cloud object-store
+qualification, broader optimizer coverage, and unsupported SQL features.
+
+## Reproduction
+
+Run engine commands from `engine/` with the pinned toolchain:
 
 ```text
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-```
-
-The workspace Clippy gate exited with code 0.
-
-Against the current source above, `cargo fmt --all -- --check` and
-`cargo clippy --locked --workspace --all-targets -- -D warnings` both exited
-with code 0.
-
-After the workspace evidence was captured, the planner regression for
-unpartitioned windows was added and the current source was rechecked with the
-two focused gates below:
-
-```text
-cargo test -p kaveon-sql bracketed_identifiers -- --nocapture
-1 passed, 0 failed
-
-cargo test -p kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
-1 passed, 0 failed (411 filtered out; 140.31s)
-```
-
-The bracketed identifier check covers the Studio-generated
-`SELECT DISTINCT [year] ...` form that previously surfaced as an `ARRAY`
-function error. The differential gate covers the distributed SQL corpus over
-the current parser and planner.
-
-After that workspace snapshot, the planner also began hash-partitioning
-`DISTINCT` and `UNION DISTINCT` projections whose expressions have stable
-output names. Two planner tests verify the exchange keys and worker count, and
-the full distributed differential sweep was rerun with expression-shaped
-`DISTINCT` and `UNION DISTINCT` cases; it passed **1/1** (422 filtered server
-tests; 140.30 seconds). Expressions are evaluated by each branch before the
-exchange, removing the coordinator-only fallback without changing results.
-
-The TopN operator gate also passes **17/17** focused tests, including a
-sorted-string worker merge. That path now merges already-sorted non-integer
-and multi-key candidates by their heads while retaining the existing Arrow
-fallback for unsorted input.
-
-The distributed differential sweep was rerun after the planner change and
-passed **1/1** (411 filtered server tests; 136.86 seconds). It includes a
-projected-key `UNION DISTINCT` case whose branches now hash-partition across
-workers before the final deduplication; unsupported expression-shaped unions
-still use the single-task fallback.
-
-The sweep also covers typed DATE and DECIMAL set operations. The set operator
-and DISTINCT key paths now canonicalize DATE32/DATE64/TIMESTAMP, DECIMAL128,
-narrow integer/Float32, and LargeUtf8 values, with deterministic nested
-array/map/row keys; focused array, map, and row set-key tests pass, and the sweep passed **1/1** after that extension
-(411 filtered server tests; 135.24 seconds).
-
-The differential corpus now also includes SQL-level array and map
-`INTERSECT` cases plus a composite multi-column row `EXCEPT` case; the exact
-local/distributed sweep passed **1/1** after those additions (411 filtered
-server tests; 134.00 seconds). The direct-map, correlated-map, and mixed
-map-plus-array UNNEST cases also pass in the same sweep: `UNNEST(MAP(...))`
-is normalized to `MAP_ENTRIES`, the lateral operator expands each struct entry
-into aliased key/value columns, and mixed expressions preserve padding and
-ordinality (411 filtered server tests; 133.68 seconds).
-
-The map cardinality case also passed in the exact-result sweep (411 filtered
-server tests; 134.19 seconds), covering `CARDINALITY(MAP(...))` across the
-local and distributed execution paths.
-
-The optimizer rejection corpus now also has a focused binder test for a
-correlated scalar `OFFSET ... LIMIT` with a residual predicate. It fails closed
-with the explicit Apply-required diagnostic rather than silently rebinding the
-outer columns.
-
-After that change, the complete server target suite was rerun from the same
-source:
-
-```text
-cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-420 passed, 0 failed, 0 ignored (147.88s)
-```
-
-This includes the planner regression for projected-key `UNION DISTINCT` and
-the existing distributed join, aggregate, spill, retry, cancellation, and
-worker-loss coverage.
-
-The added `correlated_residual_left_lateral_join_using_matches_the_local_result`
-case proves that a residual predicate inside a `LEFT JOIN LATERAL` preserves
-local null-extension semantics across three distributed workers. Its preserved
-side is an explicitly aliased derived `VALUES` relation, so the qualification
-also covers relation-qualifier propagation through the SQL lowering boundary.
-The `derived_values_join_using_matches_the_local_result` case additionally
-checks qualified `JOIN ... USING` keys on two derived `VALUES` relations.
-
-The exchange-focused regression also verifies that nested array, map, and row
-keys partition successfully, including two maps with reversed entry order
-landing in the same partition; map/row keys use the canonical nested fallback
-because Arrow's `RowConverter` does not implement Map values.
-
-The complete execution crate target suite was also rerun on this source:
-
-```text
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-385 passed, 0 failed, 4 ignored (15.35s)
-```
-
-This is repository-level evidence only. It does not close the remaining Track
-1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
-parity trackers and require their corresponding live or differential evidence.
-
-The same gate also covers expression-shaped INTERSECT and EXCEPT projections, including the non-empty constant-key difference case; both local and distributed results matched exactly.
-
-The complete server target was then rerun against this source:
-
-```text
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-423 passed, 0 failed, 0 ignored (147.17s)
 ```
-
-The differential gate also covers expression-shaped `INTERSECT ALL` and
-`EXCEPT ALL` projections; both passed with exact local/distributed results in
-143.25 seconds.
-
-Track 2 array coverage now includes `ARRAY_SPLIT_INTO_CHUNKS` for typed
-regular and large Arrow lists, with nested-boundary unit coverage and an exact
-local/distributed differential case. The differential sweep passed **1/1**
-(145.60 seconds).
-
-Track 2 array coverage now includes deterministic `ARRAY_HISTOGRAM` maps for
-integer and UTF-8 elements, ignoring null elements and preserving null arrays.
-The unit test and local/distributed differential sweep passed; the sweep took
-145.16 seconds.
-
-`ARRAY_HISTOGRAM` coverage now also supports boolean and DATE32 keys, in
-addition to integer and UTF-8 keys. The exact local/distributed differential
-sweep passed **1/1** after this extension (145.94 seconds).
-
-The histogram path now covers the primitive integer family used by the engine
-(Int8/16/32/64 and UInt8/16/32/64). A narrow-element Int32 unit regression
-preserves deterministic ordering, null-element omission, and overflow checks.
-
-Float32 and Float64 histogram keys are also supported. NaN values are
-canonicalized into one bucket and signed zero values share one bucket; a unit
-regression covers both behaviors.
-
-The differential corpus now includes an explicit DOUBLE histogram case; the
-local/distributed sweep passed **1/1** after adding it (147.33 seconds).
-
-The corpus also includes a DECIMAL histogram case preserving key precision and
-scale; the sweep passed **1/1** after adding it (152.25 seconds).
-
-Date64 and all Arrow timestamp units now use the same deterministic histogram
-path; the complete exec suite remains green at **390 passed, 0 failed, 4
-ignored**.
-
-The differential corpus now includes a DATE histogram case; the full sweep
-passed **1/1** after adding the temporal coverage (195.90 seconds).
-
-The complete targets were rerun after the histogram type extension:
-
-```text
-cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-390 passed, 0 failed, 4 ignored (15.64s)
-
-cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-423 passed, 0 failed, 0 ignored (155.27s)
-```
-
-The typed map lookup expansion (`MAP_ELEMENT_AT` and
-`MAP_CONTAINS_KEY`) was then rerun through the complete server target suite:
-**423 passed, 0 failed, 0 ignored** (154.34 seconds). A direct Int32-key
-regression confirms narrow primitive map keys resolve to the typed value.
-
-The differential corpus now includes the same narrow integer map lookup through
-the fragment planner; the local/distributed sweep passed **1/1** (153.34
-seconds).
