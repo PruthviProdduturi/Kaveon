@@ -871,6 +871,16 @@ impl Binder<'_> {
         let left_scope = self.scope_of(&left.plan);
         let mut right_outer = outer.to_vec();
         right_outer.push(left_scope.clone());
+        // A positive LIMIT cannot change the truth value of EXISTS: the
+        // predicate only asks whether at least one row survives. Remove the
+        // top-level limit before binding so correlated EXISTS can still be
+        // decorrelated into a keyed semi/anti join. LIMIT 0 remains intact,
+        // and IN keeps its limit because multiplicity/set membership matters.
+        let right = if matches!(right_key, Expr::Literal(_)) {
+            strip_positive_exists_limit(right)
+        } else {
+            right
+        };
         let right = self.bind(right, &right_outer)?;
         let (lateral, deeper): (Vec<_>, Vec<_>) = right
             .correlations
@@ -1814,6 +1824,13 @@ fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
     }
 }
 
+fn strip_positive_exists_limit(plan: LogicalPlan) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Limit { input, count } if count > 0 => *input,
+        plan => plan,
+    }
+}
+
 /// Whether a correlated `IN` subquery exposes its equality key as the first
 /// projected value. `DISTINCT` is transparent here: it changes multiplicity,
 /// which a semi/anti join already ignores, but it must not make an otherwise
@@ -2543,10 +2560,6 @@ mod tests {
                 "EXISTS correlated without an equality",
             ),
             (
-                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey LIMIT 1)",
-                "LIMIT inside a correlated subquery",
-            ),
-            (
                 "SELECT o_orderkey FROM orders WHERE o_custkey IN (SELECT l_quantity FROM lineitem WHERE l_orderkey = o_orderkey)",
                 "correlated IN subquery",
             ),
@@ -2572,6 +2585,31 @@ mod tests {
             let error = bind(plan, &catalog()).unwrap_err().to_string();
             assert!(error.contains(reason), "{sql}: {error}");
         }
+    }
+
+    #[test]
+    fn correlated_exists_positive_limit_is_decorrelated() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey LIMIT 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected outer projection")
+        };
+        assert!(matches!(*input, LogicalPlan::SemiJoin { .. }), "{input:?}");
+    }
+
+    #[test]
+    fn correlated_exists_zero_limit_remains_empty() {
+        let mut plan = sql_to_logical_plan_for_binder(
+            "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey LIMIT 0)",
+        )
+        .unwrap();
+        qualify(&mut plan);
+        let error = bind(plan, &catalog()).unwrap_err().to_string();
+        assert!(
+            error.contains("LIMIT inside a correlated subquery"),
+            "{error}"
+        );
     }
 
     #[test]

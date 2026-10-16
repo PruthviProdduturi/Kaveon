@@ -78,9 +78,12 @@ binder lowers to executable joins: keyed `EXISTS`, `NOT EXISTS`, `IN`, and
 `NOT IN` with residual predicates, plus correlated scalar `MIN`/`MAX` and
 `COUNT` filters. Each case is compared across node-local and three-fragment
 execution over the same Parquet inputs. This is qualified coverage for those
-shapes, not a general Apply implementation. Correlated `LIMIT`, `OFFSET`,
-`UNION`, multi-level outer references, and lateral/derived relation forms
-remain explicitly outside the contract and continue to fail closed.
+shapes, not a general Apply implementation. Positive top-level `LIMIT` on
+correlated `EXISTS`/`NOT EXISTS` is now removed before decorrelation because it
+cannot change existence; correlated `OFFSET`, `LIMIT 0`, limits in correlated
+`IN`/scalar forms, `UNION`, multi-level outer references, and lateral/derived
+relation forms remain explicitly outside the contract and continue to fail
+closed.
 
 ## Fresh clean workspace gate — commit `33ad59e1` — 2026-10-15
 
@@ -228,6 +231,21 @@ The runtime operator contract now accepts a safe conjunction of single-column
 the integration gap between composite-key filter construction and storage
 readers; unsupported shapes still decline and retain the exact batch filter.
 The core contract regression verifies that every conjunction child is applied.
+
+## Correlated EXISTS positive-limit qualification — 2026-10-15
+
+The binder now removes a positive top-level `LIMIT` from a correlated
+`EXISTS`/`NOT EXISTS` subquery before decorrelation. Existence only depends on
+whether at least one row survives, so `LIMIT 1` and other positive limits do
+not change the predicate's truth value. `LIMIT 0` remains rejected in the
+correlated path, and limits in correlated `IN` or scalar subqueries are not
+rewritten because their cardinality affects semantics.
+
+The optimizer suite passes `23/23`, including
+`correlated_exists_positive_limit_is_decorrelated` and
+`correlated_exists_zero_limit_remains_empty`. This is a local binder
+qualification; distributed and external-client coverage for this shape still
+belongs to the broader wire corpus.
 
 ## Explicit remaining boundaries
 
