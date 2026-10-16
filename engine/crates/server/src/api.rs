@@ -528,6 +528,8 @@ struct TaskScanMetrics {
     compressed_bytes_read: u64,
     row_filter_rows_examined: u64,
     row_filter_rows_admitted: u64,
+    runtime_filters_applied: u64,
+    runtime_filter_values: u64,
     batches_emitted: u64,
     snapshot_ns: u64,
     footer_ns: u64,
@@ -602,6 +604,10 @@ struct ScanTelemetry {
     /// the projection.
     row_filter_rows_examined: u64,
     row_filter_rows_admitted: u64,
+    /// Exact build-side runtime filters accepted before a source started
+    /// reading, and the number of values carried by them.
+    runtime_filters_applied: u64,
+    runtime_filter_values: u64,
     snapshot_ns: u64,
     footer_ns: u64,
     read_ns: u64,
@@ -14122,6 +14128,8 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
         compressed_bytes_read: snapshot.compressed_bytes_read,
         row_filter_rows_examined: snapshot.row_filter_rows_examined,
         row_filter_rows_admitted: snapshot.row_filter_rows_admitted,
+        runtime_filters_applied: snapshot.runtime_filters_applied,
+        runtime_filter_values: snapshot.runtime_filter_values,
         snapshot_ns: duration_ns(snapshot.snapshot_elapsed),
         footer_ns: duration_ns(snapshot.footer_elapsed),
         read_ns: duration_ns(snapshot.read_elapsed),
@@ -14184,6 +14192,8 @@ fn merge_task_scan_metrics<'a>(
         total.compressed_bytes_read += snapshot.compressed_bytes_read;
         total.row_filter_rows_examined += snapshot.row_filter_rows_examined;
         total.row_filter_rows_admitted += snapshot.row_filter_rows_admitted;
+        total.runtime_filters_applied += snapshot.runtime_filters_applied;
+        total.runtime_filter_values += snapshot.runtime_filter_values;
         total.batches_emitted += snapshot.batches_emitted;
         total.snapshot_ns += duration_ns(snapshot.snapshot_elapsed);
         total.footer_ns += duration_ns(snapshot.footer_elapsed);
@@ -14313,6 +14323,8 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             total.compressed_bytes_read += scan.compressed_bytes_read;
             total.row_filter_rows_examined += scan.row_filter_rows_examined;
             total.row_filter_rows_admitted += scan.row_filter_rows_admitted;
+            total.runtime_filters_applied += scan.runtime_filters_applied;
+            total.runtime_filter_values += scan.runtime_filter_values;
             total.batches_emitted += scan.batches_emitted;
             total.snapshot_ns += scan.snapshot_ns;
             total.footer_ns += scan.footer_ns;
@@ -14363,6 +14375,8 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             compressed_bytes_read: total.compressed_bytes_read,
             row_filter_rows_examined: total.row_filter_rows_examined,
             row_filter_rows_admitted: total.row_filter_rows_admitted,
+            runtime_filters_applied: total.runtime_filters_applied,
+            runtime_filter_values: total.runtime_filter_values,
             snapshot_ns: total.snapshot_ns,
             footer_ns: total.footer_ns,
             read_ns: total.read_ns,
@@ -20730,13 +20744,15 @@ mod tests {
             execution: None,
             scan,
         };
-        let scan = |rows_emitted, rows_selected| super::TaskScanMetrics {
+        let scan = |rows_emitted, rows_selected, runtime_values| super::TaskScanMetrics {
             rows_emitted,
             rows_selected,
             compressed_bytes_selected: 12,
             compressed_bytes_read: 5,
             row_filter_rows_examined: rows_selected,
             row_filter_rows_admitted: rows_emitted,
+            runtime_filters_applied: 1,
+            runtime_filter_values: runtime_values,
             ..Default::default()
         };
         let stages = vec![super::StageTelemetry {
@@ -20745,7 +20761,7 @@ mod tests {
             task_count: 2,
             completed_tasks: 2,
             elapsed_us: 1,
-            tasks: vec![task(Some(scan(40, 60))), task(Some(scan(30, 50)))],
+            tasks: vec![task(Some(scan(40, 60, 3))), task(Some(scan(30, 50, 2)))],
         }];
         let (scans, complete) = super::distributed_scan_telemetry(&stages);
         assert!(complete);
@@ -20754,6 +20770,8 @@ mod tests {
         assert_eq!(scans[0].compressed_bytes_read, 10);
         assert_eq!(scans[0].row_filter_rows_examined, 110);
         assert_eq!(scans[0].row_filter_rows_admitted, 70);
+        assert_eq!(scans[0].runtime_filters_applied, 2);
+        assert_eq!(scans[0].runtime_filter_values, 5);
         assert_ne!(scans[0].rows_emitted, stages[0].tasks[0].output_rows as u64);
         let incomplete = vec![super::StageTelemetry {
             tasks: vec![task(None)],
