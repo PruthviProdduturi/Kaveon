@@ -549,6 +549,7 @@ impl HashJoin {
         Ok(operator)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new_qualified_with_memory_and_residual(
         left: Box<dyn BatchOperator>,
         right: Box<dyn BatchOperator>,

@@ -160,11 +160,11 @@ impl BatchOperator for SetOpOperator {
                         }
                     }
                     SetOpMode::IntersectAll => {
-                        if let Some(remaining) = self.right_counts.as_mut().unwrap().get_mut(&key) {
-                            if *remaining > 0 {
-                                *remaining -= 1;
-                                keep.push(row as u32);
-                            }
+                        if let Some(remaining) = self.right_counts.as_mut().unwrap().get_mut(&key)
+                            && *remaining > 0
+                        {
+                            *remaining -= 1;
+                            keep.push(row as u32);
                         }
                     }
                     SetOpMode::ExceptAll => {

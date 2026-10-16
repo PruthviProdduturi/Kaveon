@@ -1297,7 +1297,7 @@ fn as_string_array(arr: &ArrayRef) -> Result<&StringArray> {
         .ok_or_else(|| KaveonError::Execution("expected string array".into()))
 }
 
-fn text_value<'a>(arr: &'a ArrayRef, row: usize) -> Result<Option<&'a str>> {
+fn text_value(arr: &ArrayRef, row: usize) -> Result<Option<&str>> {
     match arr.data_type() {
         DataType::Utf8 => {
             let values = as_string_array(arr)?;
@@ -2354,20 +2354,26 @@ fn array_slice_generic<L: OffsetSizeTrait>(
         }
         let inner = list.value(row);
         let length = inner.len() as i64;
-        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+        let step = if stride.is_valid(row) {
+            stride.value(row)
+        } else {
+            1
+        };
         if step == 0 {
             return Err(KaveonError::Execution(
                 "ARRAY_SLICE stride cannot be zero".into(),
             ));
         }
-        let start = lower
-            .is_valid(row)
-            .then(|| lower.value(row))
-            .unwrap_or(if step < 0 { length } else { 1 });
-        let end = upper
-            .is_valid(row)
-            .then(|| upper.value(row))
-            .unwrap_or(if step < 0 { 1 } else { length });
+        let start = if lower.is_valid(row) {
+            lower.value(row)
+        } else {
+            if step < 0 { length } else { 1 }
+        };
+        let end = if upper.is_valid(row) {
+            upper.value(row)
+        } else {
+            if step < 0 { 1 } else { length }
+        };
         let first = if step > 0 {
             start.max(1).min(length + 1)
         } else {
@@ -6333,15 +6339,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_primitive::<Int64Type>();
                         let length = values.len() as i64;
-                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower
-                            .is_valid(row)
-                            .then(|| lower.value(row))
-                            .unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper
-                            .is_valid(row)
-                            .then(|| upper.value(row))
-                            .unwrap_or(if step < 0 { 1 } else { length });
+                        let step = if stride.is_valid(row) {
+                            stride.value(row)
+                        } else {
+                            1
+                        };
+                        let start = if lower.is_valid(row) {
+                            lower.value(row)
+                        } else {
+                            if step < 0 { length } else { 1 }
+                        };
+                        let end = if upper.is_valid(row) {
+                            upper.value(row)
+                        } else {
+                            if step < 0 { 1 } else { length }
+                        };
                         if step == 0 {
                             return Err(KaveonError::Execution(
                                 "ARRAY_SLICE stride cannot be zero".into(),
@@ -6381,15 +6393,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row);
                         let values = values.as_primitive::<Float64Type>();
                         let length = values.len() as i64;
-                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower
-                            .is_valid(row)
-                            .then(|| lower.value(row))
-                            .unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper
-                            .is_valid(row)
-                            .then(|| upper.value(row))
-                            .unwrap_or(if step < 0 { 1 } else { length });
+                        let step = if stride.is_valid(row) {
+                            stride.value(row)
+                        } else {
+                            1
+                        };
+                        let start = if lower.is_valid(row) {
+                            lower.value(row)
+                        } else {
+                            if step < 0 { length } else { 1 }
+                        };
+                        let end = if upper.is_valid(row) {
+                            upper.value(row)
+                        } else {
+                            if step < 0 { 1 } else { length }
+                        };
                         if step == 0 {
                             return Err(KaveonError::Execution(
                                 "ARRAY_SLICE stride cannot be zero".into(),
@@ -6450,15 +6468,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
                         let length = values.len() as i64;
-                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower
-                            .is_valid(row)
-                            .then(|| lower.value(row))
-                            .unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper
-                            .is_valid(row)
-                            .then(|| upper.value(row))
-                            .unwrap_or(if step < 0 { 1 } else { length });
+                        let step = if stride.is_valid(row) {
+                            stride.value(row)
+                        } else {
+                            1
+                        };
+                        let start = if lower.is_valid(row) {
+                            lower.value(row)
+                        } else {
+                            if step < 0 { length } else { 1 }
+                        };
+                        let end = if upper.is_valid(row) {
+                            upper.value(row)
+                        } else {
+                            if step < 0 { 1 } else { length }
+                        };
                         if step == 0 {
                             return Err(KaveonError::Execution(
                                 "ARRAY_SLICE stride cannot be zero".into(),
@@ -6498,15 +6522,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row);
                         let values = values.as_string::<i32>();
                         let length = values.len() as i64;
-                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower
-                            .is_valid(row)
-                            .then(|| lower.value(row))
-                            .unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper
-                            .is_valid(row)
-                            .then(|| upper.value(row))
-                            .unwrap_or(if step < 0 { 1 } else { length });
+                        let step = if stride.is_valid(row) {
+                            stride.value(row)
+                        } else {
+                            1
+                        };
+                        let start = if lower.is_valid(row) {
+                            lower.value(row)
+                        } else {
+                            if step < 0 { length } else { 1 }
+                        };
+                        let end = if upper.is_valid(row) {
+                            upper.value(row)
+                        } else {
+                            if step < 0 { 1 } else { length }
+                        };
                         if step == 0 {
                             return Err(KaveonError::Execution(
                                 "ARRAY_SLICE stride cannot be zero".into(),
@@ -6546,15 +6576,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row);
                         let values = values.as_string::<i64>();
                         let length = values.len() as i64;
-                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower
-                            .is_valid(row)
-                            .then(|| lower.value(row))
-                            .unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper
-                            .is_valid(row)
-                            .then(|| upper.value(row))
-                            .unwrap_or(if step < 0 { 1 } else { length });
+                        let step = if stride.is_valid(row) {
+                            stride.value(row)
+                        } else {
+                            1
+                        };
+                        let start = if lower.is_valid(row) {
+                            lower.value(row)
+                        } else {
+                            if step < 0 { length } else { 1 }
+                        };
+                        let end = if upper.is_valid(row) {
+                            upper.value(row)
+                        } else {
+                            if step < 0 { 1 } else { length }
+                        };
                         if step == 0 {
                             return Err(KaveonError::Execution(
                                 "ARRAY_SLICE stride cannot be zero".into(),
@@ -6594,15 +6630,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row);
                         let values = values.as_boolean();
                         let length = values.len() as i64;
-                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower
-                            .is_valid(row)
-                            .then(|| lower.value(row))
-                            .unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper
-                            .is_valid(row)
-                            .then(|| upper.value(row))
-                            .unwrap_or(if step < 0 { 1 } else { length });
+                        let step = if stride.is_valid(row) {
+                            stride.value(row)
+                        } else {
+                            1
+                        };
+                        let start = if lower.is_valid(row) {
+                            lower.value(row)
+                        } else {
+                            if step < 0 { length } else { 1 }
+                        };
+                        let end = if upper.is_valid(row) {
+                            upper.value(row)
+                        } else {
+                            if step < 0 { 1 } else { length }
+                        };
                         if step == 0 {
                             return Err(KaveonError::Execution(
                                 "ARRAY_SLICE stride cannot be zero".into(),
@@ -6773,12 +6815,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .as_ref()
                 .map(|array| array.as_primitive::<Int64Type>());
             for row in 0..num_rows {
-                if let Some(instances) = instances {
-                    if !instances.is_null(row) && instances.value(row) == 0 {
-                        return Err(KaveonError::Execution(
-                            "STRPOS instance must not be zero".into(),
-                        ));
-                    }
+                if let Some(instances) = instances
+                    && !instances.is_null(row)
+                    && instances.value(row) == 0
+                {
+                    return Err(KaveonError::Execution(
+                        "STRPOS instance must not be zero".into(),
+                    ));
                 }
             }
             let mut result = Vec::with_capacity(num_rows);
@@ -6910,12 +6953,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .as_ref()
                 .map(|array| array.as_primitive::<Int64Type>());
             for row in 0..num_rows {
-                if let Some(limits) = limits {
-                    if !limits.is_null(row) && limits.value(row) <= 0 {
-                        return Err(KaveonError::Execution(
-                            "SPLIT limit must be greater than zero".into(),
-                        ));
-                    }
+                if let Some(limits) = limits
+                    && !limits.is_null(row)
+                    && limits.value(row) <= 0
+                {
+                    return Err(KaveonError::Execution(
+                        "SPLIT limit must be greater than zero".into(),
+                    ));
                 }
             }
             if args[0].data_type() == &DataType::LargeUtf8 {
@@ -7241,16 +7285,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let values = as_string_array(&args[0])?;
             let result = (0..num_rows)
                 .map(|row| {
-                    values
-                        .is_null(row)
-                        .then_some(None)
-                        .unwrap_or_else(|| parse_time_literal(values.value(row)).map(Some))
-                        .ok_or_else(|| {
-                            KaveonError::Execution(format!(
-                                "invalid TIME literal: '{}'",
-                                values.value(row)
-                            ))
-                        })
+                    if values.is_null(row) {
+                        None
+                    } else {
+                        parse_time_literal(values.value(row)).map(Some)
+                    }
+                    .ok_or_else(|| {
+                        KaveonError::Execution(format!(
+                            "invalid TIME literal: '{}'",
+                            values.value(row)
+                        ))
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Arc::new(Time64MicrosecondArray::from(result)))
@@ -8622,7 +8667,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
                 let values = (0..num_rows)
-                    .map(|row| (!list.is_null(row)).then(|| list.value_length(row) as i64))
+                    .map(|row| (!list.is_null(row)).then(|| list.value_length(row)))
                     .collect::<Vec<_>>();
                 return Ok(Arc::new(Int64Array::from(values)));
             }
@@ -9811,52 +9856,59 @@ fn temporal_nanoseconds(source: &ArrayRef, row: usize) -> Result<Option<i128>> {
         // planner before a table schema is available.
         DataType::Int64 => {
             let values = source.as_primitive::<Int64Type>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some((values.value(row) as i128) * 86_400_000_000_000i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 86_400_000_000_000i128)
+            }
         }
         DataType::Date32 => {
             let values = source.as_primitive::<Date32Type>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some((values.value(row) as i128) * 86_400_000_000_000i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 86_400_000_000_000i128)
+            }
         }
         DataType::Date64 => {
             let values = source.as_primitive::<Date64Type>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000_000i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000_000i128)
+            }
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
             let values = source.as_primitive::<TimestampSecondType>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000_000_000i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000_000_000i128)
+            }
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
             let values = source.as_primitive::<TimestampMillisecondType>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000_000i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000_000i128)
+            }
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             let values = source.as_primitive::<TimestampMicrosecondType>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000i128)
+            }
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             let values = source.as_primitive::<TimestampNanosecondType>();
-            values
-                .is_null(row)
-                .then_some(None)
-                .unwrap_or_else(|| Some(values.value(row) as i128))
+            if values.is_null(row) {
+                None
+            } else {
+                Some(values.value(row) as i128)
+            }
         }
         other => {
             return Err(KaveonError::Execution(format!(
@@ -9908,9 +9960,7 @@ fn eval_date_diff(
                             "YEAR" => months / 12,
                             _ => unreachable!(),
                         };
-                        return i64::try_from(result).map(Some).map_err(|_| {
-                            KaveonError::Execution("DATE_DIFF result overflows BIGINT".into())
-                        });
+                        return Ok(Some(result));
                     }
                     return Err(KaveonError::Execution(format!(
                         "unsupported DATE_DIFF unit: {unit}"
@@ -12751,7 +12801,7 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(result.as_boolean().value(0), true);
+        assert!(result.as_boolean().value(0));
     }
 
     #[test]
@@ -12775,7 +12825,7 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(result.as_boolean().value(0), true);
+        assert!(result.as_boolean().value(0));
     }
 
     #[test]
@@ -13223,7 +13273,7 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(equal.as_boolean().value(0), true);
+        assert!(equal.as_boolean().value(0));
         let different = evaluate(
             &Expr::BinaryOp {
                 left: Box::new(array(vec![Expr::Literal(ScalarValue::Int64(1))])),
@@ -13233,7 +13283,7 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(different.as_boolean().value(0), true);
+        assert!(different.as_boolean().value(0));
         let nullable = evaluate(
             &Expr::BinaryOp {
                 left: Box::new(array(vec![
@@ -16568,9 +16618,9 @@ mod tests {
         };
         let result = evaluate(&expr, &batch).unwrap();
         let values = result.as_boolean();
-        assert_eq!(values.value(0), true);
-        assert_eq!(values.value(1), true);
-        assert_eq!(values.value(2), false);
+        assert!(values.value(0));
+        assert!(values.value(1));
+        assert!(!values.value(2));
         assert!(values.is_null(3));
     }
 

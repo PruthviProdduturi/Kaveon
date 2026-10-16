@@ -380,9 +380,11 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                         frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
                     let selected = if distinct {
                         let key = (start, end);
-                        if !distinct_frames.contains_key(&key) {
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            distinct_frames.entry(key)
+                        {
                             let unique = distinct_window_rows(col.as_ref(), &rows[start..end])?;
-                            distinct_frames.insert(key, unique);
+                            e.insert(unique);
                         }
                         distinct_frames
                             .get(&key)
@@ -892,14 +894,14 @@ mod tests {
             WindowFrameBound::UnboundedPreceding,
             WindowFrameBound::UnboundedFollowing,
         );
-        let sum = evaluate_window(&expression("SUM_DISTINCT", whole_partition.clone()), &input)
+        let sum = evaluate_window(&expression("SUM_DISTINCT", whole_partition), &input)
             .unwrap()
             .as_primitive::<Int64Type>()
             .iter()
             .collect::<Vec<_>>();
         assert_eq!(sum, vec![Some(3); 4]);
         for (name, expected) in [("MIN_DISTINCT", 1), ("MAX_DISTINCT", 2)] {
-            let values = evaluate_window(&expression(name, whole_partition.clone()), &input)
+            let values = evaluate_window(&expression(name, whole_partition), &input)
                 .unwrap()
                 .as_primitive::<Int64Type>()
                 .iter()

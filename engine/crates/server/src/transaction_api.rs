@@ -228,6 +228,7 @@ impl TransactionRegistry {
             .transaction)
     }
 
+    #[allow(dead_code)]
     async fn stage_product_command(
         &self,
         owner: &str,

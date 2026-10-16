@@ -222,10 +222,10 @@ pub fn merge_top_n(
     // column. Keep only row references while ranking those batches so the
     // final merge does not concatenate every payload column before selecting
     // the result. Unsupported expressions retain the general Arrow path.
-    if sort_exprs.len() == 1 {
-        if let Some(result) = try_integer_batch_top_n(schema, batches, &sort_exprs[0], limit)? {
-            return Ok(Some(result));
-        }
+    if sort_exprs.len() == 1
+        && let Some(result) = try_integer_batch_top_n(schema, batches, &sort_exprs[0], limit)?
+    {
+        return Ok(Some(result));
     }
 
     let non_empty = batches

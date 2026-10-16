@@ -96,7 +96,6 @@ pub fn optimize_with_statistics(
             join_type,
             condition,
             using_columns,
-            distribution: _,
             ..
         } => {
             let left = Box::new(optimize_with_statistics(*left, statistics));
