@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `e6c13819` (the workspace gate includes the
+**Source:** `origin/dev` at `3287437e` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -63,7 +63,7 @@ still use the single-task fallback.
 The sweep also covers typed DATE and DECIMAL set operations. The set operator
 and DISTINCT key paths now canonicalize DATE32/DATE64/TIMESTAMP, DECIMAL128,
 narrow integer/Float32, and LargeUtf8 values, with deterministic nested
-array/map/row keys; the focused sweep passed **1/1** after that extension
+array/map/row keys; focused array and map set-key tests pass, and the sweep passed **1/1** after that extension
 (411 filtered server tests; 135.24 seconds).
 
 After that change, the complete server target suite was rerun from the same
