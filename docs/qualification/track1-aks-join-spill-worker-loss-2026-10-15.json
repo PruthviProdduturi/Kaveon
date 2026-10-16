@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-15",
+  "environment": "kaveon-aks",
+  "namespace": "kaveon",
+  "engine_image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+  "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+  "principal": "kaveon-operator",
+  "topology": {"active_workers_after_recovery": 3, "compatible_workers_after_recovery": 3, "target_worker": "kaveon-worker-0", "worker_restarts": 1},
+  "sql": "SELECT a.region, COUNT(*) AS matches FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id BETWEEN 1 AND 10000 AND b.user_id BETWEEN 1 AND 10000 AND a.event_date = DATE '2026-07-04' AND b.event_date = DATE '2026-07-04' GROUP BY a.region ORDER BY a.region",
+  "settings": {"query_memory_limit_bytes": 1048576, "local_parallelism": 1, "result_cache": false, "use_statistics": false},
+  "baseline": {"status": 200, "state": "FINISHED", "rows": [["Africa",17712],["Asia",161352],["Europe",75600],["North America",79128],["Oceania",5724],["South America",20484]], "rows_sha256": "9f045c73f737481c6fe9b05d55063f7b24e1b3d217d9e710ba45567a37825d55", "stage_count": 5},
+  "during_worker_loss": {"query_id": "f8d19b26-979c-426a-8e24-08cf158cdc80", "status": 200, "state": "FINISHED", "observed_running_before_delete": true, "rows_sha256": "9f045c73f737481c6fe9b05d55063f7b24e1b3d217d9e710ba45567a37825d55", "stage_count": 5, "retry_observed": true, "spill": {"each_worker_join_spill_partitions": 32, "join_spill_bytes_written_per_worker": [1043328,1041024,1043328]}}
+  ,"recovery": {"replacement_uid": "c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60", "exact_match": true, "active_workers": 3, "compatible_workers": 3},
+  "qualification": {"forced_join_spill_worker_loss": "QUALIFIED (bounded)", "spill_cleanup_on_live_workers": true, "boundary": "Disk exhaustion, larger high-cardinality joins, and sustained mixed-workload endurance remain open."}
+}
