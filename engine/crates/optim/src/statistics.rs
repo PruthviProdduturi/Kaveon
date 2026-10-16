@@ -865,6 +865,27 @@ mod tests {
             JoinDistribution::Partitioned
         );
     }
+
+    #[test]
+    fn exact_source_byte_hints_reject_an_oversized_broadcast_build() {
+        let plan = sql_to_logical_plan("SELECT * FROM big b JOIN small s ON b.id=s.id").unwrap();
+        let optimized = optimize_with_statistics(plan, &mut |table| {
+            Some(RelationStatistics::exact_with_bytes(
+                if table == "small" { 10 } else { 10_000 },
+                vec!["id".into()],
+                if table == "small" {
+                    BROADCAST_BUILD_MAX_BYTES + 1
+                } else {
+                    1_000
+                },
+            ))
+        });
+        let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join missing")
+        };
+        assert_eq!(distribution, JoinDistribution::Partitioned);
+    }
+
     #[test]
     fn leaves_outer_unknown_and_unqualified_joins_unchanged() {
         for sql in [
