@@ -1,13 +1,14 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `8421dd5b` (the workspace gate includes the
+**Source:** `origin/dev` at `e3c0e43d` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions, plus nested null-safe array/map/row comparison, LargeList map
 constructors, primitive numeric map keys, date/decimal map keys, decimal
 map-key regression coverage, explicit, wildcard-derived, nested-derived,
-derived column-list aliases, equality-correlated, residual-inner, and uncorrelated-lateral
+derived column-list aliases, equality-correlated, residual-inner,
+residual-left-outer, and uncorrelated-lateral
 `JOIN ... USING`)
 
 The complete Rust workspace test command was run from `engine/`:
@@ -16,10 +17,10 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets --no-fail-fast --quiet
 ```
 
-The command completed with **1,565 listed tests, 1,559 passed, 0 failed, and 6
+The command completed with **1,566 listed tests, 1,560 passed, 0 failed, and 6
 ignored** across all workspace test binaries. The long server differential
 sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
-core, 389 execution, 69 optimizer, 418 server, 191 SQL, and 125 storage tests.
+core, 389 execution, 69 optimizer, 419 server, 191 SQL, and 125 storage tests.
 
 The release lint commands also passed:
 
@@ -91,12 +92,16 @@ source:
 
 ```text
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-418 passed, 0 failed, 0 ignored (150.36s)
+419 passed, 0 failed, 0 ignored (146.95s)
 ```
 
 This includes the planner regression for projected-key `UNION DISTINCT` and
 the existing distributed join, aggregate, spill, retry, cancellation, and
 worker-loss coverage.
+
+The added `correlated_residual_left_lateral_join_using_matches_the_local_result`
+case proves that a residual predicate inside a `LEFT JOIN LATERAL` preserves
+local null-extension semantics across three distributed workers.
 
 The exchange-focused regression also verifies that nested array, map, and row
 keys partition successfully, including two maps with reversed entry order

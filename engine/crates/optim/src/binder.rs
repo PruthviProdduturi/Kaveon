@@ -592,13 +592,18 @@ impl Binder<'_> {
                         Correlation::Residual { predicate, .. } => residuals.push(predicate),
                     }
                 }
-                if !residuals.is_empty() && !matches!(join_type, JoinType::Inner | JoinType::Cross)
+                if !residuals.is_empty()
+                    && !matches!(
+                        join_type,
+                        JoinType::Inner | JoinType::Left | JoinType::Cross
+                    )
                 {
                     return Err(KaveonError::Sql(
-                        "residual correlated predicates are supported only for inner lateral joins"
-                            .into(),
+                        "residual correlated predicates are supported only for inner or left lateral joins".into(),
                     ));
                 }
+                let allow_lateral_outer_residual =
+                    join_type == JoinType::Left && !residuals.is_empty();
                 let condition =
                     conjoin(condition.into_iter().chain(keys).chain(residuals).collect());
                 let Some(condition) = condition else {
@@ -627,6 +632,7 @@ impl Binder<'_> {
                     condition,
                     using_columns,
                     distribution,
+                    allow_lateral_outer_residual,
                 )?;
                 bound.correlations = correlations;
                 Ok(bound)
@@ -850,6 +856,7 @@ impl Binder<'_> {
     /// under a LEFT JOIN, so filtering it away first is the same join. An
     /// inner join filters anything else above itself; an outer join has no
     /// residual and refuses it.
+    #[allow(clippy::too_many_arguments)]
     fn bind_on(
         &self,
         left: LogicalPlan,
@@ -858,6 +865,7 @@ impl Binder<'_> {
         condition: Expr,
         using_columns: Option<Vec<String>>,
         distribution: kaveon_sql::logical_plan::JoinDistribution,
+        allow_lateral_outer_residual: bool,
     ) -> Result<Bound> {
         let left_scope = self.scope_of(&left).qualified_by(relation_qualifier(&left));
         let right_scope = self
@@ -885,7 +893,10 @@ impl Binder<'_> {
                 _ => above.push(conjunct),
             }
         }
-        if !above.is_empty() && !matches!(join_type, JoinType::Inner | JoinType::Cross) {
+        if !above.is_empty()
+            && !matches!(join_type, JoinType::Inner | JoinType::Cross)
+            && !(allow_lateral_outer_residual && join_type == JoinType::Left)
+        {
             return Err(KaveonError::Sql(format!(
                 "{} JOIN conditions other than equalities between the two sides are not supported: {:?}",
                 match join_type {
@@ -905,16 +916,30 @@ impl Binder<'_> {
         } else {
             join_type
         };
+        let join_condition = if allow_lateral_outer_residual && join_type == JoinType::Left {
+            conjoin(keys.into_iter().chain(above.clone()).collect())
+        } else {
+            conjoin(keys)
+        };
         let plan = LogicalPlan::Join {
             left: Box::new(left),
             right: Box::new(right),
             join_type,
-            condition: conjoin(keys),
+            condition: join_condition,
             using_columns,
             distribution,
         };
         let scope = self.scope_of(&plan);
-        let plan = self.filtered(plan, above, &scope, None)?;
+        let plan = self.filtered(
+            plan,
+            if allow_lateral_outer_residual && join_type == JoinType::Left {
+                Vec::new()
+            } else {
+                above
+            },
+            &scope,
+            None,
+        )?;
         Ok(Bound::plain(plan))
     }
 
