@@ -1993,6 +1993,7 @@ dependencies = [
  "kaveon-core",
  "kaveon-sql",
  "kaveon-storage",
+ "serde_json",
  "thiserror",
 ]
 

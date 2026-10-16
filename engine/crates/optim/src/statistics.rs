@@ -5,7 +5,7 @@
 //! statistics retain their existing plans.
 use crate::rules::to_storage_predicate;
 use kaveon_core::{
-    BinaryOp, CatalogManager, CompareOp, DataFormat, Expr, ScalarValue, StatValue,
+    BinaryOp, CatalogManager, CompareOp, DataFormat, Expr, ResolvedTable, ScalarValue, StatValue,
     StoragePredicate, StorageType, TableReference, TableStatistics,
 };
 use kaveon_sql::logical_plan::{JoinDistribution, JoinType, LogicalPlan};
@@ -43,6 +43,52 @@ impl RelationStatistics {
     }
 }
 
+fn relation_statistics(resolved: &ResolvedTable) -> Option<RelationStatistics> {
+    if !matches!(resolved.storage, StorageType::Local { .. }) {
+        return None;
+    }
+    match resolved.table.format {
+        DataFormat::Parquet => {
+            let metadata = ParquetReader::new(resolved.full_path()).metadata().ok()?;
+            Some(RelationStatistics::exact(
+                metadata.row_count,
+                metadata
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone())
+                    .collect(),
+            ))
+        }
+        DataFormat::Delta => {
+            let metadata = DeltaTableReader::new(resolved.full_path())
+                .metadata()
+                .ok()?;
+            Some(RelationStatistics::exact(
+                metadata.row_count,
+                metadata
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone())
+                    .collect(),
+            ))
+        }
+        DataFormat::Iceberg => {
+            let snapshot = IcebergReader::new(resolved.full_path()).snapshot().ok()?;
+            Some(RelationStatistics::exact(
+                snapshot.row_count,
+                snapshot
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone())
+                    .collect(),
+            ))
+        }
+    }
+}
+
 pub fn optimize_join_builds(plan: LogicalPlan, catalog: &CatalogManager) -> LogicalPlan {
     let mut cache = HashMap::new();
     optimize_with_statistics(plan, &mut |table| {
@@ -50,38 +96,7 @@ pub fn optimize_join_builds(plan: LogicalPlan, catalog: &CatalogManager) -> Logi
             .entry(table.to_owned())
             .or_insert_with(|| {
                 let resolved = catalog.resolve_table(&TableReference::parse(table)).ok()?;
-                if !matches!(resolved.storage, StorageType::Local { .. }) {
-                    return None;
-                }
-                let metadata = match resolved.table.format {
-                    DataFormat::Parquet => {
-                        ParquetReader::new(resolved.full_path()).metadata().ok()?
-                    }
-                    DataFormat::Delta => DeltaTableReader::new(resolved.full_path())
-                        .metadata()
-                        .ok()?,
-                    DataFormat::Iceberg => {
-                        let snapshot = IcebergReader::new(resolved.full_path()).snapshot().ok()?;
-                        return Some(RelationStatistics::exact(
-                            snapshot.row_count,
-                            snapshot
-                                .schema
-                                .fields()
-                                .iter()
-                                .map(|field| field.name().clone())
-                                .collect(),
-                        ));
-                    }
-                };
-                Some(RelationStatistics::exact(
-                    metadata.row_count,
-                    metadata
-                        .schema
-                        .fields()
-                        .iter()
-                        .map(|field| field.name().clone())
-                        .collect(),
-                ))
+                relation_statistics(&resolved)
             })
             .clone()
     })
@@ -638,16 +653,65 @@ fn reverse_keys(condition: &Expr, left_alias: &str, right_alias: &str) -> Option
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
+    use arrow::datatypes::Schema;
     use kaveon_core::{
-        ColumnStatistics, HllSketch, KllSketch, SourceVersion, SourceVersionKind, StatisticsDepth,
-        TableId,
+        AccessPattern, ColumnStatistics, HllSketch, KllSketch, ResolvedTable, SourceVersion,
+        SourceVersionKind, StatisticsDepth, StorageType, TableId, TableMeta,
     };
     use kaveon_sql::logical_plan::sql_to_logical_plan;
+    use std::{fs, path::PathBuf};
     fn stats(table: &str) -> Option<RelationStatistics> {
         Some(RelationStatistics::exact(
             if table == "small" { 10 } else { 10_000 },
             vec!["id".into(), "value".into()],
         ))
+    }
+
+    #[test]
+    fn reads_exact_schema_and_row_count_from_an_iceberg_snapshot() {
+        let root =
+            std::env::temp_dir().join(format!("kaveon-optim-iceberg-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let metadata = root.join("v2.metadata.json");
+        fs::write(
+            &metadata,
+            serde_json::json!({
+                "format-version": 2,
+                "location": root.to_string_lossy(),
+                "current-snapshot-id": -1,
+                "current-schema-id": 1,
+                "schemas": [{
+                    "type": "struct",
+                    "schema-id": 1,
+                    "fields": [{"id": 1, "name": "id", "required": true, "type": "long"}]
+                }],
+                "snapshots": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let resolved = ResolvedTable {
+            catalog: "lake".into(),
+            schema: "s".into(),
+            table: std::sync::Arc::new(TableMeta {
+                name: "ice".into(),
+                arrow_schema: std::sync::Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+                    "id",
+                    arrow::datatypes::DataType::Int64,
+                    false,
+                )])),
+                location: metadata.to_string_lossy().into_owned(),
+                access: AccessPattern::Shortcut,
+                format: DataFormat::Iceberg,
+            }),
+            storage: StorageType::Local {
+                base_path: PathBuf::new(),
+            },
+        };
+        let statistics = relation_statistics(&resolved).expect("Iceberg metadata is readable");
+        assert_eq!(statistics.rows, 0);
+        assert_eq!(statistics.columns, vec!["id"]);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn puts_smaller_input_on_build_side_and_preserves_star_column_order() {
