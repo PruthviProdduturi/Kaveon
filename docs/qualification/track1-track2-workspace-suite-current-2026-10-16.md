@@ -69,9 +69,10 @@ array/map/row keys; focused array, map, and row set-key tests pass, and the swee
 The differential corpus now also includes SQL-level array and map
 `INTERSECT` cases plus a composite multi-column row `EXCEPT` case; the exact
 local/distributed sweep passed **1/1** after those additions (411 filtered
-server tests; 134.00 seconds). The follow-up direct-map UNNEST case also
-passed in the same sweep after `UNNEST(MAP(...))` was normalized to
-`MAP_ENTRIES` (411 filtered server tests; 135.42 seconds).
+server tests; 134.00 seconds). The direct-map and correlated-map UNNEST cases
+also pass in the same sweep: `UNNEST(MAP(...))` is normalized to
+`MAP_ENTRIES`, and the lateral operator expands each struct entry into the
+aliased key/value columns (411 filtered server tests; 134.51 seconds).
 
 After that change, the complete server target suite was rerun from the same
 source:

@@ -17,6 +17,7 @@ use crate::expr_eval::{evaluate, resolve_column_index};
 pub struct LateralUnnestOperator {
     input: Box<dyn BatchOperator>,
     expressions: Vec<Expr>,
+    element_types: Vec<DataType>,
     ordinality: bool,
     ordinality_start: i64,
     schema: SchemaRef,
@@ -31,17 +32,53 @@ impl LateralUnnestOperator {
         ordinality_column: impl Into<String>,
         ordinality_start: i64,
     ) -> Result<Self> {
-        if expressions.is_empty() || expressions.len() != columns.len() {
+        if expressions.is_empty() || columns.is_empty() {
             return Err(KaveonError::Execution(
-                "lateral UNNEST requires one output column for each ARRAY expression".into(),
+                "lateral UNNEST requires at least one ARRAY expression and output column".into(),
             ));
         }
         let input_schema = input.schema().clone();
         let empty = RecordBatch::new_empty(input_schema.clone());
         let mut fields = input_schema.fields().iter().cloned().collect::<Vec<_>>();
-        for (expression, column) in expressions.iter().zip(&columns) {
+        let mut element_types = Vec::with_capacity(expressions.len());
+        let mut column_index = 0;
+        for expression in &expressions {
             let element_type = array_element_type(expression, &input_schema, &empty)?;
-            fields.push(Field::new(column, element_type, true).into());
+            if let DataType::Struct(struct_fields) = &element_type {
+                if columns.len().saturating_sub(column_index) < struct_fields.len() {
+                    return Err(KaveonError::Execution(format!(
+                        "lateral UNNEST ROW value has {} fields but only {} output columns were provided",
+                        struct_fields.len(),
+                        columns.len().saturating_sub(column_index)
+                    )));
+                }
+                for struct_field in struct_fields {
+                    fields.push(
+                        Field::new(
+                            &columns[column_index],
+                            struct_field.data_type().clone(),
+                            true,
+                        )
+                        .into(),
+                    );
+                    column_index += 1;
+                }
+            } else {
+                let column = columns.get(column_index).ok_or_else(|| {
+                    KaveonError::Execution(
+                        "lateral UNNEST has more ARRAY expressions than output columns".into(),
+                    )
+                })?;
+                fields.push(Field::new(column, element_type.clone(), true).into());
+                column_index += 1;
+            }
+            element_types.push(element_type);
+        }
+        if column_index != columns.len() {
+            return Err(KaveonError::Execution(format!(
+                "lateral UNNEST has {} unused output columns",
+                columns.len() - column_index
+            )));
         }
         if ordinality {
             fields.push(Field::new(ordinality_column, DataType::Int64, false).into());
@@ -49,6 +86,7 @@ impl LateralUnnestOperator {
         Ok(Self {
             input,
             expressions,
+            element_types,
             ordinality,
             ordinality_start,
             schema: Arc::new(Schema::new(fields)),
@@ -80,11 +118,6 @@ impl BatchOperator for LateralUnnestOperator {
         let mut element_chunks = (0..lists.len())
             .map(|_| Vec::<ArrayRef>::new())
             .collect::<Vec<_>>();
-        let mut element_types = Vec::with_capacity(lists.len());
-        for list in &lists {
-            element_types.push(list.element_type.clone());
-        }
-
         for row in 0..input.num_rows() {
             let lengths = lists
                 .iter()
@@ -109,8 +142,35 @@ impl BatchOperator for LateralUnnestOperator {
             .iter()
             .map(|column| take(column.as_ref(), &indices, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        for (chunks, element_type) in element_chunks.into_iter().zip(element_types) {
-            output.push(concat_arrays(&chunks, &element_type)?);
+        for (chunks, element_type) in element_chunks.into_iter().zip(&self.element_types) {
+            let values = concat_arrays(&chunks, element_type)?;
+            if let DataType::Struct(struct_fields) = element_type {
+                let row = values
+                    .as_any()
+                    .downcast_ref::<arrow::array::StructArray>()
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "lateral UNNEST ROW value has an incompatible struct representation"
+                                .into(),
+                        )
+                    })?;
+                let valid = if row.null_count() > 0 {
+                    Some(arrow::compute::is_not_null(row)?)
+                } else {
+                    None
+                };
+                for field_index in 0..struct_fields.len() {
+                    let child = row.column(field_index).clone();
+                    output.push(if let Some(valid) = &valid {
+                        let nulls = new_null_array(child.data_type(), child.len());
+                        arrow::compute::kernels::zip::zip(valid, &child, &nulls)?
+                    } else {
+                        child
+                    });
+                }
+            } else {
+                output.push(values);
+            }
         }
         if self.ordinality {
             output.push(Arc::new(Int64Array::from(ordinals)) as ArrayRef);
