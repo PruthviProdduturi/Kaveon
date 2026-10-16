@@ -322,6 +322,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_scalar_path",
+        "SELECT JSON_VALUE(JSON_PARSE('{\"x\":7}'), '$.x') AS value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
