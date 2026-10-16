@@ -1061,8 +1061,7 @@ impl ExecutableFragmentBuilder<'_> {
         let (keys, residual) = join_keys_and_residual(condition)?;
         if join_type != JoinType::Cross && keys.is_empty() && residual.is_none() {
             return Err(KaveonError::Execution(
-                "outer and hash joins require at least one equality key; residual-only joins are not supported"
-                    .into(),
+                "non-cross joins require an equality key or a residual predicate".into(),
             ));
         }
         if distribution == JoinDistribution::BroadcastRight
