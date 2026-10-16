@@ -2847,6 +2847,13 @@ fn array_split_into_chunks<L: OffsetSizeTrait>(
 
 fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     match list.value_type() {
+        DataType::Int8 => array_histogram_primitive::<L, Int8Type>(list),
+        DataType::Int16 => array_histogram_primitive::<L, Int16Type>(list),
+        DataType::Int32 => array_histogram_primitive::<L, Int32Type>(list),
+        DataType::UInt8 => array_histogram_primitive::<L, UInt8Type>(list),
+        DataType::UInt16 => array_histogram_primitive::<L, UInt16Type>(list),
+        DataType::UInt32 => array_histogram_primitive::<L, UInt32Type>(list),
+        DataType::UInt64 => array_histogram_primitive::<L, UInt64Type>(list),
         DataType::Boolean => {
             let mut keys = ListBuilder::new(BooleanBuilder::new());
             let mut counts = ListBuilder::new(Int64Builder::new());
@@ -2913,39 +2920,7 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
                 list.len(),
             )
         }
-        DataType::Date32 => {
-            let mut keys = ListBuilder::new(PrimitiveBuilder::<Date32Type>::new());
-            let mut counts = ListBuilder::new(Int64Builder::new());
-            for row in 0..list.len() {
-                if list.is_null(row) {
-                    keys.append(false);
-                    counts.append(false);
-                    continue;
-                }
-                let inner = list.value(row);
-                let values = inner.as_primitive::<Date32Type>();
-                let mut histogram = std::collections::BTreeMap::<i32, i64>::new();
-                for index in 0..values.len() {
-                    if !values.is_null(index) {
-                        let count = histogram.entry(values.value(index)).or_default();
-                        *count = count.checked_add(1).ok_or_else(|| {
-                            KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
-                        })?;
-                    }
-                }
-                for (value, count) in histogram {
-                    keys.values().append_value(value);
-                    counts.values().append_value(count);
-                }
-                keys.append(true);
-                counts.append(true);
-            }
-            eval_scalar_function(
-                "MAP",
-                &[Arc::new(keys.finish()), Arc::new(counts.finish())],
-                list.len(),
-            )
-        }
+        DataType::Date32 => array_histogram_primitive::<L, Date32Type>(list),
         DataType::Utf8 | DataType::LargeUtf8 => {
             let mut keys = ListBuilder::new(StringBuilder::new());
             let mut counts = ListBuilder::new(Int64Builder::new());
@@ -2988,6 +2963,45 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
             "ARRAY_HISTOGRAM does not support list element type {other}"
         ))),
     }
+}
+
+fn array_histogram_primitive<L, T>(list: &GenericListArray<L>) -> Result<ArrayRef>
+where
+    L: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    T::Native: Ord,
+{
+    let mut keys = ListBuilder::new(PrimitiveBuilder::<T>::new());
+    let mut counts = ListBuilder::new(Int64Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            keys.append(false);
+            counts.append(false);
+            continue;
+        }
+        let inner = list.value(row);
+        let values = inner.as_primitive::<T>();
+        let mut histogram = std::collections::BTreeMap::<T::Native, i64>::new();
+        for index in 0..values.len() {
+            if !values.is_null(index) {
+                let count = histogram.entry(values.value(index)).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                })?;
+            }
+        }
+        for (value, count) in histogram {
+            keys.values().append_value(value);
+            counts.values().append_value(count);
+        }
+        keys.append(true);
+        counts.append(true);
+    }
+    eval_scalar_function(
+        "MAP",
+        &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+        list.len(),
+    )
 }
 
 fn array_trim<L: OffsetSizeTrait>(
@@ -11795,6 +11809,21 @@ mod tests {
         .unwrap();
         let map = value.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map.keys().as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn array_histogram_supports_narrow_integer_elements() {
+        let list = ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 4_i32])),
+            Arc::new(Int32Array::from(vec![Some(3), Some(1), None, Some(3)])),
+            None,
+        )
+        .unwrap();
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_primitive::<Int32Type>().values(), &[1, 3]);
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
     }
 
