@@ -3,7 +3,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     time::Instant,
@@ -751,6 +751,8 @@ pub struct AdlsBatchSource {
     receiver: mpsc::Receiver<Result<Option<RecordBatch>>>,
     metrics: ScanMetrics,
     exhausted: bool,
+    start: Option<mpsc::SyncSender<()>>,
+    runtime_predicate: Arc<Mutex<Option<StoragePredicate>>>,
 }
 
 impl AdlsBatchSource {
@@ -765,9 +767,41 @@ impl BatchSource for AdlsBatchSource {
         &self.schema
     }
 
+    fn apply_runtime_filter(
+        &mut self,
+        column: &str,
+        values: &[kaveon_core::ScalarValue],
+    ) -> Result<bool> {
+        let Some(_start) = &self.start else {
+            return Ok(false);
+        };
+        if values.is_empty() {
+            return Ok(false);
+        }
+        let predicate = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        let mut guard = self
+            .runtime_predicate
+            .lock()
+            .map_err(|_| storage_error("ADLS runtime-filter state was poisoned"))?;
+        *guard = Some(match guard.take() {
+            Some(existing) => StoragePredicate::And(vec![existing, predicate]),
+            None => predicate,
+        });
+        self.metrics.runtime_filter_applied(values.len());
+        Ok(true)
+    }
+
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         if self.exhausted {
             return Ok(None);
+        }
+        if let Some(start) = self.start.take() {
+            start
+                .send(())
+                .map_err(|_| storage_error("ADLS reader terminated before decoding started"))?;
         }
         let batch = self.receiver.recv().map_err(|_| {
             storage_error("ADLS reader terminated without an end-of-stream marker")
@@ -1384,10 +1418,15 @@ impl AdlsParquetReader {
         Ok(with_index)
     }
 
-    pub fn read_blocking(self) -> Result<AdlsBatchSource> {
+    pub fn read_blocking(mut self) -> Result<AdlsBatchSource> {
         self.validate()?;
         let (initial_sender, initial_receiver) = mpsc::sync_channel(1);
         let (batch_sender, batch_receiver) = mpsc::sync_channel(2);
+        let (start_tx, start_rx) = mpsc::sync_channel(1);
+        let runtime_predicate = Arc::new(Mutex::new(self.predicate.clone()));
+        let worker_runtime_predicate = Arc::clone(&runtime_predicate);
+        let deferred_start = Arc::new(AtomicBool::new(false));
+        let worker_deferred_start = Arc::clone(&deferred_start);
         std::thread::Builder::new()
             .name("kaveon-adls-reader".into())
             .spawn(move || {
@@ -1437,18 +1476,38 @@ impl AdlsParquetReader {
                     };
                     metrics.files_considered(1);
                     metrics.file_opened();
-                    let mut stream = match self.stream(opened, metrics).await {
-                        Ok(stream) => stream,
+                    let schema = match crate::parquet_reader::ordered_projection(
+                        Arc::clone(opened.schema()),
+                        self.columns.as_deref(),
+                    ) {
+                        Ok((schema, _)) => schema,
                         Err(error) => {
                             let _ = initial_sender.send(Err(error));
                             return;
                         }
                     };
-                    let schema = Arc::clone(stream.schema());
-                    let metrics = stream.metrics();
-                    if initial_sender.send(Ok((schema, metrics))).is_err() {
+                    worker_deferred_start.store(true, Ordering::Release);
+                    if initial_sender.send(Ok((schema, metrics.clone()))).is_err() {
                         return;
                     }
+                    if start_rx.recv().is_err() {
+                        return;
+                    }
+                    self.predicate = match worker_runtime_predicate.lock() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => {
+                            let _ = batch_sender
+                                .send(Err(storage_error("ADLS runtime-filter state was poisoned")));
+                            return;
+                        }
+                    };
+                    let mut stream = match self.stream(opened, metrics).await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            let _ = batch_sender.send(Err(error));
+                            return;
+                        }
+                    };
                     loop {
                         match stream.next_batch().await {
                             Ok(Some(batch)) => {
@@ -1477,6 +1536,8 @@ impl AdlsParquetReader {
             receiver: batch_receiver,
             metrics,
             exhausted: false,
+            start: deferred_start.load(Ordering::Acquire).then_some(start_tx),
+            runtime_predicate,
         })
     }
 
@@ -2230,6 +2291,39 @@ mod tests {
                 bytes_read[1]
             );
         }
+    }
+
+    #[test]
+    fn late_runtime_filter_is_applied_before_adls_lanes_start() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let account = format!("runtime-filter-{}", std::process::id());
+            let reader = row_filter_fixture(&account, 100, 25, false, true)
+                .await
+                .with_columns(vec!["id".into(), "url".into(), "payload".into()])
+                .with_late_materialisation(LateMaterialisation::Always);
+            let mut source = reader.read_blocking().unwrap();
+            assert!(
+                source
+                    .apply_runtime_filter("id", &[kaveon_core::ScalarValue::Int64(7)])
+                    .unwrap()
+            );
+            let metrics = source.metrics();
+            let mut ids = Vec::new();
+            while let Some(batch) = source.next_batch().unwrap() {
+                ids.extend(
+                    batch
+                        .column(0)
+                        .as_primitive::<arrow::datatypes::Int64Type>()
+                        .values()
+                        .iter()
+                        .copied(),
+                );
+            }
+            assert_eq!(ids, vec![7]);
+            assert_eq!(metrics.snapshot().runtime_filters_applied, 1);
+            assert_eq!(metrics.snapshot().runtime_filter_values, 1);
+        });
     }
 
     /// A small object of many row groups is held in memory and decoded once
