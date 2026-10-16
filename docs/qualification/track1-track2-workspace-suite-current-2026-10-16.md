@@ -153,3 +153,7 @@ Track 2 array coverage now includes deterministic `ARRAY_HISTOGRAM` maps for
 integer and UTF-8 elements, ignoring null elements and preserving null arrays.
 The unit test and local/distributed differential sweep passed; the sweep took
 145.16 seconds.
+
+`ARRAY_HISTOGRAM` coverage now also supports boolean and DATE32 keys, in
+addition to integer and UTF-8 keys. The exact local/distributed differential
+sweep passed **1/1** after this extension (145.94 seconds).

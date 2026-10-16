@@ -2847,6 +2847,39 @@ fn array_split_into_chunks<L: OffsetSizeTrait>(
 
 fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     match list.value_type() {
+        DataType::Boolean => {
+            let mut keys = ListBuilder::new(BooleanBuilder::new());
+            let mut counts = ListBuilder::new(Int64Builder::new());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    keys.append(false);
+                    counts.append(false);
+                    continue;
+                }
+                let inner = list.value(row);
+                let values = inner.as_boolean();
+                let mut histogram = std::collections::BTreeMap::<bool, i64>::new();
+                for index in 0..values.len() {
+                    if !values.is_null(index) {
+                        let count = histogram.entry(values.value(index)).or_default();
+                        *count = count.checked_add(1).ok_or_else(|| {
+                            KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                        })?;
+                    }
+                }
+                for (value, count) in histogram {
+                    keys.values().append_value(value);
+                    counts.values().append_value(count);
+                }
+                keys.append(true);
+                counts.append(true);
+            }
+            eval_scalar_function(
+                "MAP",
+                &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+                list.len(),
+            )
+        }
         DataType::Int64 => {
             let mut keys = ListBuilder::new(Int64Builder::new());
             let mut counts = ListBuilder::new(Int64Builder::new());
@@ -2859,6 +2892,39 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
                 let inner = list.value(row);
                 let values = inner.as_primitive::<Int64Type>();
                 let mut histogram = std::collections::BTreeMap::<i64, i64>::new();
+                for index in 0..values.len() {
+                    if !values.is_null(index) {
+                        let count = histogram.entry(values.value(index)).or_default();
+                        *count = count.checked_add(1).ok_or_else(|| {
+                            KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                        })?;
+                    }
+                }
+                for (value, count) in histogram {
+                    keys.values().append_value(value);
+                    counts.values().append_value(count);
+                }
+                keys.append(true);
+                counts.append(true);
+            }
+            eval_scalar_function(
+                "MAP",
+                &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+                list.len(),
+            )
+        }
+        DataType::Date32 => {
+            let mut keys = ListBuilder::new(PrimitiveBuilder::<Date32Type>::new());
+            let mut counts = ListBuilder::new(Int64Builder::new());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    keys.append(false);
+                    counts.append(false);
+                    continue;
+                }
+                let inner = list.value(row);
+                let values = inner.as_primitive::<Date32Type>();
+                let mut histogram = std::collections::BTreeMap::<i32, i64>::new();
                 for index in 0..values.len() {
                     if !values.is_null(index) {
                         let count = histogram.entry(values.value(index)).or_default();
