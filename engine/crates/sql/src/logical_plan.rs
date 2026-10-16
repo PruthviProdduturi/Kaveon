@@ -1751,10 +1751,11 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     // top-level LIMIT cannot change that scalar value, so remove it before
     // validating the scalar shape. LIMIT 0 is retained: an empty scalar
     // requires null-fill/Apply semantics that this lowering does not provide.
-    let (plan, zero_limit) = match plan {
-        LogicalPlan::Limit { input, count } if count > 0 => (*input, false),
-        LogicalPlan::Limit { input, count: 0 } => (*input, true),
-        plan => (plan, false),
+    let (plan, zero_limit, positive_offset) = match plan {
+        LogicalPlan::Limit { input, count } if count > 0 => (*input, false, false),
+        LogicalPlan::Limit { input, count: 0 } => (*input, true, false),
+        LogicalPlan::Offset { input, count } if count > 0 => (*input, false, true),
+        plan => (plan, false, false),
     };
     let LogicalPlan::Project { input, columns } = plan else {
         return Err(sql_err("a scalar subquery must select exactly one column"));
@@ -1764,18 +1765,6 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     };
     if matches!(column, Expr::Star) {
         return Err(sql_err("a scalar subquery must select exactly one column"));
-    }
-    if zero_limit {
-        return Ok(LogicalPlan::Unnest {
-            expressions: vec![Expr::Function {
-                name: "ARRAY".to_owned(),
-                args: vec![Expr::Literal(ScalarValue::Null)],
-            }],
-            columns: vec![name.to_owned()],
-            with_ordinality: false,
-            ordinality_column: "ordinality".to_owned(),
-            ordinality_start: 1,
-        });
     }
     fn single_row(plan: &LogicalPlan) -> bool {
         match plan {
@@ -1790,8 +1779,6 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
             }
             // `SELECT 42` and constant `UNNEST(ARRAY[...])` relations are
             // statically single-row when every array has at most one value.
-            // This is safe for a scalar subquery: unlike a general table
-            // scan, the relation cannot produce a second row.
             LogicalPlan::Unnest { expressions, .. } => expressions.iter().all(|expr| {
                 matches!(
                     expr,
@@ -1801,6 +1788,23 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
             }),
             _ => false,
         }
+    }
+    if zero_limit || (positive_offset && single_row(&input)) {
+        return Ok(LogicalPlan::Unnest {
+            expressions: vec![Expr::Function {
+                name: "ARRAY".to_owned(),
+                args: vec![Expr::Literal(ScalarValue::Null)],
+            }],
+            columns: vec![name.to_owned()],
+            with_ordinality: false,
+            ordinality_column: "ordinality".to_owned(),
+            ordinality_start: 1,
+        });
+    }
+    if positive_offset {
+        return Err(sql_err(
+            "a positive scalar OFFSET requires an ungrouped aggregate or a constant single row",
+        ));
     }
     if !single_row(&input) {
         return Err(sql_err(
@@ -5746,6 +5750,15 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
         assert!(!debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_aggregate_positive_offset_becomes_a_single_null_row() {
+        let plan = sql_to_logical_plan("SELECT (SELECT avg(b) FROM t OFFSET 1) AS answer FROM t")
+            .expect("offsetting a one-row aggregate produces a NULL scalar");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(!debug.contains("Offset"), "{debug}");
     }
 
     #[test]
