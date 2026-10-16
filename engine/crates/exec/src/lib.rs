@@ -7,6 +7,7 @@ pub mod filter;
 pub mod final_merge;
 pub mod incremental_aggregate;
 pub mod join;
+pub mod lateral_unnest;
 pub mod limit;
 pub mod local_parallel;
 pub mod metadata_count;

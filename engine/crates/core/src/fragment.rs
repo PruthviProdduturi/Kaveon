@@ -11,12 +11,11 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// The wire format a coordinator sends. Version 6 added the directory
-/// listing to a scan (`ScanSpec::listing`); version 5 carried the location
-/// alone. A worker accepts both: a version-5 fragment from an older
-/// coordinator reads as version 6 with no listing, and its tasks list the
-/// location themselves as they always did.
-pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 6;
+/// The wire format a coordinator sends. Version 7 adds the input-aware
+/// `LateralUnnest` operator; version 6 added the directory listing to a scan
+/// (`ScanSpec::listing`), and version 5 carried the location alone. A worker
+/// accepts older fragments with those fields absent.
+pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 7;
 /// The oldest wire format a worker still executes.
 pub const OLDEST_EXECUTABLE_FRAGMENT_VERSION: u16 = 5;
 
@@ -43,6 +42,16 @@ pub struct FragmentNode {
 pub enum FragmentOperator {
     Scan(ScanSpec),
     Unnest {
+        expressions: Vec<Expr>,
+        columns: Vec<String>,
+        with_ordinality: bool,
+        ordinality_column: String,
+        ordinality_start: i64,
+    },
+    /// Expand array expressions for each row from the input relation. Unlike
+    /// `Unnest`, this operator is lateral: expressions may reference columns
+    /// from its input batch.
+    LateralUnnest {
         expressions: Vec<Expr>,
         columns: Vec<String>,
         with_ordinality: bool,
@@ -352,6 +361,7 @@ impl FragmentNode {
                 0
             }
             FragmentOperator::Unnest { .. } => 0,
+            FragmentOperator::LateralUnnest { .. } => 1,
             FragmentOperator::ExchangeInput(input) => {
                 validate_exchange_id(&input.exchange_id)?;
                 0

@@ -40,7 +40,9 @@
 //! aggregate, a join or an IN they are refused with their text.
 use std::cell::Cell;
 
-use kaveon_core::{BinaryOp, CatalogManager, Expr, KaveonError, Result, TableReference};
+use kaveon_core::{
+    BinaryOp, CatalogManager, Expr, KaveonError, Result, TableReference, expression_contains_column,
+};
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 
 /// Bind `plan` against `catalog`. Table names must already be qualified.
@@ -212,7 +214,16 @@ impl Binder<'_> {
                 self.catalog.resolve_table(&TableReference::parse(table))?;
                 Ok(Bound::plain(plan))
             }
-            LogicalPlan::Unnest { .. } => Ok(Bound::plain(plan)),
+            LogicalPlan::Unnest {
+                ref expressions, ..
+            } => {
+                if expressions.iter().any(expression_contains_column) {
+                    return Err(KaveonError::Sql(
+                        "correlated UNNEST requires CROSS JOIN LATERAL".into(),
+                    ));
+                }
+                Ok(Bound::plain(plan))
+            }
             LogicalPlan::Filter { input, predicate } => {
                 let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
@@ -505,7 +516,56 @@ impl Binder<'_> {
                 // correlations become this join's keys.
                 let mut right_outer = outer.to_vec();
                 right_outer.push(self.scope_of(&left.plan));
-                let mut right = self.bind(*right, &right_outer)?;
+                let lateral_unnest = matches!(
+                    right.as_ref(),
+                    LogicalPlan::Unnest { expressions, .. }
+                        if expressions.iter().any(expression_contains_column)
+                );
+                let mut right = if lateral_unnest {
+                    Bound::plain(*right)
+                } else {
+                    self.bind(*right, &right_outer)?
+                };
+                // A non-constant UNNEST on the right of a CROSS JOIN is a
+                // lateral table function. Bind its expressions against the
+                // complete left scope; the physical planner will execute the
+                // resulting operator once per left input batch.
+                if join_type == JoinType::Cross
+                    && condition.is_none()
+                    && let LogicalPlan::Unnest {
+                        expressions,
+                        columns,
+                        with_ordinality,
+                        ordinality_column,
+                        ordinality_start,
+                    } = &right.plan
+                    && expressions.iter().any(expression_contains_column)
+                {
+                    let left_scope = self.scope_of(&left.plan);
+                    let expressions = expressions
+                        .iter()
+                        .cloned()
+                        .map(|expression| self.bind_expr(expression, &left_scope, None))
+                        .collect::<Result<Vec<_>>>()?;
+                    return Ok(Bound {
+                        plan: LogicalPlan::Join {
+                            left: Box::new(left.plan),
+                            right: Box::new(LogicalPlan::Unnest {
+                                expressions,
+                                columns: columns.clone(),
+                                with_ordinality: *with_ordinality,
+                                ordinality_column: ordinality_column.clone(),
+                                ordinality_start: *ordinality_start,
+                            }),
+                            join_type,
+                            condition,
+                            using_columns,
+                            distribution,
+                        },
+                        aggregate_input: None,
+                        correlations: left.correlations,
+                    });
+                }
                 let (lateral, deeper): (Vec<_>, Vec<_>) = right
                     .correlations
                     .into_iter()

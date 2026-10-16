@@ -501,6 +501,31 @@ fn compile_node(
             ordinality_column.clone(),
             *ordinality_start,
         )?)),
+        FragmentOperator::LateralUnnest {
+            expressions,
+            columns,
+            with_ordinality,
+            ordinality_column,
+            ordinality_start,
+        } => Ok(Box::new(
+            kaveon_exec::lateral_unnest::LateralUnnestOperator::new(
+                compile_input(
+                    node,
+                    0,
+                    nodes,
+                    catalog,
+                    exchanges,
+                    scan_partition,
+                    memory,
+                    scan_metrics,
+                )?,
+                expressions.clone(),
+                columns.clone(),
+                *with_ordinality,
+                ordinality_column.clone(),
+                *ordinality_start,
+            )?,
+        )),
         FragmentOperator::ExchangeInput(input) => exchanges.open(&input.exchange_id),
         FragmentOperator::Filter { predicate } => {
             let mut operator = FilterOperator::new(

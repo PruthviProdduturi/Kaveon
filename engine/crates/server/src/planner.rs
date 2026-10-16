@@ -4,7 +4,7 @@ use kaveon_core::{
     ExchangeOutput, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
     JoinSpec, JoinType as FragmentJoinType, KaveonError, ListingDigest, NamedExpr, Partitioning,
     QueryMemoryPool, Result, ScanAssignment, ScanFile, ScanListing, ScanSpec, ScanTable, SortSpec,
-    StageFragment, StageGraph, StageId, TableReference,
+    StageFragment, StageGraph, StageId, TableReference, expression_contains_column,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc};
 use kaveon_exec::filter::FilterOperator;
@@ -1027,6 +1027,35 @@ impl ExecutableFragmentBuilder<'_> {
         condition: Option<&Expr>,
         distribution: JoinDistribution,
     ) -> Result<StageId> {
+        // A non-constant UNNEST on the right of a cross join is the physical
+        // form of CROSS JOIN LATERAL UNNEST. It must execute against each
+        // input batch; routing it through the ordinary hash/cross join would
+        // evaluate the array once as a zero-input leaf.
+        if join_type == JoinType::Cross
+            && condition.is_none()
+            && let LogicalPlan::Unnest {
+                expressions,
+                columns,
+                with_ordinality,
+                ordinality_column,
+                ordinality_start,
+            } = right
+            && expressions.iter().any(expression_contains_column)
+        {
+            let stage = self.build(left)?;
+            let mut draft = self.draft_mut(stage)?;
+            draft.push(
+                FragmentOperator::LateralUnnest {
+                    expressions: expressions.clone(),
+                    columns: columns.clone(),
+                    with_ordinality: *with_ordinality,
+                    ordinality_column: ordinality_column.clone(),
+                    ordinality_start: *ordinality_start,
+                },
+                vec![draft.root],
+            );
+            return Ok(stage);
+        }
         let left_stage = self.build(left)?;
         let right_stage = self.build(right)?;
         let (keys, residual) = join_keys_and_residual(condition)?;
@@ -1491,6 +1520,16 @@ impl StageGraphBuilder {
                 distribution,
                 ..
             } => {
+                if *join_type == JoinType::Cross
+                    && condition.is_none()
+                    && let LogicalPlan::Unnest { expressions, .. } = right.as_ref()
+                    && expressions.iter().any(expression_contains_column)
+                {
+                    let source = self.build(left)?;
+                    let physical = physical_plan_tree(plan);
+                    self.wrap_stage(source, "LateralUnnest", physical.attributes);
+                    return Ok(source);
+                }
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let join = physical_plan_tree(plan);
@@ -2214,6 +2253,33 @@ fn plan_query_with_predicate(
             condition,
             ..
         } => {
+            if *join_type == JoinType::Cross
+                && condition.is_none()
+                && let LogicalPlan::Unnest {
+                    expressions,
+                    columns,
+                    with_ordinality,
+                    ordinality_column,
+                    ordinality_start,
+                } = right.as_ref()
+                && expressions
+                    .iter()
+                    .any(kaveon_core::expression_contains_column)
+            {
+                let left = plan_query_inner(left, catalog, partition, memory, pins)?;
+                let operator = kaveon_exec::lateral_unnest::LateralUnnestOperator::new(
+                    left.operator,
+                    expressions.clone(),
+                    columns.clone(),
+                    *with_ordinality,
+                    ordinality_column.clone(),
+                    *ordinality_start,
+                )?;
+                return Ok(PlannedQuery {
+                    operator: Box::new(operator),
+                    scan_metrics: left.scan_metrics,
+                });
+            }
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);
             let left = plan_query_inner(left, catalog, partition, memory, pins)?;
@@ -3525,6 +3591,38 @@ mod tests {
                 .iter()
                 .any(|stage| stage.plan.operator == "Unnest")
         );
+    }
+
+    #[test]
+    fn plans_correlated_lateral_unnest_as_an_input_operator() {
+        let fragments = executable_fragments(
+            "SELECT x.id, u.value FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[x.id, 2]) AS u(value)",
+        );
+        assert!(fragments.values().any(|fragment| {
+            fragment.nodes.iter().any(|node| {
+                matches!(node.operator, FragmentOperator::LateralUnnest { .. })
+                    && node.inputs.len() == 1
+            })
+        }));
+    }
+
+    #[test]
+    fn executes_correlated_lateral_unnest_per_input_row() {
+        let fixture = fixture();
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT x.id, u.value FROM (VALUES (1), (3)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[x.id, 2]) AS u(value) ORDER BY x.id, u.value",
+        )
+        .unwrap();
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        let batches = collect_batches(&mut *planned.operator).unwrap();
+        let rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(rows, 4);
+        let values = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(values.values(), &[1, 2, 2, 3]);
     }
 
     #[test]

@@ -65,6 +65,61 @@ pub enum Expr {
     },
 }
 
+/// Whether an expression reads a relation column. This is used by planners
+/// to distinguish constant table functions from input-bound lateral ones.
+pub fn expression_contains_column(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_) => true,
+        Expr::Literal(_) | Expr::Star => false,
+        Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
+            expression_contains_column(left) || expression_contains_column(right)
+        }
+        Expr::IsNull(inner)
+        | Expr::IsNotNull(inner)
+        | Expr::Not(inner)
+        | Expr::Cast { expr: inner, .. }
+        | Expr::Extract { expr: inner, .. } => expression_contains_column(inner),
+        Expr::Function { args, .. } => args.iter().any(expression_contains_column),
+        Expr::Alias { expr, .. } => expression_contains_column(expr),
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => {
+            operand.as_deref().is_some_and(expression_contains_column)
+                || when_then.iter().any(|(when, then)| {
+                    expression_contains_column(when) || expression_contains_column(then)
+                })
+                || else_expr.as_deref().is_some_and(expression_contains_column)
+        }
+        Expr::Like { expr, pattern, .. } => {
+            expression_contains_column(expr) || expression_contains_column(pattern)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expression_contains_column(expr)
+                || expression_contains_column(low)
+                || expression_contains_column(high)
+        }
+        Expr::InList { expr, list, .. } => {
+            expression_contains_column(expr) || list.iter().any(expression_contains_column)
+        }
+        Expr::WindowFunction {
+            args,
+            partition_by,
+            order_by,
+            ..
+        } => {
+            args.iter().any(expression_contains_column)
+                || partition_by.iter().any(expression_contains_column)
+                || order_by
+                    .iter()
+                    .any(|(expr, _, _)| expression_contains_column(expr))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CastTarget {
     Boolean,
