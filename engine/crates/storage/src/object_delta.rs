@@ -279,6 +279,30 @@ impl BatchSource for ObjectDeltaSource {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
+
+    fn apply_runtime_filter(
+        &mut self,
+        column: &str,
+        values: &[kaveon_core::ScalarValue],
+    ) -> Result<bool> {
+        // Delta has not opened a file until the first batch. Preserve the
+        // exact build-side keys in the snapshot predicate so object readers
+        // can prune before fetching or decoding a file.
+        if self.current.is_some() || values.is_empty() {
+            return Ok(false);
+        }
+        let predicate = StoragePredicate::In {
+            column: column.to_owned(),
+            values: values.to_vec(),
+        };
+        self.predicate = Some(match self.predicate.take() {
+            Some(existing) => StoragePredicate::And(vec![existing, predicate]),
+            None => predicate,
+        });
+        self.metrics.runtime_filter_applied(values.len());
+        Ok(true)
+    }
+
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if let Some(current) = &mut self.current {
