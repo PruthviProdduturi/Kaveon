@@ -1,0 +1,602 @@
+{
+  "passed": true,
+  "started_at_utc": "2026-10-16T02:30:03.461323+00:00",
+  "context": "kaveon-aks",
+  "namespace": "kaveon",
+  "credential_material_recorded": false,
+  "subscription_policy_changed": false,
+  "scope": "Fail-closed active-query interruption during coordinator restart; no survival claim.",
+  "pods_before": {
+    "kaveon-api-6758744588-hxhn6": {
+      "uid": "59ac0bbc-94a0-47c9-b6db-0acea9214d06",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "6Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-availability-guard-29868630-mwprr": {
+      "uid": "51648e27-7329-4ae6-868d-a13e735a872c",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "192Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868615-qwq5g": {
+      "uid": "d0eda191-b43a-40ad-b9fd-ef7c083cd5f9",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868620-vhxss": {
+      "uid": "e3dfc799-f03d-43f1-8182-a9043446795d",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868625-k5nq2": {
+      "uid": "ef76b714-6904-4cb8-a82c-b16374f8dd0d",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868630-j7nkb": {
+      "uid": "17d978ac-2231-47eb-a055-10697c918246",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-coordinator-0": {
+      "uid": "d6bbdbb0-1a3c-44e0-a790-8e2a508b2685",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-system-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3",
+          "ephemeral-storage": "8Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "2Gi",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868497-vlj5z": {
+      "uid": "17e44596-36bf-40b1-80c9-a7b3e8a63c84",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868557-bbq5b": {
+      "uid": "75ab91de-ce1a-4f7e-baad-b42d55a2fe38",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868617-xdgxj": {
+      "uid": "b7935d0e-c15a-484f-988d-d488961ef11e",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-portal-d5bc89fd8-s2hkv": {
+      "uid": "a3839b53-d7d6-414f-b748-66787cfcd73c",
+      "image": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "image_id": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "3Gi"
+        },
+        "requests": {
+          "cpu": "200m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-worker-0": {
+      "uid": "74d82844-dceb-46cc-a5f9-4040e3609b83",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-1": {
+      "uid": "827a5048-0835-4f84-ae41-237b060dea18",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-2": {
+      "uid": "2d84821e-0e61-4e93-901f-b0f1a8a21965",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    }
+  },
+  "retained_files_before": {
+    "coordinator_exchange": 0
+  },
+  "principal": "kaveon-operator",
+  "query_id": "ff7df2cc-2277-44cb-b970-25c3778793bc",
+  "query_observed_running": true,
+  "restart_status": "Waiting for partitioned roll out to finish: 0 out of 1 new pods have been updated...\nWaiting for 1 pods to be ready...\nWaiting for 1 pods to be ready...\nWaiting for 1 pods to be ready...\npartitioned roll out complete: 1 new pods have been updated...",
+  "interrupted_request": {
+    "exception_type": "ConnectionError",
+    "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+  },
+  "interruption_observed": true,
+  "pods_after": {
+    "kaveon-api-6758744588-hxhn6": {
+      "uid": "59ac0bbc-94a0-47c9-b6db-0acea9214d06",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "6Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-availability-guard-29868631-wzmnh": {
+      "uid": "f61ada9f-63fc-4e5f-a881-1d17abd0d1d5",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "192Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868615-qwq5g": {
+      "uid": "d0eda191-b43a-40ad-b9fd-ef7c083cd5f9",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868620-vhxss": {
+      "uid": "e3dfc799-f03d-43f1-8182-a9043446795d",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868625-k5nq2": {
+      "uid": "ef76b714-6904-4cb8-a82c-b16374f8dd0d",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868630-j7nkb": {
+      "uid": "17d978ac-2231-47eb-a055-10697c918246",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868630-j85dl": {
+      "uid": "14358032-aed6-45cf-82f7-a7fbe02fa662",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868630-kdqfx": {
+      "uid": "c82165ee-9e47-420b-a837-8c65c18f9672",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-coordinator-0": {
+      "uid": "660097c1-6c50-415f-84f3-97600eb9c22a",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-system-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3",
+          "ephemeral-storage": "8Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "2Gi",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868497-vlj5z": {
+      "uid": "17e44596-36bf-40b1-80c9-a7b3e8a63c84",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868557-bbq5b": {
+      "uid": "75ab91de-ce1a-4f7e-baad-b42d55a2fe38",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868617-xdgxj": {
+      "uid": "b7935d0e-c15a-484f-988d-d488961ef11e",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-portal-d5bc89fd8-s2hkv": {
+      "uid": "a3839b53-d7d6-414f-b748-66787cfcd73c",
+      "image": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "image_id": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "3Gi"
+        },
+        "requests": {
+          "cpu": "200m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-worker-0": {
+      "uid": "74d82844-dceb-46cc-a5f9-4040e3609b83",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-1": {
+      "uid": "827a5048-0835-4f84-ae41-237b060dea18",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-2": {
+      "uid": "2d84821e-0e61-4e93-901f-b0f1a8a21965",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    }
+  },
+  "retained_files_after": {
+    "coordinator_exchange": 0
+  },
+  "post_restart_probe": {
+    "state": "FINISHED",
+    "data": [
+      [
+        24
+      ]
+    ],
+    "exact": true
+  },
+  "checks": {
+    "query_observed_running": true,
+    "interruption_observed": true,
+    "coordinator_ready_after_restart": true,
+    "three_workers_ready_after_restart": true,
+    "post_restart_exact_probe": true,
+    "no_retained_exchange_growth": true
+  },
+  "completed_at_utc": "2026-10-16T02:31:19.644722+00:00"
+}
