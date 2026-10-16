@@ -82,6 +82,13 @@ The exchange-focused regression also verifies that nested array, map, and row
 keys partition successfully; map/row keys use the canonical nested fallback
 because Arrow's `RowConverter` does not implement Map values.
 
+The complete execution crate target suite was also rerun on this source:
+
+```text
+cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
+380 passed, 0 failed, 4 ignored (15.05s)
+```
+
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
 parity trackers and require their corresponding live or differential evidence.
