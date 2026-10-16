@@ -1,0 +1,1115 @@
+{
+  "exact_repeat": true,
+  "image": {
+    "active_workers": 3,
+    "compatible_workers": 3,
+    "coordinator": {
+      "address": "https://kaveon-coordinator.kaveon.svc.cluster.local:8080",
+      "admission": {
+        "admitted": 123,
+        "admitted_bytes": 0,
+        "limit_bytes": 8589934592,
+        "peak_admitted_bytes": 8589934592,
+        "queue_depth": 0,
+        "queue_limit": 64,
+        "queued": 0,
+        "rejected": 0,
+        "withdrawn": 0
+      },
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "environment": "aks",
+      "last_heartbeat": 1792112020,
+      "memory_allocated_bytes": 31189799,
+      "memory_limit_bytes": 11811160064,
+      "memory_rss_bytes": 942116864,
+      "node_id": "kaveon-coordinator-0",
+      "resource_groups": [
+        {
+          "admitted": 123,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "max_concurrent": 4,
+          "max_queued": 64,
+          "name": "default",
+          "queued": 0,
+          "queued_total": 0,
+          "rejected": 0,
+          "running": 0,
+          "wait_ms_p50": 0,
+          "wait_ms_p95": 0,
+          "weight": 10,
+          "withdrawn": 0
+        },
+        {
+          "admitted": 0,
+          "admitted_bytes": 0,
+          "limit_bytes": 2147483648,
+          "max_concurrent": 2,
+          "max_queued": 32,
+          "name": "maintenance",
+          "queued": 0,
+          "queued_total": 0,
+          "rejected": 0,
+          "running": 0,
+          "weight": 1,
+          "withdrawn": 0
+        }
+      ],
+      "result_cache": {
+        "budget_bytes": 268435456,
+        "bytes": 0,
+        "enabled": true,
+        "entries": 0,
+        "evictions": 0,
+        "expirations": 0,
+        "hit_latency_ns_max": 0,
+        "hit_latency_ns_total": 0,
+        "hit_latency_samples": 0,
+        "hits": 0,
+        "misses": 6,
+        "refused": 0,
+        "ttl_seconds": 600
+      },
+      "role": "coordinator",
+      "uptime_secs": 7298,
+      "version": "0.1.0"
+    },
+    "environment": "aks",
+    "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+    "total_nodes": 4,
+    "workers": [
+      {
+        "address": "https://kaveon-worker-1.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 21,
+          "admitted_bytes": 6442450944,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 8,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792112011,
+        "memory_allocated_bytes": 168486093,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 488857600,
+        "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+        "role": "worker",
+        "uptime_secs": 451,
+        "version": "0.1.0"
+      },
+      {
+        "address": "https://kaveon-worker-2.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 140,
+          "admitted_bytes": 6442450944,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 16,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792112013,
+        "memory_allocated_bytes": 168808396,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 551067648,
+        "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+        "role": "worker",
+        "uptime_secs": 3403,
+        "version": "0.1.0"
+      },
+      {
+        "address": "https://kaveon-worker-0.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 128,
+          "admitted_bytes": 6442450944,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 14,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792112016,
+        "memory_allocated_bytes": 154015597,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 740151296,
+        "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "role": "worker",
+        "uptime_secs": 1262,
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "principal": "kaveon-operator",
+  "runs": [
+    {
+      "admission_refusals": 0,
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "client_elapsed_ms": 22359.0,
+      "data": [
+        [
+          1,
+          168
+        ],
+        [
+          2,
+          168
+        ],
+        [
+          3,
+          168
+        ],
+        [
+          4,
+          168
+        ],
+        [
+          5,
+          168
+        ],
+        [
+          6,
+          168
+        ],
+        [
+          7,
+          168
+        ],
+        [
+          8,
+          168
+        ],
+        [
+          9,
+          168
+        ],
+        [
+          10,
+          168
+        ],
+        [
+          11,
+          168
+        ],
+        [
+          12,
+          168
+        ],
+        [
+          13,
+          168
+        ],
+        [
+          14,
+          168
+        ],
+        [
+          15,
+          168
+        ],
+        [
+          16,
+          168
+        ],
+        [
+          17,
+          168
+        ],
+        [
+          18,
+          168
+        ],
+        [
+          19,
+          168
+        ],
+        [
+          20,
+          168
+        ],
+        [
+          21,
+          168
+        ],
+        [
+          22,
+          168
+        ],
+        [
+          23,
+          168
+        ],
+        [
+          24,
+          168
+        ],
+        [
+          25,
+          168
+        ],
+        [
+          26,
+          168
+        ],
+        [
+          27,
+          168
+        ],
+        [
+          28,
+          168
+        ],
+        [
+          29,
+          168
+        ],
+        [
+          30,
+          168
+        ],
+        [
+          31,
+          168
+        ],
+        [
+          32,
+          168
+        ],
+        [
+          33,
+          168
+        ],
+        [
+          34,
+          168
+        ],
+        [
+          35,
+          168
+        ],
+        [
+          36,
+          168
+        ],
+        [
+          37,
+          168
+        ],
+        [
+          38,
+          168
+        ],
+        [
+          39,
+          168
+        ],
+        [
+          40,
+          168
+        ],
+        [
+          41,
+          168
+        ],
+        [
+          42,
+          168
+        ],
+        [
+          43,
+          168
+        ],
+        [
+          44,
+          168
+        ],
+        [
+          45,
+          168
+        ],
+        [
+          46,
+          168
+        ],
+        [
+          47,
+          168
+        ],
+        [
+          48,
+          168
+        ],
+        [
+          49,
+          168
+        ],
+        [
+          50,
+          168
+        ],
+        [
+          51,
+          168
+        ],
+        [
+          52,
+          168
+        ],
+        [
+          53,
+          168
+        ],
+        [
+          54,
+          168
+        ],
+        [
+          55,
+          168
+        ],
+        [
+          56,
+          168
+        ],
+        [
+          57,
+          168
+        ],
+        [
+          58,
+          168
+        ],
+        [
+          59,
+          168
+        ],
+        [
+          60,
+          168
+        ],
+        [
+          61,
+          168
+        ],
+        [
+          62,
+          168
+        ],
+        [
+          63,
+          168
+        ],
+        [
+          64,
+          168
+        ],
+        [
+          65,
+          168
+        ],
+        [
+          66,
+          168
+        ],
+        [
+          67,
+          168
+        ],
+        [
+          68,
+          168
+        ],
+        [
+          69,
+          168
+        ],
+        [
+          70,
+          168
+        ],
+        [
+          71,
+          168
+        ],
+        [
+          72,
+          168
+        ],
+        [
+          73,
+          168
+        ],
+        [
+          74,
+          168
+        ],
+        [
+          75,
+          168
+        ],
+        [
+          76,
+          168
+        ],
+        [
+          77,
+          168
+        ],
+        [
+          78,
+          168
+        ],
+        [
+          79,
+          168
+        ],
+        [
+          80,
+          168
+        ],
+        [
+          81,
+          168
+        ],
+        [
+          82,
+          168
+        ],
+        [
+          83,
+          168
+        ],
+        [
+          84,
+          168
+        ],
+        [
+          85,
+          168
+        ],
+        [
+          86,
+          168
+        ],
+        [
+          87,
+          168
+        ],
+        [
+          88,
+          168
+        ],
+        [
+          89,
+          168
+        ],
+        [
+          90,
+          168
+        ],
+        [
+          91,
+          168
+        ],
+        [
+          92,
+          168
+        ],
+        [
+          93,
+          168
+        ],
+        [
+          94,
+          168
+        ],
+        [
+          95,
+          168
+        ],
+        [
+          96,
+          168
+        ],
+        [
+          97,
+          168
+        ],
+        [
+          98,
+          168
+        ],
+        [
+          99,
+          168
+        ],
+        [
+          100,
+          168
+        ]
+      ],
+      "elapsed_ms": 22107,
+      "error": null,
+      "id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815",
+      "name": "scale_aggregate_1",
+      "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
+      "row_count": 100,
+      "scan_metrics_complete": false,
+      "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100",
+      "stage_count": 3,
+      "state": "FINISHED",
+      "status": 200,
+      "task_count": 7,
+      "task_ids": [
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.0.0.0",
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.0.1.0",
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.0.2.0",
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.1.0.0",
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.1.1.0",
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.1.2.0",
+        "a08bbba8-4f0f-45ce-8864-a6d83b4da815.2.0.0"
+      ],
+      "tasks": [
+        {
+          "elapsed_us": 18789402,
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "stage_id": 0,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.0.0.0"
+        },
+        {
+          "elapsed_us": 19905601,
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "stage_id": 0,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.0.1.0"
+        },
+        {
+          "elapsed_us": 17342400,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "stage_id": 0,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.0.2.0"
+        },
+        {
+          "elapsed_us": 1540316,
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "stage_id": 1,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.1.0.0"
+        },
+        {
+          "elapsed_us": 1500795,
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "stage_id": 1,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.1.1.0"
+        },
+        {
+          "elapsed_us": 1550110,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "stage_id": 1,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.1.2.0"
+        },
+        {
+          "elapsed_us": 80566,
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "stage_id": 2,
+          "task_id": "a08bbba8-4f0f-45ce-8864-a6d83b4da815.2.0.0"
+        }
+      ],
+      "wall_seconds": 22.64,
+      "worker_ids": [
+        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+      ]
+    },
+    {
+      "admission_refusals": 0,
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "client_elapsed_ms": 23594.0,
+      "data": [
+        [
+          1,
+          168
+        ],
+        [
+          2,
+          168
+        ],
+        [
+          3,
+          168
+        ],
+        [
+          4,
+          168
+        ],
+        [
+          5,
+          168
+        ],
+        [
+          6,
+          168
+        ],
+        [
+          7,
+          168
+        ],
+        [
+          8,
+          168
+        ],
+        [
+          9,
+          168
+        ],
+        [
+          10,
+          168
+        ],
+        [
+          11,
+          168
+        ],
+        [
+          12,
+          168
+        ],
+        [
+          13,
+          168
+        ],
+        [
+          14,
+          168
+        ],
+        [
+          15,
+          168
+        ],
+        [
+          16,
+          168
+        ],
+        [
+          17,
+          168
+        ],
+        [
+          18,
+          168
+        ],
+        [
+          19,
+          168
+        ],
+        [
+          20,
+          168
+        ],
+        [
+          21,
+          168
+        ],
+        [
+          22,
+          168
+        ],
+        [
+          23,
+          168
+        ],
+        [
+          24,
+          168
+        ],
+        [
+          25,
+          168
+        ],
+        [
+          26,
+          168
+        ],
+        [
+          27,
+          168
+        ],
+        [
+          28,
+          168
+        ],
+        [
+          29,
+          168
+        ],
+        [
+          30,
+          168
+        ],
+        [
+          31,
+          168
+        ],
+        [
+          32,
+          168
+        ],
+        [
+          33,
+          168
+        ],
+        [
+          34,
+          168
+        ],
+        [
+          35,
+          168
+        ],
+        [
+          36,
+          168
+        ],
+        [
+          37,
+          168
+        ],
+        [
+          38,
+          168
+        ],
+        [
+          39,
+          168
+        ],
+        [
+          40,
+          168
+        ],
+        [
+          41,
+          168
+        ],
+        [
+          42,
+          168
+        ],
+        [
+          43,
+          168
+        ],
+        [
+          44,
+          168
+        ],
+        [
+          45,
+          168
+        ],
+        [
+          46,
+          168
+        ],
+        [
+          47,
+          168
+        ],
+        [
+          48,
+          168
+        ],
+        [
+          49,
+          168
+        ],
+        [
+          50,
+          168
+        ],
+        [
+          51,
+          168
+        ],
+        [
+          52,
+          168
+        ],
+        [
+          53,
+          168
+        ],
+        [
+          54,
+          168
+        ],
+        [
+          55,
+          168
+        ],
+        [
+          56,
+          168
+        ],
+        [
+          57,
+          168
+        ],
+        [
+          58,
+          168
+        ],
+        [
+          59,
+          168
+        ],
+        [
+          60,
+          168
+        ],
+        [
+          61,
+          168
+        ],
+        [
+          62,
+          168
+        ],
+        [
+          63,
+          168
+        ],
+        [
+          64,
+          168
+        ],
+        [
+          65,
+          168
+        ],
+        [
+          66,
+          168
+        ],
+        [
+          67,
+          168
+        ],
+        [
+          68,
+          168
+        ],
+        [
+          69,
+          168
+        ],
+        [
+          70,
+          168
+        ],
+        [
+          71,
+          168
+        ],
+        [
+          72,
+          168
+        ],
+        [
+          73,
+          168
+        ],
+        [
+          74,
+          168
+        ],
+        [
+          75,
+          168
+        ],
+        [
+          76,
+          168
+        ],
+        [
+          77,
+          168
+        ],
+        [
+          78,
+          168
+        ],
+        [
+          79,
+          168
+        ],
+        [
+          80,
+          168
+        ],
+        [
+          81,
+          168
+        ],
+        [
+          82,
+          168
+        ],
+        [
+          83,
+          168
+        ],
+        [
+          84,
+          168
+        ],
+        [
+          85,
+          168
+        ],
+        [
+          86,
+          168
+        ],
+        [
+          87,
+          168
+        ],
+        [
+          88,
+          168
+        ],
+        [
+          89,
+          168
+        ],
+        [
+          90,
+          168
+        ],
+        [
+          91,
+          168
+        ],
+        [
+          92,
+          168
+        ],
+        [
+          93,
+          168
+        ],
+        [
+          94,
+          168
+        ],
+        [
+          95,
+          168
+        ],
+        [
+          96,
+          168
+        ],
+        [
+          97,
+          168
+        ],
+        [
+          98,
+          168
+        ],
+        [
+          99,
+          168
+        ],
+        [
+          100,
+          168
+        ]
+      ],
+      "elapsed_ms": 23357,
+      "error": null,
+      "id": "000a24b9-1dc6-49c4-a6f7-77709aac2170",
+      "name": "scale_aggregate_2",
+      "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
+      "row_count": 100,
+      "scan_metrics_complete": false,
+      "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100",
+      "stage_count": 3,
+      "state": "FINISHED",
+      "status": 200,
+      "task_count": 7,
+      "task_ids": [
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.0.0.0",
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.0.1.0",
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.0.2.0",
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.1.0.0",
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.1.1.0",
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.1.2.0",
+        "000a24b9-1dc6-49c4-a6f7-77709aac2170.2.0.0"
+      ],
+      "tasks": [
+        {
+          "elapsed_us": 18689571,
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "stage_id": 0,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.0.0.0"
+        },
+        {
+          "elapsed_us": 21049759,
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "stage_id": 0,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.0.1.0"
+        },
+        {
+          "elapsed_us": 18645553,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "stage_id": 0,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.0.2.0"
+        },
+        {
+          "elapsed_us": 1611631,
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "stage_id": 1,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.1.0.0"
+        },
+        {
+          "elapsed_us": 1551443,
+          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "stage_id": 1,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.1.1.0"
+        },
+        {
+          "elapsed_us": 1494714,
+          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "stage_id": 1,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.1.2.0"
+        },
+        {
+          "elapsed_us": 46672,
+          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "stage_id": 2,
+          "task_id": "000a24b9-1dc6-49c4-a6f7-77709aac2170.2.0.0"
+        }
+      ],
+      "wall_seconds": 23.891,
+      "worker_ids": [
+        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+      ]
+    }
+  ],
+  "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100"
+}
