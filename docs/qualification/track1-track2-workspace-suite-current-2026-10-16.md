@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `1b5e0c98` (the workspace gate includes the
+**Source:** `origin/dev` at `64da58b6` (the workspace gate includes the
 correlated array-function, map-key, and map-entry regressions)
 
 The complete Rust workspace test command was run from `engine/`:
