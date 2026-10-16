@@ -60,6 +60,11 @@ projected-key `UNION DISTINCT` case whose branches now hash-partition across
 workers before the final deduplication; unsupported expression-shaped unions
 still use the single-task fallback.
 
+The sweep also covers typed DATE and DECIMAL set operations. The set operator
+and DISTINCT key paths now canonicalize DATE32/DATE64/TIMESTAMP, DECIMAL128,
+and LargeUtf8 values; the focused sweep passed **1/1** after that extension
+(411 filtered server tests; 134.26 seconds).
+
 After that change, the complete server target suite was rerun from the same
 source:
 

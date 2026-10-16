@@ -225,6 +225,36 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
                 .as_primitive::<arrow::datatypes::UInt64Type>()
                 .value(row) as i64,
         )),
+        DataType::Date32 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::Date32Type>()
+                .value(row),
+        )),
+        DataType::Date64 => Ok(AggregateValue::Int64(
+            array
+                .as_primitive::<arrow::datatypes::Date64Type>()
+                .value(row),
+        )),
+        DataType::Timestamp(unit, _) => Ok(AggregateValue::Int64(match unit {
+            arrow::datatypes::TimeUnit::Second => array
+                .as_primitive::<arrow::datatypes::TimestampSecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Millisecond => array
+                .as_primitive::<arrow::datatypes::TimestampMillisecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Microsecond => array
+                .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Nanosecond => array
+                .as_primitive::<arrow::datatypes::TimestampNanosecondType>()
+                .value(row),
+        })),
+        DataType::Decimal128(_, scale) => Ok(AggregateValue::Decimal128(
+            array
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(row),
+            *scale,
+        )),
         DataType::Float64 => {
             let v = array
                 .as_primitive::<arrow::datatypes::Float64Type>()
@@ -245,6 +275,14 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
                 .value(row)
                 .to_owned(),
         )),
+        DataType::LargeUtf8 => Ok(AggregateValue::Utf8(
+            array
+                .as_any()
+                .downcast_ref::<arrow::array::LargeStringArray>()
+                .expect("LargeUtf8")
+                .value(row)
+                .to_owned(),
+        )),
         dt => Err(KaveonError::Execution(format!(
             "set operation not supported for type {dt}"
         ))),
@@ -256,7 +294,10 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, DictionaryArray, Int32Array, StringArray};
+    use arrow::array::{
+        ArrayRef, Date32Array, Decimal128Array, DictionaryArray, Int32Array, LargeStringArray,
+        StringArray,
+    };
     use arrow::datatypes::{Field, Schema};
 
     use super::*;
@@ -358,5 +399,67 @@ mod tests {
             }
             assert_eq!(strings(batches), expected);
         }
+    }
+
+    #[test]
+    fn typed_temporal_decimal_and_large_text_keys_are_value_comparable() {
+        let decimal = |values: Vec<Option<i128>>| -> ArrayRef {
+            Arc::new(
+                Decimal128Array::from(values)
+                    .with_precision_and_scale(12, 2)
+                    .unwrap(),
+            )
+        };
+        let mut decimal_op = SetOpOperator::new(
+            side(decimal(vec![Some(100), Some(250), Some(999)])),
+            side(decimal(vec![Some(250), Some(300)])),
+            SetOpMode::Intersect,
+        );
+        let decimal_batch = decimal_op.next_batch().unwrap().unwrap();
+        let decimal_values = decimal_batch
+            .column(0)
+            .as_primitive::<arrow::datatypes::Decimal128Type>()
+            .values()
+            .to_vec();
+        assert_eq!(decimal_values, vec![250]);
+
+        let mut date_op = SetOpOperator::new(
+            side(Arc::new(Date32Array::from(vec![
+                Some(20_000),
+                Some(20_001),
+            ]))),
+            side(Arc::new(Date32Array::from(vec![
+                Some(20_001),
+                Some(20_002),
+            ]))),
+            SetOpMode::Except,
+        );
+        let date_batch = date_op.next_batch().unwrap().unwrap();
+        assert_eq!(
+            date_batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::Date32Type>()
+                .values(),
+            &[20_000]
+        );
+
+        let mut large_text_op = SetOpOperator::new(
+            side(Arc::new(LargeStringArray::from(vec![
+                Some("alpha"),
+                Some("beta"),
+            ]))),
+            side(Arc::new(LargeStringArray::from(vec![Some("beta")]))),
+            SetOpMode::Intersect,
+        );
+        let large_text_batch = large_text_op.next_batch().unwrap().unwrap();
+        assert_eq!(
+            large_text_batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .unwrap()
+                .value(0),
+            "beta"
+        );
     }
 }

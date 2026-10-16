@@ -412,6 +412,36 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
                 .as_primitive::<arrow::datatypes::UInt64Type>()
                 .value(row) as i64,
         )),
+        DataType::Date32 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::Date32Type>()
+                .value(row),
+        )),
+        DataType::Date64 => Ok(AggregateValue::Int64(
+            array
+                .as_primitive::<arrow::datatypes::Date64Type>()
+                .value(row),
+        )),
+        DataType::Timestamp(unit, _) => Ok(AggregateValue::Int64(match unit {
+            arrow::datatypes::TimeUnit::Second => array
+                .as_primitive::<arrow::datatypes::TimestampSecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Millisecond => array
+                .as_primitive::<arrow::datatypes::TimestampMillisecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Microsecond => array
+                .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                .value(row),
+            arrow::datatypes::TimeUnit::Nanosecond => array
+                .as_primitive::<arrow::datatypes::TimestampNanosecondType>()
+                .value(row),
+        })),
+        DataType::Decimal128(_, scale) => Ok(AggregateValue::Decimal128(
+            array
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(row),
+            *scale,
+        )),
         DataType::Float64 => {
             let v = array
                 .as_primitive::<arrow::datatypes::Float64Type>()
@@ -429,6 +459,14 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
                 .as_any()
                 .downcast_ref::<arrow::array::StringArray>()
                 .expect("Utf8 array")
+                .value(row)
+                .to_owned(),
+        )),
+        DataType::LargeUtf8 => Ok(AggregateValue::Utf8(
+            array
+                .as_any()
+                .downcast_ref::<arrow::array::LargeStringArray>()
+                .expect("LargeUtf8 array")
                 .value(row)
                 .to_owned(),
         )),
