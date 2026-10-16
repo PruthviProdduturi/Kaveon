@@ -32,7 +32,7 @@ snapshot, not a session diary.
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
 | 14 | Connector federation | Open | Native Parquet, Delta, and Iceberg paths exist; registered SQL sources use passthrough API paths. | Authenticated pushdown and cross-source execution qualification. |
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
-| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus a 604.001-second ten-round, 40-query concurrent mixed-workload run, a current-image forced-worker-loss pressure run, and a graceful node-drain observation with exact results, resource samples, and zero retained spill exist. | Longer endurance, node-loss during the soak, broader topology, and retry/failure qualification. |
+| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus a 604.001-second ten-round, 40-query concurrent mixed-workload run, a current-image 900-second three-client soak with 1,386/1,386 exact requests, a forced-worker-loss pressure run, and a graceful node-drain observation with exact results, resource samples, and zero retained spill exist. | Longer endurance, node-loss during the soak, broader topology, and retry/failure qualification. |
 
 The full-table aggregate evidence is retained in `docs/qualification/track1-aks-scale-aggregate-2026-10-15.md` and its raw JSON: two identical 100-row result sets after grouping all 504,000,000 source rows, across three stages, seven tasks, and all three workers. It strengthens item 4 correctness evidence; p95, skew, and sustained mixed-workload gates remain open.
 
@@ -84,6 +84,13 @@ raw JSON. An active query was interrupted during coordinator restart, cleanup
 was fail-closed, all three workers returned, the exact probe passed, and no
 retained exchange or spill growth was observed. Multi-coordinator continuity
 remains outside this bounded gate.
+
+The current-image three-client soak is retained in
+`docs/qualification/track1-aks-current-soak-900-c3-2026-10-16.md` and its raw
+JSON. It ran for 900 seconds with 1,386/1,386 exact requests, zero failures,
+zero unexpected restarts, all three workers Ready, and no retained exchange or
+spill growth. Node loss during the soak, physical disk exhaustion, and broader
+topologies remain open.
 
 ## Active item: 3 — distributed joins
 
