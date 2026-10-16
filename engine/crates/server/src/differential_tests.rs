@@ -357,6 +357,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "trigonometric_scalar_compatibility",
+        "SELECT SIN(PI() / 2) AS sine, COS(0) AS cosine, TAN(0) AS tangent, ATAN2(1, 1) AS atan2_value, DEGREES(PI()) AS degrees, RADIANS(180) AS radians, SIN(NULL) AS null_sine FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "timestamp_decimal_array_functions",
         "SELECT CARDINALITY(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)]) AS timestamp_card, ARRAY_POSITION(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)], CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)) AS timestamp_pos, CARDINALITY(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_card, ARRAY_POSITION(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))], CAST(2.30 AS DECIMAL(10, 2))) AS decimal_pos FROM {T} LIMIT 1",
         false,

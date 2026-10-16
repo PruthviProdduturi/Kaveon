@@ -8002,6 +8002,55 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::sqrt)
         }
+        "SIN" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::sin)
+        }
+        "COS" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::cos)
+        }
+        "TAN" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::tan)
+        }
+        "ASIN" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::asin)
+        }
+        "ACOS" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::acos)
+        }
+        "ATAN" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::atan)
+        }
+        "ATAN2" => {
+            check_arity(name, args, 2)?;
+            let y = compute::cast(&args[0], &DataType::Float64)?;
+            let x = compute::cast(&args[1], &DataType::Float64)?;
+            let y = y.as_primitive::<Float64Type>();
+            let x = x.as_primitive::<Float64Type>();
+            let result: Float64Array = (0..num_rows)
+                .map(|i| {
+                    if y.is_null(i) || x.is_null(i) {
+                        None
+                    } else {
+                        Some(y.value(i).atan2(x.value(i)))
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        "DEGREES" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::to_degrees)
+        }
+        "RADIANS" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::to_radians)
+        }
         "SIGN" | "SIGNUM" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::signum)
