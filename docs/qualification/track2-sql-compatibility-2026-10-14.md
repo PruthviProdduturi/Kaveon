@@ -462,8 +462,9 @@ for row-producing `UNNEST`. This covers both constant relations such as
 `CROSS JOIN LATERAL UNNEST(SEQUENCE(1, x.stop))`. The existing list expansion
 path supplies the element type, preserves input-row repetition, and keeps the
 same ordinality/offset and multi-array NULL-padding rules as literal arrays.
-Focused SQL, leaf-executor, and lateral-executor tests pass on the current
-commit. Other table functions remain intentionally unsupported.
+Focused SQL, leaf-executor, lateral-executor, and two-worker-path distributed
+tests pass on the current commit. Other table functions remain intentionally
+unsupported.
 
 ## Trino wire compatibility qualification
 
