@@ -1149,6 +1149,8 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("ARRAY_SLICE")
                     || name.eq_ignore_ascii_case("ARRAY_SORT")
                     || name.eq_ignore_ascii_case("ARRAY_ZIP")
+                    || name.eq_ignore_ascii_case("MAP_KEYS")
+                    || name.eq_ignore_ascii_case("MAP_VALUES")
         )
 }
 
@@ -5324,6 +5326,18 @@ mod tests {
     fn parses_array_function_unnest_in_from() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM UNNEST(ARRAY_CONCAT(ARRAY[1], ARRAY[2, 3])) AS t(value)",
+        )
+        .unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest { columns, .. } if columns == vec!["value"]
+        ));
+    }
+
+    #[test]
+    fn parses_map_array_function_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(MAP_KEYS(MAP(ARRAY['a'], ARRAY[1]))) AS t(value)",
         )
         .unwrap();
         assert!(matches!(
