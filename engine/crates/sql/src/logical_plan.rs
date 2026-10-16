@@ -1258,21 +1258,20 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             let mut plan = query_to_plan(subquery, ctes)?;
             if let Some(alias) = alias
                 && !alias.columns.is_empty()
+                && let LogicalPlan::Unnest { columns, .. } = &mut plan
             {
-                if let LogicalPlan::Unnest { columns, .. } = &mut plan {
-                    if alias.columns.len() != columns.len() {
-                        return Err(sql_err(format!(
-                            "derived relation alias has {} columns but the relation has {}",
-                            alias.columns.len(),
-                            columns.len()
-                        )));
-                    }
-                    *columns = alias
-                        .columns
-                        .iter()
-                        .map(|column| column.name.value.clone())
-                        .collect();
+                if alias.columns.len() != columns.len() {
+                    return Err(sql_err(format!(
+                        "derived relation alias has {} columns but the relation has {}",
+                        alias.columns.len(),
+                        columns.len()
+                    )));
                 }
+                *columns = alias
+                    .columns
+                    .iter()
+                    .map(|column| column.name.value.clone())
+                    .collect();
             }
             Ok(plan)
         }
@@ -1291,7 +1290,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             }
             let expressions = array_exprs
                 .iter()
-                .map(|array| ast_expr_to_expr(array))
+                .map(ast_expr_to_expr)
                 .collect::<Result<Vec<_>>>()?;
             if expressions
                 .iter()
@@ -2140,16 +2139,16 @@ fn lower_aggregate_expressions(
                 });
                 let column = Expr::Column(name);
                 bindings.push((original.clone(), column.clone()));
-                if let Expr::Alias { name, .. } = original {
-                    if let Some(grouping_column) = name.strip_prefix("__kaveon_grouping_") {
-                        bindings.push((
-                            Expr::Function {
-                                name: "GROUPING".to_owned(),
-                                args: vec![Expr::Column(grouping_column.to_owned())],
-                            },
-                            column.clone(),
-                        ));
-                    }
+                if let Expr::Alias { name, .. } = original
+                    && let Some(grouping_column) = name.strip_prefix("__kaveon_grouping_")
+                {
+                    bindings.push((
+                        Expr::Function {
+                            name: "GROUPING".to_owned(),
+                            args: vec![Expr::Column(grouping_column.to_owned())],
+                        },
+                        column.clone(),
+                    ));
                 }
                 *expr = column;
             }
