@@ -338,9 +338,11 @@ mod tests {
 
     use arrow::array::{
         ArrayRef, Date32Array, Decimal128Array, DictionaryArray, Float32Array, Int32Array,
-        Int32Builder, LargeStringArray, ListArray, ListBuilder, StringArray, UInt8Array,
+        Int32Builder, LargeStringArray, ListArray, ListBuilder, MapArray, StringArray, StructArray,
+        UInt8Array,
     };
-    use arrow::datatypes::{Field, Schema};
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
 
@@ -559,5 +561,37 @@ mod tests {
                 .values(),
             &[3]
         );
+
+        let map = |keys: &[&str], values: &[i32]| -> ArrayRef {
+            let fields: arrow::datatypes::Fields = vec![
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(Field::new("value", DataType::Int32, true)),
+            ]
+            .into();
+            let entries = StructArray::new(
+                fields.clone(),
+                vec![
+                    Arc::new(StringArray::from(keys.to_vec())) as ArrayRef,
+                    Arc::new(Int32Array::from(values.to_vec())) as ArrayRef,
+                ],
+                None,
+            );
+            Arc::new(
+                MapArray::try_new(
+                    Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, keys.len() as i32])),
+                    entries,
+                    None,
+                    false,
+                )
+                .unwrap(),
+            )
+        };
+        let mut map_op = SetOpOperator::new(
+            side(map(&["a", "b"], &[1, 2])),
+            side(map(&["b", "a"], &[2, 1])),
+            SetOpMode::Intersect,
+        );
+        assert!(map_op.next_batch().unwrap().is_some());
     }
 }
