@@ -1375,6 +1375,28 @@ fn distributed_map_keys_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_map_entries_unnest_supports_row_field_access() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-unnest-map-entries-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT entry FROM UNNEST(MAP_ENTRIES(MAP(ARRAY['a', 'b'], ARRAY[1, 2]))) AS t(entry)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-map-entries", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        2
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// The Trino spelling uses a function table factor for a constant lateral
 /// UNNEST. It must reach the same distributed leaf operator and preserve the
 /// left relation's row for each unnested value.
