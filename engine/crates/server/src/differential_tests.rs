@@ -287,6 +287,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "null_safe_complex_equality",
+        "SELECT ARRAY[1, NULL] IS NOT DISTINCT FROM ARRAY[1, NULL] AS arrays_same, MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) IS NOT DISTINCT FROM MAP(ARRAY['b', 'a'], ARRAY[NULL, 10]) AS maps_same, ROW(ARRAY[1, NULL]) IS NOT DISTINCT FROM ROW(ARRAY[1, NULL]) AS rows_same FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "date_array_functions",
         "SELECT CARDINALITY(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS card, ARRAY_POSITION(ARRAY[DATE '2026-01-01', DATE '2026-02-01'], DATE '2026-02-01') AS pos, ARRAY_REVERSE(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS reversed, ARRAY_DISTINCT(ARRAY[DATE '2026-01-01', DATE '2026-01-01']) AS distinct_dates FROM {T} LIMIT 1",
         false,
