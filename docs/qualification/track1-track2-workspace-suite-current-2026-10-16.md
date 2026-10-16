@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `de10c91c` (the workspace gate includes the
+**Source:** `origin/dev` at `fb0d4b60` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -62,15 +62,15 @@ still use the single-task fallback.
 
 The sweep also covers typed DATE and DECIMAL set operations. The set operator
 and DISTINCT key paths now canonicalize DATE32/DATE64/TIMESTAMP, DECIMAL128,
-and LargeUtf8 values; the focused sweep passed **1/1** after that extension
-(411 filtered server tests; 134.26 seconds).
+narrow integer/Float32, and LargeUtf8 values; the focused sweep passed **1/1**
+after that extension (411 filtered server tests; 135.24 seconds).
 
 After that change, the complete server target suite was rerun from the same
 source:
 
 ```text
 cargo test -p kaveon-server --all-targets
-412 passed, 0 failed, 0 ignored (138.78s)
+412 passed, 0 failed, 0 ignored (140.10s)
 ```
 
 This includes the planner regression for projected-key `UNION DISTINCT` and
