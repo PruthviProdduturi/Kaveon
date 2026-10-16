@@ -89,6 +89,12 @@ correlated scalar forms, `UNION`, multi-level outer references, and
 lateral/derived relation forms remain explicitly outside the contract and
 continue to fail closed.
 
+An ordered keyed membership query such as `ORDER BY i.actions DESC LIMIT 1`
+is covered by the same existential rule. The SQL lowering removes the hidden
+sort projection and the positive limit before binding, then resolves the
+generated correlation alias through the remaining projection chain. The
+result is the same keyed semi/anti join as the unordered form.
+
 ## Correlated scalar aggregate limit qualification — 2026-10-15
 
 The SQL lowering now recognizes a positive top-level `LIMIT` around an
