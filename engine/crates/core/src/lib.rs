@@ -32,7 +32,7 @@ pub use exchange::{
 };
 pub use expr::{
     AGGREGATE_FUNCTION_NAMES, BinaryOp, CastTarget, DateField, Expr, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, aggregate_output_name, is_aggregate_function,
+    WindowFrameUnits, aggregate_output_name, expression_contains_column, is_aggregate_function,
 };
 pub use fragment::{
     AggregateFunction, AggregateMode, AggregateSpec, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput,

@@ -6,7 +6,7 @@ use crate::parser::parse_sql;
 use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{
     BinaryOp, CastTarget, DateField, Expr, KaveonError, Percentiles, Result, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, is_aggregate_function,
+    WindowFrameBound, WindowFrameUnits, expression_contains_column, is_aggregate_function,
 };
 use sqlparser::ast;
 use sqlparser::ast::visit_expressions_mut;
@@ -195,9 +195,10 @@ pub enum LogicalPlan {
         alias: Option<String>,
         columns: Option<Vec<String>>,
     },
-    /// Constant array expressions expanded into rows by `UNNEST` in `FROM`.
-    /// Correlated/lateral arrays remain an explicit planner boundary; the
-    /// constant `CROSS JOIN LATERAL UNNEST(...)` spelling uses this same node.
+    /// Array expressions expanded into rows by `UNNEST` in `FROM`. Constant
+    /// relations use a zero-input fragment; a correlated expression is kept
+    /// on the right side of a cross join so the physical planner can route it
+    /// through the input-aware lateral operator.
     Unnest {
         expressions: Vec<Expr>,
         columns: Vec<String>,
@@ -1127,6 +1128,14 @@ fn build_from_clause(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPla
     Ok(plan)
 }
 
+fn is_array_unnest_expression(expression: &Expr) -> bool {
+    matches!(expression, Expr::Column(_))
+        || matches!(
+            expression,
+            Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY")
+        )
+}
+
 fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<LogicalPlan> {
     match factor {
         ast::TableFactor::Table {
@@ -1157,20 +1166,18 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     .map(|argument| {
                         let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(array)) = argument
                         else {
-                            return Err(sql_err(
-                                "UNNEST in FROM requires constant ARRAY expressions",
-                            ));
+                            return Err(sql_err("UNNEST in FROM requires an expression"));
                         };
                         let expression = ast_expr_to_expr(array)?;
-                        if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
-                        {
-                            return Err(sql_err(
-                                "UNNEST in FROM requires constant ARRAY expressions",
-                            ));
+                        if !is_array_unnest_expression(&expression) {
+                            return Err(sql_err("UNNEST in FROM requires an ARRAY expression"));
                         }
                         Ok(expression)
                     })
                     .collect::<Result<Vec<_>>>()?;
+                if expressions.iter().any(expression_contains_column) {
+                    return Err(sql_err("correlated UNNEST requires CROSS JOIN LATERAL"));
+                }
                 let columns = alias
                     .as_ref()
                     .map(|alias| {
@@ -1275,7 +1282,11 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             Ok(plan)
         }
         ast::TableFactor::Function {
-            name, args, alias, ..
+            name,
+            args,
+            alias,
+            lateral,
+            ..
         } if name
             .0
             .last()
@@ -1291,20 +1302,18 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .map(|argument| {
                     let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(array)) = argument
                     else {
-                        return Err(sql_err(
-                            "UNNEST in FROM requires constant ARRAY expressions",
-                        ));
+                        return Err(sql_err("UNNEST in FROM requires an expression"));
                     };
                     let expression = ast_expr_to_expr(array)?;
-                    if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
-                    {
-                        return Err(sql_err(
-                            "UNNEST in FROM requires constant ARRAY expressions",
-                        ));
+                    if !is_array_unnest_expression(&expression) {
+                        return Err(sql_err("UNNEST in FROM requires an ARRAY expression"));
                     }
                     Ok(expression)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            if expressions.iter().any(expression_contains_column) && !*lateral {
+                return Err(sql_err("correlated UNNEST requires CROSS JOIN LATERAL"));
+            }
             let columns = alias
                 .as_ref()
                 .map(|alias| {
@@ -1369,11 +1378,9 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .collect::<Result<Vec<_>>>()?;
             if expressions
                 .iter()
-                .any(|expression| !matches!(expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY")))
+                .any(|expression| !is_array_unnest_expression(expression))
             {
-                return Err(sql_err(
-                    "UNNEST in FROM requires constant ARRAY expressions",
-                ));
+                return Err(sql_err("UNNEST in FROM requires an ARRAY expression"));
             }
             let columns = alias
                 .as_ref()
@@ -5306,6 +5313,23 @@ mod tests {
     }
 
     #[test]
+    fn binds_correlated_lateral_unnest_against_the_left_scope() {
+        let plan = sql_to_logical_plan(
+            "SELECT x.id, u.value FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[x.id, 2]) AS u(value)",
+        )
+        .expect("a lateral array may reference the left relation");
+        let rendered = format!("{plan:?}");
+        assert!(
+            rendered.contains("join_type: Cross"),
+            "expected lateral cross join: {rendered}"
+        );
+        assert!(
+            rendered.contains("x.id"),
+            "expected bound outer column: {rendered}"
+        );
+    }
+
+    #[test]
     fn parses_multiple_constant_array_unnest_in_from() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM UNNEST(ARRAY[1, 2], ARRAY[3]) AS t(left_col, right_col)",
@@ -6665,10 +6689,10 @@ mod tests {
     #[test]
     fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
         for (sql, expected) in [
-            ("SELECT * FROM UNNEST(1, 2)", "constant ARRAY expressions"),
+            ("SELECT * FROM UNNEST(1, 2)", "requires an ARRAY expression"),
             (
                 "SELECT * FROM UNNEST(values) AS t(value)",
-                "constant ARRAY expression",
+                "correlated UNNEST requires CROSS JOIN LATERAL",
             ),
         ] {
             let error = sql_to_logical_plan(sql).unwrap_err();

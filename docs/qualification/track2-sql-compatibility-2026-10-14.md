@@ -606,3 +606,14 @@ and the distributed differential sweep passed 20/20 test cases (375 filtered)
 including the deterministic ordered `OFFSET 1 LIMIT 1` shape. Unbounded
 non-aggregate scalar OFFSET, residual correlated OFFSET, and broader Apply
 forms remain intentionally unsupported.
+
+## Correlated lateral UNNEST — 2026-10-16
+
+`CROSS JOIN LATERAL UNNEST` now has an input-aware execution path for array
+expressions that reference columns from the left relation. The operator
+evaluates each array per input batch, repeats the left row for the longest
+array, null-pads additional arrays, and emits the requested ordinality base.
+The local planner/executor regression and the distributed fragment regression
+both pass exact rows for two input rows and `ARRAY[id, 2]`. Constant UNNEST
+continues to use the zero-input leaf path. Arbitrary table functions and
+deeper nested/lateral combinations remain outside this qualification.
