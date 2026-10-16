@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, new_null_array};
+use arrow::array::{Array, ArrayRef, Int64Array, StructArray, new_null_array};
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -34,14 +34,15 @@ impl UnnestOperator {
             Vec::new(),
             &RecordBatchOptions::new().with_row_count(Some(1)),
         )?;
-        if expressions.is_empty() || expressions.len() != columns.len() {
+        if expressions.is_empty() || columns.is_empty() {
             return Err(KaveonError::Execution(
-                "UNNEST requires one output column for each ARRAY expression".into(),
+                "UNNEST requires at least one ARRAY expression and output column".into(),
             ));
         }
-        let mut values = Vec::with_capacity(expressions.len());
+        let mut values = Vec::with_capacity(columns.len());
         let mut fields = Vec::with_capacity(columns.len() + usize::from(ordinality));
-        for (expression, column) in expressions.iter().zip(columns) {
+        let mut column_index = 0;
+        for expression in expressions {
             let evaluated = crate::expr_eval::evaluate(expression, &empty)?;
             let (element_type, value) = match evaluated.data_type() {
                 DataType::List(field) | DataType::LargeList(field) => {
@@ -73,8 +74,47 @@ impl UnnestOperator {
                     )));
                 }
             };
-            fields.push(Field::new(column, element_type, true));
-            values.push(value);
+            if let DataType::Struct(struct_fields) = &element_type {
+                let row = value
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "UNNEST ROW value has an incompatible struct representation".into(),
+                        )
+                    })?;
+                let width = struct_fields.len();
+                if columns.len().saturating_sub(column_index) < width {
+                    return Err(KaveonError::Execution(format!(
+                        "UNNEST ROW value has {width} fields but only {} output columns were provided",
+                        columns.len().saturating_sub(column_index)
+                    )));
+                }
+                for field_index in 0..width {
+                    fields.push(Field::new(
+                        &columns[column_index],
+                        struct_fields[field_index].data_type().clone(),
+                        true,
+                    ));
+                    values.push(row.column(field_index).clone());
+                    column_index += 1;
+                }
+            } else {
+                let column = columns.get(column_index).ok_or_else(|| {
+                    KaveonError::Execution(
+                        "UNNEST has more ARRAY expressions than output columns".into(),
+                    )
+                })?;
+                fields.push(Field::new(column, element_type, true));
+                values.push(value);
+                column_index += 1;
+            }
+        }
+        if column_index != columns.len() {
+            return Err(KaveonError::Execution(format!(
+                "UNNEST has {} unused output columns",
+                columns.len() - column_index
+            )));
         }
         let row_count = values.iter().map(|value| value.len()).max().unwrap_or(0);
         let values = values

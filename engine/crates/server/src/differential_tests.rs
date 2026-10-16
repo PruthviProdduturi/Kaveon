@@ -1383,16 +1383,12 @@ fn distributed_map_entries_unnest_supports_row_field_access() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement =
-        "SELECT entry FROM UNNEST(MAP_ENTRIES(MAP(ARRAY['a', 'b'], ARRAY[1, 2]))) AS t(entry)";
+    let statement = "SELECT key, value FROM UNNEST(MAP_ENTRIES(MAP(ARRAY['a', 'b'], ARRAY[1, 2]))) AS t(key, value) ORDER BY key";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-unnest-map-entries", 16 << 20).unwrap();
     let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
         .unwrap_or_else(|error| panic!("{statement}: {error}"));
-    assert_eq!(
-        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
-        2
-    );
+    assert_eq!(canonical_rows(&batches, true), vec!["a\u{1f}1", "b\u{1f}2"]);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
