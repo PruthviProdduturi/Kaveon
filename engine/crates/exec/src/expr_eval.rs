@@ -13683,8 +13683,14 @@ mod tests {
         };
         let row_equal = evaluate(
             &null_safe(
-                row(Expr::Literal(ScalarValue::Int64(7))),
-                row(Expr::Literal(ScalarValue::Int64(7))),
+                row(array(vec![
+                    Expr::Literal(ScalarValue::Int64(7)),
+                    Expr::Literal(ScalarValue::Null),
+                ])),
+                row(array(vec![
+                    Expr::Literal(ScalarValue::Int64(7)),
+                    Expr::Literal(ScalarValue::Null),
+                ])),
             ),
             &batch,
         )
