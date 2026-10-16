@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-15",
+  "environment": "kaveon-aks",
+  "namespace": "kaveon",
+  "engine_image": "kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6",
+  "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+  "topology": {"active_workers": 3, "compatible_workers": 3, "worker_restarts_during_probe": 0},
+  "probe": {
+    "sql": "SELECT a.user_id, COUNT(*) AS matches FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id BETWEEN 1 AND 1000000 AND b.user_id BETWEEN 1 AND 1000000 AND a.event_date = DATE '2026-07-04' AND b.event_date = DATE '2026-07-04' GROUP BY a.user_id ORDER BY a.user_id",
+    "catalog": "OpenSource", "schema": "public",
+    "settings": {"query_memory_limit_bytes": 1048576, "local_parallelism": 1, "result_cache": false, "use_statistics": false},
+    "query_id": "d93c558e-97de-4c20-adb6-360fb1b7372f",
+    "client_request": {"status": "timed_out_after_300_seconds", "follow_up_cancel": "HTTP 204"},
+    "history": {"state": "CANCELED", "error_code": "CLIENT_DISCONNECTED", "error": "client disconnected before the statement finished", "stage_states": ["FINISHED", "FINISHED"], "join_spill_bytes_written": 0, "join_spill_partitions": 0, "join_spill_depth": 0},
+    "cleanup": {"history_after_cancel": "CANCELED", "coordinator_queue_depth": 0, "worker_queue_depth": 0, "active_workers_after_cancel": 3, "compatible_workers_after_cancel": 3}
+  },
+  "qualification": {"forced_join_spill": "NOT QUALIFIED", "reason": "The bounded high-cardinality probe did not reach a completed spill result before the client timeout; it produced no join-spill counters. Cancellation and cluster cleanup did pass.", "next_gate": "Use a purpose-built high-cardinality fixture or a prunable snapshot so forced join spill and recovery can finish within the qualification timeout; retain exact result and spill counters."}
+}
