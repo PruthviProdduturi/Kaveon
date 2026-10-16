@@ -4084,16 +4084,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 continue;
             }
             valid.push(true);
+            let row_start = selected.len();
             for (map_index, map) in maps.iter().enumerate() {
                 let start = map.value_offsets()[row] as usize;
                 let end = map.value_offsets()[row + 1] as usize;
                 for entry in start..end {
                     let global = bases[map_index] + entry as u32;
-                    if let Some(position) = selected.iter().position(|candidate| {
+                    if let Some(position) = selected[row_start..].iter().position(|candidate| {
                         map_keys_equal(&all_keys, *candidate as usize, global as usize)
                             .unwrap_or(false)
                     }) {
-                        selected[position] = global;
+                        selected[row_start + position] = global;
                     } else {
                         selected.push(global);
                     }
@@ -12182,6 +12183,63 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(1), Some(20), Some(3)]
+        );
+    }
+
+    #[test]
+    fn map_concat_scopes_duplicate_keys_to_each_row() {
+        let input = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = |keys: &[&str], values: &[i64]| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: keys
+                        .iter()
+                        .map(|key| Expr::Literal(ScalarValue::Utf8((*key).into())))
+                        .collect(),
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: values
+                        .iter()
+                        .map(|value| Expr::Literal(ScalarValue::Int64(*value)))
+                        .collect(),
+                },
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_CONCAT".into(),
+                args: vec![map(&["a", "b"], &[1, 2]), map(&["b", "c"], &[20, 3])],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(result.value_offsets(), &[0, 3, 6]);
+        assert_eq!(
+            result.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+            ]
+        );
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(20), Some(3), Some(1), Some(20), Some(3)]
         );
     }
 
