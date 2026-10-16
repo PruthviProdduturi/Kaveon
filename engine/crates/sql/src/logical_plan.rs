@@ -1275,6 +1275,82 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             }
             Ok(plan)
         }
+        ast::TableFactor::Function {
+            name, args, alias, ..
+        } if name
+            .0
+            .last()
+            .is_some_and(|part| part.value.eq_ignore_ascii_case("UNNEST")) =>
+        {
+            if args.is_empty() {
+                return Err(sql_err(
+                    "UNNEST in FROM requires at least one ARRAY expression",
+                ));
+            }
+            let expressions = args
+                .iter()
+                .map(|argument| {
+                    let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(array)) = argument
+                    else {
+                        return Err(sql_err(
+                            "UNNEST in FROM requires constant ARRAY expressions",
+                        ));
+                    };
+                    let expression = ast_expr_to_expr(array)?;
+                    if !matches!(&expression, Expr::Function { name, .. } if name.eq_ignore_ascii_case("ARRAY"))
+                    {
+                        return Err(sql_err(
+                            "UNNEST in FROM requires constant ARRAY expressions",
+                        ));
+                    }
+                    Ok(expression)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let columns = alias
+                .as_ref()
+                .map(|alias| {
+                    expressions
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| {
+                            alias
+                                .columns
+                                .get(index)
+                                .map(|column| column.name.value.clone())
+                                .unwrap_or_else(|| {
+                                    if index == 0 {
+                                        "unnest".to_owned()
+                                    } else {
+                                        format!("unnest_{}", index + 1)
+                                    }
+                                })
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    (0..expressions.len())
+                        .map(|index| {
+                            if index == 0 {
+                                "unnest".to_owned()
+                            } else {
+                                format!("unnest_{}", index + 1)
+                            }
+                        })
+                        .collect()
+                });
+            let ordinality_column = alias
+                .as_ref()
+                .and_then(|alias| alias.columns.get(expressions.len()))
+                .map(|column| column.name.value.clone())
+                .unwrap_or_else(|| "ordinality".to_owned());
+            Ok(LogicalPlan::Unnest {
+                expressions,
+                columns,
+                with_ordinality: false,
+                ordinality_column,
+                ordinality_start: 1,
+            })
+        }
         ast::TableFactor::UNNEST {
             alias,
             array_exprs,
@@ -4904,6 +4980,23 @@ mod tests {
                 ..
             } if columns == vec!["value"]
         ));
+    }
+
+    #[test]
+    fn parses_lateral_function_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[10, 20]) AS u(value)",
+        )
+        .unwrap();
+        let rendered = format!("{plan:?}");
+        assert!(
+            rendered.contains("Unnest"),
+            "expected lateral UNNEST plan: {rendered}"
+        );
+        assert!(
+            rendered.contains("value"),
+            "expected alias in lateral UNNEST plan: {rendered}"
+        );
     }
 
     #[test]
