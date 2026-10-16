@@ -5330,6 +5330,20 @@ mod tests {
     }
 
     #[test]
+    fn binds_correlated_lateral_unnest_with_ordinality() {
+        let plan = sql_to_logical_plan(
+            "SELECT x.id, u.value, u.ord FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[x.id, 2]) WITH ORDINALITY AS u(value, ord)",
+        )
+        .expect("a lateral array may carry ordinality");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("with_ordinality: true"), "{rendered}");
+        assert!(
+            rendered.contains("ordinality_column: \"ord\""),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn parses_multiple_constant_array_unnest_in_from() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM UNNEST(ARRAY[1, 2], ARRAY[3]) AS t(left_col, right_col)",

@@ -17,7 +17,15 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // scalar function ARRAY. Quote identifier-shaped brackets before parsing;
     // leave numeric/list brackets untouched so ARRAY[...] remains available
     // for the syntax that explicitly supports it.
-    let normalized = normalize_bracket_identifiers(sql);
+    let normalized = normalize_lateral_unnest(&normalize_bracket_identifiers(sql));
+    // BigQuery's grammar retains a table-shaped UNNEST node when the function
+    // is correlated. DuckDB parses the same spelling as a generic function,
+    // which cannot carry ordinality metadata.
+    if contains_lateral_unnest(sql)
+        && let Ok(statements) = Parser::parse_sql(&BigQueryDialect {}, &normalized)
+    {
+        return Ok(statements);
+    }
     match Parser::parse_sql(&dialect, &normalized) {
         Ok(statements) => Ok(statements),
         Err(primary) if normalized.to_ascii_uppercase().contains("WITH OFFSET") => {
@@ -30,6 +38,77 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),
     }
+}
+
+fn contains_lateral_unnest(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    upper
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|window| window[0] == "LATERAL" && window[1].starts_with("UNNEST"))
+}
+
+/// The upstream parser represents `LATERAL UNNEST(...)` as a generic table
+/// function, which has no `WITH ORDINALITY`/`WITH OFFSET` field. Removing the
+/// redundant lateral keyword for this one table-shaped form lets it produce
+/// the richer `TableFactor::UNNEST` node; the logical binder still recognizes
+/// correlated expressions only when the factor is joined laterally.
+fn normalize_lateral_unnest(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut copied = 0usize;
+    let mut i = 0usize;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                if i + 1 < bytes.len() && bytes[i + 1] == delimiter {
+                    i += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            i += 1;
+            continue;
+        }
+        if is_sql_word_at(bytes, i, b"LATERAL") {
+            let mut next = i + b"LATERAL".len();
+            while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+                next += 1;
+            }
+            if is_sql_word_at(bytes, next, b"UNNEST") {
+                out.push_str(&sql[copied..i]);
+                copied = i + b"LATERAL".len();
+                i = copied;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if copied == 0 {
+        sql.to_owned()
+    } else {
+        out.push_str(&sql[copied..]);
+        out
+    }
+}
+
+fn is_sql_word_at(bytes: &[u8], offset: usize, word: &[u8]) -> bool {
+    offset + word.len() <= bytes.len()
+        && bytes[offset..offset + word.len()].eq_ignore_ascii_case(word)
+        && (offset == 0 || !is_sql_word_byte(bytes[offset - 1]))
+        && (offset + word.len() == bytes.len() || !is_sql_word_byte(bytes[offset + word.len()]))
+}
+
+fn is_sql_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn normalize_bracket_identifiers(sql: &str) -> String {
