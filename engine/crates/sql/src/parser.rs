@@ -3,7 +3,7 @@ use sqlparser::ast::Statement;
 use sqlparser::ast::{
     AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
 };
-use sqlparser::dialect::{BigQueryDialect, DuckDbDialect};
+use sqlparser::dialect::{BigQueryDialect, DuckDbDialect, MsSqlDialect};
 use sqlparser::parser::Parser;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
@@ -34,6 +34,15 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
             // the dialect that owns the AST fields, leaving all other
             // statements on the normal DuckDB grammar and diagnostics.
             Parser::parse_sql(&BigQueryDialect {}, &normalized)
+                .map_err(|_| KaveonError::Sql(primary.to_string()))
+        }
+        Err(primary) if normalized.to_ascii_uppercase().contains("JSON_OBJECT") => {
+            // sqlparser's MSSQL dialect carries the SQL/JSON key-value
+            // argument AST (`key : value` and `key VALUE value`) that the
+            // DuckDB dialect intentionally does not expose. Retry only this
+            // function-specific surface so ordinary statements retain the
+            // normal DuckDB grammar and diagnostics.
+            Parser::parse_sql(&MsSqlDialect {}, &normalized)
                 .map_err(|_| KaveonError::Sql(primary.to_string()))
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),

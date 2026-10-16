@@ -332,6 +332,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_object_sql_standard_constructor",
+        "SELECT JSON_OBJECT('answer' : 7, 'omitted' : NULL ABSENT ON NULL) AS constructed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_scalar_path",
         "SELECT JSON_VALUE(JSON_PARSE('{\"x\":7}'), '$.x') AS value FROM {T} LIMIT 1",
         false,

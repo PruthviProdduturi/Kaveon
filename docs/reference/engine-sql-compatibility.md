@@ -45,9 +45,11 @@ floating-point, and text needles. It preserves NULL inputs, returns NULL for
 malformed JSON, and returns `false` for valid non-array JSON values.
 
 `JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
-SQL NULL arguments as JSON `null`. `JSON_OBJECT(key, value, ...)` constructs
-an object from alternating scalar key/value arguments, preserves SQL NULL
-values as JSON `null`, and rejects null or duplicate keys. `JSON_PARSE` validates a text document,
+SQL NULL arguments as JSON `null`. `JSON_OBJECT(key : value, ...)` (or the
+equivalent `key VALUE value` form) constructs an object from scalar pairs; the
+bounded surface also accepts comma-separated key/value pairs, preserves SQL
+NULL values as JSON `null`, supports `ABSENT ON NULL`, and rejects null or
+duplicate keys. `JSON_PARSE` validates a text document,
 `JSON_FORMAT` emits canonical JSON,
 and `JSON_QUERY`/`JSON_EXTRACT` preserve object and array results. Their paths
 support dotted keys, quoted bracket keys, numeric array indexes, and array
