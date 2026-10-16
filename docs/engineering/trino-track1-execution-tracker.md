@@ -51,7 +51,7 @@ The bounded AKS join qualification is retained in
 `docs/qualification/track1-aks-join-gates-2026-10-15.md` and its raw JSON
 report. Left outer, full outer cross-source, and skewed grouped joins all
 finished twice with identical results across the three workers. Disk
-exhaustion and forced join-spill recovery remain the next item-3 gate.
+bounded forced join spill and one-worker-loss recovery are now qualified; disk exhaustion and larger high-cardinality joins remain the next item-3 gates.
 
 Current exchange evidence includes the scheduler and stage-runtime suites,
 three-node Docker and AKS runs, exact multi-worker exchange, cancellation
