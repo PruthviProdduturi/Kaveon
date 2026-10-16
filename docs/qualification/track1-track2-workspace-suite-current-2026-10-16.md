@@ -172,6 +172,10 @@ local/distributed sweep passed **1/1** after adding it (147.33 seconds).
 The corpus also includes a DECIMAL histogram case preserving key precision and
 scale; the sweep passed **1/1** after adding it (152.25 seconds).
 
+Date64 and all Arrow timestamp units now use the same deterministic histogram
+path; the complete exec suite remains green at **390 passed, 0 failed, 4
+ignored**.
+
 The complete targets were rerun after the histogram type extension:
 
 ```text
