@@ -1151,6 +1151,7 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("ARRAY_ZIP")
                     || name.eq_ignore_ascii_case("MAP_KEYS")
                     || name.eq_ignore_ascii_case("MAP_VALUES")
+                    || name.eq_ignore_ascii_case("MAP_ENTRIES")
         )
 }
 
@@ -5343,6 +5344,18 @@ mod tests {
         assert!(matches!(
             plan,
             LogicalPlan::Unnest { columns, .. } if columns == vec!["value"]
+        ));
+    }
+
+    #[test]
+    fn parses_map_entries_array_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(MAP_ENTRIES(MAP(ARRAY['a'], ARRAY[1]))) AS t(entry)",
+        )
+        .unwrap();
+        assert!(matches!(
+            plan,
+            LogicalPlan::Unnest { columns, .. } if columns == vec!["entry"]
         ));
     }
 
