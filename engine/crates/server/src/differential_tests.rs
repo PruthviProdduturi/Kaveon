@@ -626,6 +626,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "union_distinct_projected_key",
+        "SELECT country FROM {T} UNION SELECT country FROM {T} ORDER BY country",
+        true,
+    ),
+    (
         "intersect_distinct",
         "SELECT country FROM {T} WHERE region = 'Asia' INTERSECT SELECT country FROM {U} WHERE locale = 'ja-JP' ORDER BY country",
         true,
