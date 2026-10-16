@@ -29,6 +29,19 @@ worker, records the moved spool, records stage retries, and verifies that the
 surviving worker completes the final stage without missing or double-counting
 partitions.
 
+## 2026-10-16 — final-merge pressure gate
+
+The release-mode ignored executor gate
+`cargo test --release -p kaveon-exec final_merge_under_pressure -- --ignored --nocapture`
+passed (`1 passed, 0 failed`, 61.28 seconds). It builds 6,000,000 partial
+rows (812 MiB encoded), exercises the final merge under a 640 MiB reservation,
+and repeats partitioned, broadcast, and reserving modes with tight and roomy
+budgets. The tight runs completed exactly with bounded spill (305–458 MiB),
+bounded memory (523–639 MiB), and no retained spill tables or source-thread
+refusals in the partitioned/broadcast variants; the roomy runs completed with
+zero spill. This is local release pressure evidence only. It does not replace
+the open AKS disk-exhaustion, sustained mixed-workload, or network-fault gates.
+
 ## Scope boundary
 
 These results qualify local semantics and recovery orchestration. They do not
