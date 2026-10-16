@@ -5,8 +5,8 @@ the boundary or evidence changes; do not append session notes or duplicate
 historical ledgers. Detailed implementation history remains in git history and
 the parity tracker.
 
-**Source:** `origin/dev` at `6623c000` (timestamp map-key containment and
-timezone-less timestamp map lookup support).
+**Source:** current `dev` source after the cube ordering/limit qualification
+and the timestamp map-key compatibility work.
 
 ## Current evidence
 
@@ -14,7 +14,7 @@ timezone-less timestamp map lookup support).
 | --- | --- | --- |
 | Server distributed execution | `cargo test -p kaveon-server --all-targets --no-fail-fast --quiet` | **423 passed, 0 failed, 0 ignored**; includes joins, aggregates, exchange, spill, retry, cancellation, worker-loss, set operations, lateral joins, and the differential sweep (151.33 s) |
 | Execution operators | `cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet` | **390 passed, 0 failed, 4 ignored** |
-| SQL compatibility | Differential local/distributed corpus | Exact results for qualified array/map/row operations, set operations, typed histograms, map lookup, nested keys, and the current Trino compatibility cases |
+| SQL compatibility | Differential local/distributed corpus | Exact results for qualified array/map/row operations, set operations, typed histograms, map lookup, nested keys, and the current Trino compatibility cases; cube answers also preserve output-column `ORDER BY`, `NULLS FIRST/LAST`, `OFFSET`, and bounded `LIMIT` without a scan |
 | Parser regression | `cargo test -p kaveon-sql bracketed_identifiers -- --nocapture` | **1 passed, 0 failed**; covers Studio-generated bracketed identifiers such as `SELECT DISTINCT [year] ...` |
 | Formatting | `cargo fmt --all -- --check` | Passed |
 | Lint gate | `cargo clippy --workspace --all-targets -- -D warnings` | Passed on Rust 1.98.1 |
