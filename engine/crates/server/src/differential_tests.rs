@@ -511,6 +511,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "skewed_grouped_aggregate",
+        "SELECT CASE WHEN actions % 10 = 0 THEN 'rare' ELSE 'common' END AS bucket, COUNT(*) AS n, SUM(actions) AS total FROM {T} GROUP BY CASE WHEN actions % 10 = 0 THEN 'rare' ELSE 'common' END ORDER BY bucket",
+        true,
+    ),
+    (
         "offset",
         "SELECT country, SUM(actions) AS a FROM {T} GROUP BY country ORDER BY a DESC, country LIMIT 5 OFFSET 5",
         true,
