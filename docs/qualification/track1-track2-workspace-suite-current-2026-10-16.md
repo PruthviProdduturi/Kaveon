@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `1814e206` (the workspace gate includes the
+**Source:** `origin/dev` at `5c118f3b` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, and named
 window regressions)
 
@@ -11,11 +11,11 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets
 ```
 
-The command completed with **1,529 listed tests, 0 failed** across all
+The command completed with **1,530 listed tests, 0 failed** across all
 workspace test binaries; the run also reported the repository's six
 intentional/benchmark ignores. The long server differential sweep completed
 successfully. Component totals were 74 catalog, 212 CLI, 87 core, 377
-execution, 68 optimizer, 409 server, 177 SQL, and 125 storage tests.
+execution, 68 optimizer, 409 server, 178 SQL, and 125 storage tests.
 
 The release lint commands also passed:
 
