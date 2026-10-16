@@ -568,7 +568,7 @@ The focused JSON regression also covers a `LargeUtf8` document with an
 `Int32` index, confirming that scalar index coercion does not depend on a
 64-bit input column.
 
-## Current differential rerun — 2026-10-15
+## Current differential rerun — 2026-10-16
 
 The server differential corpus was rerun from the current source with:
 
@@ -576,10 +576,14 @@ The server differential corpus was rerun from the current source with:
 cargo test -p kaveon-server --bin kaveon-server differential_tests --quiet
 ```
 
-All **19 differential cases passed** with zero failures. This includes the
+All **20 differential cases passed** with zero failures. This includes the
 aggregate `FILTER (WHERE ...)` cases, windowed filtered aggregates, joins,
 subqueries, set operations, ordering, arrays, maps, JSON, and typed literal
-paths across the local and distributed execution variants. This is current
+paths across the local and distributed execution variants, including the
+ordered one-column scalar `OFFSET 1 LIMIT 1` case. The full workspace
+regression on the same commit also passed 74 core, 211 SQL (one ignored), 85
+planner/runtime, 368 execution (four ignored), 68 optimizer, 395 server, 168
+additional targets, and 124 storage tests (one ignored). This is current
 repository evidence; the remaining cloud and broader external-client gates
 stay open in the parity matrix.
 
