@@ -134,22 +134,24 @@ Limit 100
              ← Filter l_receiptdate > l_commitdate AND l_orderkey IS NOT NULL ← Scan lineitem l3 [4 columns]
 ```
 
-Distributed, both subquery projections broadcast into the probe stage
-(`JoinSpec { join_type: Semi | Anti, broadcast: true, residual: Some(…) }`),
-as keyed semi joins already did. The executor builds the subquery side as
-rows by key holding only the residual's columns, gathers each probe row's
-pairs and evaluates the residual over them in bounded chunks; a probe row
-passes the semi join when any pair holds and the anti join when none does.
+Distributed, both keyed subquery projections are hash-partitioned with the
+probe stage (`PartitionedSemiJoin` / `PartitionedAntiJoin`, with
+`residual: Some(…)`). The executor builds the subquery side as rows by key
+holding only the residual's columns, gathers each probe row's pairs and
+evaluates the residual over them in bounded chunks; a probe row passes the
+semi join when any pair holds and the anti join when none does. If a
+subquery has no safe equality key, the planner retains the conservative
+broadcast fallback rather than silently changing semantics.
 On the gate's data (every fifth order kept waiting by the SAUDI ARABIA
 supplier) the answer is one row, `Supplier#000000003 | 30`, checked cell by
 cell against an independent computation on both paths.
 
 ## What remains for Q21 at scale
 
-- The subquery side is broadcast whole to every probe task: at SF100 that
-  is two projections of `lineitem` (key and supplier) per worker. A
-  partitioned semi join on the key — both sides hash-exchanged on
-  `l_orderkey` — is the next step; the operator does not change.
+- The keyed path is partitioned, so each worker receives only its hash bucket
+  of the two `lineitem` projections. At SF100, the remaining qualification is
+  pressure and spill behavior for those build buckets rather than a
+  coordinator-wide broadcast.
 - The retained build rows have no spill: a build side over the query's
   budget fails closed.
 - `NOT EXISTS` on a NULL probe key without a residual still takes NOT IN's
