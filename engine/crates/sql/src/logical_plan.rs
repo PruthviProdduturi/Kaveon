@@ -6105,6 +6105,15 @@ mod tests {
     }
 
     #[test]
+    fn correlated_lateral_using_preserves_lateral_predicate_for_binding() {
+        let plan = sql_to_logical_plan(
+            "SELECT u.user_id, o.actions FROM users u JOIN LATERAL (SELECT user_id, actions FROM events WHERE events.user_id = u.user_id) o USING (user_id)",
+        )
+        .unwrap();
+        assert!(format!("{plan:?}").contains("u.user_id"));
+    }
+
+    #[test]
     fn lowers_inner_residual_join_to_cross_join_and_filter() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM users u JOIN orders o ON u.id = o.user_id AND u.value > o.value",
