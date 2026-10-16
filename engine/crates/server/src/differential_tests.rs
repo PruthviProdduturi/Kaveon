@@ -661,6 +661,21 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_set_operation",
+        "SELECT value FROM (VALUES (ARRAY[1, 2]), (ARRAY[3])) AS left_values(value) INTERSECT SELECT value FROM (VALUES (ARRAY[3]), (ARRAY[4])) AS right_values(value)",
+        false,
+    ),
+    (
+        "map_set_operation",
+        "SELECT value FROM (VALUES (MAP(ARRAY['a', 'b'], ARRAY[1, 2]))) AS left_values(value) INTERSECT SELECT value FROM (VALUES (MAP(ARRAY['b', 'a'], ARRAY[2, 1]))) AS right_values(value)",
+        false,
+    ),
+    (
+        "row_set_operation",
+        "SELECT id, name FROM (VALUES (1, 'one'), (2, 'two')) AS left_values(id, name) EXCEPT SELECT id, name FROM (VALUES (2, 'two')) AS right_values(id, name) ORDER BY id",
+        true,
+    ),
+    (
         "union_all_complex_values",
         "SELECT ARRAY[1, 2] AS values UNION ALL SELECT ARRAY[3, NULL]",
         false,
