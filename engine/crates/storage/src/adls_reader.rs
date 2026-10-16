@@ -194,14 +194,17 @@ impl DecodedBatchCache {
     fn reserve(&mut self, bytes: usize) -> (Option<DecodedCacheReservation>, u64) {
         let mut evictions = 0;
         loop {
-            if self
-                .live_bytes
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            if kaveon_core::try_update_usize(
+                &self.live_bytes,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |current| {
                     current
                         .checked_add(bytes)
                         .filter(|&next| next <= self.limit_bytes)
-                })
-                .is_ok()
+                },
+            )
+            .is_ok()
             {
                 return (
                     Some(DecodedCacheReservation {
@@ -361,14 +364,18 @@ struct CacheReservation(usize);
 
 impl CacheReservation {
     fn try_new(bytes: usize) -> Option<Self> {
-        FULL_OBJECT_CACHE_BYTES
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        kaveon_core::try_update_usize(
+            &FULL_OBJECT_CACHE_BYTES,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |current| {
                 current
                     .checked_add(bytes)
                     .filter(|&next| next <= PROCESS_FULL_OBJECT_CACHE_LIMIT)
-            })
-            .ok()
-            .map(|_| Self(bytes))
+            },
+        )
+        .ok()
+        .map(|_| Self(bytes))
     }
 }
 

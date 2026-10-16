@@ -1,3 +1,4 @@
+pub mod atomic;
 pub mod catalog;
 pub mod cube;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod statistics;
 pub mod telemetry;
 pub mod types;
 
+pub use atomic::{try_update_u64, try_update_usize};
 pub use catalog::{
     AccessPattern, AdapterCapabilities, CatalogAdapter, CatalogCapability, CatalogDefinition,
     CatalogId, CatalogLifecycle, CatalogManager, CatalogProvider, CatalogRevision,

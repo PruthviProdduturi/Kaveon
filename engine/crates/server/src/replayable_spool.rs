@@ -184,15 +184,18 @@ impl SpoolWriter {
             ));
         }
         if let Some(quota) = self.inner.quota {
-            quota
-                .counter
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            kaveon_core::try_update_u64(
+                quota.counter,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |used| {
                     used.checked_add(bytes.len() as u64)
                         .filter(|total| *total <= quota.limit)
-                })
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::StorageFull, "process spool quota exceeded")
-                })?;
+                },
+            )
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::StorageFull, "process spool quota exceeded")
+            })?;
         }
         self.file
             .as_mut()

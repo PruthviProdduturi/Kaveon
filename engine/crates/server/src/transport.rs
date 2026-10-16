@@ -44,12 +44,11 @@ impl CachedTaskResult {
         scan_metrics_header: Option<String>,
         execution_metrics_header: Option<String>,
     ) -> Result<Self, String> {
-        CACHED_BYTES
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(bytes.capacity() as u64)
-                    .filter(|total| *total <= 512 * 1024 * 1024)
-            })
-            .map_err(|_| "worker task result cache quota exceeded")?;
+        kaveon_core::try_update_u64(&CACHED_BYTES, Ordering::AcqRel, Ordering::Acquire, |used| {
+            used.checked_add(bytes.capacity() as u64)
+                .filter(|total| *total <= 512 * 1024 * 1024)
+        })
+        .map_err(|_| "worker task result cache quota exceeded")?;
         Ok(Self {
             bytes,
             elapsed_us,
@@ -255,12 +254,16 @@ async fn receive_with_limit(
         if spool.bytes + bytes > limit {
             return Err("Arrow payload exceeds receive limit".into());
         }
-        RETAINED_BYTES
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+        kaveon_core::try_update_u64(
+            &RETAINED_BYTES,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |used| {
                 used.checked_add(bytes)
                     .filter(|total| *total <= PROCESS_SPOOL_BYTES)
-            })
-            .map_err(|_| "process IPC disk spool quota exceeded")?;
+            },
+        )
+        .map_err(|_| "process IPC disk spool quota exceeded")?;
         spool.bytes += bytes;
         output
             .write_all(&chunk)
@@ -543,12 +546,16 @@ async fn pump_chunks<S>(
                 let _ = chunks.send(Err("Arrow payload exceeds receive limit".into()));
                 return;
             }
-            if RETAINED_BYTES
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            if kaveon_core::try_update_u64(
+                &RETAINED_BYTES,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |used| {
                     used.checked_add(bytes)
                         .filter(|total| *total <= PROCESS_SPOOL_BYTES)
-                })
-                .is_err()
+                },
+            )
+            .is_err()
             {
                 let _ = chunks.send(Err("process IPC disk spool quota exceeded".into()));
                 return;

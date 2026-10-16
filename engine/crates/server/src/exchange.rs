@@ -155,21 +155,21 @@ static DOWNLOAD_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomi
 struct DownloadPermit(usize);
 impl DownloadPermit {
     fn new(bytes: usize) -> ExchangeResult<Self> {
-        DOWNLOAD_BYTES
-            .try_update(
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-                |used| {
-                    used.checked_add(bytes)
-                        .filter(|total| *total <= exchange_buffer_bytes())
-                },
-            )
-            .map_err(|_| {
-                ExchangeError::StoreCapacityExceeded(ExchangeBound::Download {
-                    wanted: bytes,
-                    limit: exchange_buffer_bytes(),
-                })
-            })?;
+        kaveon_core::try_update_usize(
+            &DOWNLOAD_BYTES,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |used| {
+                used.checked_add(bytes)
+                    .filter(|total| *total <= exchange_buffer_bytes())
+            },
+        )
+        .map_err(|_| {
+            ExchangeError::StoreCapacityExceeded(ExchangeBound::Download {
+                wanted: bytes,
+                limit: exchange_buffer_bytes(),
+            })
+        })?;
         Ok(Self(bytes))
     }
 }
