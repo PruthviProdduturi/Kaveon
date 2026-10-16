@@ -2574,6 +2574,48 @@ fn a_join_under_a_refusing_budget_spills_and_matches_the_in_memory_join() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A distributed join must fail closed when its spill device quota is
+/// exhausted.  The refusal must not leave a partially written run or a query
+/// reservation behind, because retrying the statement must be safe.
+#[test]
+fn a_distributed_join_refuses_spill_device_exhaustion_without_leaking_files() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-spill-quota-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let spill_root = directory.join("spill");
+    let spill = kaveon_exec::spill::SpillManager::new(&spill_root, 16).unwrap();
+    let plan = bound_plan(
+        "SELECT t.country, COUNT(*) AS n FROM events t JOIN events o ON o.user_id = t.user_id WHERE t.event_date = '2026-07-04' GROUP BY t.country ORDER BY t.country",
+        &manager,
+    );
+    let pool = QueryMemoryPool::new("join-spill-quota", 64 << 10).unwrap();
+    kaveon_exec::partitioned::register_spill(&pool, spill.clone(), 8).unwrap();
+
+    let error = execute_distributed("join-spill-quota", &plan, &manager, 2, &pool).unwrap_err();
+    assert!(
+        error.to_string().contains("spill limit exceeded"),
+        "unexpected disk-quota error: {error}"
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0, "join leaked memory");
+    assert_eq!(spill.snapshot().current_bytes, 0, "join leaked spill bytes");
+    assert_eq!(
+        spill.snapshot().runs_written,
+        0,
+        "partial run was committed"
+    );
+    assert!(
+        std::fs::read_dir(&spill_root)
+            .unwrap()
+            .flatten()
+            .all(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("kaveon-spill-")),
+        "unexpected spill artifact remained"
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A high-cardinality grouped aggregate must preserve the same rows when its
 /// distributed final merge is forced to spill. The local result is the
 /// reference; both normal and constrained distributed runs must match it and
