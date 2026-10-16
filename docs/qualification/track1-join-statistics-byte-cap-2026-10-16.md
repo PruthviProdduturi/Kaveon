@@ -17,7 +17,7 @@ cargo test -p kaveon-optim statistics --quiet
 Result for commit `bf396e72`:
 
 ```text
-12 passed; 0 failed
+13 passed; 0 failed
 ```
 
 The focused tests cover:
@@ -27,6 +27,8 @@ The focused tests cover:
 - preservation of estimates through projections, sorting, limits, and offsets;
 - broadcast selection for a materially smaller build;
 - refusal of a build whose exact source bytes exceed `256 MiB`;
+- right-side broadcast for a left outer join when the preserved left side
+  remains the probe;
 - preservation of join output ordering and `USING` metadata when a join is not
   safely reordered.
 
