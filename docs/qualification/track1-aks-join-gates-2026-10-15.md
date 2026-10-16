@@ -46,3 +46,11 @@ This qualifies bounded distributed outer-join equivalence and skewed join
 execution on the declared three-worker AKS topology. It does not yet qualify
 disk-exhaustion behavior, forced join-spill recovery, larger high-cardinality
 joins, or the full multi-join cost policy; those remain open in the tracker.
+
+## Forced-spill probe (negative evidence, 2026-10-15)
+
+A low-memory probe against the current 504M-row `OpenSource.public.kaveon_events_enriched` table used a 1 MiB query budget, one local worker thread, disabled result caching and statistics, and a bounded `user_id`/date predicate. The request did not finish within the 300-second client window. The query was then canceled through `DELETE /v1/query/{id}`; its history settled to `CANCELED`, all stages stopped, all three workers remained catalog-compatible, and coordinator and worker queue depths returned to zero. No worker restarted.
+
+The probe recorded zero `join_spill_bytes_written`, zero spill partitions, and zero spill depth, so this is **not** a forced join-spill qualification. It is retained as negative evidence and confirms cancellation cleanup. The next gate needs a purpose-built high-cardinality fixture or a prunable snapshot that completes within the qualification window and records exact spill/recovery counters.
+
+Raw evidence: [`track1-aks-join-spill-negative-2026-10-15.json`](./track1-aks-join-spill-negative-2026-10-15.json).
