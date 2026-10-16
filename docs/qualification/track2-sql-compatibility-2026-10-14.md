@@ -172,7 +172,7 @@ paths remain conservative NULL results under the existing JSON path contract.
 
 '## ARRAY_CUM_SUM qualification
 
-`ARRAY_CUM_SUM` supports `BIGINT` and `DOUBLE` arrays in both regular and
+`ARRAY_CUM_SUM` supports `INTEGER`, `BIGINT`, and `DOUBLE` arrays in both regular and
 large-list representations. It emits cumulative values, propagates NULL from
 the first NULL element onward, preserves NULL arrays, and fails closed for
 other element types until their coercion and overflow contracts are qualified.
