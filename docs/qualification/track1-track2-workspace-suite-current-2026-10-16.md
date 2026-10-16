@@ -143,3 +143,8 @@ cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
 The differential gate also covers expression-shaped `INTERSECT ALL` and
 `EXCEPT ALL` projections; both passed with exact local/distributed results in
 143.25 seconds.
+
+Track 2 array coverage now includes `ARRAY_SPLIT_INTO_CHUNKS` for typed
+regular and large Arrow lists, with nested-boundary unit coverage and an exact
+local/distributed differential case. The differential sweep passed **1/1**
+(145.60 seconds).

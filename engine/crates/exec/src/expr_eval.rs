@@ -2757,6 +2757,94 @@ fn array_flatten<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Array
     )?))
 }
 
+/// Split each input array into consecutive chunks of the requested size.
+/// Trino exposes this as `array_split_into_chunks(array, chunk_size)`.  The
+/// size is evaluated per row so the vectorized expression path retains its
+/// normal null and error semantics.
+fn array_split_into_chunks<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    sizes: &Int64Array,
+) -> Result<ArrayRef> {
+    if list.len() != sizes.len() {
+        return Err(KaveonError::Execution(
+            "ARRAY_SPLIT_INTO_CHUNKS requires one chunk size per row".into(),
+        ));
+    }
+    let mut chunks = Vec::<ArrayRef>::new();
+    let mut inner_offsets = vec![0i32];
+    let mut outer_offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) || sizes.is_null(row) {
+            valid.push(false);
+            outer_offsets.push(L::from_usize(chunks.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_SPLIT_INTO_CHUNKS result offset overflow".into())
+            })?);
+            continue;
+        }
+        let chunk_size = sizes.value(row);
+        if chunk_size <= 0 {
+            return Err(KaveonError::Execution(
+                "ARRAY_SPLIT_INTO_CHUNKS chunk size must be positive".into(),
+            ));
+        }
+        let inner = list.value(row);
+        let chunk_size = usize::try_from(chunk_size).unwrap_or(usize::MAX);
+        let mut start = 0usize;
+        while start < inner.len() {
+            let length = chunk_size.min(inner.len() - start);
+            chunks.push(inner.slice(start, length));
+            let end = inner_offsets
+                .last()
+                .copied()
+                .unwrap_or_default()
+                .checked_add(i32::try_from(length).map_err(|_| {
+                    KaveonError::Execution("ARRAY_SPLIT_INTO_CHUNKS inner offset overflow".into())
+                })?)
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_SPLIT_INTO_CHUNKS inner offset overflow".into())
+                })?;
+            inner_offsets.push(end);
+            start += length;
+        }
+        valid.push(true);
+        outer_offsets.push(L::from_usize(chunks.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_SPLIT_INTO_CHUNKS result offset overflow".into())
+        })?);
+    }
+    let values = if chunks.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = chunks
+            .iter()
+            .map(|chunk| chunk.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let inner_field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    let inner = Arc::new(ListArray::try_new(
+        inner_field,
+        OffsetBuffer::new(ScalarBuffer::from(inner_offsets)),
+        values,
+        None,
+    )?) as ArrayRef;
+    let outer_field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        inner.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        outer_field,
+        OffsetBuffer::new(ScalarBuffer::from(outer_offsets)),
+        inner,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn array_trim<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     counts: &Int64Array,
@@ -3594,6 +3682,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         return Err(KaveonError::Execution(
             "FLATTEN requires an ARRAY of ARRAY values".into(),
+        ));
+    }
+    if upper == "ARRAY_SPLIT_INTO_CHUNKS" {
+        check_arity(name, args, 2)?;
+        let sizes = compute::cast(&args[1], &DataType::Int64)?;
+        let sizes = sizes.as_primitive::<Int64Type>();
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_split_into_chunks(list, sizes);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_split_into_chunks(list, sizes);
+        }
+        return Err(KaveonError::Execution(
+            "ARRAY_SPLIT_INTO_CHUNKS requires an ARRAY/List value".into(),
         ));
     }
     if matches!(
@@ -11475,6 +11577,42 @@ mod tests {
             arrays.value(0).as_primitive::<Int64Type>().values(),
             &[1, 2, 3]
         );
+    }
+
+    #[test]
+    fn array_split_into_chunks_preserves_nested_boundaries() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SPLIT_INTO_CHUNKS".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: (1..=5)
+                            .map(|value| Expr::Literal(ScalarValue::Int64(value)))
+                            .collect(),
+                    },
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let nested = outer.value(0);
+        let chunks = nested.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(
+            chunks.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
+        );
+        assert_eq!(
+            chunks.value(1).as_primitive::<Int64Type>().values(),
+            &[3, 4]
+        );
+        assert_eq!(chunks.value(2).as_primitive::<Int64Type>().values(), &[5]);
     }
 
     #[test]

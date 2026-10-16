@@ -257,6 +257,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_split_into_chunks",
+        "SELECT ARRAY_SPLIT_INTO_CHUNKS(ARRAY[1, 2, 3, 4, 5], 2) AS chunks FROM {T} LIMIT 1",
+        true,
+    ),
+    (
         "array_membership_and_trim",
         "SELECT CONTAINS(ARRAY[1, 2, 3], 2) AS contains_value, TRIM_ARRAY(ARRAY[1, 2, 3], 1) AS trimmed FROM {T} LIMIT 1",
         false,
