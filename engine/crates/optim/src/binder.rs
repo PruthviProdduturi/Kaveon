@@ -1627,11 +1627,19 @@ impl Binder<'_> {
                 for column in columns {
                     match column {
                         Expr::Star => out.extend(input.columns.iter().cloned()),
-                        Expr::Alias { name, .. } => out.push(Column {
-                            qualifier: None,
-                            name: name.clone(),
-                            physical: name.clone(),
-                        }),
+                        Expr::Alias { name, .. } => {
+                            let (qualifier, bare) = match name.rsplit_once('.') {
+                                Some((qualifier, bare)) => {
+                                    (Some(qualifier.to_owned()), bare.to_owned())
+                                }
+                                None => (None, name.clone()),
+                            };
+                            out.push(Column {
+                                qualifier,
+                                name: bare,
+                                physical: name.clone(),
+                            });
+                        }
                         // The output field carries the written name.
                         Expr::Column(name) => {
                             let (qualifier, bare) = match name.rsplit_once('.') {
