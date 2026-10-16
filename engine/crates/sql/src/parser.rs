@@ -72,7 +72,8 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
 fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
     let trimmed = sql.trim();
     let prefix = "WITH RECURSIVE";
-    if !trimmed[..trimmed.len().min(prefix.len())].eq_ignore_ascii_case(prefix) {
+    let prefix_text = trimmed.get(..prefix.len())?;
+    if !prefix_text.eq_ignore_ascii_case(prefix) {
         return None;
     }
     let mut cursor = prefix.len();
@@ -907,6 +908,11 @@ mod tests {
     fn unsupported_recursive_cte_is_not_rewritten() {
         let sql = "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < other) SELECT * FROM numbers";
         assert!(normalize_bounded_linear_recursive_cte(sql).is_none());
+    }
+
+    #[test]
+    fn recursive_cte_probe_is_utf8_boundary_safe() {
+        assert!(normalize_bounded_linear_recursive_cte("😀 SELECT 1").is_none());
     }
 
     #[test]
