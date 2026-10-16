@@ -62,3 +62,11 @@ The current three-worker AKS image was run twice with a 1 MiB per-query budget, 
 This qualifies bounded forced join spill, exact repeatability, and post-query cleanup. It does not qualify disk exhaustion, spill recovery after worker loss, larger high-cardinality joins, or sustained mixed-workload endurance; those remain open in the tracker.
 
 Raw evidence: [`track1-aks-join-spill-qualification-2026-10-15.json`](./track1-aks-join-spill-qualification-2026-10-15.json).
+
+## Forced join-spill worker-loss qualification (bounded, 2026-10-15)
+
+The same 1 MiB spill query was observed running on the current three-worker AKS image while one StatefulSet worker was forcibly deleted. The replacement worker re-registered with the same catalog snapshot. The retried query finished with the exact baseline six-row ordered result and recorded 32 join-spill partitions on each worker before the loss. The post-recovery cluster reported three active and three catalog-compatible workers; live spill directories were empty afterward.
+
+This qualifies bounded spill recovery across one worker loss. Disk exhaustion, larger high-cardinality joins, and sustained mixed-workload endurance remain open.
+
+Raw evidence: [`track1-aks-join-spill-worker-loss-2026-10-15.json`](./track1-aks-join-spill-worker-loss-2026-10-15.json).
