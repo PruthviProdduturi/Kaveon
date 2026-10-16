@@ -3959,14 +3959,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     }
     if upper == "MAP_FROM_ENTRIES" {
         check_arity(name, args, 1)?;
-        let entries = args[0]
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .ok_or_else(|| {
-                KaveonError::Execution(
+        let entries_array = match args[0].data_type() {
+            DataType::List(_) => Arc::clone(&args[0]),
+            DataType::LargeList(field) => compute::cast(&args[0], &DataType::List(field.clone()))
+                .map_err(|error| {
+                KaveonError::Execution(format!(
+                    "MAP_FROM_ENTRIES LargeList cannot be represented: {error}"
+                ))
+            })?,
+            _ => {
+                return Err(KaveonError::Execution(
                     "MAP_FROM_ENTRIES requires an ARRAY of ROW(key, value) entries".into(),
-                )
-            })?;
+                ));
+            }
+        };
+        let entries = entries_array.as_any().downcast_ref::<ListArray>().unwrap();
         let entry_struct = entries
             .values()
             .as_any()
@@ -12637,6 +12644,41 @@ mod tests {
             vec![Some(1), Some(2)]
         );
         assert!(result.is_null(1));
+
+        let large_rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["wide"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+            ],
+            None,
+        );
+        let large_list = LargeListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields.clone()),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 1_i64])),
+            Arc::new(large_rows),
+            None,
+        );
+        let large_input =
+            RecordBatch::try_from_iter([("entries", Arc::new(large_list) as ArrayRef)]).unwrap();
+        let large_result = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &large_input,
+        )
+        .unwrap();
+        let large_result = large_result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(large_result.keys().as_string::<i32>().value(0), "wide");
+        assert_eq!(
+            large_result.values().as_primitive::<Int64Type>().value(0),
+            7
+        );
 
         let duplicate_rows = StructArray::new(
             fields.clone(),
