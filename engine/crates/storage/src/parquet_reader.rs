@@ -217,7 +217,11 @@ impl BatchSource for ParquetBatchIterator {
             return Ok(false);
         }
         if let ParquetBatchInner::Directory(directory) = &mut self.inner {
-            return Ok(directory.apply_runtime_filter(column, values));
+            let accepted = directory.apply_runtime_filter(column, values);
+            if accepted {
+                self.metrics.runtime_filter_applied(values.len());
+            }
+            return Ok(accepted);
         }
         if !matches!(self.inner, ParquetBatchInner::Deferred(_)) {
             return Ok(false);
@@ -231,6 +235,7 @@ impl BatchSource for ParquetBatchIterator {
             None => predicate,
         });
         self.filter_dirty = true;
+        self.metrics.runtime_filter_applied(values.len());
         Ok(true)
     }
 }

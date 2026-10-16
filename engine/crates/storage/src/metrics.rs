@@ -43,6 +43,10 @@ pub struct ScanMetricsSnapshot {
     /// ran on) and admitted to the rest of the projection.
     pub row_filter_rows_examined: u64,
     pub row_filter_rows_admitted: u64,
+    /// Exact build-side runtime filters accepted before the source started
+    /// reading, and the number of values carried by those filters.
+    pub runtime_filters_applied: u64,
+    pub runtime_filter_values: u64,
     pub batches_emitted: u64,
     pub snapshot_elapsed: Duration,
     pub footer_elapsed: Duration,
@@ -106,6 +110,8 @@ struct ScanMetricsInner {
     compressed_bytes_read: AtomicU64,
     row_filter_rows_examined: AtomicU64,
     row_filter_rows_admitted: AtomicU64,
+    runtime_filters_applied: AtomicU64,
+    runtime_filter_values: AtomicU64,
     batches_emitted: AtomicU64,
     snapshot_nanos: AtomicU64,
     footer_nanos: AtomicU64,
@@ -142,6 +148,8 @@ impl ScanMetrics {
             compressed_bytes_read: self.load(&self.0.compressed_bytes_read),
             row_filter_rows_examined: self.load(&self.0.row_filter_rows_examined),
             row_filter_rows_admitted: self.load(&self.0.row_filter_rows_admitted),
+            runtime_filters_applied: self.load(&self.0.runtime_filters_applied),
+            runtime_filter_values: self.load(&self.0.runtime_filter_values),
             batches_emitted: self.load(&self.0.batches_emitted),
             snapshot_elapsed: Duration::from_nanos(self.load(&self.0.snapshot_nanos)),
             footer_elapsed: Duration::from_nanos(self.load(&self.0.footer_nanos)),
@@ -269,6 +277,15 @@ impl ScanMetrics {
             .row_filter_rows_admitted
             .fetch_add(rows as u64, Ordering::Relaxed);
     }
+    /// Record an exact build-side runtime filter accepted before reading.
+    pub(crate) fn runtime_filter_applied(&self, values: usize) {
+        self.0
+            .runtime_filters_applied
+            .fetch_add(1, Ordering::Relaxed);
+        self.0
+            .runtime_filter_values
+            .fetch_add(values as u64, Ordering::Relaxed);
+    }
     pub(crate) fn emitted(&self, rows: usize) {
         self.0
             .rows_emitted
@@ -291,4 +308,21 @@ fn add_duration(target: &AtomicU64, value: Duration) {
         value.as_nanos().min(u128::from(u64::MAX)) as u64,
         Ordering::Relaxed,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScanMetrics;
+
+    #[test]
+    fn runtime_filter_metrics_are_shared_and_count_values() {
+        let metrics = ScanMetrics::default();
+        let clone = metrics.clone();
+        metrics.runtime_filter_applied(3);
+        clone.runtime_filter_applied(2);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.runtime_filters_applied, 2);
+        assert_eq!(snapshot.runtime_filter_values, 5);
+    }
 }

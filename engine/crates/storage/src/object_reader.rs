@@ -166,6 +166,7 @@ impl BatchSource for ObjectBatchSource {
             Some(existing) => StoragePredicate::And(vec![existing, predicate]),
             None => predicate,
         });
+        self.metrics.runtime_filter_applied(values.len());
         Ok(true)
     }
 }
