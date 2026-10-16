@@ -56,7 +56,7 @@ After that workspace snapshot, the planner also began hash-partitioning
 `DISTINCT` and `UNION DISTINCT` projections whose expressions have stable
 output names. Two planner tests verify the exchange keys and worker count, and
 the full distributed differential sweep was rerun with expression-shaped
-`DISTINCT` and `UNION DISTINCT` cases; it passed **1/1** (422 filtered server
+`DISTINCT` and `UNION DISTINCT` cases; it passed **1/1** (421 filtered server
 tests; 140.30 seconds). Expressions are evaluated by each branch before the
 exchange, removing the coordinator-only fallback without changing results.
 
