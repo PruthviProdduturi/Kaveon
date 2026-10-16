@@ -794,6 +794,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_nth_value_ignore_nulls",
+        "SELECT country, NTH_VALUE(industry, 2) IGNORE NULLS OVER (ORDER BY actions, country ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS n FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country LIMIT 6",
+        true,
+    ),
+    (
         "window_first_value_ignore_nulls",
         "SELECT country, FIRST_VALUE(industry) IGNORE NULLS OVER (ORDER BY actions, country) AS first_industry FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country LIMIT 6",
         true,
