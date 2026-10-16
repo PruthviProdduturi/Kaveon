@@ -33,10 +33,14 @@ passed
 cargo fmt --all -- --check
 passed
 
+cargo test -p kaveon-server the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
+1 passed, 0 failed, 411 filtered out, 140.31s
+
 node scripts/validate-docs.mjs
 193 Markdown files, 39 routes, 9 SVGs; passed
 ```
 
-This evidence qualifies nested null-safe comparison behavior in the execution
-and SQL unit suites. It does not expand the remaining Track 2 gaps around full
-complex-type coercion, ordered MAP semantics, or external-client qualification.
+This evidence qualifies nested null-safe comparison behavior in the execution,
+SQL, and local/distributed differential suites. It does not expand the
+remaining Track 2 gaps around full complex-type coercion, ordered MAP
+semantics, or external-client qualification.
