@@ -132,3 +132,10 @@ This is repository-level evidence only. It does not close the remaining Track
 parity trackers and require their corresponding live or differential evidence.
 
 The same gate also covers expression-shaped INTERSECT and EXCEPT projections, including the non-empty constant-key difference case; both local and distributed results matched exactly.
+
+The complete server target was then rerun against this source:
+
+```text
+cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
+423 passed, 0 failed, 0 ignored (147.17s)
+```
