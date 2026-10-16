@@ -5344,6 +5344,16 @@ mod tests {
     }
 
     #[test]
+    fn binds_correlated_lateral_unnest_with_offset_alias_order() {
+        let plan = sql_to_logical_plan(
+            "SELECT x.id, u.value, u.pos FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[x.id, 2]) AS u(value) WITH OFFSET AS pos",
+        )
+        .expect("the dialect offset form should parse");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("ordinality_start: 0"), "{rendered}");
+    }
+
+    #[test]
     fn parses_multiple_constant_array_unnest_in_from() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM UNNEST(ARRAY[1, 2], ARRAY[3]) AS t(left_col, right_col)",
