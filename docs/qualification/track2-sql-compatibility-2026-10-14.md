@@ -473,6 +473,10 @@ The same explicit allow-list now accepts the supported array-valued functions
 and a correlated lateral `ARRAY_CONCAT` regression both pass exactly; arbitrary
 scalar functions are still rejected during lowering.
 
+`MAP_KEYS` and `MAP_VALUES` are also accepted as array-valued inputs. The
+distributed `MAP_KEYS` regression returns the exact key rows, while map-entry
+row expansion remains outside this allow-list.
+
 ## Trino wire compatibility qualification
 
 The focused Trino compatibility gate passed on the same workspace commit:
