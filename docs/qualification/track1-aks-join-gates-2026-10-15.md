@@ -79,3 +79,4 @@ The current three-worker AKS image ran an ordered 10,000-group aggregation twice
 This qualifies bounded distributed aggregate spill, exact repeatability, and cleanup. Larger-scale AKS pressure, skew behavior, published p95 latency, disk exhaustion, and sustained mixed-workload endurance remain open.
 
 Raw evidence: [`track1-aks-aggregate-spill-2026-10-15.json`](./track1-aks-aggregate-spill-2026-10-15.json).
+
