@@ -327,6 +327,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "correlated_exists_zero_offset",
+        "SELECT t.country, COUNT(*) AS n FROM {T} t WHERE EXISTS (SELECT * FROM {T} o WHERE o.user_id = t.user_id OFFSET 0) GROUP BY t.country ORDER BY country",
+        true,
+    ),
+    (
         "filtered_aggregates",
         "SELECT region, COUNT(*) FILTER (WHERE sessions > 0) AS active_n, SUM(actions) FILTER (WHERE actions > 0) AS positive_actions FROM {T} GROUP BY region ORDER BY region",
         true,
