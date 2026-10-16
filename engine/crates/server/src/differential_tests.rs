@@ -1219,6 +1219,28 @@ fn distributed_unnest_with_offset_is_zero_based() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// The Trino spelling uses a function table factor for a constant lateral
+/// UNNEST. It must reach the same distributed leaf operator and preserve the
+/// left relation's row for each unnested value.
+#[test]
+fn distributed_constant_lateral_unnest_matches_trino_shape() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-lateral-unnest-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.id, u.value FROM (VALUES (1)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[10, 20]) AS u(value) ORDER BY u.value";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-lateral-unnest", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["1\u{1f}10", "1\u{1f}20"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// GROUPING SETS lowers to a bounded UNION of aggregates. Compare that
 /// lowering through the local and fragment paths so a branch cannot silently
 /// lose its NULL grouping key or final aggregate merge.
