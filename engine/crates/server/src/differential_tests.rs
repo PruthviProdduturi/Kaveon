@@ -247,6 +247,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_remove",
+        "SELECT ARRAY_REMOVE(ARRAY[1, 2, 2, 3], 2) AS removed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_scalar_functions",
         "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
         false,
