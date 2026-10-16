@@ -243,7 +243,8 @@ rewritten because their cardinality affects semantics.
 
 The optimizer suite passes `23/23`, including
 `correlated_exists_positive_limit_is_decorrelated` and
-`correlated_exists_zero_limit_becomes_empty_relation`. This is a local binder
+`correlated_exists_zero_limit_becomes_empty_relation`, plus the no-op
+`correlated_exists_zero_offset_is_decorrelated` case. This is a local binder
 qualification. The shared local/distributed differential corpus also includes
 the grouped `correlated_exists_positive_limit` query and compares both paths
 against the same exact result.

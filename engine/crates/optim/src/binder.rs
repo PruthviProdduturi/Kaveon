@@ -876,10 +876,10 @@ impl Binder<'_> {
         // positive top-level limit before binding so correlated EXISTS can
         // still be decorrelated into a keyed semi/anti join. LIMIT 0 becomes
         // an empty relation (always false for EXISTS, always true for NOT
-        // EXISTS), and IN keeps its limit because multiplicity/set membership
-        // matters.
+        // EXISTS), OFFSET 0 is removed as a no-op, and IN keeps its paging
+        // clauses because multiplicity/set membership matters.
         let right = if matches!(right_key, Expr::Literal(_)) {
-            strip_positive_exists_limit(right)
+            strip_exists_noop_paging(right)
         } else {
             right
         };
@@ -1826,7 +1826,7 @@ fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
     }
 }
 
-fn strip_positive_exists_limit(plan: LogicalPlan) -> LogicalPlan {
+fn strip_exists_noop_paging(plan: LogicalPlan) -> LogicalPlan {
     match plan {
         LogicalPlan::Limit { input, count } if count > 0 => *input,
         LogicalPlan::Limit { count: 0, .. } => LogicalPlan::Filter {
@@ -1842,6 +1842,10 @@ fn strip_positive_exists_limit(plan: LogicalPlan) -> LogicalPlan {
             }),
             predicate: Expr::Literal(kaveon_core::ScalarValue::Bool(false)),
         },
+        // OFFSET 0 is also a semantic no-op for EXISTS.  Do not remove a
+        // positive offset: unlike LIMIT, it can change whether any row
+        // remains and therefore cannot be represented by a semi/anti join.
+        LogicalPlan::Offset { input, count: 0 } => *input,
         plan => plan,
     }
 }
@@ -2628,6 +2632,17 @@ mod tests {
             panic!("expected semi join")
         };
         assert!(matches!(*right, LogicalPlan::Filter { .. }), "{right:?}");
+    }
+
+    #[test]
+    fn correlated_exists_zero_offset_is_decorrelated() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey OFFSET 0)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected outer projection")
+        };
+        assert!(matches!(*input, LogicalPlan::SemiJoin { .. }), "{input:?}");
     }
 
     #[test]
