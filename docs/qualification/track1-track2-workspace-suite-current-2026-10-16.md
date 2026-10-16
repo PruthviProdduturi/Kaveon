@@ -148,3 +148,8 @@ Track 2 array coverage now includes `ARRAY_SPLIT_INTO_CHUNKS` for typed
 regular and large Arrow lists, with nested-boundary unit coverage and an exact
 local/distributed differential case. The differential sweep passed **1/1**
 (145.60 seconds).
+
+Track 2 array coverage now includes deterministic `ARRAY_HISTOGRAM` maps for
+integer and UTF-8 elements, ignoring null elements and preserving null arrays.
+The unit test and local/distributed differential sweep passed; the sweep took
+145.16 seconds.

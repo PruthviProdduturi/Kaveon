@@ -2845,6 +2845,85 @@ fn array_split_into_chunks<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    match list.value_type() {
+        DataType::Int64 => {
+            let mut keys = ListBuilder::new(Int64Builder::new());
+            let mut counts = ListBuilder::new(Int64Builder::new());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    keys.append(false);
+                    counts.append(false);
+                    continue;
+                }
+                let inner = list.value(row);
+                let values = inner.as_primitive::<Int64Type>();
+                let mut histogram = std::collections::BTreeMap::<i64, i64>::new();
+                for index in 0..values.len() {
+                    if !values.is_null(index) {
+                        let count = histogram.entry(values.value(index)).or_default();
+                        *count = count.checked_add(1).ok_or_else(|| {
+                            KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                        })?;
+                    }
+                }
+                for (value, count) in histogram {
+                    keys.values().append_value(value);
+                    counts.values().append_value(count);
+                }
+                keys.append(true);
+                counts.append(true);
+            }
+            eval_scalar_function(
+                "MAP",
+                &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+                list.len(),
+            )
+        }
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let mut keys = ListBuilder::new(StringBuilder::new());
+            let mut counts = ListBuilder::new(Int64Builder::new());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    keys.append(false);
+                    counts.append(false);
+                    continue;
+                }
+                let values = list.value(row);
+                let mut histogram = std::collections::BTreeMap::<String, i64>::new();
+                for index in 0..values.len() {
+                    if values.is_null(index) {
+                        continue;
+                    }
+                    let value = match values.data_type() {
+                        DataType::Utf8 => values.as_string::<i32>().value(index),
+                        DataType::LargeUtf8 => values.as_string::<i64>().value(index),
+                        _ => unreachable!(),
+                    };
+                    let count = histogram.entry(value.to_owned()).or_default();
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                    })?;
+                }
+                for (value, count) in histogram {
+                    keys.values().append_value(value);
+                    counts.values().append_value(count);
+                }
+                keys.append(true);
+                counts.append(true);
+            }
+            eval_scalar_function(
+                "MAP",
+                &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+                list.len(),
+            )
+        }
+        other => Err(KaveonError::Execution(format!(
+            "ARRAY_HISTOGRAM does not support list element type {other}"
+        ))),
+    }
+}
+
 fn array_trim<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     counts: &Int64Array,
@@ -3696,6 +3775,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         return Err(KaveonError::Execution(
             "ARRAY_SPLIT_INTO_CHUNKS requires an ARRAY/List value".into(),
+        ));
+    }
+    if upper == "ARRAY_HISTOGRAM" {
+        check_arity(name, args, 1)?;
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_histogram(list);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_histogram(list);
+        }
+        return Err(KaveonError::Execution(
+            "ARRAY_HISTOGRAM requires an ARRAY/List value".into(),
         ));
     }
     if matches!(
@@ -11613,6 +11704,32 @@ mod tests {
             &[3, 4]
         );
         assert_eq!(chunks.value(2).as_primitive::<Int64Type>().values(), &[5]);
+    }
+
+    #[test]
+    fn array_histogram_counts_non_null_values_deterministically() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_HISTOGRAM".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(2)),
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Null),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
     }
 
     #[test]
