@@ -4198,6 +4198,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "hour" => ("DATE_ADD_SECONDS", 3_600),
             "minute" => ("DATE_ADD_SECONDS", 60),
             "second" => ("DATE_ADD_SECONDS", 1),
+            "millisecond" => ("DATE_ADD_MILLISECONDS", 1),
             other => {
                 return Err(sql_err(format!("DATE_ADD does not support unit '{other}'")));
             }
@@ -5535,10 +5536,11 @@ mod tests {
         assert!(debug.contains("DATE_ADD_SECONDS"));
         assert!(debug.contains("Literal(Int64(20468))"), "{debug}");
         assert!(debug.contains("Literal(Int64(20544))"), "{debug}");
-        assert!(
-            sql_to_logical_plan("SELECT DATE_ADD('millisecond', 1, CURRENT_TIMESTAMP) FROM t")
-                .is_err()
-        );
+        let millis = sql_to_logical_plan(
+            "SELECT DATE_ADD('millisecond', 1, CAST('2026-01-01 00:00:00' AS TIMESTAMP)) FROM t",
+        )
+        .unwrap();
+        assert!(format!("{millis:?}").contains("DATE_ADD_MILLISECONDS"));
     }
 
     #[test]

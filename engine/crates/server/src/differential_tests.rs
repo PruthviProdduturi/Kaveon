@@ -343,7 +343,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "date_add_trino_units",
-        "SELECT DATE_ADD('week', 2, DATE '2026-01-01') AS plus_weeks, DATE_ADD('quarter', 1, DATE '2026-01-31') AS plus_quarter, DATE_ADD('hour', 3, TIMESTAMP '2026-01-01 00:00:00') AS plus_hours FROM {T} LIMIT 1",
+        "SELECT DATE_ADD('week', 2, DATE '2026-01-01') AS plus_weeks, DATE_ADD('quarter', 1, DATE '2026-01-31') AS plus_quarter, DATE_ADD('hour', 3, TIMESTAMP '2026-01-01 00:00:00') AS plus_hours, DATE_ADD('millisecond', 1, TIMESTAMP '2026-01-01 00:00:00') AS plus_millis FROM {T} LIMIT 1",
         false,
     ),
     (
