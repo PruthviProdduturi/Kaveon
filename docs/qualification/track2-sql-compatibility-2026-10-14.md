@@ -400,11 +400,12 @@ implementation therefore lowers these shapes to the existing keyed semi/anti
 join path and preserves the residual predicate path.
 
 This rule is intentionally narrow. Uncorrelated `IN` keeps its `LIMIT`, because
-the limit changes the tested set; `LIMIT 0` remains an empty subquery; and
-correlated scalar limits and other Apply shapes remain fail-closed. The binder
-regressions cover both `IN` and `NOT IN`, and the distributed differential
-sweep now includes both positive-limit cases with identical local and
-distributed results.
+the limit changes the tested set. Correlated `LIMIT 0` is lowered to an empty
+semi/anti-join input, preserving the `IN`/`NOT IN` result without invoking an
+Apply operator. Correlated scalar limits and other Apply shapes remain
+fail-closed. The binder regressions cover both `IN` and `NOT IN` for positive
+and zero limits, and the distributed differential sweep includes all four
+cases with identical local and distributed results.
 
 ## UNNEST offset qualification
 
