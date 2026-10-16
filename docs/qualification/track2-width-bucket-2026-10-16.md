@@ -11,7 +11,7 @@ max`.
 
 ## Evidence
 
-- Commit: `f8eb4fe3`
+- Commit: `cdc4fc3f`
 - Focused test: `cargo test -p kaveon-exec width_bucket_matches_trino_boundaries_and_nulls --quiet`
 - Result: 1 passed, 0 failed
 - Static gates: `cargo clippy --workspace --all-targets -- -D warnings` passed;
