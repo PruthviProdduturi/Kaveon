@@ -593,5 +593,40 @@ mod tests {
             SetOpMode::Intersect,
         );
         assert!(map_op.next_batch().unwrap().is_some());
+
+        let record = |ids: &[i32], names: &[&str]| -> ArrayRef {
+            let fields: arrow::datatypes::Fields = vec![
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(Field::new("name", DataType::Utf8, false)),
+            ]
+            .into();
+            Arc::new(StructArray::new(
+                fields,
+                vec![
+                    Arc::new(Int32Array::from(ids.to_vec())) as ArrayRef,
+                    Arc::new(StringArray::from(names.to_vec())) as ArrayRef,
+                ],
+                None,
+            ))
+        };
+        let mut record_op = SetOpOperator::new(
+            side(record(&[1, 2], &["a", "b"])),
+            side(record(&[2, 3], &["b", "c"])),
+            SetOpMode::Intersect,
+        );
+        let record_batch = record_op.next_batch().unwrap().unwrap();
+        let record_result = record_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(
+            record_result
+                .column_by_name("id")
+                .unwrap()
+                .as_primitive::<arrow::datatypes::Int32Type>()
+                .value(0),
+            2
+        );
     }
 }
