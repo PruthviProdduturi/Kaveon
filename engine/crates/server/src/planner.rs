@@ -4480,6 +4480,24 @@ mod tests {
     }
 
     #[test]
+    fn plans_unpartitioned_window_as_a_single_final_stage() {
+        let graph = graph("SELECT ROW_NUMBER() OVER (ORDER BY id) AS n FROM orders");
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.exchanges.len(), 1);
+        assert_eq!(graph.exchanges[0].partitioning, Partitioning::Single);
+        assert_eq!(graph.stages[graph.root_stage.0 as usize].task_count, 1);
+        let root = &graph.stages[graph.root_stage.0 as usize].plan;
+        assert!(
+            root.operator == "FinalWindow"
+                || root
+                    .children
+                    .iter()
+                    .any(|child| child.operator == "FinalWindow"),
+            "{root:?}"
+        );
+    }
+
+    #[test]
     fn partitions_windows_when_all_expressions_share_partition_keys() {
         let expr = kaveon_core::Expr::WindowFunction {
             name: "ROW_NUMBER".into(),
