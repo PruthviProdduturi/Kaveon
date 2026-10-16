@@ -24,6 +24,8 @@ pub struct RelationStatistics {
     /// The exact row count of the source at the pinned version.
     pub rows: u64,
     pub columns: Vec<String>,
+    /// Exact bytes from the pinned source metadata, when available.
+    pub bytes_hint: Option<u64>,
     /// The table's statistics on record — fresh or stale, for costing.
     pub table: Option<Arc<TableStatistics>>,
 }
@@ -33,13 +35,26 @@ impl RelationStatistics {
         Self {
             rows,
             columns,
+            bytes_hint: None,
+            table: None,
+        }
+    }
+
+    pub fn exact_with_bytes(rows: u64, columns: Vec<String>, bytes: u64) -> Self {
+        Self {
+            rows,
+            columns,
+            bytes_hint: Some(bytes),
             table: None,
         }
     }
 
     /// The bytes as stored, when the statistics record them.
     fn bytes(&self) -> Option<u64> {
-        self.table.as_ref().map(|table| table.bytes)
+        self.table
+            .as_ref()
+            .map(|table| table.bytes)
+            .or(self.bytes_hint)
     }
 }
 
@@ -50,7 +65,7 @@ fn relation_statistics(resolved: &ResolvedTable) -> Option<RelationStatistics> {
     match resolved.table.format {
         DataFormat::Parquet => {
             let metadata = ParquetReader::new(resolved.full_path()).metadata().ok()?;
-            Some(RelationStatistics::exact(
+            Some(RelationStatistics::exact_with_bytes(
                 metadata.row_count,
                 metadata
                     .schema
@@ -58,13 +73,14 @@ fn relation_statistics(resolved: &ResolvedTable) -> Option<RelationStatistics> {
                     .iter()
                     .map(|field| field.name().clone())
                     .collect(),
+                metadata.profile.file_bytes,
             ))
         }
         DataFormat::Delta => {
             let metadata = DeltaTableReader::new(resolved.full_path())
                 .metadata()
                 .ok()?;
-            Some(RelationStatistics::exact(
+            Some(RelationStatistics::exact_with_bytes(
                 metadata.row_count,
                 metadata
                     .schema
@@ -72,11 +88,12 @@ fn relation_statistics(resolved: &ResolvedTable) -> Option<RelationStatistics> {
                     .iter()
                     .map(|field| field.name().clone())
                     .collect(),
+                metadata.profile.file_bytes,
             ))
         }
         DataFormat::Iceberg => {
             let snapshot = IcebergReader::new(resolved.full_path()).snapshot().ok()?;
-            Some(RelationStatistics::exact(
+            Some(RelationStatistics::exact_with_bytes(
                 snapshot.row_count,
                 snapshot
                     .schema
@@ -84,6 +101,7 @@ fn relation_statistics(resolved: &ResolvedTable) -> Option<RelationStatistics> {
                     .iter()
                     .map(|field| field.name().clone())
                     .collect(),
+                snapshot.total_bytes,
             ))
         }
     }
@@ -711,6 +729,7 @@ mod tests {
         let statistics = relation_statistics(&resolved).expect("Iceberg metadata is readable");
         assert_eq!(statistics.rows, 0);
         assert_eq!(statistics.columns, vec!["id"]);
+        assert_eq!(statistics.bytes_hint, Some(0));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -992,6 +1011,7 @@ mod tests {
             Some(RelationStatistics {
                 rows: 1_000_000,
                 columns: vec!["id".into(), "region".into()],
+                bytes_hint: None,
                 table: (table == "events").then(|| Arc::new(table_statistics(1_000_000))),
             })
         };

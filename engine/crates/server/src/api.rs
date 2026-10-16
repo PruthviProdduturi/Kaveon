@@ -10257,6 +10257,7 @@ async fn optimize_with_durable_statistics(
             kaveon_optim::statistics::RelationStatistics {
                 rows,
                 columns: current.columns.clone(),
+                bytes_hint: None,
                 table: relation.statistics.clone(),
             }
         });
