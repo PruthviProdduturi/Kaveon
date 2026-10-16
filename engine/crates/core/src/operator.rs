@@ -25,6 +25,29 @@ pub trait BatchSource {
                 }
                 Ok(accepted)
             }
+            StoragePredicate::Or(children) if !children.is_empty() => {
+                let mut column = None;
+                let mut values = Vec::new();
+                for child in children {
+                    let StoragePredicate::In {
+                        column: child_column,
+                        values: child_values,
+                    } = child
+                    else {
+                        return Ok(false);
+                    };
+                    if column.is_some_and(|current| current != child_column) {
+                        return Ok(false);
+                    }
+                    column = Some(child_column.as_str());
+                    for value in child_values {
+                        if !values.contains(value) {
+                            values.push(value.clone());
+                        }
+                    }
+                }
+                self.apply_runtime_filter(column.expect("non-empty OR"), &values)
+            }
             _ => Ok(false),
         }
     }
@@ -50,6 +73,29 @@ pub trait BatchOperator {
                     accepted &= self.apply_runtime_predicate(child)?;
                 }
                 Ok(accepted)
+            }
+            StoragePredicate::Or(children) if !children.is_empty() => {
+                let mut column = None;
+                let mut values = Vec::new();
+                for child in children {
+                    let StoragePredicate::In {
+                        column: child_column,
+                        values: child_values,
+                    } = child
+                    else {
+                        return Ok(false);
+                    };
+                    if column.is_some_and(|current| current != child_column) {
+                        return Ok(false);
+                    }
+                    column = Some(child_column.as_str());
+                    for value in child_values {
+                        if !values.contains(value) {
+                            values.push(value.clone());
+                        }
+                    }
+                }
+                self.apply_runtime_filter(column.expect("non-empty OR"), &values)
             }
             _ => Ok(false),
         }
@@ -102,5 +148,39 @@ mod tests {
         ]);
         assert!(source.apply_runtime_predicate(&predicate).unwrap());
         assert_eq!(source.accepted, 2);
+    }
+
+    #[test]
+    fn folds_same_column_or_runtime_predicates_into_one_filter() {
+        let mut source = RecordingSource { accepted: 0 };
+        let predicate = StoragePredicate::Or(vec![
+            StoragePredicate::In {
+                column: "a".into(),
+                values: vec![ScalarValue::Int64(1), ScalarValue::Int64(2)],
+            },
+            StoragePredicate::In {
+                column: "a".into(),
+                values: vec![ScalarValue::Int64(2), ScalarValue::Int64(3)],
+            },
+        ]);
+        assert!(source.apply_runtime_predicate(&predicate).unwrap());
+        assert_eq!(source.accepted, 1);
+    }
+
+    #[test]
+    fn declines_cross_column_or_runtime_predicates() {
+        let mut source = RecordingSource { accepted: 0 };
+        let predicate = StoragePredicate::Or(vec![
+            StoragePredicate::In {
+                column: "a".into(),
+                values: vec![ScalarValue::Int64(1)],
+            },
+            StoragePredicate::In {
+                column: "b".into(),
+                values: vec![ScalarValue::Int64(2)],
+            },
+        ]);
+        assert!(!source.apply_runtime_predicate(&predicate).unwrap());
+        assert_eq!(source.accepted, 0);
     }
 }
