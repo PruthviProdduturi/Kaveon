@@ -1238,7 +1238,22 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("MAP_KEYS")
                     || name.eq_ignore_ascii_case("MAP_VALUES")
                     || name.eq_ignore_ascii_case("MAP_ENTRIES")
+                    || name.eq_ignore_ascii_case("MAP")
         )
+}
+
+/// Trino exposes maps directly to `UNNEST`, yielding one row field for the
+/// key and one for the value. The execution operator already handles the
+/// `MAP_ENTRIES` list-of-row representation, so normalize only the explicit
+/// map constructor here; arbitrary table functions remain rejected.
+fn normalize_unnest_expression(expression: Expr) -> Expr {
+    match expression {
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") => Expr::Function {
+            name: "MAP_ENTRIES".into(),
+            args: vec![Expr::Function { name, args }],
+        },
+        expression => expression,
+    }
 }
 
 fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<LogicalPlan> {
@@ -1273,7 +1288,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                         else {
                             return Err(sql_err("UNNEST in FROM requires an expression"));
                         };
-                        let expression = ast_expr_to_expr(array)?;
+                        let expression = normalize_unnest_expression(ast_expr_to_expr(array)?);
                         if !is_array_unnest_expression(&expression) {
                             return Err(sql_err("UNNEST in FROM requires an ARRAY expression"));
                         }
@@ -1427,7 +1442,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     else {
                         return Err(sql_err("UNNEST in FROM requires an expression"));
                     };
-                    let expression = ast_expr_to_expr(array)?;
+                    let expression = normalize_unnest_expression(ast_expr_to_expr(array)?);
                     if !is_array_unnest_expression(&expression) {
                         return Err(sql_err("UNNEST in FROM requires an ARRAY expression"));
                     }
@@ -1506,6 +1521,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             let expressions = array_exprs
                 .iter()
                 .map(ast_expr_to_expr)
+                .map(|expression| expression.map(normalize_unnest_expression))
                 .collect::<Result<Vec<_>>>()?;
             if expressions
                 .iter()
@@ -5532,6 +5548,28 @@ mod tests {
         assert!(matches!(
             plan,
             LogicalPlan::Unnest { columns, .. } if columns == vec!["key", "value"]
+        ));
+    }
+
+    #[test]
+    fn parses_direct_map_unnest_in_from() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM UNNEST(MAP(ARRAY['a', 'b'], ARRAY[1, 2])) AS t(key, value)",
+        )
+        .unwrap();
+        let LogicalPlan::Unnest {
+            expressions,
+            columns,
+            ..
+        } = plan
+        else {
+            panic!("expected direct MAP UNNEST plan");
+        };
+        assert_eq!(columns, vec!["key", "value"]);
+        assert!(matches!(
+            &expressions[0],
+            Expr::Function { name, args }
+                if name == "MAP_ENTRIES" && args.len() == 1
         ));
     }
 

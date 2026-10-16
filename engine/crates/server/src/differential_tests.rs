@@ -671,6 +671,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "direct_map_unnest",
+        "SELECT key, value FROM UNNEST(MAP(ARRAY['a', 'b'], ARRAY[1, 2])) AS entries(key, value) ORDER BY key",
+        true,
+    ),
+    (
         "row_set_operation",
         "SELECT id, name FROM (VALUES (1, 'one'), (2, 'two')) AS left_values(id, name) EXCEPT SELECT id, name FROM (VALUES (2, 'two')) AS right_values(id, name) ORDER BY id",
         true,

@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `2a5f20c5` (the workspace gate includes the
+**Source:** `origin/dev` at `f59c20a3` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -69,7 +69,9 @@ array/map/row keys; focused array, map, and row set-key tests pass, and the swee
 The differential corpus now also includes SQL-level array and map
 `INTERSECT` cases plus a composite multi-column row `EXCEPT` case; the exact
 local/distributed sweep passed **1/1** after those additions (411 filtered
-server tests; 134.00 seconds).
+server tests; 134.00 seconds). The follow-up direct-map UNNEST case also
+passed in the same sweep after `UNNEST(MAP(...))` was normalized to
+`MAP_ENTRIES` (411 filtered server tests; 135.42 seconds).
 
 After that change, the complete server target suite was rerun from the same
 source:
