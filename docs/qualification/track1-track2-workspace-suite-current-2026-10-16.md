@@ -1,10 +1,11 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `9514d6c2` (the workspace gate includes the
+**Source:** `origin/dev` at `932cc025` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
-regressions, plus nested null-safe array/map/row comparison)
+regressions, plus nested null-safe array/map/row comparison and LargeList map
+constructors)
 
 The complete Rust workspace test command was run from `engine/`:
 
@@ -12,10 +13,10 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets --no-fail-fast --quiet
 ```
 
-The command completed with **1,549 listed tests, 1,543 passed, 0 failed, and 6
+The command completed with **1,550 listed tests, 1,544 passed, 0 failed, and 6
 ignored** across all workspace test binaries. The long server differential
 sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
-core, 385 execution, 69 optimizer, 412 server, 185 SQL, and 125 storage tests.
+core, 386 execution, 69 optimizer, 412 server, 185 SQL, and 125 storage tests.
 
 The release lint commands also passed:
 
@@ -87,7 +88,7 @@ source:
 
 ```text
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-412 passed, 0 failed, 0 ignored (148.24s)
+412 passed, 0 failed, 0 ignored (145.30s)
 ```
 
 This includes the planner regression for projected-key `UNION DISTINCT` and
@@ -103,7 +104,7 @@ The complete execution crate target suite was also rerun on this source:
 
 ```text
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-381 passed, 0 failed, 4 ignored (15.09s)
+382 passed, 0 failed, 4 ignored (14.83s)
 ```
 
 This is repository-level evidence only. It does not close the remaining Track
