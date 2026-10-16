@@ -18,6 +18,12 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // leave numeric/list brackets untouched so ARRAY[...] remains available
     // for the syntax that explicitly supports it.
     let normalized = normalize_lateral_unnest(&normalize_bracket_identifiers(sql));
+    // Lower the one recursive shape that has a finite, deterministic
+    // equivalent in the existing UNNEST/SEQUENCE execution path.  More
+    // general recursive graphs remain explicitly unsupported in the logical
+    // planner rather than being accepted with unsafe or incomplete semantics.
+    let normalized = normalize_bounded_linear_recursive_cte(&normalized)
+        .unwrap_or_else(|| normalized.to_owned());
     // BigQuery's grammar retains a table-shaped UNNEST node when the function
     // is correlated. DuckDB parses the same spelling as a generic function,
     // which cannot carry ordinality metadata.
@@ -46,6 +52,194 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
                 .map_err(|_| KaveonError::Sql(primary.to_string()))
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),
+    }
+}
+
+/// Rewrites a single-column, monotonic integer recursive CTE into a bounded
+/// `SEQUENCE` relation.  The accepted form is intentionally narrow:
+///
+/// ```text
+/// WITH RECURSIVE n(value) AS (
+///   SELECT 1
+///   UNION ALL
+///   SELECT value + 1 FROM n WHERE value < 5
+/// ) SELECT * FROM n
+/// ```
+///
+/// The rewrite is valid because the recursive member has one arithmetic step,
+/// one source CTE, and a strict/inclusive bound.  Any other shape returns
+/// `None`, preserving the planner's explicit unsupported-recursion error.
+fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
+    let trimmed = sql.trim();
+    let prefix = "WITH RECURSIVE";
+    if !trimmed[..trimmed.len().min(prefix.len())].eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    let mut cursor = prefix.len();
+    cursor = skip_sql_space(trimmed, cursor);
+    let (cte_name, next) = take_sql_word(trimmed, cursor)?;
+    cursor = skip_sql_space(trimmed, next);
+    if trimmed.as_bytes().get(cursor) != Some(&b'(') {
+        return None;
+    }
+    cursor += 1;
+    cursor = skip_sql_space(trimmed, cursor);
+    let (column, next) = take_sql_word(trimmed, cursor)?;
+    cursor = skip_sql_space(trimmed, next);
+    if trimmed.as_bytes().get(cursor) != Some(&b')') {
+        return None;
+    }
+    cursor = skip_sql_space(trimmed, cursor + 1);
+    cursor = consume_sql_token(trimmed, cursor, "AS")?;
+    cursor = skip_sql_space(trimmed, cursor);
+    if trimmed.as_bytes().get(cursor) != Some(&b'(') {
+        return None;
+    }
+    let body_start = cursor + 1;
+    let body_end = matching_sql_paren(trimmed, cursor)?;
+    let body = trimmed[body_start..body_end].trim();
+    let outer = trimmed[body_end + 1..].trim_start();
+    if outer.is_empty() || outer.starts_with(',') {
+        return None;
+    }
+    let (seed_sql, recursive_sql) = split_top_level_union_all(body)?;
+    let seed = parse_single_integer_select(seed_sql.trim())?;
+    let tokens = recursive_sql.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() != 10
+        || !tokens[0].eq_ignore_ascii_case("SELECT")
+        || !tokens[1].eq_ignore_ascii_case(&column)
+        || !matches!(tokens[2], "+" | "-")
+        || !tokens[4].eq_ignore_ascii_case("FROM")
+        || !tokens[5].eq_ignore_ascii_case(&cte_name)
+        || !tokens[6].eq_ignore_ascii_case("WHERE")
+        || !tokens[7].eq_ignore_ascii_case(&column)
+        || !matches!(tokens[8], "<" | "<=")
+    {
+        return None;
+    }
+    let step = tokens[3].parse::<i64>().ok()?;
+    let bound = tokens[9].parse::<i64>().ok()?;
+    if step == 0 {
+        return None;
+    }
+    let stop = match (step.signum(), tokens[8]) {
+        (1, "<") => bound.checked_sub(1)?,
+        (1, "<=") => bound,
+        (-1, "<") => bound.checked_add(1)?,
+        (-1, "<=") => bound,
+        _ => return None,
+    };
+    Some(format!(
+        "WITH {cte_name}({column}) AS (SELECT * FROM UNNEST(SEQUENCE({seed}, {stop}, {step})) AS {cte_name}({column})) {outer}"
+    ))
+}
+
+fn skip_sql_space(sql: &str, mut cursor: usize) -> usize {
+    while sql
+        .as_bytes()
+        .get(cursor)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn take_sql_word(sql: &str, cursor: usize) -> Option<(String, usize)> {
+    let bytes = sql.as_bytes();
+    let mut end = cursor;
+    while bytes
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        end += 1;
+    }
+    (end > cursor).then(|| (sql[cursor..end].to_owned(), end))
+}
+
+fn consume_sql_token(sql: &str, cursor: usize, token: &str) -> Option<usize> {
+    let end = cursor.checked_add(token.len())?;
+    sql.get(cursor..end)?
+        .eq_ignore_ascii_case(token)
+        .then_some(end)
+}
+
+fn matching_sql_paren(sql: &str, open: usize) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut cursor = open;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                if bytes.get(cursor + 1) == Some(&delimiter) {
+                    cursor += 2;
+                    continue;
+                }
+                quote = None;
+            }
+        } else if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+        } else if byte == b'(' {
+            depth += 1;
+        } else if byte == b')' {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(cursor);
+            }
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn split_top_level_union_all(body: &str) -> Option<(&str, &str)> {
+    let bytes = body.as_bytes();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                if bytes.get(cursor + 1) == Some(&delimiter) {
+                    cursor += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            cursor += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            cursor += 1;
+            continue;
+        }
+        match byte {
+            b'(' => depth += 1,
+            b')' => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+        if depth == 0 && body[cursor..].to_ascii_uppercase().starts_with("UNION ALL") {
+            let before = if cursor == 0 { b' ' } else { bytes[cursor - 1] };
+            let after = bytes.get(cursor + 9).copied().unwrap_or(b' ');
+            if !before.is_ascii_alphanumeric() && !after.is_ascii_alphanumeric() {
+                return Some((&body[..cursor], &body[cursor + 9..]));
+            }
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn parse_single_integer_select(sql: &str) -> Option<i64> {
+    let tokens = sql.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() == 2 && tokens[0].eq_ignore_ascii_case("SELECT") {
+        tokens[1].parse().ok()
+    } else {
+        None
     }
 }
 
@@ -696,6 +890,23 @@ mod tests {
         let rendered = statements[0].to_string();
         assert!(rendered.contains("\"year\""));
         assert!(!rendered.contains("ARRAY"));
+    }
+
+    #[test]
+    fn bounded_linear_recursive_cte_uses_sequence_lowering() {
+        let statements = parse_sql(
+            "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 5) SELECT * FROM numbers",
+        )
+        .expect("bounded recursive CTE should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("SEQUENCE(1, 4, 1)"), "{rendered}");
+        assert!(!rendered.contains("WITH RECURSIVE"), "{rendered}");
+    }
+
+    #[test]
+    fn unsupported_recursive_cte_is_not_rewritten() {
+        let sql = "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < other) SELECT * FROM numbers";
+        assert!(normalize_bounded_linear_recursive_cte(sql).is_none());
     }
 
     #[test]
