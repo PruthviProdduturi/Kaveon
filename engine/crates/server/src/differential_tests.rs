@@ -671,6 +671,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_cardinality",
+        "SELECT CARDINALITY(MAP(ARRAY['a', 'b'], ARRAY[1, 2])) AS map_size",
+        true,
+    ),
+    (
         "direct_map_unnest",
         "SELECT key, value FROM UNNEST(MAP(ARRAY['a', 'b'], ARRAY[1, 2])) AS entries(key, value) ORDER BY key",
         true,
