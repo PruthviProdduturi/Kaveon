@@ -211,13 +211,14 @@ impl TimeGrain {
     }
 
     /// The value at the grain: a date at day grain is itself; a
-    /// microsecond timestamp is truncated as `DATE_TRUNC` truncates it.
-    /// `None` for a value the grain does not apply to (a date at month
-    /// grain: the row path has no `DATE_TRUNC` over dates, so the shape
-    /// refuses it).
+    /// microsecond timestamp is truncated as `DATE_TRUNC` truncates it. A
+    /// date at month grain is returned as the first day of that month.
     pub fn truncate(self, value: &StatValue) -> Option<StatValue> {
         match (self, value) {
             (Self::Day, StatValue::Date(days)) => Some(StatValue::Date(*days)),
+            (Self::Month, StatValue::Date(days)) => Some(StatValue::Date(
+                (truncate_micros(i64::from(*days) * 86_400_000_000, self) / 86_400_000_000) as i32,
+            )),
             (
                 grain,
                 StatValue::Timestamp {
@@ -287,11 +288,12 @@ pub struct ShapeTime {
 
 impl ShapeTime {
     /// Whether a column of `data_type` can be the time dimension at
-    /// `grain`: a date at day grain, a microsecond timestamp at either.
+    /// `grain`: a date at day or month grain, a microsecond timestamp at
+    /// either.
     pub fn accepts(data_type: &DataType, grain: TimeGrain) -> bool {
         matches!(
             (logical_type(data_type), grain),
-            (DataType::Date32, TimeGrain::Day) | (DataType::Timestamp(TimeUnit::Microsecond, _), _)
+            (DataType::Date32, _) | (DataType::Timestamp(TimeUnit::Microsecond, _), _)
         )
     }
 }
@@ -933,7 +935,10 @@ mod tests {
             TimeGrain::Day.truncate(&StatValue::Date(5)),
             Some(StatValue::Date(5))
         );
-        assert_eq!(TimeGrain::Month.truncate(&StatValue::Date(5)), None);
+        assert_eq!(
+            TimeGrain::Month.truncate(&StatValue::Date(5)),
+            Some(StatValue::Date(0))
+        );
     }
 
     #[test]
