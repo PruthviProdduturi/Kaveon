@@ -6847,6 +6847,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unknown_and_cyclic_named_windows() {
+        let unknown = sql_to_logical_plan(
+            "SELECT ROW_NUMBER() OVER missing FROM t WINDOW declared AS (ORDER BY id)",
+        )
+        .unwrap_err();
+        assert!(unknown.to_string().contains("unknown named window 'missing'"));
+
+        let cyclic = sql_to_logical_plan(
+            "SELECT ROW_NUMBER() OVER first_window FROM t WINDOW first_window AS (second_window), second_window AS (first_window)",
+        )
+        .unwrap_err();
+        assert!(cyclic
+            .to_string()
+            .contains("cyclic named window reference involving 'first_window'"));
+    }
+
+    #[test]
     fn parses_cast_to_decimal() {
         let plan = sql_to_logical_plan("SELECT CAST(x AS DECIMAL(10,2)) FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
