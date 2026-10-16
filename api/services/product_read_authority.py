@@ -162,12 +162,21 @@ def read_document(
 
 
 def list_documents(family: str, actor: str, role: str, *,
-                   max_records: int | None = None) -> list[dict]:
+                   max_records: int | None = None,
+                   capped: bool = False) -> list[dict]:
     """List one cutover family from KaveonDB with legacy visibility and order.
 
     `max_records` is passed through for a family whose own retention bound is
     close to the store's listing ceiling, so the caller states the bound it
     expects instead of discovering the default by exceeding it.
+
+    `capped` changes what happens when the family runs past that bound. The
+    default refuses the whole listing, which is right for a caller that needs
+    all of it. For a caller showing the most recent handful it is the worst
+    possible answer: an owner over the ceiling saw nothing at all, and the
+    page reported "not configured" for a store that was configured and
+    working. With `capped` the listing stops at the bound and returns what it
+    has, so a partial history beats no history.
     """
     if not enabled(family):
         raise ProductReadAuthorityError(f"{family} has not moved to KaveonDB read authority")
@@ -181,7 +190,12 @@ def list_documents(family: str, actor: str, role: str, *,
         "datasets", "charts", "dashboards", "saved_queries", "sources"
     }
     bound = {} if max_records is None else {"max_records": max_records}
-    reads = [lambda: product_store.list_records(_KIND[family], actor, "Admin", **bound)]
+    if capped:
+        limit = max_records or product_store.COUNT_BOUND
+        reads = [lambda: product_store.list_records_capped(
+            _KIND[family], actor, "Admin", limit=limit)[0]]
+    else:
+        reads = [lambda: product_store.list_records(_KIND[family], actor, "Admin", **bound)]
     if wants_favorites:
         reads.append(lambda: product_store.list_records("favorite", actor, "Admin"))
     listed = product_reads.gather(*reads)

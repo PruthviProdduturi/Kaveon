@@ -24,6 +24,9 @@ class ExtendedReadAuthorityTests(unittest.TestCase):
             with self.subTest(family=family), self.env(family), \
                  patch.object(authority.product_store, "list_records",
                               side_effect=lambda kind, *args, **kwargs: [] if kind == "favorite" else [{"document": document}]), \
+                 patch.object(authority.product_store, "list_records_capped",
+                              side_effect=lambda kind, *args, **kwargs: (
+                                  [] if kind == "favorite" else [{"document": document}], False)), \
                  patch.object(database, "query") as postgres:
                 operation()
                 postgres.assert_not_called()

@@ -99,8 +99,21 @@ def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
         role = "Admin" if not user_id or user_id == "all" else "Viewer"
         # Ask for the ceiling explicitly rather than inheriting a default: a
         # read of this family must not be the thing that discovers the bound.
-        return product_read_authority.list_documents(
-            "query_history", actor, role, max_records=HISTORY_LIST_CEILING)[:limit]
+        #
+        # Capped, so passing the ceiling degrades the answer instead of
+        # removing it. History is owner-scoped, which makes the bound personal:
+        # it is whoever has run the most queries who loses the panel, and they
+        # lose it entirely -- the store raises rather than truncating, so one
+        # row over the ceiling turned a full history into "not configured".
+        # While truncated this is the newest of what could be read rather than
+        # the newest that exists; the retention sweep converges the two, and a
+        # thousand recent statements is not a page anyone scrolls to the end of.
+        documents = product_read_authority.list_documents(
+            "query_history", actor, role,
+            max_records=HISTORY_LIST_CEILING, capped=True)
+        documents.sort(key=lambda item: (str(item.get("executed_at") or ""),
+                                         str(item.get("id") or "")), reverse=True)
+        return documents[:limit]
     columns = _BASE_COLS + (_ENGINE_COLS if _supports_engine_details() else "")
     fetch_all = not user_id or user_id == "all"
     if fetch_all:
