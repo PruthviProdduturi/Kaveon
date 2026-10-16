@@ -37,6 +37,9 @@ warnings`, the workspace tests, Linux/macOS/Windows release builds, and the
 CLI qualification workflows successfully in GitHub Actions run
 `38966141218`.
 
+The physical planner regression for the left-outer broadcast shape passes in
+the server planner suite (`49 passed; 0 failed`).
+
 ## Boundary
 
 This is planner qualification, not a claim of complete cost-based optimization.

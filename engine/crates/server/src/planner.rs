@@ -4079,6 +4079,42 @@ mod tests {
     }
 
     #[test]
+    fn proven_small_build_is_broadcast_for_a_left_outer_join() {
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM items i LEFT JOIN customers c ON i.id = c.id",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
+            Some(kaveon_optim::statistics::RelationStatistics::exact(
+                if table.ends_with("customers") {
+                    10
+                } else {
+                    10_000
+                },
+                vec!["id".into(), "name".into()],
+            ))
+        });
+
+        let graph = build_stage_graph("broadcast-left-outer-query", &plan, 4).unwrap();
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.exchanges.len(), 1);
+        assert_eq!(graph.exchanges[0].partitioning, Partitioning::Broadcast);
+        assert_eq!(graph.stages[0].plan.operator, "BroadcastHashJoin");
+
+        let fragments =
+            build_executable_fragments("broadcast-left-outer-query", &plan, &fixture.catalog, 4)
+                .unwrap();
+        let join = fragments[&StageId(0)].nodes.last().unwrap();
+        assert!(matches!(
+            &join.operator,
+            FragmentOperator::HashJoin(spec)
+                if spec.broadcast && spec.join_type == FragmentJoinType::Left
+        ));
+    }
+
+    #[test]
     fn broadcast_join_propagates_safe_probe_scan_predicate_from_build_filter() {
         let fixture = fixture();
         let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
