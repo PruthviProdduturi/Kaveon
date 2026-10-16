@@ -58,9 +58,9 @@ l1.l_suppkey` needs a semi join with a residual over matched pairs, which
 or set operations inside a correlated subquery, `EXISTS` correlated on more
 than one column, correlated
 `IN`, a scalar subquery that is not an ungrouped aggregate, recursive CTEs,
-named windows,
-`WITHIN GROUP`/`DISTINCT`, approximate aggregates, array/map/JSON types,
-general DDL and row DML (the product transaction API is a bounded
+broader mixed-partition window execution,
+`WITHIN GROUP`/`DISTINCT` forms that are not implemented, general DDL and row
+DML (the product transaction API is a bounded
 product-record protocol, see the [SQL compatibility
 reference](../reference/engine-sql-compatibility.md)).
 
