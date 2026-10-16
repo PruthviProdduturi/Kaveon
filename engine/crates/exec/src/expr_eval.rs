@@ -4843,6 +4843,30 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     map_element_at_primitive::<Date64Type>(map_keys, &requested, row, start, end)
                         .is_some()
                 }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
+                    map_element_at_primitive::<TimestampSecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                    .is_some()
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None) => {
+                    map_element_at_primitive::<TimestampMillisecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                    .is_some()
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => {
+                    map_element_at_primitive::<TimestampMicrosecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                    .is_some()
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None) => {
+                    map_element_at_primitive::<TimestampNanosecondType>(
+                        map_keys, &requested, row, start, end,
+                    )
+                    .is_some()
+                }
                 DataType::Decimal128(_, _) => {
                     map_element_at_primitive::<arrow::datatypes::Decimal128Type>(
                         map_keys, &requested, row, start, end,
@@ -12968,6 +12992,13 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let needle = Arc::new(TimestampMicrosecondArray::from(vec![Some(1_000_000)])) as ArrayRef;
+        let contains = eval_scalar_function(
+            "MAP_CONTAINS_KEY",
+            &[Arc::clone(&map), Arc::clone(&needle)],
+            1,
+        )
+        .unwrap();
+        assert!(contains.as_boolean().value(0));
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
     }
