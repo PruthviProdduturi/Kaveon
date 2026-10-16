@@ -1417,6 +1417,21 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     .map(|column| column.name.value.clone())
                     .collect();
             }
+            if let Some(alias) = alias
+                && alias.columns.is_empty()
+                && let Some(columns) = plan_output_columns(&plan)
+            {
+                plan = LogicalPlan::Project {
+                    input: Box::new(plan),
+                    columns: columns
+                        .into_iter()
+                        .map(|column| Expr::Alias {
+                            expr: Box::new(Expr::Column(column.clone())),
+                            name: format!("{}.{}", alias.name.value, column),
+                        })
+                        .collect(),
+                };
+            }
             Ok(plan)
         }
         ast::TableFactor::Function {
@@ -1611,6 +1626,35 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
     }
 }
 
+/// Return names for a derived relation whose projection is explicit enough to
+/// preserve its SQL relation qualifier through a later `JOIN ... USING`.
+/// Scan-backed wildcard projections remain fail-closed because their catalog
+/// schema is not available during SQL lowering.
+fn plan_output_columns(plan: &LogicalPlan) -> Option<Vec<String>> {
+    match plan {
+        LogicalPlan::Project { input, columns } => {
+            if columns.iter().any(|column| matches!(column, Expr::Star)) {
+                return plan_output_columns(input);
+            }
+            columns
+                .iter()
+                .map(|column| match column {
+                    Expr::Column(name) => Some(name.rsplit('.').next().unwrap_or(name).to_owned()),
+                    Expr::Alias { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Window { input, .. } => plan_output_columns(input),
+        _ => None,
+    }
+}
+
 fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> Result<LogicalPlan> {
     for join in joins {
         let right = table_factor_to_plan(&join.relation, ctes)?;
@@ -1712,6 +1756,16 @@ fn join_relation_qualifier(plan: &LogicalPlan) -> Option<String> {
                 .unwrap_or_else(|| table.rsplit('.').next().unwrap_or(table).to_owned()),
         ),
         LogicalPlan::Filter { input, .. } => join_relation_qualifier(input),
+        LogicalPlan::Project { columns, .. } => {
+            let mut qualifiers = columns.iter().filter_map(|column| match column {
+                Expr::Alias { name, .. } => name.rsplit_once('.').map(|(qualifier, _)| qualifier),
+                _ => None,
+            });
+            let qualifier = qualifiers.next()?.to_owned();
+            qualifiers
+                .all(|candidate| candidate == qualifier)
+                .then_some(qualifier)
+        }
         _ => None,
     }
 }
@@ -4913,17 +4967,23 @@ mod tests {
     }
 
     #[test]
-    fn derived_join_using_fails_closed_until_relation_qualifiers_are_preserved() {
-        let error = sql_to_logical_plan(
+    fn derived_join_using_preserves_relation_qualifiers() {
+        let plan = sql_to_logical_plan(
             "SELECT u.user_id FROM (SELECT user_id FROM events) u JOIN (SELECT user_id FROM users) p USING (user_id)",
         )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("JOIN USING requires a single base relation"),
-            "{error}"
-        );
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected top-level projection")
+        };
+        let LogicalPlan::Join {
+            condition: Some(Expr::BinaryOp { left, right, .. }),
+            ..
+        } = *input
+        else {
+            panic!("expected qualified USING join")
+        };
+        assert_eq!(*left, Expr::Column("u.user_id".into()));
+        assert_eq!(*right, Expr::Column("p.user_id".into()));
     }
 
     #[test]
@@ -5901,15 +5961,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_using_over_a_composite_left_relation_until_bound() {
-        let error =
+    fn lowers_using_over_a_composite_left_relation() {
+        let plan =
             sql_to_logical_plan("SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)")
-                .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("single base relation on the left")
-        );
+                .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected top-level projection")
+        };
+        let LogicalPlan::Join {
+            condition: Some(Expr::BinaryOp { left, right, .. }),
+            ..
+        } = *input
+        else {
+            panic!("expected qualified USING join")
+        };
+        assert_eq!(*left, Expr::Column("u.id".into()));
+        assert_eq!(*right, Expr::Column("o.id".into()));
     }
 
     #[test]
