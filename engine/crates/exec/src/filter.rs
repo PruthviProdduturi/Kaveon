@@ -1,7 +1,7 @@
 use arrow::compute;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, Expr, Result};
+use kaveon_core::{BatchOperator, Expr, Result, StoragePredicate};
 
 use crate::expr_eval::evaluate_predicate;
 
@@ -32,6 +32,13 @@ impl FilterOperator {
 impl BatchOperator for FilterOperator {
     fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    fn apply_runtime_predicate(&mut self, predicate: &StoragePredicate) -> Result<bool> {
+        // The filter preserves the input columns and only evaluates its own
+        // predicate, so an exact build-side predicate can be pushed through
+        // to the storage source before the next batch is read.
+        self.source.apply_runtime_predicate(predicate)
     }
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
