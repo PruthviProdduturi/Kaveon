@@ -4009,6 +4009,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 | DataType::UInt64
                 | DataType::Float32
                 | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Decimal128(_, _)
                 | DataType::Utf8
                 | DataType::LargeUtf8
         ) {
@@ -9459,6 +9462,9 @@ fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Res
         DataType::UInt64 => primitive_keys_equal!(UInt64Array),
         DataType::Float32 => primitive_keys_equal!(Float32Array),
         DataType::Float64 => primitive_keys_equal!(Float64Array),
+        DataType::Date32 => primitive_keys_equal!(Date32Array),
+        DataType::Date64 => primitive_keys_equal!(Date64Array),
+        DataType::Decimal128(_, _) => primitive_keys_equal!(Decimal128Array),
         DataType::Utf8 => {
             let values = left.as_any().downcast_ref::<StringArray>().unwrap();
             values.value(left_index) == values.value(right_index)
@@ -12766,6 +12772,47 @@ mod tests {
         assert_eq!(
             result.keys().as_primitive::<Int32Type>().values(),
             &[1_i32, 2_i32]
+        );
+    }
+
+    #[test]
+    fn map_from_entries_accepts_date_key_types() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", DataType::Date32, false)),
+            Arc::new(arrow::datatypes::Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Date32Array::from(vec![19_000, 19_001])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+            ],
+            None,
+        );
+        let list = ListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields.clone()),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            Arc::new(rows),
+            None,
+        );
+        let input = RecordBatch::try_from_iter([("entries", Arc::new(list) as ArrayRef)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            result.keys().as_primitive::<Date32Type>().values(),
+            &[19_000_i32, 19_001_i32]
         );
     }
 
