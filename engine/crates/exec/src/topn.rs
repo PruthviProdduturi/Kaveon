@@ -228,6 +228,15 @@ pub fn merge_top_n(
         return Ok(Some(result));
     }
 
+    // Worker TopN operators also emit sorted batches for strings, dates,
+    // decimals, and multi-key orderings.  Merge those heads without
+    // concatenating the payload columns at the coordinator.  The integer
+    // specialization above remains the cheaper hot path; this generic path
+    // keeps Arrow's comparator semantics for every other key type.
+    if let Some(result) = try_sorted_batch_top_n(schema, batches, sort_exprs, limit)? {
+        return Ok(Some(result));
+    }
+
     let non_empty = batches
         .iter()
         .filter(|batch| batch.num_rows() > 0)
@@ -259,6 +268,139 @@ pub fn merge_top_n(
         .map(|column| take(column.as_ref(), &indices, None))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(Some(RecordBatch::try_new(schema.clone(), output_columns)?))
+}
+
+fn try_sorted_batch_top_n(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    sort_exprs: &[SortExpr],
+    limit: usize,
+) -> Result<Option<RecordBatch>> {
+    let evaluated = batches
+        .iter()
+        .map(|batch| {
+            sort_exprs
+                .iter()
+                .map(|sort_expr| evaluate(&sort_expr.expr, batch))
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let key_columns = (0..sort_exprs.len())
+        .map(|key| {
+            let columns = evaluated
+                .iter()
+                .map(|batch| batch[key].clone())
+                .collect::<Vec<_>>();
+            arrow::compute::concat(
+                &columns
+                    .iter()
+                    .map(|column| column.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|error| KaveonError::Execution(error.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let comparators = key_columns
+        .iter()
+        .zip(sort_exprs)
+        .map(|(values, sort_expr)| {
+            arrow::array::make_comparator(
+                values.as_ref(),
+                values.as_ref(),
+                SortOptions {
+                    descending: !sort_expr.ascending,
+                    nulls_first: sort_expr.nulls_first,
+                },
+            )
+            .map_err(|error| KaveonError::Execution(error.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut offsets = Vec::with_capacity(batches.len());
+    let mut offset = 0usize;
+    for batch in batches {
+        offsets.push(offset);
+        offset += batch.num_rows();
+    }
+    let compare = |left: usize, right: usize| {
+        for comparator in &comparators {
+            let ordering = comparator(left, right);
+            if !ordering.is_eq() {
+                return ordering;
+            }
+        }
+        std::cmp::Ordering::Equal
+    };
+    let sorted = evaluated.iter().enumerate().all(|(batch, keys)| {
+        (1..keys.first().map_or(0, Array::len)).all(|row| {
+            compare(offsets[batch] + row - 1, offsets[batch] + row) != std::cmp::Ordering::Greater
+        })
+    });
+    if !sorted {
+        return Ok(None);
+    }
+
+    let mut cursors = vec![0usize; batches.len()];
+    let mut references = Vec::with_capacity(limit.min(offset));
+    while references.len() < limit {
+        let next = batches
+            .iter()
+            .enumerate()
+            .filter_map(|(batch, input)| {
+                let row = cursors[batch];
+                (row < input.num_rows()).then_some((batch, row))
+            })
+            .min_by(|left, right| compare(offsets[left.0] + left.1, offsets[right.0] + right.1));
+        let Some((batch, row)) = next else { break };
+        references.push((batch, row));
+        cursors[batch] += 1;
+    }
+    if references.is_empty() {
+        return Ok(None);
+    }
+
+    let mut selected = Vec::with_capacity(batches.len());
+    let mut output_order = Vec::with_capacity(references.len());
+    for (batch_index, batch) in batches.iter().enumerate() {
+        let rows = references
+            .iter()
+            .filter_map(|(candidate_batch, row)| {
+                (*candidate_batch == batch_index).then_some(*row as u32)
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
+        }
+        let indices = UInt32Array::from(rows);
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|column| take(column.as_ref(), &indices, None))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        selected.push(RecordBatch::try_new(schema.clone(), columns)?);
+    }
+    let selected = concat_batches(schema, &selected)?;
+    let mut selected_offsets = vec![0usize; batches.len()];
+    let mut count = 0usize;
+    for (batch_index, _batch) in batches.iter().enumerate() {
+        selected_offsets[batch_index] = count;
+        count += references
+            .iter()
+            .filter(|(candidate_batch, _)| *candidate_batch == batch_index)
+            .count();
+    }
+    let mut seen = vec![0usize; batches.len()];
+    for (batch, _) in &references {
+        output_order.push((selected_offsets[*batch] + seen[*batch]) as u32);
+        seen[*batch] += 1;
+    }
+    let order = UInt32Array::from(output_order);
+    let columns = selected
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &order, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
 }
 
 fn try_integer_batch_top_n(
@@ -943,6 +1085,59 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("a9"), Some("b8"), Some("a7"), Some("b7")]
+        );
+    }
+
+    #[test]
+    fn merges_sorted_string_batches_without_payload_concatenation() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("payload", DataType::Utf8, false),
+        ]));
+        let worker_a = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![Some("alpha"), Some("charlie")])),
+                Arc::new(StringArray::from(vec!["a", "c"])),
+            ],
+        )
+        .unwrap();
+        let worker_b = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![Some("bravo"), Some("delta")])),
+                Arc::new(StringArray::from(vec!["b", "d"])),
+            ],
+        )
+        .unwrap();
+
+        let result = merge_top_n(
+            &schema,
+            &[worker_a, worker_b],
+            &[SortExpr::new(Expr::Column("name".into()), true)],
+            3,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("bravo"), Some("charlie")]
+        );
+        assert_eq!(
+            result
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]
         );
     }
 
