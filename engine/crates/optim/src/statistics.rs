@@ -302,7 +302,12 @@ fn join_distribution(
     let Some((probe, build)) = probe.zip(build) else {
         return JoinDistribution::Partitioned;
     };
-    if join_type == JoinType::Inner
+    // A right-side broadcast is also semantics-preserving for a left outer
+    // join: the probe side remains the preserved left relation, while the
+    // build side is replicated exactly as in the partitioned operator.  Do
+    // not apply this to RIGHT/FULL joins because that would require swapping
+    // the preserved side or a left-broadcast distribution.
+    if matches!(join_type, JoinType::Inner | JoinType::Left)
         && build.rows <= BROADCAST_BUILD_MAX_ROWS
         && build
             .bytes
@@ -841,7 +846,6 @@ mod tests {
             JoinDistribution::BroadcastRight
         );
         for (join_type, probe, build) in [
-            (JoinType::Left, 4_000_000, Some(1_000_000)),
             (JoinType::Inner, 3_999_999, Some(1_000_000)),
             (JoinType::Inner, 8_000_000, Some(1_000_001)),
             (JoinType::Inner, 10, None),
@@ -861,6 +865,26 @@ mod tests {
                 JoinType::Inner,
                 Some(&estimate(4_000_000, None)),
                 Some(&estimate(1_000, Some(BROADCAST_BUILD_MAX_BYTES + 1)))
+            ),
+            JoinDistribution::Partitioned
+        );
+    }
+
+    #[test]
+    fn broadcasts_a_proven_small_right_side_of_a_left_join() {
+        assert_eq!(
+            join_distribution(
+                JoinType::Left,
+                Some(&estimate(4_000_000, Some(128 * 1024 * 1024))),
+                Some(&estimate(1_000, Some(8 * 1024 * 1024))),
+            ),
+            JoinDistribution::BroadcastRight
+        );
+        assert_eq!(
+            join_distribution(
+                JoinType::Left,
+                Some(&estimate(4_000_000, None)),
+                Some(&estimate(1_000, Some(BROADCAST_BUILD_MAX_BYTES + 1))),
             ),
             JoinDistribution::Partitioned
         );
