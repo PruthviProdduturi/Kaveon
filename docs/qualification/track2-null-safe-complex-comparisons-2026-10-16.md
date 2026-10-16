@@ -1,8 +1,7 @@
 # Track 2 null-safe complex comparisons
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `bb7e2584` plus the typed-NULL correction in this
-qualification update
+**Source:** `origin/dev` at `9514d6c2`
 
 Kaveon now evaluates `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` through a
 recursive null-safe comparison path. This preserves SQL's two-valued semantics
