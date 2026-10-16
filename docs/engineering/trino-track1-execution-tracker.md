@@ -25,14 +25,14 @@ snapshot, not a session diary.
 | 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current AKS image also has exact-repeat three-worker evidence for multi-column ordering with OFFSET and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
 | 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, telemetry, ten exact concurrent mixed-workload rounds on the current image with resource samples and zero retained spill files, and a forced-worker-loss pressure run with zero file growth exist. | Skew, physical disk exhaustion, and final-merge spill under sustained load. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
-| 9 | Worker-loss recovery | **Qualified (bounded)** | Replacement-worker recovery preserves exact results for the declared bounded gate; the current image also passes a forced worker loss during a distributed scan with exact retry, replacement, cleanup, and post-recovery probe. | Node-drain and repeated-loss endurance with retained exact-result evidence. |
+| 9 | Worker-loss recovery | **Qualified (bounded)** | Replacement-worker recovery preserves exact results for the declared bounded gate; the current image also passes a forced worker loss during a distributed scan with exact retry, replacement, cleanup, and post-recovery probe. A graceful node-drain run also returned the exact result and restored three catalog-compatible workers, but Kubernetes evicted the pod before a retry was observable. | Node-drain interruption/retry and repeated-loss endurance with retained exact-result evidence. |
 | 10 | Coordinator restart | **Complete (bounded)** | Idle and active-query cleanup is fail-closed, exchange spools are reclaimed, workers reregister, and exact post-restart probes pass. | Multi-coordinator/failover continuity remains a separate future qualification. |
 | 11 | Snapshot consistency | Open | Catalog and Delta versions are pinned across statement fragments and retries. | Cross-coordinator recovery and concurrent source-version qualification. |
 | 12 | Runtime dynamic filtering | Open | Build-side runtime filters reduce probe work for supported joins. | Inject filters into Parquet/Delta scan pruning with exact-result and exchange tests. |
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
 | 14 | Connector federation | Open | Native Parquet, Delta, and Iceberg paths exist; registered SQL sources use passthrough API paths. | Authenticated pushdown and cross-source execution qualification. |
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
-| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus a 604.001-second ten-round, 40-query concurrent mixed-workload run and a current-image forced-worker-loss pressure run with exact results, resource samples, and zero retained spill exist. | Longer endurance, node-loss during the soak, broader topology, and retry/failure qualification. |
+| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus a 604.001-second ten-round, 40-query concurrent mixed-workload run, a current-image forced-worker-loss pressure run, and a graceful node-drain observation with exact results, resource samples, and zero retained spill exist. | Longer endurance, node-loss during the soak, broader topology, and retry/failure qualification. |
 
 The full-table aggregate evidence is retained in `docs/qualification/track1-aks-scale-aggregate-2026-10-15.md` and its raw JSON: two identical 100-row result sets after grouping all 504,000,000 source rows, across three stages, seven tasks, and all three workers. It strengthens item 4 correctness evidence; p95, skew, and sustained mixed-workload gates remain open.
 
@@ -58,6 +58,12 @@ returned the exact baseline, the replacement rejoined with the pinned catalog
 snapshot, eight pressure requests were exact, and no exchange or spill files
 remained. Repeated loss, node drain during a long soak, and physical disk
 exhaustion remain open.
+
+The graceful node-drain observation is retained in
+`docs/qualification/track1-aks-node-drain-graceful-2026-10-16.md` and its raw
+JSON. The active scan returned the exact baseline and the replacement worker
+rejoined with the pinned snapshot, but eviction completed before a retry could
+be observed; it is intentionally not counted as a retry qualification.
 
 ## Active item: 3 — distributed joins
 

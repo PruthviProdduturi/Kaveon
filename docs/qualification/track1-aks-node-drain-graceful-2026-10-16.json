@@ -1,0 +1,553 @@
+{
+  "started_at_utc": "2026-10-16T02:18:20.053363+00:00",
+  "context": "kaveon-aks",
+  "namespace": "kaveon",
+  "credential_material_recorded": false,
+  "subscription_policy_changed": false,
+  "failure_mode": "node-drain",
+  "checks": {
+    "three_catalog_compatible_workers_before": true,
+    "concurrent_exact_results": true,
+    "cancellation_cleanup": true,
+    "worker_loss_exact_retry_and_recovery": false
+  },
+  "passed": false,
+  "shell_current_context": "kaveon-aks",
+  "explicit_target_context": "kaveon-aks",
+  "pods_before": {
+    "kaveon-api-6758744588-st566": {
+      "uid": "6dc8481c-bd5e-4b38-9d76-e4889e7da015",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "6Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-availability-guard-29868618-7zkdv": {
+      "uid": "89891c64-13e1-43f3-9849-891b78e50661",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "250m",
+          "memory": "192Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868605-6dm9v": {
+      "uid": "5dfb1004-ca42-4fa3-92ab-e0ce6f74658b",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868610-h6xm5": {
+      "uid": "17012bc1-0dfe-4150-a24a-483d42294e40",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-catalog-archive-29868615-qwq5g": {
+      "uid": "d0eda191-b43a-40ad-b9fd-ef7c083cd5f9",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "512Mi"
+        },
+        "requests": {
+          "cpu": "25m",
+          "memory": "128Mi"
+        }
+      }
+    },
+    "kaveon-coordinator-0": {
+      "uid": "d6bbdbb0-1a3c-44e0-a790-8e2a508b2685",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-system-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3",
+          "ephemeral-storage": "8Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "2Gi",
+          "memory": "2Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868497-vlj5z": {
+      "uid": "17e44596-36bf-40b1-80c9-a7b3e8a63c84",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868557-bbq5b": {
+      "uid": "75ab91de-ce1a-4f7e-baad-b42d55a2fe38",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-dlm-freshness-29868617-xdgxj": {
+      "uid": "b7935d0e-c15a-484f-988d-d488961ef11e",
+      "image": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "image_id": "kaveonacr.azurecr.io/kaveon-api@sha256:b1d87f0d767fcacb003e67662ccbccaf7ce4f73bee2c05b97e9a0e843daa29f1",
+      "restart_count": 0,
+      "ready": false,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "8Gi"
+        },
+        "requests": {
+          "cpu": "250m",
+          "memory": "1Gi"
+        }
+      }
+    },
+    "kaveon-portal-d5bc89fd8-cbszz": {
+      "uid": "c3b4fdfc-0be7-402a-abad-a86bdb0620de",
+      "image": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "image_id": "kaveonacr.azurecr.io/kaveon-studio@sha256:aa65298563f5a0c3fc5d94ed2a0f4717375cd7527487ff7ebd1a79ac42bd8784",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "3Gi"
+        },
+        "requests": {
+          "cpu": "200m",
+          "memory": "512Mi"
+        }
+      }
+    },
+    "kaveon-worker-0": {
+      "uid": "74d82844-dceb-46cc-a5f9-4040e3609b83",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000000",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-1": {
+      "uid": "91d266c0-7437-4f74-a8a2-928346ddfe8e",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000002",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    },
+    "kaveon-worker-2": {
+      "uid": "2d84821e-0e61-4e93-901f-b0f1a8a21965",
+      "image": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "image_id": "kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18",
+      "restart_count": 0,
+      "ready": true,
+      "node": "aks-workers-15909223-vmss000001",
+      "resources": {
+        "limits": {
+          "cpu": "3200m",
+          "ephemeral-storage": "24Gi",
+          "memory": "11Gi"
+        },
+        "requests": {
+          "cpu": "1",
+          "ephemeral-storage": "4Gi",
+          "memory": "3Gi"
+        }
+      }
+    }
+  },
+  "retained_files_before": {
+    "coordinator_exchange": 0,
+    "kaveon-worker-0_spill": 0,
+    "kaveon-worker-1_spill": 0,
+    "kaveon-worker-2_spill": 0
+  },
+  "principal": "kaveon-operator",
+  "cluster_before": {
+    "environment": "aks",
+    "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+    "active_workers": 3,
+    "compatible_workers": 3,
+    "total_nodes": 4,
+    "workers": [
+      {
+        "node_id": "kaveon-worker-2-2d84821e-0e61-4e93-901f-b0f1a8a21965",
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "memory_rss_bytes": 581193728
+      },
+      {
+        "node_id": "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "memory_rss_bytes": 531427328
+      },
+      {
+        "node_id": "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "memory_rss_bytes": 59359232
+      }
+    ]
+  },
+  "concurrent_exact": {
+    "concurrency": 3,
+    "rounds": 1,
+    "requests": [
+      {
+        "name": "dashboard_count",
+        "sql": "SELECT COUNT(*) FROM kaveon_events_dashboard",
+        "status": 200,
+        "id": "53fcef05-3cd7-4949-8334-139b48775b18",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 604,
+        "client_elapsed_ms": 1046.0,
+        "result_sha256": "84377fa78279b94980226e19983054b7c579c97cdbc8921c843b174d35fd0012",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            24
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "enriched_count",
+        "sql": "SELECT COUNT(*) FROM kaveon_events_enriched",
+        "status": 200,
+        "id": "c33d4700-5731-46f7-b4cb-bf25351504ee",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 657,
+        "client_elapsed_ms": 1078.0,
+        "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            504000000
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 1,
+        "exact": true
+      },
+      {
+        "name": "borough_count",
+        "sql": "SELECT COUNT(*) FROM nyc_taxi_borough",
+        "status": 200,
+        "id": "3c4c0941-b701-4691-85ef-8d7e41cf8fc6",
+        "state": "FINISHED",
+        "error": null,
+        "elapsed_ms": 535,
+        "client_elapsed_ms": 1578.0,
+        "result_sha256": "77471ebe3613f4714666523fa961eb443f57dc2396a31528afdbbea86fadc8f8",
+        "row_count": 1,
+        "admission_refusals": 0,
+        "data": [
+          [
+            5
+          ]
+        ],
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "stage_count": 0,
+        "task_count": 0,
+        "worker_ids": [],
+        "task_ids": [],
+        "tasks": [],
+        "scan_metrics_complete": true,
+        "round": 1,
+        "exact": true
+      }
+    ]
+  },
+  "cancellation": {
+    "query_id": "1a7f7767-cb3d-46a1-9abe-276dca1a4f85",
+    "delete_status": 204,
+    "statement_response_status": 409,
+    "final_state": "CANCELED",
+    "retained_files_after": {
+      "coordinator_exchange": 0,
+      "kaveon-worker-0_spill": 0,
+      "kaveon-worker-1_spill": 0,
+      "kaveon-worker-2_spill": 0
+    },
+    "cleanup": true
+  },
+  "worker_loss": {
+    "target": "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+    "target_pod": "kaveon-worker-1",
+    "target_node": "aks-workers-15909223-vmss000002",
+    "old_uid": "91d266c0-7437-4f74-a8a2-928346ddfe8e",
+    "replacement_uid": "827a5048-0835-4f84-ae41-237b060dea18",
+    "query_observed_running": true,
+    "target_selected_from_longest_baseline_task": {
+      "stage_id": 0,
+      "task_id": "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.1.0",
+      "node_id": "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+      "elapsed_us": 15677264
+    },
+    "forced_termination_after_running_ms": 5000,
+    "retry_attempt_observed": false,
+    "baseline": {
+      "name": "enriched_scan_fault",
+      "sql": "SELECT COUNT(*) FROM kaveon_events_enriched WHERE actions >= 0",
+      "status": 200,
+      "id": "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5",
+      "state": "FINISHED",
+      "error": null,
+      "elapsed_ms": 16279,
+      "client_elapsed_ms": 16532.0,
+      "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+      "row_count": 1,
+      "admission_refusals": 0,
+      "data": [
+        [
+          504000000
+        ]
+      ],
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "stage_count": 2,
+      "task_count": 4,
+      "worker_ids": [
+        "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+        "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+        "kaveon-worker-2-2d84821e-0e61-4e93-901f-b0f1a8a21965"
+      ],
+      "task_ids": [
+        "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.0.0",
+        "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.1.0",
+        "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.2.0",
+        "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.1.0.0"
+      ],
+      "tasks": [
+        {
+          "stage_id": 0,
+          "task_id": "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.0.0",
+          "node_id": "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+          "elapsed_us": 14815226
+        },
+        {
+          "stage_id": 0,
+          "task_id": "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.1.0",
+          "node_id": "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+          "elapsed_us": 15677264
+        },
+        {
+          "stage_id": 0,
+          "task_id": "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.0.2.0",
+          "node_id": "kaveon-worker-2-2d84821e-0e61-4e93-901f-b0f1a8a21965",
+          "elapsed_us": 14732710
+        },
+        {
+          "stage_id": 1,
+          "task_id": "8ac8e1c8-2395-44f2-83e7-9041c0a88bc5.1.0.0",
+          "node_id": "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+          "elapsed_us": 5019
+        }
+      ],
+      "scan_metrics_complete": false
+    },
+    "during_loss": {
+      "name": "enriched_scan_fault",
+      "sql": "SELECT COUNT(*) FROM kaveon_events_enriched WHERE actions >= 0",
+      "status": 200,
+      "id": "70ad6689-8392-4dca-961f-aa1fab8a455c",
+      "state": "FINISHED",
+      "error": null,
+      "elapsed_ms": 20806,
+      "client_elapsed_ms": 21156.0,
+      "result_sha256": "17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5",
+      "row_count": 1,
+      "admission_refusals": 0,
+      "data": [
+        [
+          504000000
+        ]
+      ],
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "stage_count": 2,
+      "task_count": 4,
+      "worker_ids": [
+        "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+        "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+        "kaveon-worker-2-2d84821e-0e61-4e93-901f-b0f1a8a21965"
+      ],
+      "task_ids": [
+        "70ad6689-8392-4dca-961f-aa1fab8a455c.0.0.0",
+        "70ad6689-8392-4dca-961f-aa1fab8a455c.0.1.0",
+        "70ad6689-8392-4dca-961f-aa1fab8a455c.0.2.0",
+        "70ad6689-8392-4dca-961f-aa1fab8a455c.1.0.0"
+      ],
+      "tasks": [
+        {
+          "stage_id": 0,
+          "task_id": "70ad6689-8392-4dca-961f-aa1fab8a455c.0.0.0",
+          "node_id": "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+          "elapsed_us": 14384057
+        },
+        {
+          "stage_id": 0,
+          "task_id": "70ad6689-8392-4dca-961f-aa1fab8a455c.0.1.0",
+          "node_id": "kaveon-worker-1-91d266c0-7437-4f74-a8a2-928346ddfe8e",
+          "elapsed_us": 14680979
+        },
+        {
+          "stage_id": 0,
+          "task_id": "70ad6689-8392-4dca-961f-aa1fab8a455c.0.2.0",
+          "node_id": "kaveon-worker-2-2d84821e-0e61-4e93-901f-b0f1a8a21965",
+          "elapsed_us": 20188672
+        },
+        {
+          "stage_id": 1,
+          "task_id": "70ad6689-8392-4dca-961f-aa1fab8a455c.1.0.0",
+          "node_id": "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+          "elapsed_us": 2789
+        }
+      ],
+      "scan_metrics_complete": false
+    },
+    "exact_match": true,
+    "cluster_after_recovery": {
+      "environment": "aks",
+      "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "active_workers": 3,
+      "compatible_workers": 3,
+      "total_nodes": 4,
+      "workers": [
+        {
+          "node_id": "kaveon-worker-2-2d84821e-0e61-4e93-901f-b0f1a8a21965",
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "memory_rss_bytes": 581193728
+        },
+        {
+          "node_id": "kaveon-worker-0-74d82844-dceb-46cc-a5f9-4040e3609b83",
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "memory_rss_bytes": 531427328
+        },
+        {
+          "node_id": "kaveon-worker-1-827a5048-0835-4f84-ae41-237b060dea18",
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "memory_rss_bytes": 30216192
+        }
+      ]
+    }
+  },
+  "failure": "Worker-loss query did not prove exact retry and full recovery",
+  "completed_at_utc": "2026-10-16T02:19:55.856334+00:00"
+}
