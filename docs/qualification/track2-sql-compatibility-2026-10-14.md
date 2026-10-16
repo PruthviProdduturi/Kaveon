@@ -506,3 +506,11 @@ subqueries, set operations, ordering, arrays, maps, JSON, and typed literal
 paths across the local and distributed execution variants. This is current
 repository evidence; the remaining cloud and broader external-client gates
 stay open in the parity matrix.
+
+## Current-image AKS wire-shape qualification (2026-10-15)
+
+The current AKS image passed two exact-repeat executions for four bounded Trino-compatible shapes: multi-array `UNNEST … WITH ORDINALITY` with null padding, BigQuery-compatible `WITH OFFSET`, `JSON_PARSE` with `JSON_VALUE` and array length, and typed `ROW` plus `MAP_KEYS` materialization. Every run returned HTTP 200 and `FINISHED` with identical result digests. The distributed UNNEST cases completed through the fragment path; constant-expression JSON and map/row cases correctly stayed single-task.
+
+This strengthens the current-image wire evidence for arrays, JSON, maps, rows, and row-producing UNNEST. Correlated/lateral table functions, full complex-type coercion, and broader external-client differential coverage remain open.
+
+Raw evidence: [`track2-aks-wire-shapes-2026-10-15.json`](./track2-aks-wire-shapes-2026-10-15.json).
