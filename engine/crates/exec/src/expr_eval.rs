@@ -2925,16 +2925,16 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         }
         DataType::Date32 => array_histogram_primitive::<L, Date32Type>(list),
         DataType::Date64 => array_histogram_primitive::<L, Date64Type>(list),
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
             array_histogram_primitive::<L, TimestampSecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None) => {
             array_histogram_primitive::<L, TimestampMillisecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => {
             array_histogram_primitive::<L, TimestampMicrosecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None) => {
             array_histogram_primitive::<L, TimestampNanosecondType>(list)
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
