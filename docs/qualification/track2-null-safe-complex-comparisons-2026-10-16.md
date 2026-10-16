@@ -1,7 +1,8 @@
 # Track 2 null-safe complex comparisons
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `5ce87c76`
+**Source:** `origin/dev` at `bb7e2584` plus the typed-NULL correction in this
+qualification update
 
 Kaveon now evaluates `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` through a
 recursive null-safe comparison path. This preserves SQL's two-valued semantics
@@ -11,7 +12,7 @@ semantics.
 The focused execution regression covers:
 
 - arrays containing NULL elements;
-- ROW values;
+- ROW values, including untyped `NULL` fields;
 - MAP values with typed NULL entries; and
 - the inverse `IS DISTINCT FROM` result.
 
@@ -34,10 +35,10 @@ cargo fmt --all -- --check
 passed
 
 cargo test -p kaveon-server the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
-1 passed, 0 failed, 411 filtered out, 140.31s
+1 passed, 0 failed, 411 filtered out, 140.56s
 
 node scripts/validate-docs.mjs
-193 Markdown files, 39 routes, 9 SVGs; passed
+194 Markdown files, 39 routes, 9 SVGs; passed
 ```
 
 This evidence qualifies nested null-safe comparison behavior in the execution,

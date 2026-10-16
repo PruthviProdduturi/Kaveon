@@ -3023,8 +3023,10 @@ fn null_safe_equal(left: &ArrayRef, right: &ArrayRef) -> Result<BooleanArray> {
 fn null_safe_equal_value(left: &ArrayRef, right: &ArrayRef) -> Result<bool> {
     debug_assert_eq!(left.len(), 1);
     debug_assert_eq!(right.len(), 1);
-    if left.is_null(0) || right.is_null(0) {
-        return Ok(left.is_null(0) == right.is_null(0));
+    let left_is_null = matches!(left.data_type(), DataType::Null) || left.is_null(0);
+    let right_is_null = matches!(right.data_type(), DataType::Null) || right.is_null(0);
+    if left_is_null || right_is_null {
+        return Ok(left_is_null == right_is_null);
     }
 
     let left_list = match left.data_type() {
@@ -13683,14 +13685,8 @@ mod tests {
         };
         let row_equal = evaluate(
             &null_safe(
-                row(array(vec![
-                    Expr::Literal(ScalarValue::Int64(7)),
-                    Expr::Literal(ScalarValue::Null),
-                ])),
-                row(array(vec![
-                    Expr::Literal(ScalarValue::Int64(7)),
-                    Expr::Literal(ScalarValue::Null),
-                ])),
+                row(Expr::Literal(ScalarValue::Null)),
+                row(Expr::Literal(ScalarValue::Null)),
             ),
             &batch,
         )
