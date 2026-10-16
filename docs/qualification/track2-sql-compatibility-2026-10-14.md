@@ -390,6 +390,22 @@ fix with output captured and an authoritative exit status. `cargo test
 SQL `157/157`, execution `351 passed / 4 ignored`, and the remaining workspace
 targets all passed. The server differential sweep completed in 105.78 seconds.
 
+## Keyed correlated IN positive-limit qualification
+
+The binder now removes a positive top-level `LIMIT` from a keyed correlated
+`IN` or `NOT IN` subquery before decorrelation. For each outer row, membership
+is existential: if the correlated key has one qualifying inner row, retaining
+one row or all qualifying rows produces the same membership result. The
+implementation therefore lowers these shapes to the existing keyed semi/anti
+join path and preserves the residual predicate path.
+
+This rule is intentionally narrow. Uncorrelated `IN` keeps its `LIMIT`, because
+the limit changes the tested set; `LIMIT 0` remains an empty subquery; and
+correlated scalar limits and other Apply shapes remain fail-closed. The binder
+regressions cover both `IN` and `NOT IN`, and the distributed differential
+sweep now includes both positive-limit cases with identical local and
+distributed results.
+
 ## UNNEST offset qualification
 
 The row-producing UNNEST surface now accepts the BigQuery-compatible
