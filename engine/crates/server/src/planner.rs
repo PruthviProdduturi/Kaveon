@@ -1444,6 +1444,7 @@ fn window_partition_columns(window_exprs: &[Expr]) -> Option<Vec<String>> {
         // order also ensures every worker hashes the same key tuple.
         let mut columns = columns;
         columns.sort();
+        columns.dedup();
         if let Some(expected) = &shared {
             if expected != &columns {
                 return None;
@@ -4688,6 +4689,25 @@ mod tests {
                 expr(&["region", "category"])
             ]),
             Some(vec!["category".into(), "region".into()])
+        );
+    }
+
+    #[test]
+    fn removes_duplicate_window_partition_keys() {
+        let expr = kaveon_core::Expr::WindowFunction {
+            name: "ROW_NUMBER".into(),
+            args: vec![],
+            partition_by: vec![
+                kaveon_core::Expr::Column("category".into()),
+                kaveon_core::Expr::Column("category".into()),
+            ],
+            order_by: vec![],
+            frame: None,
+        };
+
+        assert_eq!(
+            window_partition_columns(&[expr]),
+            Some(vec!["category".into()])
         );
     }
 
