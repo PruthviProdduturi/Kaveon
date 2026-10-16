@@ -276,3 +276,42 @@ class AnOwnerPastTheCeilingCanGetBackUnder(unittest.TestCase):
              patch.object(history.product_store, "transact"):
             self.assertEqual(history.run_retention_sweep(owner), 0)
         self.assertEqual(history._HISTORY_COUNTS[owner], 400)
+
+
+class TheHistoryPanelShowsSomethingPastTheCeiling(unittest.TestCase):
+    """The symptom: "Your query history is not configured on this server".
+
+    It was configured. The store raises rather than truncating once a family
+    passes the bound it was given, the panel renders that status as a verdict
+    about configuration, and history is owner-scoped -- so the person who has
+    run the most queries is the one who loses the panel, and loses it whole.
+    """
+
+    def _read(self, records, truncated):
+        with patch("services.product_read_authority.enabled", return_value=True), \
+             patch.object(history.product_store, "list_records_capped",
+                          return_value=(records, truncated)), \
+             patch.object(history.product_store, "list_records",
+                          side_effect=AssertionError("the read must not use the raising listing")):
+            return history.list_history("alice", 3)
+
+    def _record(self, identity, stamp):
+        return {"document": {"id": identity, "user_email": "alice",
+                             "sql_text": "SELECT 1", "executed_at": stamp}}
+
+    def test_a_truncated_listing_still_answers(self):
+        records = [self._record(f"q{i}", f"2026-01-01T00:{i:02d}:00Z") for i in range(5)]
+        rows = self._read(records, True)
+        self.assertEqual(len(rows), 3)
+
+    def test_the_newest_come_first_whatever_order_the_store_used(self):
+        """The store returns its own order, so the read has to sort: taking
+        the first N of an arbitrary order would show an arbitrary three."""
+        records = [self._record("old", "2026-01-01T00:00:00Z"),
+                   self._record("newest", "2026-03-01T00:00:00Z"),
+                   self._record("middle", "2026-02-01T00:00:00Z")]
+        rows = self._read(records, False)
+        self.assertEqual([row["id"] for row in rows], ["newest", "middle", "old"])
+
+    def test_an_empty_history_is_still_empty(self):
+        self.assertEqual(self._read([], False), [])
