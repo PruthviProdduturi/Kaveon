@@ -1438,6 +1438,12 @@ fn window_partition_columns(window_exprs: &[Expr]) -> Option<Vec<String>> {
         if columns.is_empty() {
             return None;
         }
+        // Partition-key order does not change a window partition.  Normalize
+        // it before comparing windows so `PARTITION BY a, b` and
+        // `PARTITION BY b, a` can share one hash exchange.  Keeping a stable
+        // order also ensures every worker hashes the same key tuple.
+        let mut columns = columns;
+        columns.sort();
         if let Some(expected) = &shared {
             if expected != &columns {
                 return None;
@@ -4660,6 +4666,28 @@ mod tests {
         assert_eq!(
             window_partition_columns(&[expr("category"), expr("region")]),
             None
+        );
+    }
+
+    #[test]
+    fn shares_exchange_for_reordered_window_partition_keys() {
+        let expr = |columns: &[&str]| kaveon_core::Expr::WindowFunction {
+            name: "ROW_NUMBER".into(),
+            args: vec![],
+            partition_by: columns
+                .iter()
+                .map(|column| kaveon_core::Expr::Column((*column).into()))
+                .collect(),
+            order_by: vec![],
+            frame: None,
+        };
+
+        assert_eq!(
+            window_partition_columns(&[
+                expr(&["category", "region"]),
+                expr(&["region", "category"])
+            ]),
+            Some(vec!["category".into(), "region".into()])
         );
     }
 
