@@ -1693,6 +1693,7 @@ fn plan_output_columns(plan: &LogicalPlan) -> Option<Vec<String>> {
         | LogicalPlan::Offset { input, .. }
         | LogicalPlan::Distinct { input }
         | LogicalPlan::Window { input, .. } => plan_output_columns(input),
+        LogicalPlan::Unnest { columns, .. } => Some(columns.clone()),
         _ => None,
     }
 }
@@ -7902,8 +7903,17 @@ mod tests {
         };
         assert!(matches!(
             input.as_ref(),
-            LogicalPlan::Unnest { columns, .. }
-                if columns == &["id".to_owned(), "label".to_owned()]
+            LogicalPlan::Project { columns, .. }
+                if columns == &vec![
+                    Expr::Alias {
+                        expr: Box::new(Expr::Column("id".to_owned())),
+                        name: "t.id".to_owned(),
+                    },
+                    Expr::Alias {
+                        expr: Box::new(Expr::Column("label".to_owned())),
+                        name: "t.label".to_owned(),
+                    },
+                ]
         ));
     }
 }
