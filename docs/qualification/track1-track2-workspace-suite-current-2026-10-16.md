@@ -14,7 +14,7 @@ The complete Rust workspace test command was run from `engine/`:
 cargo test --workspace --all-targets --no-fail-fast --quiet
 ```
 
-The command completed with **1,553 listed tests, 1,547 passed, 0 failed, and 6
+The command completed with **1,554 listed tests, 1,548 passed, 0 failed, and 6
 ignored** across all workspace test binaries. The long server differential
 sweep completed successfully. Component totals were 74 catalog, 212 CLI, 87
 core, 386 execution, 69 optimizer, 412 server, 185 SQL, and 125 storage tests.

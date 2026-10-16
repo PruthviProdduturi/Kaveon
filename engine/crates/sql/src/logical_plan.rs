@@ -4913,6 +4913,20 @@ mod tests {
     }
 
     #[test]
+    fn derived_join_using_fails_closed_until_relation_qualifiers_are_preserved() {
+        let error = sql_to_logical_plan(
+            "SELECT u.user_id FROM (SELECT user_id FROM events) u JOIN (SELECT user_id FROM users) p USING (user_id)",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("JOIN USING requires a single base relation"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn order_by_a_repeated_select_item_orders_by_its_output() {
         let plan =
             sql_to_logical_plan("SELECT k, COUNT(*) FROM t GROUP BY k ORDER BY COUNT(*) DESC")
