@@ -257,6 +257,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_membership_and_trim",
+        "SELECT CONTAINS(ARRAY[1, 2, 3], 2) AS contains_value, TRIM_ARRAY(ARRAY[1, 2, 3], 1) AS trimmed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_scalar_functions",
         "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
         false,
