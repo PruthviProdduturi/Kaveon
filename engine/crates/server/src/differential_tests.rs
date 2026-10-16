@@ -681,6 +681,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "correlated_map_array_unnest_with_ordinality",
+        "SELECT x.id, entries.key, entries.value, entries.extra, entries.ord FROM (VALUES (1), (2)) AS x(id) CROSS JOIN LATERAL UNNEST(MAP(ARRAY['id'], ARRAY[x.id]), ARRAY[x.id, x.id + 10]) WITH ORDINALITY AS entries(key, value, extra, ord) ORDER BY x.id, entries.ord",
+        true,
+    ),
+    (
         "row_set_operation",
         "SELECT id, name FROM (VALUES (1, 'one'), (2, 'two')) AS left_values(id, name) EXCEPT SELECT id, name FROM (VALUES (2, 'two')) AS right_values(id, name) ORDER BY id",
         true,
