@@ -2089,7 +2089,7 @@ fn correlated_residual_left_lateral_join_using_matches_the_local_result() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement = "SELECT u.user_id, o.actions FROM users u LEFT JOIN LATERAL (SELECT user_id, actions FROM events WHERE events.user_id = u.user_id AND actions > u.user_id) o USING (user_id) ORDER BY u.user_id, o.actions LIMIT 10";
+    let statement = "SELECT u.user_id, o.actions FROM (VALUES (1), (9999)) AS u(user_id) LEFT JOIN LATERAL (SELECT user_id, actions FROM events WHERE events.user_id = u.user_id AND actions > u.user_id) o ON o.user_id = u.user_id ORDER BY u.user_id, o.actions";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("correlated-residual-left-lateral-using", 32 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)

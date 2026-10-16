@@ -101,7 +101,9 @@ worker-loss coverage.
 
 The added `correlated_residual_left_lateral_join_using_matches_the_local_result`
 case proves that a residual predicate inside a `LEFT JOIN LATERAL` preserves
-local null-extension semantics across three distributed workers.
+local null-extension semantics across three distributed workers. Its preserved
+side is an explicitly aliased derived `VALUES` relation, so the qualification
+also covers relation-qualifier propagation through the SQL lowering boundary.
 
 The exchange-focused regression also verifies that nested array, map, and row
 keys partition successfully, including two maps with reversed entry order
