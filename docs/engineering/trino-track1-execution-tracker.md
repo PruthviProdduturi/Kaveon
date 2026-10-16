@@ -75,7 +75,7 @@ commands, raw results, and a short qualification report under
 The worker-discovery gate is now complete for the declared three-worker
 topology. The qualification package includes Docker and AKS scheduling runs,
 forced pod-loss retry, grouped skew/failure injection, repeated pressure, and
-graceful node-drain retry. Item 2 is now qualified for the declared
+graceful node-drain observation. Item 2 is now qualified for the declared
 three-worker bounded gate; item 3 is the active work item.
 
 The bounded AKS join qualification is retained in
@@ -87,7 +87,7 @@ bounded forced join spill, one-worker-loss recovery, and a bounded high-cardinal
 Current exchange evidence includes the scheduler and stage-runtime suites,
 three-node Docker and AKS runs, exact multi-worker exchange, cancellation
 cleanup, worker replacement, grouped skew/failure injection, repeated pressure,
-and graceful node-drain retry. These reports qualify worker discovery and
+and graceful node-drain observation. These reports qualify worker discovery and
 scheduling for the declared three-worker topology. The broader topology and
 endurance work remains open.
 
