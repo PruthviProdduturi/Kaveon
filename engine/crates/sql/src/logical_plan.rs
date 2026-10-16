@@ -1418,6 +1418,29 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     .collect();
             }
             if let Some(alias) = alias
+                && !alias.columns.is_empty()
+                && let Some(columns) = plan_output_columns(&plan)
+            {
+                if alias.columns.len() != columns.len() {
+                    return Err(sql_err(format!(
+                        "derived relation alias has {} columns but the relation has {}",
+                        alias.columns.len(),
+                        columns.len()
+                    )));
+                }
+                plan = LogicalPlan::Project {
+                    input: Box::new(plan),
+                    columns: columns
+                        .into_iter()
+                        .zip(alias.columns.iter())
+                        .map(|(column, alias_column)| Expr::Alias {
+                            expr: Box::new(Expr::Column(column)),
+                            name: format!("{}.{}", alias.name.value, alias_column.name.value),
+                        })
+                        .collect(),
+                };
+            }
+            if let Some(alias) = alias
                 && alias.columns.is_empty()
                 && let LogicalPlan::Scan {
                     alias: scan_alias, ..
@@ -6059,6 +6082,26 @@ mod tests {
         };
         assert_eq!(*left, Expr::Column("u.id".into()));
         assert_eq!(*right, Expr::Column("o.id".into()));
+    }
+
+    #[test]
+    fn lowers_using_over_a_derived_relation_with_column_aliases() {
+        let plan = sql_to_logical_plan(
+            "SELECT u.uid, o.uid FROM (SELECT user_id FROM users) u(uid) JOIN (SELECT user_id FROM events) o(uid) USING (uid)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected top-level projection")
+        };
+        let LogicalPlan::Join {
+            condition: Some(Expr::BinaryOp { left, right, .. }),
+            ..
+        } = *input
+        else {
+            panic!("expected qualified USING join")
+        };
+        assert_eq!(*left, Expr::Column("u.uid".into()));
+        assert_eq!(*right, Expr::Column("o.uid".into()));
     }
 
     #[test]

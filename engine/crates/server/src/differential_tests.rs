@@ -2008,6 +2008,32 @@ fn distributed_uncorrelated_lateral_join_using_matches_the_local_result() {
 }
 
 #[test]
+fn distributed_derived_column_alias_join_using_matches_the_local_result() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-derived-column-alias-using-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT u.uid, o.actions FROM (SELECT user_id FROM users) u(uid) JOIN (SELECT user_id, actions FROM events) o(uid, actions) USING (uid) ORDER BY 1, 2 LIMIT 10";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-derived-column-alias-using", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_join_using_wildcard_suppresses_the_right_key() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-join-using-star-{}", uuid::Uuid::new_v4()));
