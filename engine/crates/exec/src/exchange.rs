@@ -144,17 +144,59 @@ impl HashPartitioner {
                 Ok(normalized)
             })
             .collect::<Result<Vec<ArrayRef>>>()?;
-        let fields = key_columns
-            .iter()
-            .map(|column| SortField::new(column.data_type().clone()))
-            .collect();
-        let converter = RowConverter::new(fields)?;
-        let rows = converter.convert_columns(&key_columns)?;
+        let nested_key = key_columns.iter().any(|column| {
+            matches!(
+                column.data_type(),
+                arrow::datatypes::DataType::List(_)
+                    | arrow::datatypes::DataType::LargeList(_)
+                    | arrow::datatypes::DataType::Map(_, _)
+                    | arrow::datatypes::DataType::Struct(_)
+            )
+        });
+        let hashes = if nested_key {
+            // Arrow's RowConverter intentionally does not yet support Map.
+            // Keep the fast row encoding for primitive keys, but use the
+            // canonical nested value key for lists/maps/rows so equal values
+            // still reach the same worker.
+            let mut hashes = vec![FNV_OFFSET_BASIS; batch.num_rows()];
+            for column in &key_columns {
+                if matches!(
+                    column.data_type(),
+                    arrow::datatypes::DataType::List(_)
+                        | arrow::datatypes::DataType::LargeList(_)
+                        | arrow::datatypes::DataType::Map(_, _)
+                        | arrow::datatypes::DataType::Struct(_)
+                ) {
+                    for (row, hash) in hashes.iter_mut().enumerate() {
+                        let key = crate::distinct::complex_value_key(column.as_ref(), row)?;
+                        *hash = stable_hash_from(*hash, key.as_bytes());
+                    }
+                } else {
+                    let converter =
+                        RowConverter::new(vec![SortField::new(column.data_type().clone())])?;
+                    let rows = converter.convert_columns(std::slice::from_ref(column))?;
+                    for (row, hash) in hashes.iter_mut().enumerate() {
+                        *hash = stable_hash_from(*hash, rows.row(row).as_ref());
+                    }
+                }
+            }
+            hashes
+        } else {
+            let fields = key_columns
+                .iter()
+                .map(|column| SortField::new(column.data_type().clone()))
+                .collect();
+            let converter = RowConverter::new(fields)?;
+            let rows = converter.convert_columns(&key_columns)?;
+            (0..batch.num_rows())
+                .map(|row| stable_hash(rows.row(row).as_ref()))
+                .collect()
+        };
         let mut indices = (0..self.partition_count)
             .map(|_| UInt32Builder::new())
             .collect::<Vec<_>>();
-        for row_index in 0..batch.num_rows() {
-            let mut hash = stable_hash(rows.row(row_index).as_ref());
+        for (row_index, hash_value) in hashes.iter().enumerate() {
+            let mut hash = *hash_value;
             if self.salt != 0 {
                 hash = mix(hash ^ self.salt);
             }
@@ -282,8 +324,10 @@ mod tests {
         BoundedExchangeBuffer, HashPartitioner, SPILL_PARTITION_SALT, THREAD_PARTITION_SALT,
     };
     use arrow::array::{
-        DictionaryArray, Int32Array, Int32Builder, Int64Array, ListBuilder, StringArray,
+        DictionaryArray, Int32Array, Int32Builder, Int64Array, ListBuilder, MapArray, StringArray,
+        StructArray,
     };
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
@@ -364,6 +408,86 @@ mod tests {
         assert_eq!(
             partitions.iter().map(|part| part.num_rows()).sum::<usize>(),
             2
+        );
+    }
+
+    #[test]
+    fn nested_map_and_row_keys_can_be_partitioned() {
+        let map_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", DataType::Int32, true)),
+        ]
+        .into();
+        let map_entries = StructArray::new(
+            map_fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as Arc<_>,
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as Arc<_>,
+            ],
+            None,
+        );
+        let map_schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(map_fields.clone()),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        )]));
+        let map = MapArray::try_new(
+            Arc::new(Field::new("entries", DataType::Struct(map_fields), false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2_i32])),
+            map_entries,
+            None,
+            false,
+        )
+        .unwrap();
+        let map_batch = RecordBatch::try_new(map_schema.clone(), vec![Arc::new(map)]).unwrap();
+        let map_partitions = HashPartitioner::try_new(&map_schema, &["key".into()], 3)
+            .unwrap()
+            .partition(&map_batch)
+            .unwrap();
+        assert_eq!(
+            map_partitions
+                .iter()
+                .map(|part| part.num_rows())
+                .sum::<usize>(),
+            1
+        );
+
+        let row_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("id", DataType::Int32, false)),
+            Arc::new(Field::new("name", DataType::Utf8, false)),
+        ]
+        .into();
+        let row_schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Struct(row_fields.clone()),
+            true,
+        )]));
+        let row = StructArray::new(
+            row_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as Arc<_>,
+                Arc::new(StringArray::from(vec![Some("one")])) as Arc<_>,
+            ],
+            None,
+        );
+        let row_batch = RecordBatch::try_new(row_schema.clone(), vec![Arc::new(row)]).unwrap();
+        let row_partitions = HashPartitioner::try_new(&row_schema, &["key".into()], 3)
+            .unwrap()
+            .partition(&row_batch)
+            .unwrap();
+        assert_eq!(
+            row_partitions
+                .iter()
+                .map(|part| part.num_rows())
+                .sum::<usize>(),
+            1
         );
     }
 
