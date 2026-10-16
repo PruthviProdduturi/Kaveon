@@ -23,6 +23,7 @@ pub struct DeltaTableReader {
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
+    metrics: ScanMetrics,
 }
 
 impl DeltaTableReader {
@@ -34,6 +35,7 @@ impl DeltaTableReader {
             columns: None,
             predicate: None,
             partition: None,
+            metrics: ScanMetrics::default(),
         }
     }
 
@@ -63,6 +65,11 @@ impl DeltaTableReader {
 
     pub fn with_predicate(mut self, predicate: StoragePredicate) -> Self {
         self.predicate = Some(predicate);
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: ScanMetrics) -> Self {
+        self.metrics = metrics;
         self
     }
 
@@ -161,7 +168,7 @@ impl DeltaTableReader {
                 batch_size: self.batch_size,
                 columns: self.columns.clone(),
                 predicate: self.predicate.clone(),
-                metrics: ScanMetrics::default(),
+                metrics: self.metrics.clone(),
             });
         }
         let schema_file = all_files
@@ -173,7 +180,7 @@ impl DeltaTableReader {
             Some(predicate) => snapshot.files_may_match(predicate),
             None => vec![true; all_files.len()],
         };
-        let metrics = ScanMetrics::default();
+        let metrics = self.metrics.clone();
         metrics.snapshot_time(snapshot_elapsed);
         let mut skipped = 0u64;
         let files: Vec<_> = all_files

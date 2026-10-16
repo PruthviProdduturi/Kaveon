@@ -19,6 +19,7 @@ pub struct ObjectDeltaReader {
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
     batch_size: usize,
+    metrics: ScanMetrics,
 }
 impl ObjectDeltaReader {
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -29,6 +30,7 @@ impl ObjectDeltaReader {
             predicate: None,
             partition: None,
             batch_size: 8_192,
+            metrics: ScanMetrics::default(),
         }
     }
     pub fn from_uri(uri: &str) -> Result<Self> {
@@ -53,6 +55,11 @@ impl ObjectDeltaReader {
     }
     pub fn with_predicate(mut self, predicate: StoragePredicate) -> Self {
         self.predicate = Some(predicate);
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: ScanMetrics) -> Self {
+        self.metrics = metrics;
         self
     }
     pub fn snapshot(&self) -> Result<DeltaSnapshot> {
@@ -181,7 +188,7 @@ impl ObjectDeltaReader {
                 columns: self.columns,
                 predicate: self.predicate,
                 batch_size: self.batch_size,
-                metrics: ScanMetrics::default(),
+                metrics: self.metrics.clone(),
             });
         }
         let first = snapshot
@@ -189,7 +196,7 @@ impl ObjectDeltaReader {
             .first()
             .cloned()
             .ok_or_else(|| error("Delta snapshot has no active files"))?;
-        let metrics = ScanMetrics::default();
+        let metrics = self.metrics.clone();
         metrics.snapshot_time(started.elapsed());
         let mut schema_reader =
             ObjectParquetReader::new(self.location.store.clone(), first.clone())
