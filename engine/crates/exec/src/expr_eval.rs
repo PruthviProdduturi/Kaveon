@@ -12939,6 +12939,40 @@ mod tests {
     }
 
     #[test]
+    fn map_lookup_accepts_timezone_less_timestamp_keys() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new(
+                "key",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let entries = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(TimestampMicrosecondArray::from(vec![Some(1_000_000)])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+            ],
+            None,
+        );
+        let map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
+                entries,
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let needle = Arc::new(TimestampMicrosecondArray::from(vec![Some(1_000_000)])) as ArrayRef;
+        let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
+        assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
+    }
+
+    #[test]
     fn element_at_accepts_large_utf8_map_keys() {
         let fields: arrow::datatypes::Fields = vec![
             Arc::new(Field::new("key", DataType::LargeUtf8, false)),
