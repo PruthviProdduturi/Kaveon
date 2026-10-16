@@ -694,6 +694,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_row_number_unpartitioned",
+        "SELECT country, actions, ROW_NUMBER() OVER (ORDER BY actions DESC, country) AS rn FROM {T} WHERE event_date = '2026-07-04' ORDER BY rn, country LIMIT 6",
+        true,
+    ),
+    (
         "window_percent_rank",
         "SELECT country, PERCENT_RANK() OVER (ORDER BY actions, country) AS p FROM {T} WHERE event_date = '2026-07-04' ORDER BY actions, country LIMIT 6",
         true,
