@@ -37,15 +37,15 @@ rerun is retained in
 [`track1-aks-join-gates-rerun-2026-10-15.json`](./track1-aks-join-gates-rerun-2026-10-15.json).
 
 This strengthens the bounded current-image equivalence evidence. It does not
-close disk-exhaustion behavior, forced join-spill recovery, or larger
-high-cardinality joins.
+close disk-exhaustion behavior or larger high-cardinality joins; bounded forced
+join spill and one-worker-loss recovery are qualified in the sections below.
 
 ## Boundary
 
 This qualifies bounded distributed outer-join equivalence and skewed join
-execution on the declared three-worker AKS topology. It does not yet qualify
-disk-exhaustion behavior, forced join-spill recovery, larger high-cardinality
-joins, or the full multi-join cost policy; those remain open in the tracker.
+execution on the declared three-worker AKS topology. Disk-exhaustion behavior,
+larger high-cardinality joins, and the full multi-join cost policy remain open in
+the tracker.
 
 ## Forced-spill probe (negative evidence, 2026-10-15)
 
@@ -59,7 +59,7 @@ Raw evidence: [`track1-aks-join-spill-negative-2026-10-15.json`](./track1-aks-jo
 
 The current three-worker AKS image was run twice with a 1 MiB per-query budget, one local worker thread, disabled result caching and statistics, and a prunable date plus `user_id` range against `OpenSource.public.kaveon_events_enriched`. Both runs finished successfully with the same ordered six-row result. Each worker wrote 32 join-spill partitions (about 1.04 MiB of join spill per worker) and completed the final merge. A follow-up check found zero spill files on all three workers, and all three workers remained catalog-compatible with no restarts.
 
-This qualifies bounded forced join spill, exact repeatability, and post-query cleanup. It does not qualify disk exhaustion, spill recovery after worker loss, larger high-cardinality joins, or sustained mixed-workload endurance; those remain open in the tracker.
+This qualifies bounded forced join spill, exact repeatability, and post-query cleanup. It does not qualify disk exhaustion, larger high-cardinality joins, or sustained mixed-workload endurance; bounded spill recovery after one worker loss is covered below.
 
 Raw evidence: [`track1-aks-join-spill-qualification-2026-10-15.json`](./track1-aks-join-spill-qualification-2026-10-15.json).
 
