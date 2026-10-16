@@ -6022,6 +6022,26 @@ mod tests {
     }
 
     #[test]
+    fn lowers_using_over_a_nested_derived_relation() {
+        let plan = sql_to_logical_plan(
+            "SELECT u.id, o.amount FROM (SELECT id FROM (SELECT id FROM users) inner_u) u JOIN orders o USING (id)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected top-level projection")
+        };
+        let LogicalPlan::Join {
+            condition: Some(Expr::BinaryOp { left, right, .. }),
+            ..
+        } = *input
+        else {
+            panic!("expected qualified USING join")
+        };
+        assert_eq!(*left, Expr::Column("u.id".into()));
+        assert_eq!(*right, Expr::Column("o.id".into()));
+    }
+
+    #[test]
     fn lowers_inner_residual_join_to_cross_join_and_filter() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM users u JOIN orders o ON u.id = o.user_id AND u.value > o.value",
