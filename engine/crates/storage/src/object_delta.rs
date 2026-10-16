@@ -1,7 +1,7 @@
 use crate::{
     ObjectBatchSource, ObjectLocation, ObjectParquetReader, ParquetFileMetadata, ScanMetrics,
     ScanPartition,
-    delta_snapshot::{DeltaSnapshot, blocking, resolve_snapshot},
+    delta_snapshot::{DeltaFileDetail, DeltaSnapshot, blocking, resolve_snapshot},
     object_reader::error,
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
@@ -182,7 +182,9 @@ impl ObjectDeltaReader {
                 crate::parquet_reader::ordered_projection(schema, self.columns.as_deref())?;
             return Ok(ObjectDeltaSource {
                 store: self.location.store,
-                files: vec![].into_iter(),
+                files: Vec::new(),
+                file_details: Vec::new(),
+                next_file: 0,
                 schema,
                 current: None,
                 columns: self.columns,
@@ -229,28 +231,22 @@ impl ObjectDeltaReader {
                     .0;
         }
         let mut skipped = 0u64;
-        let files = snapshot
-            .files
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| {
-                self.partition
-                    .is_none_or(|partition| partition.contains(*i))
-            })
-            .filter_map(|(i, path)| {
-                if admitted[i] {
-                    Some(path)
-                } else {
-                    skipped += 1;
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_iter();
+        let mut files = Vec::new();
+        let mut file_details = Vec::new();
+        for (i, path) in snapshot.files.into_iter().enumerate() {
+            if !self.partition.is_none_or(|partition| partition.contains(i)) || !admitted[i] {
+                skipped += 1;
+                continue;
+            }
+            files.push(path);
+            file_details.push(snapshot.details[i].clone());
+        }
         metrics.files_skipped(skipped);
         Ok(ObjectDeltaSource {
             store: self.location.store,
             files,
+            file_details,
+            next_file: 0,
             schema,
             current: None,
             columns: self.columns,
@@ -262,7 +258,9 @@ impl ObjectDeltaReader {
 }
 pub struct ObjectDeltaSource {
     store: Arc<dyn ObjectStore>,
-    files: std::vec::IntoIter<Path>,
+    files: Vec<Path>,
+    file_details: Vec<DeltaFileDetail>,
+    next_file: usize,
     schema: SchemaRef,
     current: Option<ObjectBatchSource>,
     columns: Option<Vec<String>>,
@@ -295,10 +293,39 @@ impl BatchSource for ObjectDeltaSource {
             column: column.to_owned(),
             values: values.to_vec(),
         };
-        self.predicate = Some(match self.predicate.take() {
+        let predicate = match self.predicate.take() {
             Some(existing) => StoragePredicate::And(vec![existing, predicate]),
             None => predicate,
-        });
+        };
+        let remaining = DeltaSnapshot {
+            version: 0,
+            files: self.files[self.next_file..].to_vec(),
+            schema: Some(self.schema.clone()),
+            details: self.file_details[self.next_file..].to_vec(),
+        };
+        let admitted = remaining.files_may_match(&predicate);
+        let mut kept_files = Vec::new();
+        let mut kept_details = Vec::new();
+        let mut skipped = 0u64;
+        for ((path, detail), keep) in remaining
+            .files
+            .into_iter()
+            .zip(remaining.details)
+            .zip(admitted)
+        {
+            if keep {
+                kept_files.push(path);
+                kept_details.push(detail);
+            } else {
+                skipped += 1;
+            }
+        }
+        self.files.truncate(self.next_file);
+        self.files.extend(kept_files);
+        self.file_details.truncate(self.next_file);
+        self.file_details.extend(kept_details);
+        self.predicate = Some(predicate);
+        self.metrics.files_skipped(skipped);
         self.metrics.runtime_filter_applied(values.len());
         Ok(true)
     }
@@ -314,9 +341,10 @@ impl BatchSource for ObjectDeltaSource {
                 }
                 self.current = None;
             }
-            let Some(path) = self.files.next() else {
+            let Some(path) = self.files.get(self.next_file).cloned() else {
                 return Ok(None);
             };
+            self.next_file += 1;
             let mut reader = ObjectParquetReader::new(self.store.clone(), path)
                 .with_batch_size(self.batch_size)
                 .with_metrics(self.metrics.clone());
@@ -513,33 +541,69 @@ mod tests {
                 .chain((0..4).map(|i| Field::new(format!("payload_{i}"), DataType::Utf8, false)))
                 .collect::<Vec<_>>(),
         ));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            std::iter::once(Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as _)
-                .chain((0..4).map(|_| {
-                    Arc::new(arrow::array::StringArray::from(vec![
-                        "payload-a",
-                        "payload-b",
-                        "payload-c",
-                        "payload-d",
-                    ])) as _
-                }))
-                .collect(),
-        )
-        .unwrap();
-        let mut writer = parquet::arrow::ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
-        writer.write(&batch).unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime
-            .block_on(store.put(
-                &Path::from("table/part-00000.parquet"),
-                writer.into_inner().unwrap().into(),
-            ))
+        for (name, values) in [
+            ("part-00000.parquet", vec![1, 2]),
+            ("part-00001.parquet", vec![3, 4]),
+        ] {
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                std::iter::once(Arc::new(Int64Array::from(values)) as _)
+                    .chain((0..4).map(|_| {
+                        Arc::new(arrow::array::StringArray::from(vec![
+                            "payload-a",
+                            "payload-b",
+                        ])) as _
+                    }))
+                    .collect(),
+            )
             .unwrap();
+            let mut writer =
+                parquet::arrow::ArrowWriter::try_new(Vec::new(), schema.clone(), None).unwrap();
+            writer.write(&batch).unwrap();
+            runtime
+                .block_on(store.put(
+                    &Path::from(format!("table/{name}")),
+                    writer.into_inner().unwrap().into(),
+                ))
+                .unwrap();
+        }
+        let schema_json = serde_json::json!({"type":"struct","fields":[
+            {"name":"x","type":"long","nullable":false,"metadata":{}},
+            {"name":"payload_0","type":"string","nullable":false,"metadata":{}},
+            {"name":"payload_1","type":"string","nullable":false,"metadata":{}},
+            {"name":"payload_2","type":"string","nullable":false,"metadata":{}},
+            {"name":"payload_3","type":"string","nullable":false,"metadata":{}}
+        ]})
+        .to_string();
+        let stats = |lo: i64, hi: i64| {
+            serde_json::json!({
+                "numRecords": 2,
+                "minValues": {"x": lo},
+                "maxValues": {"x": hi},
+                "nullCount": {"x": 0}
+            })
+            .to_string()
+        };
+        let delta_log = [
+            serde_json::json!({
+                "metaData": {"schemaString": schema_json, "partitionColumns": []}
+            })
+            .to_string(),
+            serde_json::json!({
+                "add": {"path": "part-00000.parquet", "stats": stats(1, 2)}
+            })
+            .to_string(),
+            serde_json::json!({
+                "add": {"path": "part-00001.parquet", "stats": stats(3, 4)}
+            })
+            .to_string(),
+        ]
+        .join("\n");
         runtime
             .block_on(store.put(
                 &Path::from("table/_delta_log/00000000000000000000.json"),
-                br#"{"add":{"path":"part-00000.parquet"}}"#.to_vec().into(),
+                delta_log.into_bytes().into(),
             ))
             .unwrap();
 
@@ -553,17 +617,11 @@ mod tests {
             .unwrap();
         assert!(
             source
-                .apply_runtime_filter(
-                    "x",
-                    &[
-                        kaveon_core::ScalarValue::Int64(2),
-                        kaveon_core::ScalarValue::Int64(4)
-                    ],
-                )
+                .apply_runtime_filter("x", &[kaveon_core::ScalarValue::Int64(2)],)
                 .unwrap()
         );
         assert_eq!(source.metrics().snapshot().runtime_filters_applied, 1);
-        assert_eq!(source.metrics().snapshot().runtime_filter_values, 2);
+        assert_eq!(source.metrics().snapshot().runtime_filter_values, 1);
 
         let mut values = Vec::new();
         while let Some(batch) = source.next_batch().unwrap() {
@@ -578,6 +636,7 @@ mod tests {
                     .copied(),
             );
         }
-        assert_eq!(values, vec![2, 4]);
+        assert_eq!(values, vec![2]);
+        assert_eq!(source.metrics().snapshot().files_skipped, 1);
     }
 }
