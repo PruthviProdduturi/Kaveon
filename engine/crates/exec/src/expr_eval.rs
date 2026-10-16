@@ -8941,7 +8941,9 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
 
 /// Extract a JSON value at a conservative SQL/JSON path. The result is
 /// serialized JSON text so objects and arrays remain usable JSON rather than
-/// being silently coerced to a scalar string.
+/// being silently coerced to a scalar string. Array wildcards (`[*]`) collect
+/// matching elements into one JSON array, which is the useful JSON_QUERY form;
+/// JSON_VALUE still rejects that array as non-scalar.
 fn json_extract(document: &str, path: &str) -> Option<String> {
     let value = json_extract_value(document, path)?;
     serde_json::to_string(&value).ok()
@@ -8951,6 +8953,7 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     enum Segment {
         Key(String),
         Index(usize),
+        Wildcard,
     }
     let mut remainder = path.strip_prefix('$')?;
     let mut segments = Vec::new();
@@ -8996,6 +8999,11 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
                 continue;
             }
             let close = after_open.find(']')?;
+            if after_open[..close].trim() == "*" {
+                segments.push(Segment::Wildcard);
+                remainder = &after_open[close + 1..];
+                continue;
+            }
             let index = after_open[..close].parse::<usize>().ok()?;
             segments.push(Segment::Index(index));
             remainder = &after_open[close + 1..];
@@ -9003,14 +9011,39 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
         }
         return None;
     }
-    let mut value = serde_json::from_str::<serde_json::Value>(document).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(document).ok()?;
+    let mut values = vec![value];
     for segment in segments {
-        value = match segment {
-            Segment::Key(key) => value.get(key)?.clone(),
-            Segment::Index(index) => value.get(index)?.clone(),
-        };
+        let mut next = Vec::new();
+        for value in values {
+            match segment {
+                Segment::Key(ref key) => {
+                    if let Some(value) = value.get(key) {
+                        next.push(value.clone());
+                    }
+                }
+                Segment::Index(index) => {
+                    if let Some(value) = value.get(index) {
+                        next.push(value.clone());
+                    }
+                }
+                Segment::Wildcard => match value {
+                    serde_json::Value::Array(items) => next.extend(items),
+                    serde_json::Value::Object(fields) => next.extend(fields.into_values()),
+                    _ => {}
+                },
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        values = next;
     }
-    Some(value)
+    if values.len() == 1 {
+        values.pop()
+    } else {
+        Some(serde_json::Value::Array(values))
+    }
 }
 
 fn array_append_generic<L: OffsetSizeTrait>(
@@ -17037,6 +17070,41 @@ mod tests {
         assert_eq!(values.value(1), "null");
         assert!(values.is_null(2));
         assert!(values.is_null(3));
+    }
+
+    #[test]
+    fn evaluates_json_query_array_wildcards_and_keeps_json_value_scalar() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![Some(
+                r#"{"items":[{"id":1},{"id":2}],"name":"x"}"#,
+            )])) as ArrayRef,
+        )])
+        .unwrap();
+        let query = Expr::Function {
+            name: "JSON_QUERY".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.items[*].id".into())),
+            ],
+        };
+        let queried_result = evaluate(&query, &batch).unwrap();
+        let queried = queried_result.as_string::<i32>();
+        assert_eq!(queried.value(0), "[1,2]");
+
+        let value = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.items[*].id".into())),
+            ],
+        };
+        assert!(
+            evaluate(&value, &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .is_null(0)
+        );
     }
 
     #[test]
