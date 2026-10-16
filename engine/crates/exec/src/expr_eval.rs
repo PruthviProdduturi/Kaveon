@@ -4370,6 +4370,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .into();
             Ok(Arc::new(result))
         }
+        "JSON_ARRAY" => {
+            let mut result = StringBuilder::new();
+            for row in 0..num_rows {
+                let mut values = Vec::with_capacity(args.len());
+                for argument in args {
+                    if argument.is_null(row) {
+                        values.push(serde_json::Value::Null);
+                    } else {
+                        values.push(json_scalar_value(argument, row)?.ok_or_else(|| {
+                            KaveonError::Execution(
+                                "JSON_ARRAY could not materialize a scalar argument".into(),
+                            )
+                        })?);
+                    }
+                }
+                result.append_value(serde_json::Value::Array(values).to_string());
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "JSON_ARRAY_LENGTH" => {
             check_arity(name, args, 1)?;
             let documents = &args[0];
@@ -8930,6 +8949,7 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
                 .value(row)
                 .to_owned(),
         ),
+        DataType::Null => serde_json::Value::Null,
         data_type => {
             return Err(KaveonError::Execution(format!(
                 "JSON_ARRAY_CONTAINS does not support needle type {data_type}"
@@ -17105,6 +17125,26 @@ mod tests {
                 .as_string::<i32>()
                 .is_null(0)
         );
+    }
+
+    #[test]
+    fn evaluates_json_array_constructor_with_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int64Array::from(vec![Some(7), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_ARRAY".into(),
+            args: vec![
+                Expr::Column("value".into()),
+                Expr::Literal(ScalarValue::Utf8("x".into())),
+            ],
+        };
+        let result_array = evaluate(&expr, &batch).unwrap();
+        let result = result_array.as_string::<i32>();
+        assert_eq!(result.value(0), r#"[7,"x"]"#);
+        assert_eq!(result.value(1), r#"[null,"x"]"#);
     }
 
     #[test]
