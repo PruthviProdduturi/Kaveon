@@ -322,6 +322,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_array_constructor",
+        "SELECT JSON_ARRAY(7, 'x', NULL) AS constructed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_scalar_path",
         "SELECT JSON_VALUE(JSON_PARSE('{\"x\":7}'), '$.x') AS value FROM {T} LIMIT 1",
         false,

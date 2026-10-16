@@ -44,7 +44,9 @@ by the selected database and Kaveon's API guardrails.
 floating-point, and text needles. It preserves NULL inputs, returns NULL for
 malformed JSON, and returns `false` for valid non-array JSON values.
 
-`JSON_PARSE` validates a text document, `JSON_FORMAT` emits canonical JSON,
+`JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
+SQL NULL arguments as JSON `null`. `JSON_PARSE` validates a text document,
+`JSON_FORMAT` emits canonical JSON,
 and `JSON_QUERY`/`JSON_EXTRACT` preserve object and array results. Their paths
 support dotted keys, quoted bracket keys, numeric array indexes, and array
 wildcards (`[*]`); a wildcard result is collected as a JSON array. `JSON_VALUE`
