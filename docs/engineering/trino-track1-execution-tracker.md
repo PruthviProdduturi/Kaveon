@@ -22,7 +22,7 @@ snapshot, not a session diary.
 | 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current image now also has exact-repeat forced join-spill, post-query cleanup, exact retry after forced worker loss during a distributed scan, a bounded high-cardinality 504M-row self-join, exact join results in the ten-round mixed workload, and a current-image three-worker join-gates run covering left outer, full outer cross-source, and skewed grouped joins. | bounded AKS spill-quota exhaustion, larger input volumes, physical disk exhaustion, and repeated/node-loss endurance. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget, plus five exact-repeat full-table grouped aggregates over 504M rows across all three workers; the current-image sample observed p95 26.453s. | Skew behavior, sustained mixed-workload spill evidence, and a larger statistical sample for an SLO. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current image has exact-repeat partitioned `ROW_NUMBER()`/`QUALIFY` evidence across three workers, alongside the existing mixed-key evidence. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
-| 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current AKS image also has exact-repeat three-worker evidence for multi-column ordering with OFFSET and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
+| 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current image has exact-repeat three-worker evidence for multi-column ordering with `NULLS LAST`, OFFSET, and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
 | 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, telemetry, ten exact concurrent mixed-workload rounds on the current image with resource samples and zero retained spill files, and a forced-worker-loss pressure run with zero file growth exist. | Skew, physical disk exhaustion, and final-merge spill under sustained load. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
 | 9 | Worker-loss recovery | **Qualified (bounded)** | Replacement-worker recovery preserves exact results for the declared bounded gate; the current image also passes a forced worker loss during a distributed scan with exact retry, replacement, cleanup, and post-recovery probe. A graceful node-drain run also returned the exact result and restored three catalog-compatible workers, but Kubernetes evicted the pod before a retry was observable. | Node-drain interruption/retry and repeated-loss endurance with retained exact-result evidence. |
@@ -105,6 +105,12 @@ The current-image partitioned window report is retained in
 The bounded `ROW_NUMBER()` plus `QUALIFY` query finished twice with the exact
 same 12-row result across three workers. Unpartitioned windows, broader
 modifiers, and full parallel-window qualification remain open.
+
+The current-image global-order report is retained in
+`docs/qualification/track1-aks-global-order-current-2026-10-16.md` and its
+raw JSON. A multi-column `NULLS LAST` query with OFFSET and LIMIT finished
+twice with the exact same 20-row result across three workers. Fully parallel
+ordered streaming and pressure qualification remain open.
 
 ## Active item: 3 — distributed joins
 
