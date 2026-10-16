@@ -125,8 +125,10 @@ unchanged; nothing is approximated unless the statement writes an
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, or multi-key correlated `IN`; each is refused by name.
-- Outer non-equality join conditions (residual join filters), recursive CTEs,
-  ordered map and JSON comparison. Column-key `GROUPING SETS`, `CUBE`, and
+- Residual outer joins are supported for the qualified local and distributed
+  shapes described above; unqualified outer join forms outside that binder
+  surface, recursive CTEs, ordered map and JSON comparison remain unsupported.
+  Column-key `GROUPING SETS`, `CUBE`, and
   `ROLLUP` (including the grand-total `GROUPING SETS (())` form) lower to typed
   `UNION ALL` aggregate branches; grouping metadata
   `GROUPING(column)` and `GROUPING_ID(...)` are materialized for those
