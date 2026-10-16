@@ -1,10 +1,10 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
     Decimal128Array, Decimal128Builder, Float32Array, Float64Array, Float64Builder,
-    GenericListArray, GenericListBuilder, Int8Array, Int16Array, Int32Array, Int32Builder,
-    Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray, LargeListBuilder,
-    LargeStringArray, LargeStringBuilder, ListArray, ListBuilder, MapArray, NullBuilder,
-    OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder, StructArray,
+    GenericListArray, Int8Array, Int16Array, Int32Array, Int32Builder, Int32DictionaryArray,
+    Int64Array, Int64Builder, LargeListArray, LargeListBuilder, LargeStringArray,
+    LargeStringBuilder, ListArray, ListBuilder, MapArray, NullBuilder, OffsetSizeTrait,
+    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
@@ -2195,58 +2195,6 @@ fn array_distinct_nested<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
-}
-
-fn array_cum_sum_i64<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
-    let mut builder = GenericListBuilder::<L, Int64Builder>::new(Int64Builder::new());
-    for row in 0..list.len() {
-        if list.is_null(row) {
-            builder.append(false);
-            continue;
-        }
-        let values = list.value(row);
-        let values = values.as_primitive::<Int64Type>();
-        let mut total = 0_i64;
-        let mut null_seen = false;
-        for index in 0..values.len() {
-            if null_seen || values.is_null(index) {
-                null_seen = true;
-                builder.values().append_null();
-            } else {
-                total = total.checked_add(values.value(index)).ok_or_else(|| {
-                    KaveonError::Execution("ARRAY_CUM_SUM BIGINT overflow".into())
-                })?;
-                builder.values().append_value(total);
-            }
-        }
-        builder.append(true);
-    }
-    Ok(Arc::new(builder.finish()))
-}
-
-fn array_cum_sum_f64<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
-    let mut builder = GenericListBuilder::<L, Float64Builder>::new(Float64Builder::new());
-    for row in 0..list.len() {
-        if list.is_null(row) {
-            builder.append(false);
-            continue;
-        }
-        let values = list.value(row);
-        let values = values.as_primitive::<Float64Type>();
-        let mut total = 0.0_f64;
-        let mut null_seen = false;
-        for index in 0..values.len() {
-            if null_seen || values.is_null(index) {
-                null_seen = true;
-                builder.values().append_null();
-            } else {
-                total += values.value(index);
-                builder.values().append_value(total);
-            }
-        }
-        builder.append(true);
-    }
-    Ok(Arc::new(builder.finish()))
 }
 
 fn array_has_duplicates<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
@@ -5713,56 +5661,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
             };
             Ok(Arc::new(Int64Array::from(result)))
-        }
-        "ARRAY_CUM_SUM" => {
-            check_arity(name, args, 1)?;
-            match args[0].data_type() {
-                DataType::List(field) if field.data_type() == &DataType::Int64 => {
-                    array_cum_sum_i64(args[0].as_any().downcast_ref::<ListArray>().ok_or_else(
-                        || {
-                            KaveonError::Execution(
-                                "ARRAY_CUM_SUM requires an ARRAY/List value".into(),
-                            )
-                        },
-                    )?)
-                }
-                DataType::LargeList(field) if field.data_type() == &DataType::Int64 => {
-                    array_cum_sum_i64(
-                        args[0]
-                            .as_any()
-                            .downcast_ref::<LargeListArray>()
-                            .ok_or_else(|| {
-                                KaveonError::Execution(
-                                    "ARRAY_CUM_SUM requires an ARRAY/List value".into(),
-                                )
-                            })?,
-                    )
-                }
-                DataType::List(field) if field.data_type() == &DataType::Float64 => {
-                    array_cum_sum_f64(args[0].as_any().downcast_ref::<ListArray>().ok_or_else(
-                        || {
-                            KaveonError::Execution(
-                                "ARRAY_CUM_SUM requires an ARRAY/List value".into(),
-                            )
-                        },
-                    )?)
-                }
-                DataType::LargeList(field) if field.data_type() == &DataType::Float64 => {
-                    array_cum_sum_f64(
-                        args[0]
-                            .as_any()
-                            .downcast_ref::<LargeListArray>()
-                            .ok_or_else(|| {
-                                KaveonError::Execution(
-                                    "ARRAY_CUM_SUM requires an ARRAY/List value".into(),
-                                )
-                            })?,
-                    )
-                }
-                other => Err(KaveonError::Execution(format!(
-                    "ARRAY_CUM_SUM supports ARRAY<BIGINT> and ARRAY<DOUBLE>, found {other}"
-                ))),
-            }
         }
         "ARRAY_HAS_DUPLICATES" => {
             check_arity(name, args, 1)?;
@@ -16532,43 +16430,6 @@ mod tests {
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true)]
         );
-    }
-
-    #[test]
-    fn array_cum_sum_preserves_nulls_and_supports_large_lists() {
-        let mut lists = ListBuilder::new(Int64Builder::new());
-        for value in [1_i64, 2] {
-            lists.values().append_value(value);
-        }
-        lists.values().append_null();
-        lists.values().append_value(3);
-        lists.append(true);
-        let result =
-            eval_scalar_function("ARRAY_CUM_SUM", &[Arc::new(lists.finish()) as ArrayRef], 1)
-                .unwrap();
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
-        let inner = result.value(0);
-        let values = inner.as_primitive::<Int64Type>();
-        assert_eq!(
-            values.iter().collect::<Vec<_>>(),
-            vec![Some(1), Some(3), None, None]
-        );
-
-        let mut large_lists = LargeListBuilder::new(Float64Builder::new());
-        for value in [1.5_f64, 2.0] {
-            large_lists.values().append_value(value);
-        }
-        large_lists.append(true);
-        let result = eval_scalar_function(
-            "ARRAY_CUM_SUM",
-            &[Arc::new(large_lists.finish()) as ArrayRef],
-            1,
-        )
-        .unwrap();
-        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
-        let inner = result.value(0);
-        let values = inner.as_primitive::<Float64Type>();
-        assert_eq!(values.values(), &[1.5, 3.5]);
     }
 
     #[test]

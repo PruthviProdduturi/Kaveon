@@ -170,14 +170,7 @@ an explicit JSON null, false for a missing path, and SQL NULL for NULL inputs.
 The focused executor regression covers all four cases. Invalid or unsupported
 paths remain conservative NULL results under the existing JSON path contract.
 
-'## ARRAY_CUM_SUM qualification
-
-`ARRAY_CUM_SUM` supports `BIGINT` and `DOUBLE` arrays in both regular and
-large-list representations. It emits cumulative values, propagates NULL from
-the first NULL element onward, preserves NULL arrays, and fails closed for
-other element types until their coercion and overflow contracts are qualified.
-
-'## ARRAY_HAS_DUPLICATES qualification
+## ARRAY_HAS_DUPLICATES qualification
 
 `ARRAY_HAS_DUPLICATES(array)` returns TRUE when an array contains repeated
 values, including repeated NULL elements, FALSE for distinct values, and NULL
