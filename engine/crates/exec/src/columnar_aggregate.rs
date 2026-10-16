@@ -163,16 +163,15 @@ fn text_hash(bytes: &[u8]) -> u64 {
 #[inline(always)]
 fn text_hash_scalar(bytes: &[u8]) -> u64 {
     let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ (bytes.len() as u64);
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        let mut word = u64::from_le_bytes(chunk.try_into().expect("chunks_exact is eight bytes"));
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        let mut word = u64::from_le_bytes(*chunk);
         word ^= word >> 30;
         word = word.wrapping_mul(0xbf58_476d_1ce4_e5b9);
         word ^= word >> 27;
         hash ^= word;
         hash = hash.rotate_left(23).wrapping_mul(0x2127_599b_0f5d_6d3d);
     }
-    let remainder = chunks.remainder();
     if !remainder.is_empty() {
         let mut word = 0u64;
         for (shift, byte) in remainder.iter().enumerate() {
@@ -193,12 +192,12 @@ unsafe fn text_hash_crc32(bytes: &[u8]) -> u64 {
     use std::arch::x86_64::{_mm_crc32_u8, _mm_crc32_u64};
 
     let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ bytes.len() as u64;
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        let word = u64::from_le_bytes(chunk.try_into().expect("chunks_exact is eight bytes"));
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        let word = u64::from_le_bytes(*chunk);
         hash = _mm_crc32_u64(hash, word);
     }
-    for &byte in chunks.remainder() {
+    for &byte in remainder {
         hash = _mm_crc32_u8(hash as u32, byte) as u64;
     }
     // Widen the 32-bit CRC into a well-mixed 64-bit bucket hash.
@@ -1838,10 +1837,8 @@ impl ColumnarGroups {
                     (slot, true)
                 }
             };
-            if !is_new {
-                if let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
-                    counts[slot as usize] += 1;
-                }
+            if !is_new && let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
+                counts[slot as usize] += 1;
             }
         }
         Ok((
@@ -2147,36 +2144,35 @@ impl ColumnarGroups {
                 _ => None,
             });
             let homogeneous = first_type.is_some()
-                && self.keys.iter().all(|key| match (first_type, key) {
-                    (
-                        Some(DataType::Int64),
-                        KeyColumn::Integer {
-                            data_type: DataType::Int64,
-                            ..
-                        },
+                && self.keys.iter().all(|key| {
+                    matches!(
+                        (first_type, key),
+                        (
+                            Some(DataType::Int64),
+                            KeyColumn::Integer {
+                                data_type: DataType::Int64,
+                                ..
+                            },
+                        ) | (
+                            Some(DataType::Int32),
+                            KeyColumn::Integer {
+                                data_type: DataType::Int32,
+                                ..
+                            },
+                        ) | (
+                            Some(DataType::Date32),
+                            KeyColumn::Integer {
+                                data_type: DataType::Date32,
+                                ..
+                            },
+                        ) | (
+                            Some(DataType::Boolean),
+                            KeyColumn::Integer {
+                                data_type: DataType::Boolean,
+                                ..
+                            },
+                        )
                     )
-                    | (
-                        Some(DataType::Int32),
-                        KeyColumn::Integer {
-                            data_type: DataType::Int32,
-                            ..
-                        },
-                    )
-                    | (
-                        Some(DataType::Date32),
-                        KeyColumn::Integer {
-                            data_type: DataType::Date32,
-                            ..
-                        },
-                    )
-                    | (
-                        Some(DataType::Boolean),
-                        KeyColumn::Integer {
-                            data_type: DataType::Boolean,
-                            ..
-                        },
-                    ) => true,
-                    _ => false,
                 });
             if !homogeneous {
                 for key in &self.keys {

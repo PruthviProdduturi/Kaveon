@@ -1198,6 +1198,7 @@ struct StatementRequest {
     settings: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+#[allow(dead_code)]
 fn request_parameters(values: &[serde_json::Value]) -> Result<Vec<ScalarValue>, String> {
     values
         .iter()
@@ -1266,6 +1267,7 @@ fn request_parameter_value(
     }
 }
 
+#[allow(dead_code)]
 fn request_named_parameters(
     values: &HashMap<String, serde_json::Value>,
 ) -> Result<HashMap<String, ScalarValue>, String> {
@@ -3156,6 +3158,7 @@ fn pending_query_record(
     }
 }
 
+#[allow(dead_code)]
 async fn submit_statement(
     State(state): State<Arc<AppState>>,
     Extension(identity): Extension<Identity>,
@@ -3878,7 +3881,7 @@ fn trino_explicit_parameter_type(query: &str, parameter: &str) -> String {
         let type_start = start + cast_suffix.len();
         let remainder = lower[type_start..].trim_start();
         let end = remainder
-            .find(|character: char| matches!(character, ',' | ')' | ';' | '=' | '<' | '>' | '+'))
+            .find([',', ')', ';', '=', '<', '>', '+'])
             .unwrap_or(remainder.len());
         return normalize_declared_parameter_type(&remainder[..end]);
     }
@@ -4055,6 +4058,7 @@ fn trino_show_session_pattern(body: &str) -> Result<Option<String>, String> {
     Ok(Some(unescaped))
 }
 
+#[allow(dead_code)]
 fn trino_is_show_functions(body: &str) -> bool {
     matches!(trino_show_functions_pattern(body), Ok(Some(_)))
 }
@@ -4966,10 +4970,10 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
     if let Ok(integer) = trimmed.parse::<i64>() {
         return Ok(serde_json::json!(integer));
     }
-    if let Ok(float) = trimmed.parse::<f64>() {
-        if float.is_finite() {
-            return Ok(serde_json::json!(float));
-        }
+    if let Ok(float) = trimmed.parse::<f64>()
+        && float.is_finite()
+    {
+        return Ok(serde_json::json!(float));
     }
     Err(format!(
         "Trino EXECUTE USING value '{value}' is not a supported scalar literal"
@@ -13779,14 +13783,14 @@ fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
                 .join(", ")
         ),
         arrow::datatypes::DataType::Map(field, _) => {
-            if let arrow::datatypes::DataType::Struct(fields) = field.data_type() {
-                if fields.len() == 2 {
-                    return format!(
-                        "Map({}, {})",
-                        presented_type(fields[0].data_type()),
-                        presented_type(fields[1].data_type())
-                    );
-                }
+            if let arrow::datatypes::DataType::Struct(fields) = field.data_type()
+                && fields.len() == 2
+            {
+                return format!(
+                    "Map({}, {})",
+                    presented_type(fields[0].data_type()),
+                    presented_type(fields[1].data_type())
+                );
             }
             "Map".to_owned()
         }

@@ -198,13 +198,12 @@ impl SpoolWriter {
             .as_mut()
             .expect("writer file open")
             .write_all(bytes)
-            .map_err(|error| {
+            .inspect_err(|_error| {
                 if let Some(quota) = self.inner.quota {
                     quota
                         .counter
                         .fetch_sub(bytes.len() as u64, Ordering::AcqRel);
                 }
-                error
             })?;
         self.file.as_mut().expect("writer file open").flush()?;
         state.written = end;

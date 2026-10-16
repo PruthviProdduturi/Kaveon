@@ -2212,7 +2212,6 @@ fn plan_query_with_predicate(
             right,
             join_type,
             condition,
-            distribution: _,
             ..
         } => {
             let left_qualifier = relation_qualifier(left);
@@ -2643,6 +2642,7 @@ fn physical_join_type(join_type: JoinType) -> PhysicalJoinType {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn join_keys_and_residual(
     condition: Option<&Expr>,
 ) -> Result<(Vec<(String, String)>, Option<Expr>)> {

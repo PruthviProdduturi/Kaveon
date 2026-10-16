@@ -1205,10 +1205,7 @@ impl FlushingPartialAggregate {
         };
         let mut batches = Vec::new();
         let mut rows = 0usize;
-        loop {
-            let PartialMode::PassThrough { remaining } = self.mode else {
-                break;
-            };
+        while let PartialMode::PassThrough { remaining } = self.mode {
             match self.passthrough_batch(remaining)? {
                 Some(batch) if batch.num_rows() > 0 => {
                     rows = rows.saturating_add(batch.num_rows());
