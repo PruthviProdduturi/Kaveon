@@ -277,6 +277,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_histogram_decimal",
+        "SELECT ARRAY_HISTOGRAM(ARRAY[DECIMAL '1.25', DECIMAL '1.25', DECIMAL '2.50']) AS histogram FROM {T} LIMIT 1",
+        true,
+    ),
+    (
         "array_membership_and_trim",
         "SELECT CONTAINS(ARRAY[1, 2, 3], 2) AS contains_value, TRIM_ARRAY(ARRAY[1, 2, 3], 1) AS trimmed FROM {T} LIMIT 1",
         false,
