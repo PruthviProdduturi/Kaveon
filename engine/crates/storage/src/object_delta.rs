@@ -286,7 +286,7 @@ impl BatchSource for ObjectDeltaSource {
         // Delta has not opened a file until the first batch. Preserve the
         // exact build-side keys in the snapshot predicate so object readers
         // can prune before fetching or decoding a file.
-        if self.current.is_some() || values.is_empty() {
+        if self.current.is_some() || values.is_empty() || self.next_file >= self.files.len() {
             return Ok(false);
         }
         let predicate = StoragePredicate::In {
@@ -420,6 +420,11 @@ mod tests {
         assert_eq!(reader.metadata().unwrap().row_count, 0);
         let mut source = reader.read_blocking().unwrap();
         assert_eq!(source.schema().field(0).data_type(), &DataType::Int64);
+        assert!(
+            !source
+                .apply_runtime_filter("id", &[kaveon_core::ScalarValue::Int64(1)])
+                .unwrap()
+        );
         assert!(source.next_batch().unwrap().is_none());
     }
 

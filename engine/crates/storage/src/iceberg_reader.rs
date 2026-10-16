@@ -236,7 +236,7 @@ impl BatchSource for IcebergSource {
         column: &str,
         values: &[kaveon_core::ScalarValue],
     ) -> Result<bool> {
-        if self.current.is_some() || values.is_empty() {
+        if self.current.is_some() || values.is_empty() || self.next_file >= self.files.len() {
             return Ok(false);
         }
         let filter = StoragePredicate::In {
