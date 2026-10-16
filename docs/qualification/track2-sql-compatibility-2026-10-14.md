@@ -261,8 +261,6 @@ implemented parity.
 This report is local evidence. AKS workload and external Trino-client
 qualification are separate gates in `docs/engineering/trino-parity-tracker.md`.
 
-The shared differential corpus now also covers `ARRAYS_OVERLAP` for disjoint
-and intersecting typed arrays on both local and distributed execution paths.
 
 ## Clean workspace gate rerun — 2026-10-15
 
