@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `f8a21532` (the workspace gate includes the
+**Source:** `origin/dev` at `37049fbb` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -77,6 +77,11 @@ ordinality (411 filtered server tests; 133.68 seconds).
 The map cardinality case also passed in the exact-result sweep (411 filtered
 server tests; 134.19 seconds), covering `CARDINALITY(MAP(...))` across the
 local and distributed execution paths.
+
+The optimizer rejection corpus now also has a focused binder test for a
+correlated scalar `OFFSET ... LIMIT` with a residual predicate. It fails closed
+with the explicit Apply-required diagnostic rather than silently rebinding the
+outer columns.
 
 After that change, the complete server target suite was rerun from the same
 source:
