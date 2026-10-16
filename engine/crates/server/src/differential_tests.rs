@@ -283,7 +283,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "map_scalar_functions",
-        "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
+        "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, MAP_CONTAINS_KEY(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'a') AS has_key, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
         false,
     ),
     (
