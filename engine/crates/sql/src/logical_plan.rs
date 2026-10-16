@@ -2645,13 +2645,19 @@ fn build_limit_offset(
         Some(ast::Offset { value, .. }) => ast_expr_to_usize(value)?,
         None => 0,
     };
+    let fetch_percent = match fetch {
+        Some(fetch) if fetch.percent => {
+            let quantity = fetch
+                .quantity
+                .as_ref()
+                .ok_or_else(|| sql_err("FETCH PERCENT requires a percentage"))?;
+            Some(ast_expr_to_fetch_percent(quantity)?)
+        }
+        _ => None,
+    };
     let fetch_limit = match fetch {
         None => None,
-        Some(fetch) if fetch.percent => {
-            return Err(sql_err(
-                "FETCH PERCENT is unsupported; use FETCH ... ROWS ONLY",
-            ));
-        }
+        Some(fetch) if fetch.percent => None,
         Some(fetch) => Some(
             fetch
                 .quantity
@@ -2660,6 +2666,89 @@ fn build_limit_offset(
         ),
     };
     let with_ties = fetch.is_some_and(|fetch| fetch.with_ties);
+    if let Some(percent) = fetch_percent {
+        if limit.is_some() {
+            return Err(sql_err("LIMIT and FETCH cannot both be specified"));
+        }
+        if with_ties && !matches!(plan, LogicalPlan::Sort { .. }) {
+            return Err(sql_err(
+                "FETCH PERCENT WITH TIES requires an ORDER BY clause",
+            ));
+        }
+        let (order_by, input) = match plan {
+            LogicalPlan::Sort { input, order_by } => (order_by, *input),
+            other => (Vec::new(), other),
+        };
+        let total = Expr::WindowFunction {
+            name: "COUNT".to_owned(),
+            args: vec![Expr::Star],
+            partition_by: Vec::new(),
+            order_by: Vec::new(),
+            frame: Some(WindowFrame {
+                units: WindowFrameUnits::Rows,
+                start: WindowFrameBound::UnboundedPreceding,
+                end: WindowFrameBound::UnboundedFollowing,
+            }),
+        };
+        let rank = Expr::WindowFunction {
+            name: if with_ties {
+                "RANK".to_owned()
+            } else {
+                "ROW_NUMBER".to_owned()
+            },
+            args: Vec::new(),
+            partition_by: Vec::new(),
+            order_by: order_by.clone(),
+            frame: None,
+        };
+        let total_name = format!("__kaveon_window_{total:?}");
+        let rank_name = format!("__kaveon_window_{rank:?}");
+        let threshold = Expr::Function {
+            name: "CEIL".to_owned(),
+            args: vec![Expr::BinaryOp {
+                left: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column(total_name)),
+                    op: BinaryOp::Multiply,
+                    right: Box::new(percent),
+                }),
+                op: BinaryOp::Divide,
+                right: Box::new(Expr::Literal(ScalarValue::Float64(100.0))),
+            }],
+        };
+        let bounded = LogicalPlan::Filter {
+            input: Box::new(LogicalPlan::Window {
+                input: Box::new(input),
+                window_exprs: vec![total, rank],
+            }),
+            predicate: Expr::BinaryOp {
+                left: Box::new(Expr::Column(rank_name)),
+                op: BinaryOp::Le,
+                right: Box::new(threshold),
+            },
+        };
+        return if offset_count == 0 {
+            Ok(if order_by.is_empty() {
+                bounded
+            } else {
+                LogicalPlan::Sort {
+                    input: Box::new(bounded),
+                    order_by,
+                }
+            })
+        } else {
+            Ok(LogicalPlan::Offset {
+                input: Box::new(if order_by.is_empty() {
+                    bounded
+                } else {
+                    LogicalPlan::Sort {
+                        input: Box::new(bounded),
+                        order_by,
+                    }
+                }),
+                count: offset_count,
+            })
+        };
+    }
     match (limit, fetch_limit) {
         (Some(_), Some(_)) => Err(sql_err("LIMIT and FETCH cannot both be specified")),
         (None, None) if offset_count == 0 => Ok(plan),
@@ -2749,6 +2838,22 @@ fn build_limit_offset(
             })
         }
     }
+}
+
+fn ast_expr_to_fetch_percent(expr: &ast::Expr) -> Result<Expr> {
+    let value = ast_expr_to_expr(expr)?;
+    let numeric = match value {
+        Expr::Literal(ScalarValue::Int64(value)) => value as f64,
+        Expr::Literal(ScalarValue::Float64(value)) => value,
+        Expr::Literal(ScalarValue::Decimal128 { value, scale, .. }) => {
+            value as f64 / 10_f64.powi(scale as i32)
+        }
+        _ => return Err(sql_err("FETCH PERCENT must be a literal number")),
+    };
+    if !numeric.is_finite() || !(0.0..=100.0).contains(&numeric) {
+        return Err(sql_err("FETCH PERCENT must be between 0 and 100"));
+    }
+    Ok(Expr::Literal(ScalarValue::Float64(numeric)))
 }
 
 fn ast_expr_to_usize(expr: &ast::Expr) -> Result<usize> {
@@ -5913,10 +6018,14 @@ mod tests {
     }
 
     #[test]
-    fn fetch_percent_rejects_and_with_ties_preserves_rank_semantics() {
-        let error = sql_to_logical_plan("SELECT * FROM t FETCH FIRST 10 PERCENT ROWS ONLY")
-            .expect_err("FETCH PERCENT should remain unsupported");
-        assert!(error.to_string().contains("FETCH"), "{error}");
+    fn fetch_percent_lowers_through_windows_and_with_ties_preserves_rank_semantics() {
+        let percent = sql_to_logical_plan("SELECT * FROM t FETCH FIRST 10 PERCENT ROWS ONLY")
+            .expect("FETCH PERCENT should lower through a bounded window");
+        let debug = format!("{percent:?}");
+        assert!(debug.contains("name: \"COUNT\""), "{debug}");
+        assert!(debug.contains("name: \"ROW_NUMBER\""), "{debug}");
+        assert!(debug.contains("name: \"CEIL\""), "{debug}");
+        assert!(debug.contains("Float64(10.0)"), "{debug}");
 
         let plan = sql_to_logical_plan(
             "SELECT id, score FROM t ORDER BY score DESC FETCH FIRST 2 ROWS WITH TIES",

@@ -466,6 +466,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "fetch_percent",
+        "SELECT country, SUM(actions) AS a FROM {T} GROUP BY country ORDER BY a DESC, country FETCH FIRST 50 PERCENT ROWS ONLY",
+        true,
+    ),
+    (
         "offset_fetch",
         "SELECT country, SUM(actions) AS a FROM {T} GROUP BY country ORDER BY a DESC, country OFFSET 2 ROWS FETCH NEXT 3 ROWS ONLY",
         true,

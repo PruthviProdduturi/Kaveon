@@ -8,7 +8,8 @@ one, aliases, grouped and global aggregates (COUNT/SUM/MIN/MAX/AVG, exact
 `COUNT(DISTINCT …)`, `SUM(DISTINCT)`/`AVG(DISTINCT)`), `GROUP BY` with no
 aggregate (as DISTINCT), HAVING with aggregates the projection does not
 select, `ORDER BY` with `NULLS FIRST/LAST`, `LIMIT`, `OFFSET`, and `FETCH FIRST/NEXT … ROWS ONLY`
-(`ORDER BY … OFFSET n LIMIT m` and its `FETCH` spelling are top-N paths), row `DISTINCT`, inner, left,
+(`ORDER BY … OFFSET n LIMIT m` and its `FETCH` spelling are top-N paths; literal
+`FETCH … PERCENT` uses a full-row-count window and a ceiling threshold), row `DISTINCT`, inner, left,
 right, full and cross joins, semi and anti joins from `IN`/`NOT IN`/
 `EXISTS`/`NOT EXISTS`, `UNION [ALL]`, `INTERSECT`, `EXCEPT`, CTEs, derived
 tables, uncorrelated scalar subqueries in WHERE and HAVING, correlated
