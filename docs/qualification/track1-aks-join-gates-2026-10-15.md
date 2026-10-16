@@ -23,6 +23,23 @@ longest task, demonstrating deterministic completion under uneven work.
 Raw evidence is retained in
 [`track1-aks-join-gates-2026-10-15.json`](./track1-aks-join-gates-2026-10-15.json).
 
+## Current-image rerun
+
+The same qualification was rerun on the live `kaveon-aks` cluster against
+Engine image
+`kaveonacr.azurecr.io/kaveon-engine@sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6`.
+All three workers reported the pinned catalog snapshot
+`sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3`.
+The three shapes again finished twice with exact repeated results: `EU=12,
+NA=12` for the left outer self-join, `29` rows for the full outer
+cross-source join, and `EU=144, NA=144` for the skewed grouped join. The raw
+rerun is retained in
+[`track1-aks-join-gates-rerun-2026-10-15.json`](./track1-aks-join-gates-rerun-2026-10-15.json).
+
+This strengthens the bounded current-image equivalence evidence. It does not
+close disk-exhaustion behavior, forced join-spill recovery, or larger
+high-cardinality joins.
+
 ## Boundary
 
 This qualifies bounded distributed outer-join equivalence and skewed join
