@@ -616,8 +616,8 @@ array, null-pads additional arrays, and emits the requested ordinality base.
 The local planner/executor regression and the distributed fragment regression
 both pass exact rows for two input rows and `ARRAY[id, 2]`. The exact contract
 covers per-row expansion, left-row repetition, NULL padding across multiple
-arrays, one-based correlated ordinality, and zero-based correlated offset.
-The parser routes this lateral form through the table-shaped UNNEST AST; the
+arrays, one-based correlated ordinality, zero-based correlated offset, and
+zero-padding for shorter correlated arrays. The parser routes this lateral form through the table-shaped UNNEST AST; the
 offset form uses the dialect-supported `AS u(value) WITH OFFSET AS pos` alias
 ordering. Constant UNNEST continues to use the zero-input leaf path. Arbitrary
 table functions and deeper nested/lateral combinations remain outside this

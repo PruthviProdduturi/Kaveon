@@ -1434,6 +1434,41 @@ fn distributed_correlated_lateral_unnest_matches_local_offsets() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_correlated_lateral_unnest_offsets_zip_and_pad_arrays() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-lateral-offset-padding-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.id, u.left_value, u.right_value, u.pos FROM (VALUES (1), (2)) AS x(id) CROSS JOIN LATERAL UNNEST(ARRAY[x.id, x.id + 10], ARRAY[x.id * 100]) AS u(left_value, right_value) WITH OFFSET AS pos ORDER BY x.id, u.pos";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-correlated-lateral-offset-padding", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        vec![
+            "1\u{1f}1\u{1f}100\u{1f}0",
+            "1\u{1f}11\u{1f}NULL\u{1f}1",
+            "2\u{1f}2\u{1f}200\u{1f}0",
+            "2\u{1f}12\u{1f}NULL\u{1f}1",
+        ]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// GROUPING SETS lowers to a bounded UNION of aggregates. Compare that
 /// lowering through the local and fragment paths so a branch cannot silently
 /// lose its NULL grouping key or final aggregate merge.
