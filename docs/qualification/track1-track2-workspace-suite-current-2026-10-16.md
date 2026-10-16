@@ -42,6 +42,11 @@ The bracketed identifier check covers the Studio-generated
 function error. The differential gate covers the distributed SQL corpus over
 the current parser and planner.
 
+The TopN operator gate also passes **17/17** focused tests, including a
+sorted-string worker merge. That path now merges already-sorted non-integer
+and multi-key candidates by their heads while retaining the existing Arrow
+fallback for unsorted input.
+
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
 parity trackers and require their corresponding live or differential evidence.
