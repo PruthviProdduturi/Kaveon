@@ -1337,6 +1337,28 @@ fn distributed_sequence_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_array_function_unnest_matches_trino_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-unnest-array-function-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT * FROM UNNEST(ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3])) WITH OFFSET AS off ORDER BY off";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-array-function", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["1\u{1f}0", "2\u{1f}1", "3\u{1f}2"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// The Trino spelling uses a function table factor for a constant lateral
 /// UNNEST. It must reach the same distributed leaf operator and preserve the
 /// left relation's row for each unnested value.
