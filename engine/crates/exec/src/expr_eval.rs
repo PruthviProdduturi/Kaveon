@@ -12817,6 +12817,61 @@ mod tests {
     }
 
     #[test]
+    fn map_from_entries_accepts_decimal_key_types() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new(
+                "key",
+                DataType::Decimal128(10, 2),
+                false,
+            )),
+            Arc::new(arrow::datatypes::Field::new(
+                "value",
+                DataType::Boolean,
+                true,
+            )),
+        ]
+        .into();
+        let keys = Decimal128Array::from(vec![1234_i128, 5678_i128])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(keys) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false)])) as ArrayRef,
+            ],
+            None,
+        );
+        let list = ListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields.clone()),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            Arc::new(rows),
+            None,
+        );
+        let input = RecordBatch::try_from_iter([("entries", Arc::new(list) as ArrayRef)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            result
+                .keys()
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .values(),
+            &[1234_i128, 5678_i128]
+        );
+    }
+
+    #[test]
     fn contains_key_is_null_aware_and_checks_typed_map_keys() {
         let input = RecordBatch::try_from_iter([(
             "dummy",
