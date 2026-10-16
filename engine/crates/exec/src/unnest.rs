@@ -91,12 +91,20 @@ impl UnnestOperator {
                     )));
                 }
                 for field_index in 0..width {
+                    let child = row.column(field_index).clone();
+                    let child = if row.null_count() > 0 {
+                        let valid = arrow::compute::is_not_null(row)?;
+                        let nulls = new_null_array(child.data_type(), child.len());
+                        arrow::compute::kernels::zip::zip(&valid, &child, &nulls)?
+                    } else {
+                        child
+                    };
                     fields.push(Field::new(
                         &columns[column_index],
                         struct_fields[field_index].data_type().clone(),
                         true,
                     ));
-                    values.push(row.column(field_index).clone());
+                    values.push(child);
                     column_index += 1;
                 }
             } else {

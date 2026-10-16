@@ -476,7 +476,7 @@ scalar functions are still rejected during lowering.
 `MAP_KEYS` and `MAP_VALUES` are also accepted as array-valued inputs. The
 distributed `MAP_KEYS` regression returns the exact key rows, while map-entry
 arrays are accepted as a row-valued column and can be expanded into aliased
-key/value columns (`AS t(key, value)`), including one-based `WITH ORDINALITY`; `ARRAY[ROW(...)]` elements use the same multi-column expansion. Broader arbitrary row-producing table
+key/value columns (`AS t(key, value)`), including one-based `WITH ORDINALITY`; `ARRAY[ROW(...)]` elements use the same multi-column expansion, including parent-ROW NULL propagation. Broader arbitrary row-producing table
 functions remain outside this allow-list.
 
 ## Trino wire compatibility qualification
