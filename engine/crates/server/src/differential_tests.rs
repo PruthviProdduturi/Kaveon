@@ -342,6 +342,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "width_bucket_and_finiteness",
+        "SELECT WIDTH_BUCKET(CAST(2.5 AS DOUBLE), 0, 10, 10) AS bucket, IS_FINITE(CAST(2.5 AS DOUBLE)) AS finite, IS_INFINITE(CAST('Infinity' AS DOUBLE)) AS infinite, IS_NAN(CAST('NaN' AS DOUBLE)) AS nan FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "timestamp_decimal_array_functions",
         "SELECT CARDINALITY(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)]) AS timestamp_card, ARRAY_POSITION(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)], CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)) AS timestamp_pos, CARDINALITY(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_card, ARRAY_POSITION(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))], CAST(2.30 AS DECIMAL(10, 2))) AS decimal_pos FROM {T} LIMIT 1",
         false,
