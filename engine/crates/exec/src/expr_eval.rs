@@ -2197,6 +2197,23 @@ fn array_distinct_nested<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
     )?))
 }
 
+fn array_has_duplicates<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    let distinct = array_distinct_nested(list)?;
+    let distinct = distinct
+        .as_any()
+        .downcast_ref::<GenericListArray<L>>()
+        .ok_or_else(|| KaveonError::Execution("ARRAY_HAS_DUPLICATES type mismatch".into()))?;
+    let mut result = BooleanBuilder::new();
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            result.append_null();
+        } else {
+            result.append_value(list.value(row).len() != distinct.value(row).len());
+        }
+    }
+    Ok(Arc::new(result.finish()))
+}
+
 fn array_reverse_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let mut selected = Vec::<ArrayRef>::new();
     let mut offsets = vec![L::zero()];
@@ -5644,6 +5661,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
             };
             Ok(Arc::new(Int64Array::from(result)))
+        }
+        "ARRAY_HAS_DUPLICATES" => {
+            check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+                return array_has_duplicates(list);
+            }
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_has_duplicates(list);
+            }
+            Err(KaveonError::Execution(
+                "ARRAY_HAS_DUPLICATES requires an ARRAY/List value".into(),
+            ))
         }
         "ARRAY_DISTINCT" => {
             check_arity(name, args, 1)?;
@@ -16400,6 +16429,31 @@ mod tests {
         assert_eq!(
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true)]
+        );
+    }
+
+    #[test]
+    fn array_has_duplicates_preserves_null_list_and_element_semantics() {
+        let mut lists = ListBuilder::new(Int64Builder::new());
+        for value in [1_i64, 1, 2] {
+            lists.values().append_value(value);
+        }
+        lists.values().append_null();
+        lists.append(true);
+        for value in [1_i64, 2] {
+            lists.values().append_value(value);
+        }
+        lists.append(true);
+        lists.append(false);
+        let result = eval_scalar_function(
+            "ARRAY_HAS_DUPLICATES",
+            &[Arc::new(lists.finish()) as ArrayRef],
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), None]
         );
     }
 
