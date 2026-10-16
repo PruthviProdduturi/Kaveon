@@ -414,6 +414,13 @@ impl Binder<'_> {
             }
             LogicalPlan::Offset { input, count } => {
                 let input = self.bind(*input, outer)?;
+                // OFFSET 0 cannot change a relation, including a correlated
+                // scalar subquery.  Removing it before correlation checks
+                // keeps the safe no-op case decorrelatable while positive
+                // offsets still fail closed below.
+                if count == 0 {
+                    return Ok(input);
+                }
                 uncorrelated(&input, "OFFSET")?;
                 Ok(Bound {
                     plan: LogicalPlan::Offset {
@@ -2466,7 +2473,7 @@ mod tests {
     #[test]
     fn a_correlated_scalar_aggregate_is_a_join_on_the_grouped_aggregate() {
         let plan = bound(
-            "SELECT o_orderkey FROM orders, customer WHERE c_custkey = o_custkey AND o_custkey > (SELECT avg(l_quantity) FROM lineitem WHERE l_orderkey = o_orderkey AND l_shipdate > 1)",
+            "SELECT o_orderkey FROM orders, customer WHERE c_custkey = o_custkey AND o_custkey > (SELECT avg(l_quantity) FROM lineitem WHERE l_orderkey = o_orderkey AND l_shipdate > 1 OFFSET 0)",
         );
         let LogicalPlan::Project { input, .. } = plan else {
             panic!("projection");
