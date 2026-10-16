@@ -883,11 +883,15 @@ impl Binder<'_> {
         // positive top-level limit before binding so correlated EXISTS can
         // still be decorrelated into a keyed semi/anti join. LIMIT 0 becomes
         // an empty relation (always false for EXISTS, always true for NOT
-        // EXISTS), OFFSET 0 is removed as a no-op, and IN keeps its paging
-        // clauses because multiplicity/set membership matters.
+        // EXISTS), OFFSET 0 is removed as a no-op. A keyed correlated IN
+        // also only asks whether the correlated key has a matching row, so
+        // a positive top-level LIMIT is a no-op there; uncorrelated IN keeps
+        // its paging because LIMIT changes the set being tested.
         let (right, positive_offset) = if matches!(right_key, Expr::Literal(_)) {
             let right = strip_exists_noop_paging(right);
             peel_positive_exists_offset(right)
+        } else if matches!(&right_key, Expr::Column(name) if name == "*") {
+            (strip_correlated_in_noop_limit(right), None)
         } else {
             (right, None)
         };
@@ -1950,6 +1954,18 @@ fn strip_exists_noop_paging(plan: LogicalPlan) -> LogicalPlan {
     }
 }
 
+/// A keyed correlated IN is existential with respect to the enclosing row:
+/// once its projected equality key matches, retaining any one row is enough
+/// to determine membership. A positive top-level LIMIT therefore cannot
+/// change the result. LIMIT 0 is deliberately retained because it makes the
+/// subquery empty (and NOT IN has additional NULL semantics).
+fn strip_correlated_in_noop_limit(plan: LogicalPlan) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Limit { input, count } if count > 0 => *input,
+        plan => plan,
+    }
+}
+
 fn peel_positive_exists_offset(plan: LogicalPlan) -> (LogicalPlan, Option<usize>) {
     match plan {
         LogicalPlan::Offset { input, count } if count > 0 => (*input, Some(count)),
@@ -2837,6 +2853,35 @@ mod tests {
             panic!("DISTINCT correlated IN should lower to a semi join");
         };
         assert_eq!(right_key, Expr::Column("__kaveon_corr_0".into()));
+    }
+
+    #[test]
+    fn a_correlated_in_positive_limit_is_a_keyed_semi_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey LIMIT 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin {
+            right_key, right, ..
+        } = *input
+        else {
+            panic!("positive LIMIT correlated IN should lower to a semi join");
+        };
+        assert_eq!(right_key, Expr::Column("__kaveon_corr_0".into()));
+        assert!(matches!(*right, LogicalPlan::Project { .. }));
+    }
+
+    #[test]
+    fn a_correlated_not_in_positive_limit_is_an_anti_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey NOT IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey LIMIT 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(*input, LogicalPlan::AntiJoin { .. }));
     }
 
     #[test]
