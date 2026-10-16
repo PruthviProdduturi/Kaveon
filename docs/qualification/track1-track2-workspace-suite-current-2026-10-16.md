@@ -18,7 +18,7 @@ The release lint commands also passed:
 
 ```text
 cargo fmt --all -- --check
-cargo clippy -p kaveon-sql -p kaveon-optim -p kaveon-server --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
 This is repository-level evidence only. It does not close the remaining Track
