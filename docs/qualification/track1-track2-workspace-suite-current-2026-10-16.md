@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `793b22c6` (the workspace gate includes the
+**Source:** `origin/dev` at `ca89d7d1` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -55,6 +55,18 @@ passed **1/1** (411 filtered server tests; 136.86 seconds). It includes a
 projected-key `UNION DISTINCT` case whose branches now hash-partition across
 workers before the final deduplication; unsupported expression-shaped unions
 still use the single-task fallback.
+
+After that change, the complete server target suite was rerun from the same
+source:
+
+```text
+cargo test -p kaveon-server --all-targets
+412 passed, 0 failed, 0 ignored (138.78s)
+```
+
+This includes the planner regression for projected-key `UNION DISTINCT` and
+the existing distributed join, aggregate, spill, retry, cancellation, and
+worker-loss coverage.
 
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
