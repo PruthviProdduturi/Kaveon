@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `87f21a40` (the workspace gate includes the
+**Source:** `origin/dev` at `4c049037` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -24,6 +24,23 @@ The release lint commands also passed:
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
+
+After the workspace evidence was captured, the planner regression for
+unpartitioned windows was added and the current source was rechecked with the
+two focused gates below:
+
+```text
+cargo test -p kaveon-sql bracketed_identifiers -- --nocapture
+1 passed, 0 failed
+
+cargo test -p kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
+1 passed, 0 failed (410 filtered out; 135.21s)
+```
+
+The bracketed identifier check covers the Studio-generated
+`SELECT DISTINCT [year] ...` form that previously surfaced as an `ARRAY`
+function error. The differential gate covers the distributed SQL corpus over
+the current parser and planner.
 
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
