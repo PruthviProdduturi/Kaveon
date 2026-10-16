@@ -6,37 +6,37 @@
     "coordinator": {
       "address": "https://kaveon-coordinator.kaveon.svc.cluster.local:8080",
       "admission": {
-        "admitted": 148,
+        "admitted": 243,
         "admitted_bytes": 0,
         "limit_bytes": 8589934592,
         "peak_admitted_bytes": 8589934592,
         "queue_depth": 0,
         "queue_limit": 64,
-        "queued": 0,
+        "queued": 18,
         "rejected": 0,
         "withdrawn": 0
       },
       "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
       "environment": "aks",
-      "last_heartbeat": 1792112615,
-      "memory_allocated_bytes": 30096627,
+      "last_heartbeat": 1792114619,
+      "memory_allocated_bytes": 30290264,
       "memory_limit_bytes": 11811160064,
-      "memory_rss_bytes": 902299648,
+      "memory_rss_bytes": 903688192,
       "node_id": "kaveon-coordinator-0",
       "resource_groups": [
         {
-          "admitted": 148,
+          "admitted": 243,
           "admitted_bytes": 0,
           "limit_bytes": 8589934592,
           "max_concurrent": 4,
           "max_queued": 64,
           "name": "default",
           "queued": 0,
-          "queued_total": 0,
+          "queued_total": 18,
           "rejected": 0,
           "running": 0,
           "wait_ms_p50": 0,
-          "wait_ms_p95": 0,
+          "wait_ms_p95": 21723,
           "weight": 10,
           "withdrawn": 0
         },
@@ -71,7 +71,7 @@
         "ttl_seconds": 600
       },
       "role": "coordinator",
-      "uptime_secs": 7893,
+      "uptime_secs": 9897,
       "version": "0.1.0"
     },
     "environment": "aks",
@@ -81,73 +81,73 @@
       {
         "address": "https://kaveon-worker-1.kaveon-workers.kaveon.svc.cluster.local:8080",
         "admission": {
-          "admitted": 67,
+          "admitted": 77,
           "admitted_bytes": 6442450944,
           "limit_bytes": 8589934592,
           "peak_admitted_bytes": 6442450944,
           "queue_depth": 0,
           "queue_limit": 64,
-          "queued": 16,
+          "queued": 14,
           "rejected": 0,
           "withdrawn": 0
         },
         "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
         "environment": "aks",
-        "last_heartbeat": 1792112612,
-        "memory_allocated_bytes": 269415851,
+        "last_heartbeat": 1792114617,
+        "memory_allocated_bytes": 322604708,
         "memory_limit_bytes": 11811160064,
-        "memory_rss_bytes": 722505728,
-        "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+        "memory_rss_bytes": 861777920,
+        "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
         "role": "worker",
-        "uptime_secs": 1052,
+        "uptime_secs": 881,
         "version": "0.1.0"
       },
       {
         "address": "https://kaveon-worker-2.kaveon-workers.kaveon.svc.cluster.local:8080",
         "admission": {
-          "admitted": 187,
+          "admitted": 77,
           "admitted_bytes": 6442450944,
           "limit_bytes": 8589934592,
           "peak_admitted_bytes": 6442450944,
           "queue_depth": 0,
           "queue_limit": 64,
-          "queued": 24,
+          "queued": 14,
           "rejected": 0,
           "withdrawn": 0
         },
         "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
         "environment": "aks",
-        "last_heartbeat": 1792112613,
-        "memory_allocated_bytes": 92730735,
+        "last_heartbeat": 1792114611,
+        "memory_allocated_bytes": 173163144,
         "memory_limit_bytes": 11811160064,
-        "memory_rss_bytes": 640102400,
-        "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+        "memory_rss_bytes": 595263488,
+        "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
         "role": "worker",
-        "uptime_secs": 4003,
+        "uptime_secs": 882,
         "version": "0.1.0"
       },
       {
         "address": "https://kaveon-worker-0.kaveon-workers.kaveon.svc.cluster.local:8080",
         "admission": {
-          "admitted": 205,
+          "admitted": 135,
           "admitted_bytes": 6442450944,
           "limit_bytes": 8589934592,
           "peak_admitted_bytes": 6442450944,
           "queue_depth": 0,
           "queue_limit": 64,
-          "queued": 24,
+          "queued": 22,
           "rejected": 0,
           "withdrawn": 0
         },
         "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
         "environment": "aks",
-        "last_heartbeat": 1792112606,
-        "memory_allocated_bytes": 168819988,
+        "last_heartbeat": 1792114614,
+        "memory_allocated_bytes": 168401331,
         "memory_limit_bytes": 11811160064,
-        "memory_rss_bytes": 564682752,
-        "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "memory_rss_bytes": 699285504,
+        "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
         "role": "worker",
-        "uptime_secs": 1852,
+        "uptime_secs": 872,
         "version": "0.1.0"
       }
     ]
@@ -157,7 +157,7 @@
     {
       "admission_refusals": 0,
       "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
-      "client_elapsed_ms": 24265.0,
+      "client_elapsed_ms": 22766.0,
       "data": [
         [
           1,
@@ -560,9 +560,9 @@
           168
         ]
       ],
-      "elapsed_ms": 24003,
+      "elapsed_ms": 22509,
       "error": null,
-      "id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f",
+      "id": "59b998db-5c0f-49bb-86cc-a10e0d653633",
       "name": "scale_aggregate_1",
       "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
       "row_count": 100,
@@ -573,69 +573,69 @@
       "status": 200,
       "task_count": 7,
       "task_ids": [
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.0.0.0",
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.0.1.0",
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.0.2.0",
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.1.0.0",
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.1.1.0",
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.1.2.0",
-        "350cd318-3af8-43b7-b259-1d6b9e92fa9f.2.0.0"
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.0.0.0",
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.0.1.0",
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.0.2.0",
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.1.0.0",
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.1.1.0",
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.1.2.0",
+        "59b998db-5c0f-49bb-86cc-a10e0d653633.2.0.0"
       ],
       "tasks": [
         {
-          "elapsed_us": 18910701,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 19400518,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 0,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.0.0.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.0.0.0"
         },
         {
-          "elapsed_us": 21576641,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 20080901,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 0,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.0.1.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.0.1.0"
         },
         {
-          "elapsed_us": 17811873,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 18869208,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 0,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.0.2.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.0.2.0"
         },
         {
-          "elapsed_us": 1520091,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 1500999,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 1,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.1.0.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.1.0.0"
         },
         {
-          "elapsed_us": 1622499,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 1617654,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 1,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.1.1.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.1.1.0"
         },
         {
-          "elapsed_us": 1548424,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 1491707,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 1,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.1.2.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.1.2.0"
         },
         {
-          "elapsed_us": 4869,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 4712,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 2,
-          "task_id": "350cd318-3af8-43b7-b259-1d6b9e92fa9f.2.0.0"
+          "task_id": "59b998db-5c0f-49bb-86cc-a10e0d653633.2.0.0"
         }
       ],
-      "wall_seconds": 24.546,
+      "wall_seconds": 23.047,
       "worker_ids": [
-        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
-        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
-        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
+        "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
+        "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f"
       ]
     },
     {
       "admission_refusals": 0,
       "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
-      "client_elapsed_ms": 24094.0,
+      "client_elapsed_ms": 21828.0,
       "data": [
         [
           1,
@@ -1038,9 +1038,9 @@
           168
         ]
       ],
-      "elapsed_ms": 23873,
+      "elapsed_ms": 21575,
       "error": null,
-      "id": "57833d8b-36c2-407c-93bc-455e33088040",
+      "id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c",
       "name": "scale_aggregate_2",
       "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
       "row_count": 100,
@@ -1051,69 +1051,69 @@
       "status": 200,
       "task_count": 7,
       "task_ids": [
-        "57833d8b-36c2-407c-93bc-455e33088040.0.0.0",
-        "57833d8b-36c2-407c-93bc-455e33088040.0.1.0",
-        "57833d8b-36c2-407c-93bc-455e33088040.0.2.0",
-        "57833d8b-36c2-407c-93bc-455e33088040.1.0.0",
-        "57833d8b-36c2-407c-93bc-455e33088040.1.1.0",
-        "57833d8b-36c2-407c-93bc-455e33088040.1.2.0",
-        "57833d8b-36c2-407c-93bc-455e33088040.2.0.0"
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.0.0.0",
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.0.1.0",
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.0.2.0",
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.1.0.0",
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.1.1.0",
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.1.2.0",
+        "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.2.0.0"
       ],
       "tasks": [
         {
-          "elapsed_us": 18592233,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 18580246,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 0,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.0.0.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.0.0.0"
         },
         {
-          "elapsed_us": 21466556,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 19352021,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 0,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.0.1.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.0.1.0"
         },
         {
-          "elapsed_us": 17421473,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 18368070,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 0,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.0.2.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.0.2.0"
         },
         {
-          "elapsed_us": 1503824,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 1508040,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 1,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.1.0.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.1.0.0"
         },
         {
-          "elapsed_us": 1637117,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 1585083,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 1,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.1.1.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.1.1.0"
         },
         {
-          "elapsed_us": 1188953,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 1568017,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 1,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.1.2.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.1.2.0"
         },
         {
-          "elapsed_us": 94027,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 89155,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 2,
-          "task_id": "57833d8b-36c2-407c-93bc-455e33088040.2.0.0"
+          "task_id": "ef4019fe-a2d1-4c14-95ab-ee7e9b7e5e6c.2.0.0"
         }
       ],
-      "wall_seconds": 24.391,
+      "wall_seconds": 22.11,
       "worker_ids": [
-        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
-        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
-        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
+        "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
+        "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f"
       ]
     },
     {
       "admission_refusals": 0,
       "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
-      "client_elapsed_ms": 23141.0,
+      "client_elapsed_ms": 22250.0,
       "data": [
         [
           1,
@@ -1516,9 +1516,9 @@
           168
         ]
       ],
-      "elapsed_ms": 22919,
+      "elapsed_ms": 22009,
       "error": null,
-      "id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83",
+      "id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d",
       "name": "scale_aggregate_3",
       "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
       "row_count": 100,
@@ -1529,69 +1529,69 @@
       "status": 200,
       "task_count": 7,
       "task_ids": [
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.0.0.0",
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.0.1.0",
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.0.2.0",
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.1.0.0",
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.1.1.0",
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.1.2.0",
-        "fe92a71a-b74a-43d6-bd55-68c5cf389e83.2.0.0"
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.0.0.0",
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.0.1.0",
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.0.2.0",
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.1.0.0",
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.1.1.0",
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.1.2.0",
+        "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.2.0.0"
       ],
       "tasks": [
         {
-          "elapsed_us": 18932604,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 18833926,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 0,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.0.0.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.0.0.0"
         },
         {
-          "elapsed_us": 20587516,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 19694235,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 0,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.0.1.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.0.1.0"
         },
         {
-          "elapsed_us": 17501765,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 18169931,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 0,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.0.2.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.0.2.0"
         },
         {
-          "elapsed_us": 1497187,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 1571221,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 1,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.1.0.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.1.0.0"
         },
         {
-          "elapsed_us": 1509612,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 1541296,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 1,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.1.1.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.1.1.0"
         },
         {
-          "elapsed_us": 1549948,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 1440755,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 1,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.1.2.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.1.2.0"
         },
         {
-          "elapsed_us": 100003,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 79984,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 2,
-          "task_id": "fe92a71a-b74a-43d6-bd55-68c5cf389e83.2.0.0"
+          "task_id": "f8a9cf04-e5a9-4948-bd21-7ee16ec9754d.2.0.0"
         }
       ],
-      "wall_seconds": 23.422,
+      "wall_seconds": 22.515,
       "worker_ids": [
-        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
-        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
-        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
+        "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
+        "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f"
       ]
     },
     {
       "admission_refusals": 0,
       "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
-      "client_elapsed_ms": 23312.0,
+      "client_elapsed_ms": 22313.0,
       "data": [
         [
           1,
@@ -1994,9 +1994,9 @@
           168
         ]
       ],
-      "elapsed_ms": 23085,
+      "elapsed_ms": 22066,
       "error": null,
-      "id": "ebb2b051-3571-4069-975b-999affe029a2",
+      "id": "356c598f-48cf-4b34-95d0-9f204f1e71b1",
       "name": "scale_aggregate_4",
       "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
       "row_count": 100,
@@ -2007,69 +2007,69 @@
       "status": 200,
       "task_count": 7,
       "task_ids": [
-        "ebb2b051-3571-4069-975b-999affe029a2.0.0.0",
-        "ebb2b051-3571-4069-975b-999affe029a2.0.1.0",
-        "ebb2b051-3571-4069-975b-999affe029a2.0.2.0",
-        "ebb2b051-3571-4069-975b-999affe029a2.1.0.0",
-        "ebb2b051-3571-4069-975b-999affe029a2.1.1.0",
-        "ebb2b051-3571-4069-975b-999affe029a2.1.2.0",
-        "ebb2b051-3571-4069-975b-999affe029a2.2.0.0"
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.0.0.0",
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.0.1.0",
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.0.2.0",
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.1.0.0",
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.1.1.0",
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.1.2.0",
+        "356c598f-48cf-4b34-95d0-9f204f1e71b1.2.0.0"
       ],
       "tasks": [
         {
-          "elapsed_us": 18838956,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 18726484,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 0,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.0.0.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.0.0.0"
         },
         {
-          "elapsed_us": 20681299,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 19658288,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 0,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.0.1.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.0.1.0"
         },
         {
-          "elapsed_us": 17432017,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 17841082,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 0,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.0.2.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.0.2.0"
         },
         {
-          "elapsed_us": 1582729,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 1483844,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 1,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.1.0.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.1.0.0"
         },
         {
-          "elapsed_us": 1553165,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 1663132,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 1,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.1.1.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.1.1.0"
         },
         {
-          "elapsed_us": 1467916,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 1115688,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 1,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.1.2.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.1.2.0"
         },
         {
-          "elapsed_us": 105697,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 92479,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 2,
-          "task_id": "ebb2b051-3571-4069-975b-999affe029a2.2.0.0"
+          "task_id": "356c598f-48cf-4b34-95d0-9f204f1e71b1.2.0.0"
         }
       ],
-      "wall_seconds": 23.594,
+      "wall_seconds": 22.578,
       "worker_ids": [
-        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
-        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
-        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
+        "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
+        "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f"
       ]
     },
     {
       "admission_refusals": 0,
       "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
-      "client_elapsed_ms": 22593.0,
+      "client_elapsed_ms": 21829.0,
       "data": [
         [
           1,
@@ -2472,9 +2472,9 @@
           168
         ]
       ],
-      "elapsed_ms": 22378,
+      "elapsed_ms": 21605,
       "error": null,
-      "id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521",
+      "id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca",
       "name": "scale_aggregate_5",
       "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
       "row_count": 100,
@@ -2485,63 +2485,63 @@
       "status": 200,
       "task_count": 7,
       "task_ids": [
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.0.0.0",
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.0.1.0",
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.0.2.0",
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.1.0.0",
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.1.1.0",
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.1.2.0",
-        "ed9fd0d9-24fa-4549-8cad-f0683b64d521.2.0.0"
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.0.0.0",
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.0.1.0",
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.0.2.0",
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.1.0.0",
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.1.1.0",
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.1.2.0",
+        "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.2.0.0"
       ],
       "tasks": [
         {
-          "elapsed_us": 18690401,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 19114630,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 0,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.0.0.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.0.0.0"
         },
         {
-          "elapsed_us": 19981664,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 19335760,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 0,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.0.1.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.0.1.0"
         },
         {
-          "elapsed_us": 17895457,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 17916198,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 0,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.0.2.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.0.2.0"
         },
         {
-          "elapsed_us": 1599570,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 1584831,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 1,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.1.0.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.1.0.0"
         },
         {
-          "elapsed_us": 1593383,
-          "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "elapsed_us": 1506149,
+          "node_id": "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
           "stage_id": 1,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.1.1.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.1.1.0"
         },
         {
-          "elapsed_us": 1200907,
-          "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+          "elapsed_us": 1532875,
+          "node_id": "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f",
           "stage_id": 1,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.1.2.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.1.2.0"
         },
         {
-          "elapsed_us": 91156,
-          "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "elapsed_us": 59712,
+          "node_id": "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
           "stage_id": 2,
-          "task_id": "ed9fd0d9-24fa-4549-8cad-f0683b64d521.2.0.0"
+          "task_id": "5c055ac4-1acb-4324-a361-3d3f7ab0fbca.2.0.0"
         }
       ],
-      "wall_seconds": 22.843,
+      "wall_seconds": 22.094,
       "worker_ids": [
-        "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
-        "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
-        "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        "kaveon-worker-0-67b22807-746f-4736-a772-36c9ec471a64",
+        "kaveon-worker-1-d2aed843-e59f-4efa-a2b2-01499c7bb5e1",
+        "kaveon-worker-2-2d3bf72c-4094-444e-9950-7dc343ee533f"
       ]
     }
   ],
