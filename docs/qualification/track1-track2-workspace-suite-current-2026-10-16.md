@@ -176,6 +176,9 @@ Date64 and all Arrow timestamp units now use the same deterministic histogram
 path; the complete exec suite remains green at **390 passed, 0 failed, 4
 ignored**.
 
+The differential corpus now includes a DATE histogram case; the full sweep
+passed **1/1** after adding the temporal coverage (195.90 seconds).
+
 The complete targets were rerun after the histogram type extension:
 
 ```text

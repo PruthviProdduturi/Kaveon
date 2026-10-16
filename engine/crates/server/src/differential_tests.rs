@@ -282,6 +282,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_histogram_temporal",
+        "SELECT ARRAY_HISTOGRAM(ARRAY[CAST('2024-01-01' AS DATE), CAST('2024-01-01' AS DATE), CAST('2024-02-01' AS DATE)]) AS histogram FROM {T} LIMIT 1",
+        true,
+    ),
+    (
         "array_membership_and_trim",
         "SELECT CONTAINS(ARRAY[1, 2, 3], 2) AS contains_value, TRIM_ARRAY(ARRAY[1, 2, 3], 1) AS trimmed FROM {T} LIMIT 1",
         false,
