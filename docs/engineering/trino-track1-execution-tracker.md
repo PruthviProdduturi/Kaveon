@@ -40,6 +40,8 @@ The five-run aggregate p95 sample is retained in `docs/qualification/track1-aks-
 
 The bounded mixed-workload report is retained in `docs/qualification/track1-aks-mixed-workload-2026-10-15.md` and its raw JSON. Three concurrent rounds combined aggregate, join, window, and global-order queries; all results matched sequential baselines, all workers participated, and no spill files remained. Longer endurance remains open.
 
+The controlled 64 KiB join-spill quota probe is retained as negative evidence in `docs/qualification/track1-aks-join-spill-exhaustion-negative-2026-10-15.md`: the selected join did not spill at that limit, so disk exhaustion remains unqualified. The worker quota was restored to 4 GiB and the post-restore exact join probe passed.
+
 The five-minute endurance report is retained in `docs/qualification/track1-aks-mixed-workload-6round-2026-10-15.md` and its raw JSON. Six concurrent rounds ran for 350.584 seconds with 24/24 exact requests, six resource samples, and zero retained worker spill files. Node-loss during the soak and longer endurance remain open.
 
 ## Active item: 3 — distributed joins
