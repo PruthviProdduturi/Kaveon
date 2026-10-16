@@ -2856,6 +2856,7 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         DataType::UInt64 => array_histogram_primitive::<L, UInt64Type>(list),
         DataType::Float32 => array_histogram_float32(list),
         DataType::Float64 => array_histogram_float64(list),
+        DataType::Decimal128(precision, scale) => array_histogram_decimal(list, precision, scale),
         DataType::Boolean => {
             let mut keys = ListBuilder::new(BooleanBuilder::new());
             let mut counts = ListBuilder::new(Int64Builder::new());
@@ -3081,6 +3082,45 @@ fn array_histogram_float64<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Re
         let mut values = histogram.into_values().collect::<Vec<_>>();
         values.sort_by(|left, right| left.0.total_cmp(&right.0));
         for (value, count) in values {
+            keys.values().append_value(value);
+            counts.values().append_value(count);
+        }
+        keys.append(true);
+        counts.append(true);
+    }
+    eval_scalar_function(
+        "MAP",
+        &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+        list.len(),
+    )
+}
+
+fn array_histogram_decimal<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    precision: u8,
+    scale: i8,
+) -> Result<ArrayRef> {
+    let key_builder = Decimal128Builder::new().with_precision_and_scale(precision, scale)?;
+    let mut keys = ListBuilder::new(key_builder);
+    let mut counts = ListBuilder::new(Int64Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            keys.append(false);
+            counts.append(false);
+            continue;
+        }
+        let inner = list.value(row);
+        let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+        let mut histogram = std::collections::BTreeMap::<i128, i64>::new();
+        for index in 0..values.len() {
+            if !values.is_null(index) {
+                let count = histogram.entry(values.value(index)).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
+                })?;
+            }
+        }
+        for (value, count) in histogram {
             keys.values().append_value(value);
             counts.values().append_value(count);
         }
@@ -11940,6 +11980,24 @@ mod tests {
             &[2, 1, 2]
         );
         assert!(keys.value(2).is_nan());
+    }
+
+    #[test]
+    fn array_histogram_preserves_decimal_key_metadata() {
+        let values = Decimal128Array::from(vec![Some(125_i128), Some(125_i128), Some(250_i128)])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let list = ListArray::try_new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 3_i32])),
+            Arc::new(values),
+            None,
+        )
+        .unwrap();
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().data_type(), &DataType::Decimal128(10, 2));
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 1]);
     }
 
     #[test]

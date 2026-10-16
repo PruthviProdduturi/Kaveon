@@ -169,11 +169,14 @@ regression covers both behaviors.
 The differential corpus now includes an explicit DOUBLE histogram case; the
 local/distributed sweep passed **1/1** after adding it (147.33 seconds).
 
+The corpus also includes a DECIMAL histogram case preserving key precision and
+scale; the sweep passed **1/1** after adding it (152.25 seconds).
+
 The complete targets were rerun after the histogram type extension:
 
 ```text
 cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet
-389 passed, 0 failed, 4 ignored (16.16s)
+390 passed, 0 failed, 4 ignored (15.64s)
 
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
 423 passed, 0 failed, 0 ignored (155.27s)
