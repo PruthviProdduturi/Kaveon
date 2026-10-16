@@ -436,8 +436,10 @@ fn compile_node(
                     if scan.source_uri.starts_with("abfss://")
                         || scan.source_uri.starts_with("s3://")
                     {
+                        let metrics = ScanMetrics::default();
                         let mut reader = ObjectDeltaReader::from_uri(&scan.source_uri)?
-                            .with_partition(scan_partition);
+                            .with_partition(scan_partition)
+                            .with_metrics(metrics.clone());
                         if let Some(predicate) = &scan.predicate {
                             reader = reader.with_predicate(predicate.clone());
                         }
@@ -447,13 +449,15 @@ fn compile_node(
                         if !scan.projection.is_empty() {
                             reader = reader.with_columns(scan.projection.clone());
                         }
-                        return Ok(Box::new(ScanOperator::new(
-                            Box::new(reader.read_blocking()?),
-                            None,
-                        )?));
+                        let source = reader.read_blocking()?;
+                        scan_metrics.push(metrics);
+                        return Ok(Box::new(ScanOperator::new(Box::new(source), None)?));
                     }
+                    let metrics = ScanMetrics::default();
                     let path = local_path(&scan.source_uri)?;
-                    let mut reader = DeltaTableReader::new(path).with_partition(scan_partition);
+                    let mut reader = DeltaTableReader::new(path)
+                        .with_partition(scan_partition)
+                        .with_metrics(metrics.clone());
                     if let Some(predicate) = &scan.predicate {
                         reader = reader.with_predicate(predicate.clone());
                     }
@@ -463,7 +467,9 @@ fn compile_node(
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
                     }
-                    Box::new(reader.read()?)
+                    let source = reader.read()?;
+                    scan_metrics.push(metrics);
+                    Box::new(source)
                 }
                 DataFormat::Iceberg => {
                     let mut reader = kaveon_storage::IcebergReader::new(&scan.source_uri)
