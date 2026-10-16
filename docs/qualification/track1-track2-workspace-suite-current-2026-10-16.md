@@ -50,6 +50,12 @@ sorted-string worker merge. That path now merges already-sorted non-integer
 and multi-key candidates by their heads while retaining the existing Arrow
 fallback for unsorted input.
 
+The distributed differential sweep was rerun after the planner change and
+passed **1/1** (411 filtered server tests; 136.86 seconds). It includes a
+projected-key `UNION DISTINCT` case whose branches now hash-partition across
+workers before the final deduplication; unsupported expression-shaped unions
+still use the single-task fallback.
+
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
 parity trackers and require their corresponding live or differential evidence.
