@@ -21,7 +21,7 @@ snapshot, not a session diary.
 | 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and current-image AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
 | 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current image now also has exact-repeat forced join-spill, post-query cleanup, exact retry after forced worker loss during a distributed scan, a bounded high-cardinality 504M-row self-join, exact join results in the ten-round mixed workload, and a current-image three-worker join-gates run covering left outer, full outer cross-source, and skewed grouped joins. | bounded AKS spill-quota exhaustion, larger input volumes, physical disk exhaustion, and repeated/node-loss endurance. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget, plus five exact-repeat full-table grouped aggregates over 504M rows across all three workers; the current-image sample observed p95 26.453s. | Skew behavior, sustained mixed-workload spill evidence, and a larger statistical sample for an SLO. |
-| 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current AKS image now also has exact-repeat mixed-key `ROW_NUMBER()`/`QUALIFY` evidence across three workers. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
+| 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current image has exact-repeat partitioned `ROW_NUMBER()`/`QUALIFY` evidence across three workers, alongside the existing mixed-key evidence. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
 | 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current AKS image also has exact-repeat three-worker evidence for multi-column ordering with OFFSET and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
 | 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, telemetry, ten exact concurrent mixed-workload rounds on the current image with resource samples and zero retained spill files, and a forced-worker-loss pressure run with zero file growth exist. | Skew, physical disk exhaustion, and final-merge spill under sustained load. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
@@ -99,6 +99,12 @@ JSON. It ran for 900 seconds with 1,386/1,386 exact requests, zero failures,
 zero unexpected restarts, all three workers Ready, and no retained exchange or
 spill growth. Node loss during the soak, physical disk exhaustion, and broader
 topologies remain open.
+
+The current-image partitioned window report is retained in
+`docs/qualification/track1-aks-window-current-2026-10-16.md` and its raw JSON.
+The bounded `ROW_NUMBER()` plus `QUALIFY` query finished twice with the exact
+same 12-row result across three workers. Unpartitioned windows, broader
+modifiers, and full parallel-window qualification remain open.
 
 ## Active item: 3 — distributed joins
 
