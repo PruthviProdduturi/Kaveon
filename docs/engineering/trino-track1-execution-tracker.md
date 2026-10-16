@@ -26,7 +26,7 @@ snapshot, not a session diary.
 | 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, telemetry, ten exact concurrent mixed-workload rounds on the current image with resource samples and zero retained spill files, and a forced-worker-loss pressure run with zero file growth exist. | Skew, physical disk exhaustion, and final-merge spill under sustained load. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
 | 9 | Worker-loss recovery | **Qualified (bounded)** | Replacement-worker recovery preserves exact results for the declared bounded gate; the current image also passes a forced worker loss during a distributed scan with exact retry, replacement, cleanup, and post-recovery probe. A graceful node-drain run also returned the exact result and restored three catalog-compatible workers, but Kubernetes evicted the pod before a retry was observable. | Node-drain interruption/retry and repeated-loss endurance with retained exact-result evidence. |
-| 10 | Coordinator restart | **Complete (bounded)** | Idle and active-query cleanup is fail-closed, exchange spools are reclaimed, workers reregister, and exact post-restart probes pass. | Multi-coordinator/failover continuity remains a separate future qualification. |
+| 10 | Coordinator restart | **Complete (bounded)** | Idle and active-query cleanup is fail-closed, exchange spools are reclaimed, workers reregister, and exact post-restart probes pass. The current AKS image also passed an observed active-query coordinator restart with fail-closed interruption, three-worker recovery, exact post-restart probe, and no retained-file growth. | Multi-coordinator/failover continuity remains a separate future qualification. |
 | 11 | Snapshot consistency | Open | Catalog and Delta versions are pinned across statement fragments and retries. | Cross-coordinator recovery and concurrent source-version qualification. |
 | 12 | Runtime dynamic filtering | Open | Build-side runtime filters reduce probe work for supported joins. | Inject filters into Parquet/Delta scan pruning with exact-result and exchange tests. |
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
@@ -77,6 +77,13 @@ The current-image object-store fault report is retained in
 JSON. A scoped ADLS egress fault produced an observed stage retry, the exact
 504M-row result, and zero retained exchange or spill files after cleanup.
 Cross-region storage and physical disk exhaustion remain open.
+
+The current-image coordinator-loss report is retained in
+`docs/qualification/track1-aks-coordinator-loss-current-2026-10-16.md` and its
+raw JSON. An active query was interrupted during coordinator restart, cleanup
+was fail-closed, all three workers returned, the exact probe passed, and no
+retained exchange or spill growth was observed. Multi-coordinator continuity
+remains outside this bounded gate.
 
 ## Active item: 3 — distributed joins
 
