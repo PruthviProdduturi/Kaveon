@@ -1,0 +1,3367 @@
+{
+  "all_exact": true,
+  "all_finished": true,
+  "cases": [
+    {
+      "baseline": {
+        "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+        "row_count": 20,
+        "stage_count": 2,
+        "state": "FINISHED",
+        "task_count": 4,
+        "wall_seconds": 54.219,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ]
+      },
+      "baseline_data": [
+        [
+          1,
+          168
+        ],
+        [
+          2,
+          168
+        ],
+        [
+          3,
+          168
+        ],
+        [
+          4,
+          168
+        ],
+        [
+          5,
+          168
+        ],
+        [
+          6,
+          168
+        ],
+        [
+          7,
+          168
+        ],
+        [
+          8,
+          168
+        ],
+        [
+          9,
+          168
+        ],
+        [
+          10,
+          168
+        ],
+        [
+          11,
+          168
+        ],
+        [
+          12,
+          168
+        ],
+        [
+          13,
+          168
+        ],
+        [
+          14,
+          168
+        ],
+        [
+          15,
+          168
+        ],
+        [
+          16,
+          168
+        ],
+        [
+          17,
+          168
+        ],
+        [
+          18,
+          168
+        ],
+        [
+          19,
+          168
+        ],
+        [
+          20,
+          168
+        ],
+        [
+          21,
+          168
+        ],
+        [
+          22,
+          168
+        ],
+        [
+          23,
+          168
+        ],
+        [
+          24,
+          168
+        ],
+        [
+          25,
+          168
+        ],
+        [
+          26,
+          168
+        ],
+        [
+          27,
+          168
+        ],
+        [
+          28,
+          168
+        ],
+        [
+          29,
+          168
+        ],
+        [
+          30,
+          168
+        ],
+        [
+          31,
+          168
+        ],
+        [
+          32,
+          168
+        ],
+        [
+          33,
+          168
+        ],
+        [
+          34,
+          168
+        ],
+        [
+          35,
+          168
+        ],
+        [
+          36,
+          168
+        ],
+        [
+          37,
+          168
+        ],
+        [
+          38,
+          168
+        ],
+        [
+          39,
+          168
+        ],
+        [
+          40,
+          168
+        ],
+        [
+          41,
+          168
+        ],
+        [
+          42,
+          168
+        ],
+        [
+          43,
+          168
+        ],
+        [
+          44,
+          168
+        ],
+        [
+          45,
+          168
+        ],
+        [
+          46,
+          168
+        ],
+        [
+          47,
+          168
+        ],
+        [
+          48,
+          168
+        ],
+        [
+          49,
+          168
+        ],
+        [
+          50,
+          168
+        ],
+        [
+          51,
+          168
+        ],
+        [
+          52,
+          168
+        ],
+        [
+          53,
+          168
+        ],
+        [
+          54,
+          168
+        ],
+        [
+          55,
+          168
+        ],
+        [
+          56,
+          168
+        ],
+        [
+          57,
+          168
+        ],
+        [
+          58,
+          168
+        ],
+        [
+          59,
+          168
+        ],
+        [
+          60,
+          168
+        ],
+        [
+          61,
+          168
+        ],
+        [
+          62,
+          168
+        ],
+        [
+          63,
+          168
+        ],
+        [
+          64,
+          168
+        ],
+        [
+          65,
+          168
+        ],
+        [
+          66,
+          168
+        ],
+        [
+          67,
+          168
+        ],
+        [
+          68,
+          168
+        ],
+        [
+          69,
+          168
+        ],
+        [
+          70,
+          168
+        ],
+        [
+          71,
+          168
+        ],
+        [
+          72,
+          168
+        ],
+        [
+          73,
+          168
+        ],
+        [
+          74,
+          168
+        ],
+        [
+          75,
+          168
+        ],
+        [
+          76,
+          168
+        ],
+        [
+          77,
+          168
+        ],
+        [
+          78,
+          168
+        ],
+        [
+          79,
+          168
+        ],
+        [
+          80,
+          168
+        ],
+        [
+          81,
+          168
+        ],
+        [
+          82,
+          168
+        ],
+        [
+          83,
+          168
+        ],
+        [
+          84,
+          168
+        ],
+        [
+          85,
+          168
+        ],
+        [
+          86,
+          168
+        ],
+        [
+          87,
+          168
+        ],
+        [
+          88,
+          168
+        ],
+        [
+          89,
+          168
+        ],
+        [
+          90,
+          168
+        ],
+        [
+          91,
+          168
+        ],
+        [
+          92,
+          168
+        ],
+        [
+          93,
+          168
+        ],
+        [
+          94,
+          168
+        ],
+        [
+          95,
+          168
+        ],
+        [
+          96,
+          168
+        ],
+        [
+          97,
+          168
+        ],
+        [
+          98,
+          168
+        ],
+        [
+          99,
+          168
+        ],
+        [
+          100,
+          168
+        ]
+      ],
+      "name": "aggregate",
+      "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100"
+    },
+    {
+      "baseline": {
+        "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+        "row_count": 20,
+        "stage_count": 2,
+        "state": "FINISHED",
+        "task_count": 4,
+        "wall_seconds": 54.219,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ]
+      },
+      "baseline_data": [
+        [
+          "Africa",
+          8971704
+        ],
+        [
+          "Asia",
+          79166556
+        ],
+        [
+          "Europe",
+          37338588
+        ],
+        [
+          "North America",
+          38615724
+        ],
+        [
+          "Oceania",
+          2649528
+        ],
+        [
+          "South America",
+          9657900
+        ]
+      ],
+      "name": "join",
+      "sql": "SELECT a.region, COUNT(*) AS rows FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id <= 100000 AND b.user_id <= 100000 AND a.event_date >= DATE '2026-07-04' AND a.event_date <= DATE '2026-07-10' AND b.event_date >= DATE '2026-07-04' AND b.event_date <= DATE '2026-07-10' GROUP BY a.region ORDER BY a.region"
+    },
+    {
+      "baseline": {
+        "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+        "row_count": 20,
+        "stage_count": 2,
+        "state": "FINISHED",
+        "task_count": 4,
+        "wall_seconds": 54.219,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ]
+      },
+      "baseline_data": [
+        [
+          "EU",
+          24,
+          1
+        ],
+        [
+          "EU",
+          22,
+          2
+        ],
+        [
+          "NA",
+          23,
+          1
+        ],
+        [
+          "NA",
+          21,
+          2
+        ]
+      ],
+      "name": "window",
+      "sql": "SELECT region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC) AS rn FROM kaveon_events_dashboard QUALIFY rn <= 2 ORDER BY region, rn"
+    },
+    {
+      "baseline": {
+        "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+        "row_count": 20,
+        "stage_count": 2,
+        "state": "FINISHED",
+        "task_count": 4,
+        "wall_seconds": 54.219,
+        "worker_ids": [
+          "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+          "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+          "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+        ]
+      },
+      "baseline_data": [
+        [
+          1873914,
+          9248
+        ],
+        [
+          239421,
+          6593
+        ],
+        [
+          2554807,
+          6491
+        ],
+        [
+          1515690,
+          4889
+        ],
+        [
+          1258427,
+          4875
+        ],
+        [
+          2765519,
+          4306
+        ],
+        [
+          165623,
+          4183
+        ],
+        [
+          1672298,
+          4182
+        ],
+        [
+          566584,
+          3886
+        ],
+        [
+          1207810,
+          3868
+        ],
+        [
+          2322979,
+          3828
+        ],
+        [
+          655034,
+          3802
+        ],
+        [
+          2018590,
+          3772
+        ],
+        [
+          2034538,
+          3713
+        ],
+        [
+          62181,
+          3644
+        ],
+        [
+          231584,
+          3633
+        ],
+        [
+          1962294,
+          3599
+        ],
+        [
+          1526993,
+          3598
+        ],
+        [
+          1424663,
+          3595
+        ],
+        [
+          1751356,
+          3591
+        ]
+      ],
+      "name": "order",
+      "sql": "SELECT user_id, actions FROM kaveon_events_enriched ORDER BY actions DESC, user_id LIMIT 20"
+    }
+  ],
+  "cluster": {
+    "active_workers": 3,
+    "compatible_workers": 3,
+    "coordinator": {
+      "address": "https://kaveon-coordinator.kaveon.svc.cluster.local:8080",
+      "admission": {
+        "admitted": 164,
+        "admitted_bytes": 0,
+        "limit_bytes": 8589934592,
+        "peak_admitted_bytes": 8589934592,
+        "queue_depth": 0,
+        "queue_limit": 64,
+        "queued": 6,
+        "rejected": 0,
+        "withdrawn": 0
+      },
+      "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+      "environment": "aks",
+      "last_heartbeat": 1792112891,
+      "memory_allocated_bytes": 29973234,
+      "memory_limit_bytes": 11811160064,
+      "memory_rss_bytes": 901922816,
+      "node_id": "kaveon-coordinator-0",
+      "resource_groups": [
+        {
+          "admitted": 164,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "max_concurrent": 4,
+          "max_queued": 64,
+          "name": "default",
+          "queued": 0,
+          "queued_total": 6,
+          "rejected": 0,
+          "running": 0,
+          "wait_ms_p50": 0,
+          "wait_ms_p95": 0,
+          "weight": 10,
+          "withdrawn": 0
+        },
+        {
+          "admitted": 0,
+          "admitted_bytes": 0,
+          "limit_bytes": 2147483648,
+          "max_concurrent": 2,
+          "max_queued": 32,
+          "name": "maintenance",
+          "queued": 0,
+          "queued_total": 0,
+          "rejected": 0,
+          "running": 0,
+          "weight": 1,
+          "withdrawn": 0
+        }
+      ],
+      "result_cache": {
+        "budget_bytes": 268435456,
+        "bytes": 0,
+        "enabled": true,
+        "entries": 0,
+        "evictions": 0,
+        "expirations": 0,
+        "hit_latency_ns_max": 0,
+        "hit_latency_ns_total": 0,
+        "hit_latency_samples": 0,
+        "hits": 0,
+        "misses": 6,
+        "refused": 0,
+        "ttl_seconds": 600
+      },
+      "role": "coordinator",
+      "uptime_secs": 8169,
+      "version": "0.1.0"
+    },
+    "environment": "aks",
+    "required_catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+    "total_nodes": 4,
+    "workers": [
+      {
+        "address": "https://kaveon-worker-1.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 101,
+          "admitted_bytes": 6442450944,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 1,
+          "queue_limit": 64,
+          "queued": 35,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792112882,
+        "memory_allocated_bytes": 69602282,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 622444544,
+        "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+        "role": "worker",
+        "uptime_secs": 1322,
+        "version": "0.1.0"
+      },
+      {
+        "address": "https://kaveon-worker-2.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 221,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 39,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792112883,
+        "memory_allocated_bytes": 51394264,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 706109440,
+        "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+        "role": "worker",
+        "uptime_secs": 4273,
+        "version": "0.1.0"
+      },
+      {
+        "address": "https://kaveon-worker-0.kaveon-workers.kaveon.svc.cluster.local:8080",
+        "admission": {
+          "admitted": 259,
+          "admitted_bytes": 0,
+          "limit_bytes": 8589934592,
+          "peak_admitted_bytes": 6442450944,
+          "queue_depth": 0,
+          "queue_limit": 64,
+          "queued": 48,
+          "rejected": 0,
+          "withdrawn": 0
+        },
+        "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+        "environment": "aks",
+        "last_heartbeat": 1792112886,
+        "memory_allocated_bytes": 51293291,
+        "memory_limit_bytes": 11811160064,
+        "memory_rss_bytes": 503332864,
+        "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+        "role": "worker",
+        "uptime_secs": 2132,
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "principal": "kaveon-operator",
+  "retained_files_after": {
+    "kaveon-worker-0_spill": 0,
+    "kaveon-worker-1_spill": 0,
+    "kaveon-worker-2_spill": 0
+  },
+  "rounds": [
+    {
+      "cases": [
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 31047.0,
+          "data": [
+            [
+              1,
+              168
+            ],
+            [
+              2,
+              168
+            ],
+            [
+              3,
+              168
+            ],
+            [
+              4,
+              168
+            ],
+            [
+              5,
+              168
+            ],
+            [
+              6,
+              168
+            ],
+            [
+              7,
+              168
+            ],
+            [
+              8,
+              168
+            ],
+            [
+              9,
+              168
+            ],
+            [
+              10,
+              168
+            ],
+            [
+              11,
+              168
+            ],
+            [
+              12,
+              168
+            ],
+            [
+              13,
+              168
+            ],
+            [
+              14,
+              168
+            ],
+            [
+              15,
+              168
+            ],
+            [
+              16,
+              168
+            ],
+            [
+              17,
+              168
+            ],
+            [
+              18,
+              168
+            ],
+            [
+              19,
+              168
+            ],
+            [
+              20,
+              168
+            ],
+            [
+              21,
+              168
+            ],
+            [
+              22,
+              168
+            ],
+            [
+              23,
+              168
+            ],
+            [
+              24,
+              168
+            ],
+            [
+              25,
+              168
+            ],
+            [
+              26,
+              168
+            ],
+            [
+              27,
+              168
+            ],
+            [
+              28,
+              168
+            ],
+            [
+              29,
+              168
+            ],
+            [
+              30,
+              168
+            ],
+            [
+              31,
+              168
+            ],
+            [
+              32,
+              168
+            ],
+            [
+              33,
+              168
+            ],
+            [
+              34,
+              168
+            ],
+            [
+              35,
+              168
+            ],
+            [
+              36,
+              168
+            ],
+            [
+              37,
+              168
+            ],
+            [
+              38,
+              168
+            ],
+            [
+              39,
+              168
+            ],
+            [
+              40,
+              168
+            ],
+            [
+              41,
+              168
+            ],
+            [
+              42,
+              168
+            ],
+            [
+              43,
+              168
+            ],
+            [
+              44,
+              168
+            ],
+            [
+              45,
+              168
+            ],
+            [
+              46,
+              168
+            ],
+            [
+              47,
+              168
+            ],
+            [
+              48,
+              168
+            ],
+            [
+              49,
+              168
+            ],
+            [
+              50,
+              168
+            ],
+            [
+              51,
+              168
+            ],
+            [
+              52,
+              168
+            ],
+            [
+              53,
+              168
+            ],
+            [
+              54,
+              168
+            ],
+            [
+              55,
+              168
+            ],
+            [
+              56,
+              168
+            ],
+            [
+              57,
+              168
+            ],
+            [
+              58,
+              168
+            ],
+            [
+              59,
+              168
+            ],
+            [
+              60,
+              168
+            ],
+            [
+              61,
+              168
+            ],
+            [
+              62,
+              168
+            ],
+            [
+              63,
+              168
+            ],
+            [
+              64,
+              168
+            ],
+            [
+              65,
+              168
+            ],
+            [
+              66,
+              168
+            ],
+            [
+              67,
+              168
+            ],
+            [
+              68,
+              168
+            ],
+            [
+              69,
+              168
+            ],
+            [
+              70,
+              168
+            ],
+            [
+              71,
+              168
+            ],
+            [
+              72,
+              168
+            ],
+            [
+              73,
+              168
+            ],
+            [
+              74,
+              168
+            ],
+            [
+              75,
+              168
+            ],
+            [
+              76,
+              168
+            ],
+            [
+              77,
+              168
+            ],
+            [
+              78,
+              168
+            ],
+            [
+              79,
+              168
+            ],
+            [
+              80,
+              168
+            ],
+            [
+              81,
+              168
+            ],
+            [
+              82,
+              168
+            ],
+            [
+              83,
+              168
+            ],
+            [
+              84,
+              168
+            ],
+            [
+              85,
+              168
+            ],
+            [
+              86,
+              168
+            ],
+            [
+              87,
+              168
+            ],
+            [
+              88,
+              168
+            ],
+            [
+              89,
+              168
+            ],
+            [
+              90,
+              168
+            ],
+            [
+              91,
+              168
+            ],
+            [
+              92,
+              168
+            ],
+            [
+              93,
+              168
+            ],
+            [
+              94,
+              168
+            ],
+            [
+              95,
+              168
+            ],
+            [
+              96,
+              168
+            ],
+            [
+              97,
+              168
+            ],
+            [
+              98,
+              168
+            ],
+            [
+              99,
+              168
+            ],
+            [
+              100,
+              168
+            ]
+          ],
+          "elapsed_ms": 30516,
+          "error": null,
+          "exact": true,
+          "id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb",
+          "name": "aggregate",
+          "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
+          "row_count": 100,
+          "scan_metrics_complete": false,
+          "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100",
+          "stage_count": 3,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 7,
+          "task_ids": [
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.0.0.0",
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.0.1.0",
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.0.2.0",
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.1.0.0",
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.1.1.0",
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.1.2.0",
+            "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.2.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 19511572,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.0.0.0"
+            },
+            {
+              "elapsed_us": 24816463,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.0.1.0"
+            },
+            {
+              "elapsed_us": 17087533,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.0.2.0"
+            },
+            {
+              "elapsed_us": 1512061,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.1.0.0"
+            },
+            {
+              "elapsed_us": 1484137,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.1.1.0"
+            },
+            {
+              "elapsed_us": 1542630,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.1.2.0"
+            },
+            {
+              "elapsed_us": 2661562,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "aff5b59b-5452-4ad6-9b33-c019cc37c1bb.2.0.0"
+            }
+          ],
+          "wall_seconds": 31.468,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 63687.0,
+          "data": [
+            [
+              "Africa",
+              8971704
+            ],
+            [
+              "Asia",
+              79166556
+            ],
+            [
+              "Europe",
+              37338588
+            ],
+            [
+              "North America",
+              38615724
+            ],
+            [
+              "Oceania",
+              2649528
+            ],
+            [
+              "South America",
+              9657900
+            ]
+          ],
+          "elapsed_ms": 32634,
+          "error": null,
+          "exact": true,
+          "id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc",
+          "name": "join",
+          "result_sha256": "13718a6e2e26649d6e124fc2b5deb3f2bcb52500d7a4506cf999caaf1235cf31",
+          "row_count": 6,
+          "scan_metrics_complete": false,
+          "sql": "SELECT a.region, COUNT(*) AS rows FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id <= 100000 AND b.user_id <= 100000 AND a.event_date >= DATE '2026-07-04' AND a.event_date <= DATE '2026-07-10' AND b.event_date >= DATE '2026-07-04' AND b.event_date <= DATE '2026-07-10' GROUP BY a.region ORDER BY a.region",
+          "stage_count": 5,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 13,
+          "task_ids": [
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.0.0.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.0.1.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.0.2.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.1.0.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.1.1.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.1.2.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.2.0.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.2.1.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.2.2.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.3.0.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.3.1.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.3.2.0",
+            "e77aefac-5be7-4aef-b55d-a2775d52bdcc.4.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 2438764,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.0.0.0"
+            },
+            {
+              "elapsed_us": 1800078,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.0.1.0"
+            },
+            {
+              "elapsed_us": 1628734,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.0.2.0"
+            },
+            {
+              "elapsed_us": 1439179,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.1.0.0"
+            },
+            {
+              "elapsed_us": 1285306,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.1.1.0"
+            },
+            {
+              "elapsed_us": 1083816,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.1.2.0"
+            },
+            {
+              "elapsed_us": 10489738,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.2.0.0"
+            },
+            {
+              "elapsed_us": 11206501,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 2,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.2.1.0"
+            },
+            {
+              "elapsed_us": 9277825,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 2,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.2.2.0"
+            },
+            {
+              "elapsed_us": 47285,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 3,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.3.0.0"
+            },
+            {
+              "elapsed_us": 50970,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 3,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.3.1.0"
+            },
+            {
+              "elapsed_us": 49047,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 3,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.3.2.0"
+            },
+            {
+              "elapsed_us": 43294,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 4,
+              "task_id": "e77aefac-5be7-4aef-b55d-a2775d52bdcc.4.0.0"
+            }
+          ],
+          "wall_seconds": 63.968,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 31047.0,
+          "data": [
+            [
+              "EU",
+              24,
+              1
+            ],
+            [
+              "EU",
+              22,
+              2
+            ],
+            [
+              "NA",
+              23,
+              1
+            ],
+            [
+              "NA",
+              21,
+              2
+            ]
+          ],
+          "elapsed_ms": 30530,
+          "error": null,
+          "exact": true,
+          "id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5",
+          "name": "window",
+          "result_sha256": "9d97e4825d36271b8941cbae48dd4b594aaf71f4ac5cd2cbd7c959a749f21215",
+          "row_count": 4,
+          "scan_metrics_complete": false,
+          "sql": "SELECT region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC) AS rn FROM kaveon_events_dashboard QUALIFY rn <= 2 ORDER BY region, rn",
+          "stage_count": 3,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 7,
+          "task_ids": [
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.0.0.0",
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.0.1.0",
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.0.2.0",
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.1.0.0",
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.1.1.0",
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.1.2.0",
+            "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.2.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 717993,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.0.0.0"
+            },
+            {
+              "elapsed_us": 794910,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.0.1.0"
+            },
+            {
+              "elapsed_us": 688395,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.0.2.0"
+            },
+            {
+              "elapsed_us": 54139,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.1.0.0"
+            },
+            {
+              "elapsed_us": 50441,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.1.1.0"
+            },
+            {
+              "elapsed_us": 43547,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.1.2.0"
+            },
+            {
+              "elapsed_us": 42774,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "8cb078ee-5edf-43a1-ad28-f3cf753dabb5.2.0.0"
+            }
+          ],
+          "wall_seconds": 31.468,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 62953.0,
+          "data": [
+            [
+              1873914,
+              9248
+            ],
+            [
+              239421,
+              6593
+            ],
+            [
+              2554807,
+              6491
+            ],
+            [
+              1515690,
+              4889
+            ],
+            [
+              1258427,
+              4875
+            ],
+            [
+              2765519,
+              4306
+            ],
+            [
+              165623,
+              4183
+            ],
+            [
+              1672298,
+              4182
+            ],
+            [
+              566584,
+              3886
+            ],
+            [
+              1207810,
+              3868
+            ],
+            [
+              2322979,
+              3828
+            ],
+            [
+              655034,
+              3802
+            ],
+            [
+              2018590,
+              3772
+            ],
+            [
+              2034538,
+              3713
+            ],
+            [
+              62181,
+              3644
+            ],
+            [
+              231584,
+              3633
+            ],
+            [
+              1962294,
+              3599
+            ],
+            [
+              1526993,
+              3598
+            ],
+            [
+              1424663,
+              3595
+            ],
+            [
+              1751356,
+              3591
+            ]
+          ],
+          "elapsed_ms": 31898,
+          "error": null,
+          "exact": true,
+          "id": "cae2be33-c1c7-48c4-aea4-63367a0eec83",
+          "name": "order",
+          "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+          "row_count": 20,
+          "scan_metrics_complete": false,
+          "sql": "SELECT user_id, actions FROM kaveon_events_enriched ORDER BY actions DESC, user_id LIMIT 20",
+          "stage_count": 2,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 4,
+          "task_ids": [
+            "cae2be33-c1c7-48c4-aea4-63367a0eec83.0.0.0",
+            "cae2be33-c1c7-48c4-aea4-63367a0eec83.0.1.0",
+            "cae2be33-c1c7-48c4-aea4-63367a0eec83.0.2.0",
+            "cae2be33-c1c7-48c4-aea4-63367a0eec83.1.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 16780085,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "cae2be33-c1c7-48c4-aea4-63367a0eec83.0.0.0"
+            },
+            {
+              "elapsed_us": 17536579,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "cae2be33-c1c7-48c4-aea4-63367a0eec83.0.1.0"
+            },
+            {
+              "elapsed_us": 16031677,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "cae2be33-c1c7-48c4-aea4-63367a0eec83.0.2.0"
+            },
+            {
+              "elapsed_us": 43466,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "cae2be33-c1c7-48c4-aea4-63367a0eec83.1.0.0"
+            }
+          ],
+          "wall_seconds": 63.234,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        }
+      ],
+      "elapsed_seconds": 63.968,
+      "round": 1
+    },
+    {
+      "cases": [
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 23579.0,
+          "data": [
+            [
+              1,
+              168
+            ],
+            [
+              2,
+              168
+            ],
+            [
+              3,
+              168
+            ],
+            [
+              4,
+              168
+            ],
+            [
+              5,
+              168
+            ],
+            [
+              6,
+              168
+            ],
+            [
+              7,
+              168
+            ],
+            [
+              8,
+              168
+            ],
+            [
+              9,
+              168
+            ],
+            [
+              10,
+              168
+            ],
+            [
+              11,
+              168
+            ],
+            [
+              12,
+              168
+            ],
+            [
+              13,
+              168
+            ],
+            [
+              14,
+              168
+            ],
+            [
+              15,
+              168
+            ],
+            [
+              16,
+              168
+            ],
+            [
+              17,
+              168
+            ],
+            [
+              18,
+              168
+            ],
+            [
+              19,
+              168
+            ],
+            [
+              20,
+              168
+            ],
+            [
+              21,
+              168
+            ],
+            [
+              22,
+              168
+            ],
+            [
+              23,
+              168
+            ],
+            [
+              24,
+              168
+            ],
+            [
+              25,
+              168
+            ],
+            [
+              26,
+              168
+            ],
+            [
+              27,
+              168
+            ],
+            [
+              28,
+              168
+            ],
+            [
+              29,
+              168
+            ],
+            [
+              30,
+              168
+            ],
+            [
+              31,
+              168
+            ],
+            [
+              32,
+              168
+            ],
+            [
+              33,
+              168
+            ],
+            [
+              34,
+              168
+            ],
+            [
+              35,
+              168
+            ],
+            [
+              36,
+              168
+            ],
+            [
+              37,
+              168
+            ],
+            [
+              38,
+              168
+            ],
+            [
+              39,
+              168
+            ],
+            [
+              40,
+              168
+            ],
+            [
+              41,
+              168
+            ],
+            [
+              42,
+              168
+            ],
+            [
+              43,
+              168
+            ],
+            [
+              44,
+              168
+            ],
+            [
+              45,
+              168
+            ],
+            [
+              46,
+              168
+            ],
+            [
+              47,
+              168
+            ],
+            [
+              48,
+              168
+            ],
+            [
+              49,
+              168
+            ],
+            [
+              50,
+              168
+            ],
+            [
+              51,
+              168
+            ],
+            [
+              52,
+              168
+            ],
+            [
+              53,
+              168
+            ],
+            [
+              54,
+              168
+            ],
+            [
+              55,
+              168
+            ],
+            [
+              56,
+              168
+            ],
+            [
+              57,
+              168
+            ],
+            [
+              58,
+              168
+            ],
+            [
+              59,
+              168
+            ],
+            [
+              60,
+              168
+            ],
+            [
+              61,
+              168
+            ],
+            [
+              62,
+              168
+            ],
+            [
+              63,
+              168
+            ],
+            [
+              64,
+              168
+            ],
+            [
+              65,
+              168
+            ],
+            [
+              66,
+              168
+            ],
+            [
+              67,
+              168
+            ],
+            [
+              68,
+              168
+            ],
+            [
+              69,
+              168
+            ],
+            [
+              70,
+              168
+            ],
+            [
+              71,
+              168
+            ],
+            [
+              72,
+              168
+            ],
+            [
+              73,
+              168
+            ],
+            [
+              74,
+              168
+            ],
+            [
+              75,
+              168
+            ],
+            [
+              76,
+              168
+            ],
+            [
+              77,
+              168
+            ],
+            [
+              78,
+              168
+            ],
+            [
+              79,
+              168
+            ],
+            [
+              80,
+              168
+            ],
+            [
+              81,
+              168
+            ],
+            [
+              82,
+              168
+            ],
+            [
+              83,
+              168
+            ],
+            [
+              84,
+              168
+            ],
+            [
+              85,
+              168
+            ],
+            [
+              86,
+              168
+            ],
+            [
+              87,
+              168
+            ],
+            [
+              88,
+              168
+            ],
+            [
+              89,
+              168
+            ],
+            [
+              90,
+              168
+            ],
+            [
+              91,
+              168
+            ],
+            [
+              92,
+              168
+            ],
+            [
+              93,
+              168
+            ],
+            [
+              94,
+              168
+            ],
+            [
+              95,
+              168
+            ],
+            [
+              96,
+              168
+            ],
+            [
+              97,
+              168
+            ],
+            [
+              98,
+              168
+            ],
+            [
+              99,
+              168
+            ],
+            [
+              100,
+              168
+            ]
+          ],
+          "elapsed_ms": 22477,
+          "error": null,
+          "exact": true,
+          "id": "d29abd85-3782-4e79-966c-90b14bd1f6ca",
+          "name": "aggregate",
+          "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
+          "row_count": 100,
+          "scan_metrics_complete": false,
+          "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100",
+          "stage_count": 3,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 7,
+          "task_ids": [
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.0.0.0",
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.0.1.0",
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.0.2.0",
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.1.0.0",
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.1.1.0",
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.1.2.0",
+            "d29abd85-3782-4e79-966c-90b14bd1f6ca.2.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 18647977,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.0.0.0"
+            },
+            {
+              "elapsed_us": 20151678,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.0.1.0"
+            },
+            {
+              "elapsed_us": 17021147,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.0.2.0"
+            },
+            {
+              "elapsed_us": 1551261,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.1.0.0"
+            },
+            {
+              "elapsed_us": 1504520,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.1.1.0"
+            },
+            {
+              "elapsed_us": 1535304,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.1.2.0"
+            },
+            {
+              "elapsed_us": 62332,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "d29abd85-3782-4e79-966c-90b14bd1f6ca.2.0.0"
+            }
+          ],
+          "wall_seconds": 23.938,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 55672.0,
+          "data": [
+            [
+              "Africa",
+              8971704
+            ],
+            [
+              "Asia",
+              79166556
+            ],
+            [
+              "Europe",
+              37338588
+            ],
+            [
+              "North America",
+              38615724
+            ],
+            [
+              "Oceania",
+              2649528
+            ],
+            [
+              "South America",
+              9657900
+            ]
+          ],
+          "elapsed_ms": 32092,
+          "error": null,
+          "exact": true,
+          "id": "28c87426-5f44-4ff2-9952-d738a615a987",
+          "name": "join",
+          "result_sha256": "13718a6e2e26649d6e124fc2b5deb3f2bcb52500d7a4506cf999caaf1235cf31",
+          "row_count": 6,
+          "scan_metrics_complete": false,
+          "sql": "SELECT a.region, COUNT(*) AS rows FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id <= 100000 AND b.user_id <= 100000 AND a.event_date >= DATE '2026-07-04' AND a.event_date <= DATE '2026-07-10' AND b.event_date >= DATE '2026-07-04' AND b.event_date <= DATE '2026-07-10' GROUP BY a.region ORDER BY a.region",
+          "stage_count": 5,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 13,
+          "task_ids": [
+            "28c87426-5f44-4ff2-9952-d738a615a987.0.0.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.0.1.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.0.2.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.1.0.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.1.1.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.1.2.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.2.0.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.2.1.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.2.2.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.3.0.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.3.1.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.3.2.0",
+            "28c87426-5f44-4ff2-9952-d738a615a987.4.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 2401297,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.0.0.0"
+            },
+            {
+              "elapsed_us": 1728911,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.0.1.0"
+            },
+            {
+              "elapsed_us": 1687509,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.0.2.0"
+            },
+            {
+              "elapsed_us": 1363064,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.1.0.0"
+            },
+            {
+              "elapsed_us": 1204383,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.1.1.0"
+            },
+            {
+              "elapsed_us": 1143344,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.1.2.0"
+            },
+            {
+              "elapsed_us": 10707234,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.2.0.0"
+            },
+            {
+              "elapsed_us": 11466185,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 2,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.2.1.0"
+            },
+            {
+              "elapsed_us": 9250563,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 2,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.2.2.0"
+            },
+            {
+              "elapsed_us": 30379,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 3,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.3.0.0"
+            },
+            {
+              "elapsed_us": 61099,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 3,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.3.1.0"
+            },
+            {
+              "elapsed_us": 57670,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 3,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.3.2.0"
+            },
+            {
+              "elapsed_us": 43295,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 4,
+              "task_id": "28c87426-5f44-4ff2-9952-d738a615a987.4.0.0"
+            }
+          ],
+          "wall_seconds": 56.047,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 23579.0,
+          "data": [
+            [
+              "EU",
+              24,
+              1
+            ],
+            [
+              "EU",
+              22,
+              2
+            ],
+            [
+              "NA",
+              23,
+              1
+            ],
+            [
+              "NA",
+              21,
+              2
+            ]
+          ],
+          "elapsed_ms": 23059,
+          "error": null,
+          "exact": true,
+          "id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf",
+          "name": "window",
+          "result_sha256": "9d97e4825d36271b8941cbae48dd4b594aaf71f4ac5cd2cbd7c959a749f21215",
+          "row_count": 4,
+          "scan_metrics_complete": false,
+          "sql": "SELECT region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC) AS rn FROM kaveon_events_dashboard QUALIFY rn <= 2 ORDER BY region, rn",
+          "stage_count": 3,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 7,
+          "task_ids": [
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.0.0.0",
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.0.1.0",
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.0.2.0",
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.1.0.0",
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.1.1.0",
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.1.2.0",
+            "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.2.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 739358,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.0.0.0"
+            },
+            {
+              "elapsed_us": 664925,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.0.1.0"
+            },
+            {
+              "elapsed_us": 665749,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.0.2.0"
+            },
+            {
+              "elapsed_us": 44886,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.1.0.0"
+            },
+            {
+              "elapsed_us": 50960,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.1.1.0"
+            },
+            {
+              "elapsed_us": 44244,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.1.2.0"
+            },
+            {
+              "elapsed_us": 42199,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "02d78c3f-d0b5-40f9-868e-6ebab5b361bf.2.0.0"
+            }
+          ],
+          "wall_seconds": 23.954,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 55594.0,
+          "data": [
+            [
+              1873914,
+              9248
+            ],
+            [
+              239421,
+              6593
+            ],
+            [
+              2554807,
+              6491
+            ],
+            [
+              1515690,
+              4889
+            ],
+            [
+              1258427,
+              4875
+            ],
+            [
+              2765519,
+              4306
+            ],
+            [
+              165623,
+              4183
+            ],
+            [
+              1672298,
+              4182
+            ],
+            [
+              566584,
+              3886
+            ],
+            [
+              1207810,
+              3868
+            ],
+            [
+              2322979,
+              3828
+            ],
+            [
+              655034,
+              3802
+            ],
+            [
+              2018590,
+              3772
+            ],
+            [
+              2034538,
+              3713
+            ],
+            [
+              62181,
+              3644
+            ],
+            [
+              231584,
+              3633
+            ],
+            [
+              1962294,
+              3599
+            ],
+            [
+              1526993,
+              3598
+            ],
+            [
+              1424663,
+              3595
+            ],
+            [
+              1751356,
+              3591
+            ]
+          ],
+          "elapsed_ms": 32036,
+          "error": null,
+          "exact": true,
+          "id": "5a507055-e515-42e6-bca2-a62d81d46ddd",
+          "name": "order",
+          "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+          "row_count": 20,
+          "scan_metrics_complete": false,
+          "sql": "SELECT user_id, actions FROM kaveon_events_enriched ORDER BY actions DESC, user_id LIMIT 20",
+          "stage_count": 2,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 4,
+          "task_ids": [
+            "5a507055-e515-42e6-bca2-a62d81d46ddd.0.0.0",
+            "5a507055-e515-42e6-bca2-a62d81d46ddd.0.1.0",
+            "5a507055-e515-42e6-bca2-a62d81d46ddd.0.2.0",
+            "5a507055-e515-42e6-bca2-a62d81d46ddd.1.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 16877282,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "5a507055-e515-42e6-bca2-a62d81d46ddd.0.0.0"
+            },
+            {
+              "elapsed_us": 16615095,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "5a507055-e515-42e6-bca2-a62d81d46ddd.0.1.0"
+            },
+            {
+              "elapsed_us": 15174060,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "5a507055-e515-42e6-bca2-a62d81d46ddd.0.2.0"
+            },
+            {
+              "elapsed_us": 44700,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "5a507055-e515-42e6-bca2-a62d81d46ddd.1.0.0"
+            }
+          ],
+          "wall_seconds": 55.969,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        }
+      ],
+      "elapsed_seconds": 56.047,
+      "round": 2
+    },
+    {
+      "cases": [
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 35485.0,
+          "data": [
+            [
+              1,
+              168
+            ],
+            [
+              2,
+              168
+            ],
+            [
+              3,
+              168
+            ],
+            [
+              4,
+              168
+            ],
+            [
+              5,
+              168
+            ],
+            [
+              6,
+              168
+            ],
+            [
+              7,
+              168
+            ],
+            [
+              8,
+              168
+            ],
+            [
+              9,
+              168
+            ],
+            [
+              10,
+              168
+            ],
+            [
+              11,
+              168
+            ],
+            [
+              12,
+              168
+            ],
+            [
+              13,
+              168
+            ],
+            [
+              14,
+              168
+            ],
+            [
+              15,
+              168
+            ],
+            [
+              16,
+              168
+            ],
+            [
+              17,
+              168
+            ],
+            [
+              18,
+              168
+            ],
+            [
+              19,
+              168
+            ],
+            [
+              20,
+              168
+            ],
+            [
+              21,
+              168
+            ],
+            [
+              22,
+              168
+            ],
+            [
+              23,
+              168
+            ],
+            [
+              24,
+              168
+            ],
+            [
+              25,
+              168
+            ],
+            [
+              26,
+              168
+            ],
+            [
+              27,
+              168
+            ],
+            [
+              28,
+              168
+            ],
+            [
+              29,
+              168
+            ],
+            [
+              30,
+              168
+            ],
+            [
+              31,
+              168
+            ],
+            [
+              32,
+              168
+            ],
+            [
+              33,
+              168
+            ],
+            [
+              34,
+              168
+            ],
+            [
+              35,
+              168
+            ],
+            [
+              36,
+              168
+            ],
+            [
+              37,
+              168
+            ],
+            [
+              38,
+              168
+            ],
+            [
+              39,
+              168
+            ],
+            [
+              40,
+              168
+            ],
+            [
+              41,
+              168
+            ],
+            [
+              42,
+              168
+            ],
+            [
+              43,
+              168
+            ],
+            [
+              44,
+              168
+            ],
+            [
+              45,
+              168
+            ],
+            [
+              46,
+              168
+            ],
+            [
+              47,
+              168
+            ],
+            [
+              48,
+              168
+            ],
+            [
+              49,
+              168
+            ],
+            [
+              50,
+              168
+            ],
+            [
+              51,
+              168
+            ],
+            [
+              52,
+              168
+            ],
+            [
+              53,
+              168
+            ],
+            [
+              54,
+              168
+            ],
+            [
+              55,
+              168
+            ],
+            [
+              56,
+              168
+            ],
+            [
+              57,
+              168
+            ],
+            [
+              58,
+              168
+            ],
+            [
+              59,
+              168
+            ],
+            [
+              60,
+              168
+            ],
+            [
+              61,
+              168
+            ],
+            [
+              62,
+              168
+            ],
+            [
+              63,
+              168
+            ],
+            [
+              64,
+              168
+            ],
+            [
+              65,
+              168
+            ],
+            [
+              66,
+              168
+            ],
+            [
+              67,
+              168
+            ],
+            [
+              68,
+              168
+            ],
+            [
+              69,
+              168
+            ],
+            [
+              70,
+              168
+            ],
+            [
+              71,
+              168
+            ],
+            [
+              72,
+              168
+            ],
+            [
+              73,
+              168
+            ],
+            [
+              74,
+              168
+            ],
+            [
+              75,
+              168
+            ],
+            [
+              76,
+              168
+            ],
+            [
+              77,
+              168
+            ],
+            [
+              78,
+              168
+            ],
+            [
+              79,
+              168
+            ],
+            [
+              80,
+              168
+            ],
+            [
+              81,
+              168
+            ],
+            [
+              82,
+              168
+            ],
+            [
+              83,
+              168
+            ],
+            [
+              84,
+              168
+            ],
+            [
+              85,
+              168
+            ],
+            [
+              86,
+              168
+            ],
+            [
+              87,
+              168
+            ],
+            [
+              88,
+              168
+            ],
+            [
+              89,
+              168
+            ],
+            [
+              90,
+              168
+            ],
+            [
+              91,
+              168
+            ],
+            [
+              92,
+              168
+            ],
+            [
+              93,
+              168
+            ],
+            [
+              94,
+              168
+            ],
+            [
+              95,
+              168
+            ],
+            [
+              96,
+              168
+            ],
+            [
+              97,
+              168
+            ],
+            [
+              98,
+              168
+            ],
+            [
+              99,
+              168
+            ],
+            [
+              100,
+              168
+            ]
+          ],
+          "elapsed_ms": 35003,
+          "error": null,
+          "exact": true,
+          "id": "e1287532-636b-4ea3-a30b-8d0ff9561342",
+          "name": "aggregate",
+          "result_sha256": "9e6816aae279642b5d01582a250a7be0dbc7ad3827354ec8d1efb8073dd62c0d",
+          "row_count": 100,
+          "scan_metrics_complete": false,
+          "sql": "SELECT user_id, COUNT(*) AS rows FROM kaveon_events_enriched GROUP BY user_id ORDER BY user_id LIMIT 100",
+          "stage_count": 3,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 7,
+          "task_ids": [
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.0.0.0",
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.0.1.0",
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.0.2.0",
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.1.0.0",
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.1.1.0",
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.1.2.0",
+            "e1287532-636b-4ea3-a30b-8d0ff9561342.2.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 19177111,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.0.0.0"
+            },
+            {
+              "elapsed_us": 19722812,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.0.1.0"
+            },
+            {
+              "elapsed_us": 17257081,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.0.2.0"
+            },
+            {
+              "elapsed_us": 1115194,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.1.0.0"
+            },
+            {
+              "elapsed_us": 1310211,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.1.1.0"
+            },
+            {
+              "elapsed_us": 689866,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.1.2.0"
+            },
+            {
+              "elapsed_us": 3021,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "e1287532-636b-4ea3-a30b-8d0ff9561342.2.0.0"
+            }
+          ],
+          "wall_seconds": 35.797,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 53922.0,
+          "data": [
+            [
+              "Africa",
+              8971704
+            ],
+            [
+              "Asia",
+              79166556
+            ],
+            [
+              "Europe",
+              37338588
+            ],
+            [
+              "North America",
+              38615724
+            ],
+            [
+              "Oceania",
+              2649528
+            ],
+            [
+              "South America",
+              9657900
+            ]
+          ],
+          "elapsed_ms": 52836,
+          "error": null,
+          "exact": true,
+          "id": "eef42560-4f53-4c36-b3fd-56037899df2a",
+          "name": "join",
+          "result_sha256": "13718a6e2e26649d6e124fc2b5deb3f2bcb52500d7a4506cf999caaf1235cf31",
+          "row_count": 6,
+          "scan_metrics_complete": false,
+          "sql": "SELECT a.region, COUNT(*) AS rows FROM kaveon_events_enriched a JOIN kaveon_events_enriched b ON a.user_id = b.user_id WHERE a.user_id <= 100000 AND b.user_id <= 100000 AND a.event_date >= DATE '2026-07-04' AND a.event_date <= DATE '2026-07-10' AND b.event_date >= DATE '2026-07-04' AND b.event_date <= DATE '2026-07-10' GROUP BY a.region ORDER BY a.region",
+          "stage_count": 5,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 13,
+          "task_ids": [
+            "eef42560-4f53-4c36-b3fd-56037899df2a.0.0.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.0.1.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.0.2.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.1.0.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.1.1.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.1.2.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.2.0.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.2.1.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.2.2.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.3.0.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.3.1.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.3.2.0",
+            "eef42560-4f53-4c36-b3fd-56037899df2a.4.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 2306820,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.0.0.0"
+            },
+            {
+              "elapsed_us": 2033690,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.0.1.0"
+            },
+            {
+              "elapsed_us": 1691930,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.0.2.0"
+            },
+            {
+              "elapsed_us": 1352575,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.1.0.0"
+            },
+            {
+              "elapsed_us": 1249962,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.1.1.0"
+            },
+            {
+              "elapsed_us": 1134032,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.1.2.0"
+            },
+            {
+              "elapsed_us": 10466646,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.2.0.0"
+            },
+            {
+              "elapsed_us": 11146421,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 2,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.2.1.0"
+            },
+            {
+              "elapsed_us": 10489590,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 2,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.2.2.0"
+            },
+            {
+              "elapsed_us": 6824,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 3,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.3.0.0"
+            },
+            {
+              "elapsed_us": 8980,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 3,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.3.1.0"
+            },
+            {
+              "elapsed_us": 5762,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 3,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.3.2.0"
+            },
+            {
+              "elapsed_us": 43682,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 4,
+              "task_id": "eef42560-4f53-4c36-b3fd-56037899df2a.4.0.0"
+            }
+          ],
+          "wall_seconds": 54.25,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 55282.0,
+          "data": [
+            [
+              "EU",
+              24,
+              1
+            ],
+            [
+              "EU",
+              22,
+              2
+            ],
+            [
+              "NA",
+              23,
+              1
+            ],
+            [
+              "NA",
+              21,
+              2
+            ]
+          ],
+          "elapsed_ms": 1418,
+          "error": null,
+          "exact": true,
+          "id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a",
+          "name": "window",
+          "result_sha256": "9d97e4825d36271b8941cbae48dd4b594aaf71f4ac5cd2cbd7c959a749f21215",
+          "row_count": 4,
+          "scan_metrics_complete": false,
+          "sql": "SELECT region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC) AS rn FROM kaveon_events_dashboard QUALIFY rn <= 2 ORDER BY region, rn",
+          "stage_count": 3,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 7,
+          "task_ids": [
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.0.0.0",
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.0.1.0",
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.0.2.0",
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.1.0.0",
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.1.1.0",
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.1.2.0",
+            "7200289e-7fe9-4a92-a3ac-b406617f8d0a.2.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 765608,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.0.0.0"
+            },
+            {
+              "elapsed_us": 631002,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.0.1.0"
+            },
+            {
+              "elapsed_us": 569359,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.0.2.0"
+            },
+            {
+              "elapsed_us": 43302,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.1.0.0"
+            },
+            {
+              "elapsed_us": 5120,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 1,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.1.1.0"
+            },
+            {
+              "elapsed_us": 6320,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 1,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.1.2.0"
+            },
+            {
+              "elapsed_us": 43283,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 2,
+              "task_id": "7200289e-7fe9-4a92-a3ac-b406617f8d0a.2.0.0"
+            }
+          ],
+          "wall_seconds": 55.563,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        },
+        {
+          "admission_refusals": 0,
+          "catalog_snapshot_id": "sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3",
+          "client_elapsed_ms": 53875.0,
+          "data": [
+            [
+              1873914,
+              9248
+            ],
+            [
+              239421,
+              6593
+            ],
+            [
+              2554807,
+              6491
+            ],
+            [
+              1515690,
+              4889
+            ],
+            [
+              1258427,
+              4875
+            ],
+            [
+              2765519,
+              4306
+            ],
+            [
+              165623,
+              4183
+            ],
+            [
+              1672298,
+              4182
+            ],
+            [
+              566584,
+              3886
+            ],
+            [
+              1207810,
+              3868
+            ],
+            [
+              2322979,
+              3828
+            ],
+            [
+              655034,
+              3802
+            ],
+            [
+              2018590,
+              3772
+            ],
+            [
+              2034538,
+              3713
+            ],
+            [
+              62181,
+              3644
+            ],
+            [
+              231584,
+              3633
+            ],
+            [
+              1962294,
+              3599
+            ],
+            [
+              1526993,
+              3598
+            ],
+            [
+              1424663,
+              3595
+            ],
+            [
+              1751356,
+              3591
+            ]
+          ],
+          "elapsed_ms": 18378,
+          "error": null,
+          "exact": true,
+          "id": "470e5d3c-9b07-4385-b0b1-2dbf37d152bf",
+          "name": "order",
+          "result_sha256": "5e8839d5ff259098276661f4d180a33bc518d0cd4257230ff9ffb0490e50f88b",
+          "row_count": 20,
+          "scan_metrics_complete": false,
+          "sql": "SELECT user_id, actions FROM kaveon_events_enriched ORDER BY actions DESC, user_id LIMIT 20",
+          "stage_count": 2,
+          "state": "FINISHED",
+          "status": 200,
+          "task_count": 4,
+          "task_ids": [
+            "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.0.0.0",
+            "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.0.1.0",
+            "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.0.2.0",
+            "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.1.0.0"
+          ],
+          "tasks": [
+            {
+              "elapsed_us": 16376067,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 0,
+              "task_id": "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.0.0.0"
+            },
+            {
+              "elapsed_us": 17334145,
+              "node_id": "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+              "stage_id": 0,
+              "task_id": "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.0.1.0"
+            },
+            {
+              "elapsed_us": 15940368,
+              "node_id": "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd",
+              "stage_id": 0,
+              "task_id": "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.0.2.0"
+            },
+            {
+              "elapsed_us": 2452,
+              "node_id": "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+              "stage_id": 1,
+              "task_id": "470e5d3c-9b07-4385-b0b1-2dbf37d152bf.1.0.0"
+            }
+          ],
+          "wall_seconds": 54.219,
+          "worker_ids": [
+            "kaveon-worker-0-c9ba490e-2ab9-4cd9-be9e-0b15b7d1db60",
+            "kaveon-worker-1-507f5aad-b51c-4b43-8e91-a948fdabad4b",
+            "kaveon-worker-2-491f080a-0550-4e96-8c59-b9ff2218e0dd"
+          ]
+        }
+      ],
+      "elapsed_seconds": 55.563,
+      "round": 3
+    }
+  ]
+}

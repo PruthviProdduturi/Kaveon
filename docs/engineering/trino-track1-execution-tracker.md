@@ -23,7 +23,7 @@ snapshot, not a session diary.
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget, plus an exact-repeat full-table grouped aggregate over 504M rows and a five-run sample with observed p95 24.546s. | Skew behavior, sustained mixed-workload spill evidence, and a larger statistical sample for an SLO. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current AKS image now also has exact-repeat mixed-key `ROW_NUMBER()`/`QUALIFY` evidence across three workers. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
 | 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current AKS image also has exact-repeat three-worker evidence for multi-column ordering with OFFSET and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
-| 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, and telemetry exist. | Five-minute mixed workload, skew, disk exhaustion, and final-merge spill evidence. |
+| 7 | Memory admission and spill | Open | Per-query reservations, FIFO admission, resource groups, bounded spill, cancellation cleanup, telemetry, and three exact concurrent mixed-workload rounds exist. | Five-minute endurance, skew, disk exhaustion, and final-merge spill under sustained load. |
 | 8 | Cancellation and retry | Open | Queued/running cancellation, retry rotation, timeouts, orphan-task cleanup, and idempotent exchange handling exist. | Long-running federated cancellation and concurrent cancellation stress on the release image. |
 | 9 | Worker-loss recovery | Open | Replacement-worker recovery preserves exact results for the declared bounded gate. | Node-drain and repeated-loss endurance with retained exact-result evidence. |
 | 10 | Coordinator restart | **Complete (bounded)** | Idle and active-query cleanup is fail-closed, exchange spools are reclaimed, workers reregister, and exact post-restart probes pass. | Multi-coordinator/failover continuity remains a separate future qualification. |
@@ -32,11 +32,13 @@ snapshot, not a session diary.
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
 | 14 | Connector federation | Open | Native Parquet, Delta, and Iceberg paths exist; registered SQL sources use passthrough API paths. | Authenticated pushdown and cross-source execution qualification. |
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
-| 16 | Sustained distributed soak | Open | Focused correctness and failure tests exist. | Mixed workload soak with throughput, p95 latency, memory, spill, retry, and failure counts retained. |
+| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus three exact concurrent mixed-workload rounds exist. | Five-minute or longer soak with throughput, p95 latency, memory, spill, retry, and failure counts retained. |
 
 The full-table aggregate evidence is retained in `docs/qualification/track1-aks-scale-aggregate-2026-10-15.md` and its raw JSON: two identical 100-row result sets after grouping all 504,000,000 source rows, across three stages, seven tasks, and all three workers. It strengthens item 4 correctness evidence; p95, skew, and sustained mixed-workload gates remain open.
 
 The five-run aggregate p95 sample is retained in `docs/qualification/track1-aks-scale-aggregate-5x-2026-10-15.md` and its raw JSON: five exact result hashes, an observed 24.546s p95, three stages, seven tasks, and all three workers. It is workload evidence, not a universal latency SLO.
+
+The bounded mixed-workload report is retained in `docs/qualification/track1-aks-mixed-workload-2026-10-15.md` and its raw JSON. Three concurrent rounds combined aggregate, join, window, and global-order queries; all results matched sequential baselines, all workers participated, and no spill files remained. Longer endurance remains open.
 
 ## Active item: 3 — distributed joins
 
