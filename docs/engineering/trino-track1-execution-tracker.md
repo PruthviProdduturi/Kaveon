@@ -19,7 +19,7 @@ snapshot, not a session diary.
 |---:|---|---|---|---|
 | 1 | Worker discovery and scheduling | **Complete (bounded)** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Reopen for additional topologies or endurance evidence; the declared three-worker topology is qualified. |
 | 2 | Hash exchange and repartition | **Qualified (bounded)** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, live quota rejection, cancellation cleanup, a 900-second ADLS soak, and AKS object-store fault recovery exist. | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
-| 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current AKS image now also has exact-repeat forced join-spill, post-query cleanup, and one-worker-loss retry evidence under a 1 MiB budget. | AKS disk exhaustion, larger high-cardinality joins, and sustained mixed-workload endurance. |
+| 3 | Distributed joins | **Active** | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, measured local join spill, and bounded AKS outer-join/skew evidence exist. The current AKS image now also has exact-repeat forced join-spill, post-query cleanup, one-worker-loss retry evidence under a 1 MiB budget, and a bounded high-cardinality 504M-row self-join. | AKS disk exhaustion, larger input volumes, and sustained mixed-workload endurance. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. The current AKS image also has exact-repeat 10,000-group final-merge spill and cleanup evidence under a 4 MiB budget. | Larger-scale cluster run with p95 latency, skew behavior, and sustained mixed-workload spill evidence. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; the current AKS image now also has exact-repeat mixed-key `ROW_NUMBER()`/`QUALIFY` evidence across three workers. Several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
 | 6 | Global ORDER BY and TopN | Open | Global merge, multi-column ordering, null ordering, ordinal keys, OFFSET-aware TopN, and ordered-limit correctness are implemented. The current AKS image also has exact-repeat three-worker evidence for multi-column ordering with OFFSET and LIMIT. | Demonstrate a parallel ordered result stream and pressure behavior without a coordinator bottleneck. |
@@ -51,7 +51,7 @@ The bounded AKS join qualification is retained in
 `docs/qualification/track1-aks-join-gates-2026-10-15.md` and its raw JSON
 report. Left outer, full outer cross-source, and skewed grouped joins all
 finished twice with identical results across the three workers. Disk
-bounded forced join spill and one-worker-loss recovery are now qualified; disk exhaustion and larger high-cardinality joins remain the next item-3 gates.
+bounded forced join spill, one-worker-loss recovery, and a bounded high-cardinality 504M-row self-join are now qualified; disk exhaustion, larger input volumes, and sustained mixed-workload endurance remain the next item-3 gates.
 
 Current exchange evidence includes the scheduler and stage-runtime suites,
 three-node Docker and AKS runs, exact multi-worker exchange, cancellation
@@ -70,6 +70,8 @@ exchange/spill files. Evidence is retained in
 `docs/qualification/track1-aks-current-image-soak-900-2026-10-15.md` and its
 raw JSON report. Together with the fault, quota, and object-store reports
 below, this closes the declared bounded exchange pressure gate.
+The bounded high-cardinality self-join is retained in `docs/qualification/track1-aks-high-cardinality-join-2026-10-15.md` and its raw JSON; it finished twice with identical six-row results across five stages, 13 tasks, and all three workers. Larger input volumes, disk exhaustion, and sustained mixed-workload endurance remain open.
+
 The clean-baseline rerun is retained in `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15-rerun.md` and its raw JSON. All seven checks passed on Engine image `sha256:0ea4244c392267f5d821935cb63f4c2a251c30be2f44a33554b340e1eb63a1f6`, including zero retained files before and after the run. This closes the earlier pre-existing-file precondition gap; larger high-cardinality joins, disk exhaustion, and sustained mixed-workload endurance remain open.
 The current-image fault/pressure qualification
 `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15.md`
@@ -124,6 +126,8 @@ The local differential spill gate is also covered by
 the partitioned-join spill tests in the workspace suite. Those tests prove
 exact local spill/replay and cleanup; they do not substitute for the AKS
 high-cardinality and disk-pressure gate.
+
+
 
 
 
