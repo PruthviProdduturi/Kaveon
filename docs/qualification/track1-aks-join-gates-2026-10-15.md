@@ -88,3 +88,11 @@ The current three-worker AKS image ran a partitioned `ROW_NUMBER()` with a two-c
 This qualifies the current-image mixed-key partitioned `ROW_NUMBER()`/`QUALIFY` shape. Unpartitioned windows, broader frame/modifier combinations, and sustained window pressure remain open.
 
 Raw evidence: [`track1-aks-window-qualification-2026-10-15.json`](./track1-aks-window-qualification-2026-10-15.json).
+
+## Global order and OFFSET TopN qualification (bounded AKS, 2026-10-15)
+
+The current three-worker AKS image ran a multi-column global `ORDER BY` with explicit null ordering, `OFFSET 100`, and `LIMIT 20` twice against a prunable bounded slice of `OpenSource.public.kaveon_events_enriched`. Both runs returned the same ordered 20 rows, finished successfully in two stages and four tasks, and used all three catalog-compatible workers.
+
+This qualifies bounded global ordering and OFFSET-aware TopN correctness on the current image. A coordinator-independent ordered result stream under sustained pressure remains open.
+
+Raw evidence: [`track1-aks-order-topn-2026-10-15.json`](./track1-aks-order-topn-2026-10-15.json).
