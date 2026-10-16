@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `f58761f1` (the workspace gate includes the
+**Source:** `origin/dev` at `2a5f20c5` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -77,6 +77,10 @@ cargo test -p kaveon-server --all-targets
 This includes the planner regression for projected-key `UNION DISTINCT` and
 the existing distributed join, aggregate, spill, retry, cancellation, and
 worker-loss coverage.
+
+The exchange-focused regression also verifies that nested array, map, and row
+keys partition successfully; map/row keys use the canonical nested fallback
+because Arrow's `RowConverter` does not implement Map values.
 
 This is repository-level evidence only. It does not close the remaining Track
 1 AKS gates or Track 2 compatibility boundaries; those remain listed in the
