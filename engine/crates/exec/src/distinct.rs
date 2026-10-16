@@ -397,6 +397,16 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
             )
         }
         DataType::Boolean => Ok(AggregateValue::Bool(array.as_boolean().value(row))),
+        DataType::Int8 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::Int8Type>()
+                .value(row) as i32,
+        )),
+        DataType::Int16 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::Int16Type>()
+                .value(row) as i32,
+        )),
         DataType::Int32 => Ok(AggregateValue::Int32(
             array
                 .as_primitive::<arrow::datatypes::Int32Type>()
@@ -406,6 +416,21 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
             array
                 .as_primitive::<arrow::datatypes::Int64Type>()
                 .value(row),
+        )),
+        DataType::UInt8 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::UInt8Type>()
+                .value(row) as i32,
+        )),
+        DataType::UInt16 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::UInt16Type>()
+                .value(row) as i32,
+        )),
+        DataType::UInt32 => Ok(AggregateValue::Int64(
+            array
+                .as_primitive::<arrow::datatypes::UInt32Type>()
+                .value(row) as i64,
         )),
         DataType::UInt64 => Ok(AggregateValue::Int64(
             array
@@ -442,6 +467,18 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
                 .value(row),
             *scale,
         )),
+        DataType::Float32 => {
+            let value = array
+                .as_primitive::<arrow::datatypes::Float32Type>()
+                .value(row) as f64;
+            Ok(AggregateValue::Float64Bits(if value == 0.0 {
+                0
+            } else if value.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                value.to_bits()
+            }))
+        }
         DataType::Float64 => {
             let v = array
                 .as_primitive::<arrow::datatypes::Float64Type>()

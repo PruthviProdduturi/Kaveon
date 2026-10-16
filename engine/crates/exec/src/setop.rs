@@ -210,6 +210,16 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
             )
         }
         DataType::Boolean => Ok(AggregateValue::Bool(array.as_boolean().value(row))),
+        DataType::Int8 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::Int8Type>()
+                .value(row) as i32,
+        )),
+        DataType::Int16 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::Int16Type>()
+                .value(row) as i32,
+        )),
         DataType::Int32 => Ok(AggregateValue::Int32(
             array
                 .as_primitive::<arrow::datatypes::Int32Type>()
@@ -219,6 +229,21 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
             array
                 .as_primitive::<arrow::datatypes::Int64Type>()
                 .value(row),
+        )),
+        DataType::UInt8 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::UInt8Type>()
+                .value(row) as i32,
+        )),
+        DataType::UInt16 => Ok(AggregateValue::Int32(
+            array
+                .as_primitive::<arrow::datatypes::UInt16Type>()
+                .value(row) as i32,
+        )),
+        DataType::UInt32 => Ok(AggregateValue::Int64(
+            array
+                .as_primitive::<arrow::datatypes::UInt32Type>()
+                .value(row) as i64,
         )),
         DataType::UInt64 => Ok(AggregateValue::Int64(
             array
@@ -255,6 +280,18 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
                 .value(row),
             *scale,
         )),
+        DataType::Float32 => {
+            let value = array
+                .as_primitive::<arrow::datatypes::Float32Type>()
+                .value(row) as f64;
+            Ok(AggregateValue::Float64Bits(if value == 0.0 {
+                0
+            } else if value.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                value.to_bits()
+            }))
+        }
         DataType::Float64 => {
             let v = array
                 .as_primitive::<arrow::datatypes::Float64Type>()
@@ -295,8 +332,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        ArrayRef, Date32Array, Decimal128Array, DictionaryArray, Int32Array, LargeStringArray,
-        StringArray,
+        ArrayRef, Date32Array, Decimal128Array, DictionaryArray, Float32Array, Int32Array,
+        LargeStringArray, StringArray, UInt8Array,
     };
     use arrow::datatypes::{Field, Schema};
 
@@ -460,6 +497,34 @@ mod tests {
                 .unwrap()
                 .value(0),
             "beta"
+        );
+
+        let mut narrow_numeric_op = SetOpOperator::new(
+            side(Arc::new(Float32Array::from(vec![Some(1.5), Some(2.5)]))),
+            side(Arc::new(Float32Array::from(vec![Some(2.5)]))),
+            SetOpMode::Intersect,
+        );
+        let narrow_numeric_batch = narrow_numeric_op.next_batch().unwrap().unwrap();
+        assert_eq!(
+            narrow_numeric_batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::Float32Type>()
+                .value(0),
+            2.5
+        );
+
+        let mut narrow_integer_op = SetOpOperator::new(
+            side(Arc::new(UInt8Array::from(vec![1_u8, 2_u8]))),
+            side(Arc::new(UInt8Array::from(vec![2_u8]))),
+            SetOpMode::Intersect,
+        );
+        let narrow_integer_batch = narrow_integer_op.next_batch().unwrap().unwrap();
+        assert_eq!(
+            narrow_integer_batch
+                .column(0)
+                .as_primitive::<arrow::datatypes::UInt8Type>()
+                .value(0),
+            2
         );
     }
 }
