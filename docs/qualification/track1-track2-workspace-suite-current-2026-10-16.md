@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `4a780112` (the workspace gate includes the
+**Source:** `origin/dev` at `793b22c6` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -24,6 +24,9 @@ The release lint commands also passed:
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
+
+The workspace Clippy gate was rerun after the TopN change and exited with code
+0 in 12.06 seconds.
 
 After the workspace evidence was captured, the planner regression for
 unpartitioned windows was added and the current source was rechecked with the
