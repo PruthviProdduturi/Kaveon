@@ -68,6 +68,88 @@ pub struct ExchangeIdentity {
 
 const DEFAULT_MAX_BUFFERED_EXCHANGES: usize = 1_024;
 const DEFAULT_MAX_BUFFERED_BYTES: usize = 512 * 1024 * 1024;
+
+/// The in-memory exchange buffer's bounds, read from the environment once.
+///
+/// These used to be constants with no override, and they are the bounds that
+/// actually bind: a `SELECT * FROM <billion-row table> LIMIT 100` on the AKS
+/// cluster failed on every worker with `exchange endpoint returned HTTP 507`
+/// while the coordinator's exchange directory held 348 KiB of a 32 G volume
+/// and every worker had 34 G free. Every exchange setting the chart exposes
+/// governs DISK -- `KAVEON_EXCHANGE_DISK_LIMIT_BYTES` and the rest -- and
+/// disk was never the scarce resource. There was no way to raise the one
+/// ceiling that mattered without rebuilding the server.
+fn exchange_buffer_bytes() -> usize {
+    static VALUE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *VALUE.get_or_init(|| env_bound("KAVEON_EXCHANGE_BUFFER_BYTES", DEFAULT_MAX_BUFFERED_BYTES))
+}
+
+fn exchange_buffer_exchanges() -> usize {
+    static VALUE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *VALUE.get_or_init(|| {
+        env_bound(
+            "KAVEON_EXCHANGE_BUFFER_EXCHANGES",
+            DEFAULT_MAX_BUFFERED_EXCHANGES,
+        )
+    })
+}
+
+/// A positive `usize` from the environment, or the default.
+///
+/// An unset, unparseable or zero value takes the default rather than
+/// disabling the bound: a buffer limit of zero would refuse every exchange,
+/// which is a worse failure than the one this exists to let an operator fix.
+fn env_bound(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+/// Which in-memory exchange bound a refusal hit, and what it was.
+///
+/// The refusal used to be a bare "exchange store capacity exceeded" behind an
+/// HTTP 507, whose name means *Insufficient Storage* -- so the first thing an
+/// operator does is check disk, and disk is fine. Each variant names the
+/// variable that raises it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExchangeBound {
+    /// Distinct buffered exchanges, `KAVEON_EXCHANGE_BUFFER_EXCHANGES`.
+    Count { limit: usize },
+    /// Buffered bytes held for consumers, `KAVEON_EXCHANGE_BUFFER_BYTES`.
+    Bytes {
+        wanted: usize,
+        buffered: usize,
+        limit: usize,
+    },
+    /// Bytes in flight across concurrent downloads, bounded by the same
+    /// `KAVEON_EXCHANGE_BUFFER_BYTES`.
+    Download { wanted: usize, limit: usize },
+}
+
+impl Display for ExchangeBound {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Count { limit } => write!(
+                formatter,
+                "{limit} buffered exchanges (KAVEON_EXCHANGE_BUFFER_EXCHANGES)"
+            ),
+            Self::Bytes {
+                wanted,
+                buffered,
+                limit,
+            } => write!(
+                formatter,
+                "{wanted} bytes on top of {buffered} already buffered, over the                  {limit}-byte ceiling (KAVEON_EXCHANGE_BUFFER_BYTES)"
+            ),
+            Self::Download { wanted, limit } => write!(
+                formatter,
+                "{wanted} bytes of concurrent downloads over the {limit}-byte                  ceiling (KAVEON_EXCHANGE_BUFFER_BYTES)"
+            ),
+        }
+    }
+}
+
 const EXCHANGE_MEDIA_TYPE: &str = "application/vnd.kaveon.exchange.v2";
 static DOWNLOAD_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 struct DownloadPermit(usize);
@@ -79,10 +161,15 @@ impl DownloadPermit {
                 std::sync::atomic::Ordering::Acquire,
                 |used| {
                     used.checked_add(bytes)
-                        .filter(|total| *total <= DEFAULT_MAX_BUFFERED_BYTES)
+                        .filter(|total| *total <= exchange_buffer_bytes())
                 },
             )
-            .map_err(|_| ExchangeError::StoreCapacityExceeded)?;
+            .map_err(|_| {
+                ExchangeError::StoreCapacityExceeded(ExchangeBound::Download {
+                    wanted: bytes,
+                    limit: exchange_buffer_bytes(),
+                })
+            })?;
         Ok(Self(bytes))
     }
 }
@@ -109,8 +196,8 @@ impl Default for ExchangeStore {
     fn default() -> Self {
         Self {
             state: RwLock::new(ExchangeStoreState::default()),
-            max_buffered_exchanges: DEFAULT_MAX_BUFFERED_EXCHANGES,
-            max_buffered_bytes: DEFAULT_MAX_BUFFERED_BYTES,
+            max_buffered_exchanges: exchange_buffer_exchanges(),
+            max_buffered_bytes: exchange_buffer_bytes(),
         }
     }
 }
@@ -124,7 +211,9 @@ impl ExchangeStore {
         if !state.chunks.contains_key(&chunk.identity)
             && state.chunks.len() >= self.max_buffered_exchanges
         {
-            return Err(ExchangeError::StoreCapacityExceeded);
+            return Err(ExchangeError::StoreCapacityExceeded(ExchangeBound::Count {
+                limit: self.max_buffered_exchanges,
+            }));
         }
         if let Some(existing) = state.chunks.get(&chunk.identity).and_then(|chunks| {
             chunks
@@ -140,9 +229,17 @@ impl ExchangeStore {
         let buffered_bytes = state
             .buffered_bytes
             .checked_add(chunk.payload.len())
-            .ok_or(ExchangeError::StoreCapacityExceeded)?;
+            .ok_or(ExchangeError::StoreCapacityExceeded(ExchangeBound::Bytes {
+                wanted: chunk.payload.len(),
+                buffered: state.buffered_bytes,
+                limit: self.max_buffered_bytes,
+            }))?;
         if buffered_bytes > self.max_buffered_bytes {
-            return Err(ExchangeError::StoreCapacityExceeded);
+            return Err(ExchangeError::StoreCapacityExceeded(ExchangeBound::Bytes {
+                wanted: chunk.payload.len(),
+                buffered: state.buffered_bytes,
+                limit: self.max_buffered_bytes,
+            }));
         }
         state.buffered_bytes = buffered_bytes;
         state
@@ -456,7 +553,7 @@ fn exchange_error_response(error: ExchangeError) -> Response {
         ExchangeError::EmptyExpectedToken => StatusCode::SERVICE_UNAVAILABLE,
         ExchangeError::ExchangeNotFound => StatusCode::NOT_FOUND,
         ExchangeError::MissingChunks => StatusCode::CONFLICT,
-        ExchangeError::StoreCapacityExceeded => StatusCode::INSUFFICIENT_STORAGE,
+        ExchangeError::StoreCapacityExceeded(_) => StatusCode::INSUFFICIENT_STORAGE,
         _ => StatusCode::BAD_REQUEST,
     };
     (status, error.to_string()).into_response()
@@ -1082,7 +1179,7 @@ pub enum ExchangeError {
     EmptyExpectedToken,
     Unauthorized,
     StorePoisoned,
-    StoreCapacityExceeded,
+    StoreCapacityExceeded(ExchangeBound),
     ConflictingChunk,
     ExchangeNotFound,
     Transport(String),
@@ -1125,7 +1222,10 @@ impl Display for ExchangeError {
             }
             Self::Unauthorized => write!(formatter, "exchange bearer token is invalid"),
             Self::StorePoisoned => write!(formatter, "exchange store lock is poisoned"),
-            Self::StoreCapacityExceeded => write!(formatter, "exchange store capacity exceeded"),
+            Self::StoreCapacityExceeded(bound) => write!(
+                formatter,
+                "exchange buffer exceeded: {bound}. This is an in-memory bound,                  not disk -- raise it with the environment variable named above.                  The KAVEON_EXCHANGE_DISK_LIMIT_BYTES family governs spooled                  bytes and does not apply here."
+            ),
             Self::ConflictingChunk => {
                 write!(formatter, "exchange chunk conflicts with stored data")
             }
@@ -1563,13 +1663,46 @@ mod tests {
             chunk_count: 2,
             payload: vec![4, 5].into(),
         };
+        // The refusal names the bound and the numbers behind it, so an
+        // operator reading a 507 is not sent to `df` for a memory ceiling.
         assert_eq!(
             store.insert(second),
-            Err(ExchangeError::StoreCapacityExceeded)
+            Err(ExchangeError::StoreCapacityExceeded(ExchangeBound::Bytes {
+                wanted: 2,
+                buffered: 3,
+                limit: 4,
+            }))
         );
         assert_eq!(store.buffered_bytes().unwrap(), 3);
         assert!(store.remove(&identity()).unwrap());
         assert_eq!(store.buffered_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn an_operator_can_raise_the_buffer_bound() {
+        // The bound that actually binds had no override: a billion-row scan
+        // failed on every worker with HTTP 507 while the exchange directory
+        // held 348 KiB of a 32 G volume, and nothing short of a rebuild could
+        // raise it. Zero, blank and unparseable take the default rather than
+        // disabling the bound, because a limit of zero refuses every exchange.
+        assert_eq!(super::env_bound("KAVEON_TEST_BOUND_UNSET", 7), 7);
+        for (value, expected) in [
+            ("1024", 1024),
+            ("  2048  ", 2048),
+            ("0", 7),
+            ("", 7),
+            ("not-a-number", 7),
+            ("-1", 7),
+        ] {
+            // SAFETY: single-threaded test, variable is read back immediately.
+            unsafe { std::env::set_var("KAVEON_TEST_BOUND", value) };
+            assert_eq!(
+                super::env_bound("KAVEON_TEST_BOUND", 7),
+                expected,
+                "{value:?} should resolve to {expected}"
+            );
+        }
+        unsafe { std::env::remove_var("KAVEON_TEST_BOUND") };
     }
 
     #[test]
@@ -1589,7 +1722,9 @@ mod tests {
         retry.identity.task_id.attempt += 1;
         assert_eq!(
             store.insert(retry.clone()),
-            Err(ExchangeError::StoreCapacityExceeded)
+            Err(ExchangeError::StoreCapacityExceeded(ExchangeBound::Count {
+                limit: 1
+            }))
         );
         assert!(store.remove(&first.identity).unwrap());
         assert_eq!(store.buffered_bytes().unwrap(), 0);
