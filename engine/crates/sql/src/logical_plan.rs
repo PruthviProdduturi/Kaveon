@@ -1751,9 +1751,10 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     // top-level LIMIT cannot change that scalar value, so remove it before
     // validating the scalar shape. LIMIT 0 is retained: an empty scalar
     // requires null-fill/Apply semantics that this lowering does not provide.
-    let plan = match plan {
-        LogicalPlan::Limit { input, count } if count > 0 => *input,
-        plan => plan,
+    let (plan, zero_limit) = match plan {
+        LogicalPlan::Limit { input, count } if count > 0 => (*input, false),
+        LogicalPlan::Limit { input, count: 0 } => (*input, true),
+        plan => (plan, false),
     };
     let LogicalPlan::Project { input, columns } = plan else {
         return Err(sql_err("a scalar subquery must select exactly one column"));
@@ -1763,6 +1764,18 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     };
     if matches!(column, Expr::Star) {
         return Err(sql_err("a scalar subquery must select exactly one column"));
+    }
+    if zero_limit {
+        return Ok(LogicalPlan::Unnest {
+            expressions: vec![Expr::Function {
+                name: "ARRAY".to_owned(),
+                args: vec![Expr::Literal(ScalarValue::Null)],
+            }],
+            columns: vec![name.to_owned()],
+            with_ordinality: false,
+            ordinality_column: "ordinality".to_owned(),
+            ordinality_start: 1,
+        });
     }
     fn single_row(plan: &LogicalPlan) -> bool {
         match plan {
@@ -5721,6 +5734,15 @@ mod tests {
     fn scalar_aggregate_positive_limit_keeps_the_scalar_shape() {
         let plan = sql_to_logical_plan("SELECT (SELECT avg(b) FROM t LIMIT 1) AS answer FROM t")
             .expect("a positive limit cannot change an ungrouped aggregate's one row");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(!debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_zero_limit_becomes_a_single_null_row() {
+        let plan = sql_to_logical_plan("SELECT (SELECT b FROM t LIMIT 0) AS answer FROM t")
+            .expect("an empty scalar subquery returns NULL");
         let debug = format!("{plan:?}");
         assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
         assert!(!debug.contains("Limit"), "{debug}");
