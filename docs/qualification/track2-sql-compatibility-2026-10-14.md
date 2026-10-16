@@ -95,7 +95,10 @@ continue to fail closed.
 Positive `OFFSET` over an ungrouped scalar aggregate is the corresponding
 empty scalar case: the one aggregate row is skipped and the scalar becomes
 NULL. The SQL regression and distributed differential sweep cover a correlated
-`AVG(... OFFSET 1)` comparison; residual correlated `OFFSET` under
+`AVG(... OFFSET 1)` comparison. A one-column non-aggregate scalar with a
+positive `LIMIT` is also retained as a bounded relation; the differential
+sweep uses an ordered `... ORDER BY actions LIMIT 1` form so the selected value
+is deterministic across file layouts. Residual correlated `OFFSET` under
 `EXISTS`/`NOT EXISTS` remains outside the current decorrelation contract.
 
 An ordered keyed membership query such as `ORDER BY i.actions DESC LIMIT 1`

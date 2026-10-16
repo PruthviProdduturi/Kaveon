@@ -1747,18 +1747,77 @@ fn replace_scalar_subqueries(
 /// expression. Anything else could yield several rows, which a scalar
 /// position cannot take.
 fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
+    if let LogicalPlan::Limit { input, count } = &plan
+        && *count > 0
+        && let LogicalPlan::Sort {
+            input: sorted_input,
+            order_by,
+        } = input.as_ref()
+        && let LogicalPlan::Project {
+            input: projected_input,
+            columns,
+        } = sorted_input.as_ref()
+    {
+        let [column] = columns.as_slice() else {
+            return Err(sql_err("a scalar subquery must select exactly one column"));
+        };
+        if matches!(column, Expr::Star) {
+            return Err(sql_err("a scalar subquery must select exactly one column"));
+        }
+        let aliased = LogicalPlan::Project {
+            input: projected_input.clone(),
+            columns: vec![
+                column.clone(),
+                Expr::Alias {
+                    expr: Box::new(column.clone()),
+                    name: name.to_owned(),
+                },
+            ],
+        };
+        let sorted = LogicalPlan::Sort {
+            input: Box::new(aliased),
+            order_by: order_by.clone(),
+        };
+        return Ok(LogicalPlan::Project {
+            input: Box::new(LogicalPlan::Limit {
+                input: Box::new(sorted),
+                count: *count,
+            }),
+            columns: vec![Expr::Alias {
+                expr: Box::new(Expr::Column(name.to_owned())),
+                name: name.to_owned(),
+            }],
+        });
+    }
     // An ungrouped aggregate is already a one-row relation. A positive
     // top-level LIMIT cannot change that scalar value, so remove it before
     // validating the scalar shape. LIMIT 0 is retained: an empty scalar
     // requires null-fill/Apply semantics that this lowering does not provide.
-    let (plan, zero_limit, positive_offset) = match plan {
-        LogicalPlan::Limit { input, count } if count > 0 => (*input, false, false),
-        LogicalPlan::Limit { input, count: 0 } => (*input, true, false),
-        LogicalPlan::Offset { input, count } if count > 0 => (*input, false, true),
-        plan => (plan, false, false),
+    let (plan, positive_limit, zero_limit, positive_offset) = match plan {
+        LogicalPlan::Limit { input, count } if count > 0 => {
+            (LogicalPlan::Limit { input, count }, true, false, false)
+        }
+        LogicalPlan::Limit { input, count: 0 } => (*input, false, true, false),
+        LogicalPlan::Offset { input, count } if count > 0 => (*input, false, false, true),
+        plan => (plan, false, false, false),
     };
-    let LogicalPlan::Project { input, columns } = plan else {
-        return Err(sql_err("a scalar subquery must select exactly one column"));
+    let (bounded_limit, input, columns) = match plan {
+        LogicalPlan::Limit { input, count } if positive_limit => {
+            let LogicalPlan::Project { input, columns } = *input else {
+                return Err(sql_err("a scalar subquery must select exactly one column"));
+            };
+            (Some(count), input, columns)
+        }
+        LogicalPlan::Project { input, columns } if matches!(input.as_ref(), LogicalPlan::Limit { count, .. } if *count > 0) =>
+        {
+            let count = match input.as_ref() {
+                LogicalPlan::Limit { count, .. } => *count,
+                _ => unreachable!(),
+            };
+            (Some(count), input, columns)
+        }
+        LogicalPlan::Project { input, columns } => (None, input, columns),
+        _ => return Err(sql_err("a scalar subquery must select exactly one column")),
     };
     let [column] = columns.as_slice() else {
         return Err(sql_err("a scalar subquery must select exactly one column"));
@@ -1805,6 +1864,27 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
         return Err(sql_err(
             "a positive scalar OFFSET requires an ungrouped aggregate or a constant single row",
         ));
+    }
+    if let Some(count) = bounded_limit
+        && !single_row(&input)
+    {
+        let source = LogicalPlan::Project {
+            input,
+            columns: vec![Expr::Alias {
+                expr: Box::new(column.clone()),
+                name: name.to_owned(),
+            }],
+        };
+        return Ok(LogicalPlan::Project {
+            input: Box::new(LogicalPlan::Limit {
+                input: Box::new(source),
+                count,
+            }),
+            columns: vec![Expr::Alias {
+                expr: Box::new(Expr::Column(name.to_owned())),
+                name: name.to_owned(),
+            }],
+        });
     }
     if !single_row(&input) {
         return Err(sql_err(
@@ -5741,6 +5821,25 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
         assert!(!debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_non_aggregate_positive_limit_is_bounded_to_one_row() {
+        let plan = sql_to_logical_plan("SELECT (SELECT b FROM t LIMIT 1) AS answer FROM t")
+            .expect("a positive scalar limit bounds a one-column relation");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_non_aggregate_ordered_positive_limit_is_bounded_to_one_row() {
+        let plan =
+            sql_to_logical_plan("SELECT (SELECT b FROM t ORDER BY b LIMIT 1) AS answer FROM t")
+                .expect("an ordered scalar limit remains bounded to one row");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("Limit"), "{debug}");
     }
 
     #[test]
