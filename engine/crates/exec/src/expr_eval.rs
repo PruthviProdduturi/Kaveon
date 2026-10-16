@@ -8006,6 +8006,28 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::signum)
         }
+        "IS_FINITE" | "IS_INFINITE" | "IS_NAN" => {
+            check_arity(name, args, 1)?;
+            let values = compute::cast(&args[0], &DataType::Float64)?;
+            let values = values
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!("{name} requires a numeric argument"))
+                })?;
+            let result = values
+                .iter()
+                .map(|value| {
+                    value.map(|value| match upper.as_str() {
+                        "IS_FINITE" => value.is_finite(),
+                        "IS_INFINITE" => value.is_infinite(),
+                        "IS_NAN" => value.is_nan(),
+                        _ => unreachable!(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(BooleanArray::from(result)))
+        }
         "LOG" | "LOG10" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::log10)
@@ -11553,7 +11575,7 @@ mod tests {
 
     #[test]
     fn width_bucket_matches_trino_boundaries_and_nulls() {
-        let values = Arc::new(Float64Array::from(vec![
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(-1.0),
             Some(0.0),
             Some(0.1),
@@ -11585,6 +11607,42 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("min < max"), "{error}");
+    }
+
+    #[test]
+    fn numeric_finiteness_predicates_preserve_nulls() {
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.5),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+            Some(f64::NAN),
+            None,
+        ]));
+        for (name, expected) in [
+            (
+                "IS_FINITE",
+                vec![Some(true), Some(false), Some(false), Some(false), None],
+            ),
+            (
+                "IS_INFINITE",
+                vec![Some(false), Some(true), Some(true), Some(false), None],
+            ),
+            (
+                "IS_NAN",
+                vec![Some(false), Some(false), Some(false), Some(true), None],
+            ),
+        ] {
+            let result = eval_scalar_function(name, std::slice::from_ref(&values), 5).unwrap();
+            assert_eq!(
+                result
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

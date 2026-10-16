@@ -21,3 +21,8 @@ max`.
 This is a local scalar-function qualification. It does not claim a distributed
 wire or broad external-client qualification; those remain part of the broader
 Track 2 differential corpus.
+
+The same execution slice also qualifies the numeric `IS_FINITE`, `IS_INFINITE`,
+and `IS_NAN` predicates, including positive/negative infinity, NaN, and NULL
+inputs. Their regression is
+`cargo test -p kaveon-exec numeric_finiteness_predicates_preserve_nulls --quiet`.
