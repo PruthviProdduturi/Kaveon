@@ -327,6 +327,16 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_exists_path",
+        "SELECT JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.x') AS present, JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.missing') AS absent FROM {T} LIMIT 1",
+        false,
+    ),
+    (
+        "json_query_path",
+        "SELECT JSON_QUERY(JSON_PARSE('{\"x\":{\"y\":7}}'), '$.x') AS object_value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_array_length",
         "SELECT JSON_ARRAY_LENGTH(JSON_PARSE('[1, 2, 3]')) AS length FROM {T} LIMIT 1",
         false,
