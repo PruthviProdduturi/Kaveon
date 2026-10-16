@@ -902,9 +902,19 @@ impl Binder<'_> {
             ));
         }
         if let Some(offset) = positive_offset {
-            let [Correlation::Key { inner, .. }] = lateral.as_slice() else {
+            let keys = lateral
+                .iter()
+                .map(|correlation| match correlation {
+                    Correlation::Key { inner, outer, .. } => Ok((inner.clone(), outer.clone())),
+                    Correlation::Residual { .. } => Err(KaveonError::Sql(
+                        "a positive correlated OFFSET requires equality correlations only".into(),
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let Some((inner, _)) = keys.first() else {
                 return Err(KaveonError::Sql(
-                    "a positive correlated OFFSET requires one equality correlation and no residual predicate".into(),
+                    "a positive correlated OFFSET requires at least one equality correlation"
+                        .into(),
                 ));
             };
             let left_key = self.bind_expr(left_key, &left_scope, None)?;
@@ -914,7 +924,10 @@ impl Binder<'_> {
             };
             let aggregate = LogicalPlan::Aggregate {
                 input: Box::new(right.plan),
-                group_by: vec![Expr::Column(inner.clone())],
+                group_by: keys
+                    .iter()
+                    .map(|(inner, _)| Expr::Column(inner.clone()))
+                    .collect(),
                 aggregates: vec![count],
             };
             let threshold = Expr::BinaryOp {
@@ -939,15 +952,44 @@ impl Binder<'_> {
             } else {
                 threshold
             };
+            let mut projected = vec![Expr::Column(inner.clone())];
+            let residual = conjoin(
+                keys.iter()
+                    .skip(1)
+                    .map(|(inner, outer)| {
+                        let name = self.fresh_name();
+                        projected.push(Expr::Alias {
+                            expr: Box::new(Expr::Column(inner.clone())),
+                            name: name.clone(),
+                        });
+                        Expr::BinaryOp {
+                            left: Box::new(Expr::Column(name)),
+                            op: BinaryOp::Eq,
+                            right: Box::new(Expr::Column(outer.clone())),
+                        }
+                    })
+                    .collect(),
+            )
+            .map(|predicate| self.bind_expr(predicate, &left_scope, None))
+            .transpose()?;
+            let filtered = LogicalPlan::Filter {
+                input: Box::new(aggregate),
+                predicate,
+            };
+            let right = if projected.len() == 1 {
+                filtered
+            } else {
+                LogicalPlan::Project {
+                    input: Box::new(filtered),
+                    columns: projected,
+                }
+            };
             return Ok(BoundSemiJoin {
                 left: Box::new(left.plan),
-                right: Box::new(LogicalPlan::Filter {
-                    input: Box::new(aggregate),
-                    predicate,
-                }),
+                right: Box::new(right),
                 left_key,
                 right_key: Expr::Column(inner.clone()),
-                residual: None,
+                residual,
                 correlations: left.correlations,
             });
         }
@@ -2657,7 +2699,7 @@ mod tests {
             ),
             (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > o_custkey OFFSET 1)",
-                "a positive correlated OFFSET requires one equality correlation",
+                "a positive correlated OFFSET requires equality correlations only",
             ),
             (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem l WHERE l.l_orderkey = o_orderkey AND x.l_quantity > 1)",
@@ -2732,6 +2774,33 @@ mod tests {
                 predicate: Expr::BinaryOp { op: BinaryOp::Gt, .. }
             } if matches!(*input, LogicalPlan::Aggregate { .. })
         ));
+    }
+
+    #[test]
+    fn correlated_exists_positive_offset_groups_all_equality_keys() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity = o_custkey OFFSET 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected outer projection")
+        };
+        let LogicalPlan::SemiJoin {
+            right, residual, ..
+        } = *input
+        else {
+            panic!("expected semi join")
+        };
+        assert!(residual.is_some());
+        let LogicalPlan::Project { input, .. } = *right else {
+            panic!("expected projected count filter")
+        };
+        let LogicalPlan::Filter { input, .. } = *input else {
+            panic!("expected count filter")
+        };
+        let LogicalPlan::Aggregate { group_by, .. } = *input else {
+            panic!("expected per-key aggregate")
+        };
+        assert_eq!(group_by.len(), 2);
     }
 
     #[test]
