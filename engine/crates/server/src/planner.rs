@@ -1698,9 +1698,9 @@ impl StageGraphBuilder {
                 // both sides expose the same named projected columns.  A
                 // shared hash exchange keeps equal rows together, so this
                 // preserves DISTINCT and ALL semantics while avoiding a
-                // coordinator-only set operation.  Expressions, mismatched
-                // aliases, and SELECT * keep the conservative single-task
-                // path because their output identity is not safely known.
+                // coordinator-only set operation.  Mismatched aliases and
+                // SELECT * keep the conservative single-task path because
+                // their output identity is not safely known.
                 let partitioning =
                     set_operation_partitioning(left, right, self.exchange_partition_count)
                         .unwrap_or(Partitioning::Single);
@@ -2754,18 +2754,21 @@ fn join_keys_and_residual(
     Ok((keys, residual))
 }
 
-/// The output names a DISTINCT can hash-partition on: every projected
-/// expression of its input, when that input is a projection of columns and
-/// aliases (what `SELECT DISTINCT a, b` and the COUNT(DISTINCT) rewrite
-/// produce). Anything else keeps the single final task.
+/// The output names a DISTINCT can hash-partition on.  A projection evaluates
+/// its expressions before the exchange, so an expression is safe to use as a
+/// partition key once it has a stable output name (an explicit alias or the
+/// deterministic `expr_N` name assigned by `named_expressions`).  `*` is
+/// deliberately excluded because its expanded output is not represented by a
+/// single expression here.
 fn distinct_partition_columns(input: &LogicalPlan) -> Option<Vec<String>> {
     let LogicalPlan::Project { columns, .. } = input else {
         return None;
     };
-    if columns.is_empty() || !columns.iter().all(|expression| {
-        matches!(expression, Expr::Column(_))
-            || matches!(expression, Expr::Alias { expr, .. } if matches!(**expr, Expr::Column(_)))
-    }) {
+    if columns.is_empty()
+        || columns
+            .iter()
+            .any(|expression| matches!(expression, Expr::Star))
+    {
         return None;
     }
     Some(
@@ -2794,9 +2797,9 @@ fn set_operation_partitioning(
 
 /// A UNION DISTINCT can deduplicate independently when every branch exposes
 /// the same projected column names. Equal rows then hash to the same worker,
-/// so the final DISTINCT never needs a coordinator-only gather. Expressions,
-/// aliases with different output names, and mixed projections retain the
-/// conservative single-task path.
+/// so the final DISTINCT never needs a coordinator-only gather. Each branch
+/// may contain expressions: those are evaluated by its projection before the
+/// shared exchange, and only the resulting names need to agree.
 fn union_partitioning(inputs: &[LogicalPlan], partition_count: usize) -> Option<Partitioning> {
     let mut iter = inputs.iter();
     let first = distinct_partition_columns(iter.next()?)?;
@@ -3697,6 +3700,50 @@ mod tests {
                 .iter()
                 .any(|stage| mentions(&stage.plan, "FinalDistinct"))
         );
+    }
+
+    #[test]
+    fn expression_distinct_partitions_on_projected_output() {
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT DISTINCT id + 1 AS shifted FROM items",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let graph = build_stage_graph("query-expression-distinct", &plan, 4).unwrap();
+        assert!(graph.stages.iter().any(|stage| {
+            stage.plan.operator == "PartitionedDistinct" && stage.task_count == 4
+        }));
+        assert!(graph.exchanges.iter().any(|exchange| {
+            matches!(
+                &exchange.partitioning,
+                Partitioning::Hash { columns, partition_count: 4 }
+                    if columns == &["shifted".to_owned()]
+            )
+        }));
+    }
+
+    #[test]
+    fn expression_union_distinct_partitions_matching_projected_outputs() {
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT id + 1 AS shifted FROM items UNION SELECT id + 1 AS shifted FROM customers",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let graph = build_stage_graph("query-expression-union", &plan, 4).unwrap();
+        let union = graph
+            .stages
+            .iter()
+            .find(|stage| stage.plan.operator == "Union")
+            .expect("union stage");
+        assert_eq!(union.task_count, 4);
+        assert!(graph.exchanges.iter().any(|exchange| {
+            exchange.target_stage == union.id
+                && matches!(
+                    &exchange.partitioning,
+                    Partitioning::Hash { columns, partition_count: 4 }
+                        if columns == &["shifted".to_owned()]
+                )
+        }));
     }
 
     #[test]
