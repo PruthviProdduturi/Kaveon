@@ -885,10 +885,11 @@ impl Binder<'_> {
         // an empty relation (always false for EXISTS, always true for NOT
         // EXISTS), OFFSET 0 is removed as a no-op, and IN keeps its paging
         // clauses because multiplicity/set membership matters.
-        let right = if matches!(right_key, Expr::Literal(_)) {
-            strip_exists_noop_paging(right)
+        let (right, positive_offset) = if matches!(right_key, Expr::Literal(_)) {
+            let right = strip_exists_noop_paging(right);
+            peel_positive_exists_offset(right)
         } else {
-            right
+            (right, None)
         };
         let right = self.bind(right, &right_outer)?;
         let (lateral, deeper): (Vec<_>, Vec<_>) = right
@@ -899,6 +900,56 @@ impl Binder<'_> {
             return Err(KaveonError::Sql(
                 "a correlation reaching past an IN or EXISTS subquery is not supported".into(),
             ));
+        }
+        if let Some(offset) = positive_offset {
+            let [Correlation::Key { inner, .. }] = lateral.as_slice() else {
+                return Err(KaveonError::Sql(
+                    "a positive correlated OFFSET requires one equality correlation and no residual predicate".into(),
+                ));
+            };
+            let left_key = self.bind_expr(left_key, &left_scope, None)?;
+            let count = AggregateExpr::Count {
+                expr: Expr::Star,
+                distinct: false,
+            };
+            let aggregate = LogicalPlan::Aggregate {
+                input: Box::new(right.plan),
+                group_by: vec![Expr::Column(inner.clone())],
+                aggregates: vec![count],
+            };
+            let threshold = Expr::BinaryOp {
+                // Keep the aggregate call here. The physical planner binds
+                // it to the correct fragment or node-local output name for
+                // the stage that consumes this filter.
+                left: Box::new(Expr::Function {
+                    name: "COUNT".into(),
+                    args: vec![Expr::Star],
+                }),
+                op: BinaryOp::Gt,
+                right: Box::new(Expr::Literal(kaveon_core::ScalarValue::Int64(
+                    i64::try_from(offset)
+                        .map_err(|_| KaveonError::Sql("correlated OFFSET is too large".into()))?,
+                ))),
+            };
+            let predicate = if anti {
+                Expr::And(
+                    Box::new(threshold),
+                    Box::new(Expr::IsNotNull(Box::new(Expr::Column(inner.clone())))),
+                )
+            } else {
+                threshold
+            };
+            return Ok(BoundSemiJoin {
+                left: Box::new(left.plan),
+                right: Box::new(LogicalPlan::Filter {
+                    input: Box::new(aggregate),
+                    predicate,
+                }),
+                left_key,
+                right_key: Expr::Column(inner.clone()),
+                residual: None,
+                correlations: left.correlations,
+            });
         }
         let correlated_key = lateral.iter().find_map(|correlation| match correlation {
             Correlation::Key { inner, .. } => Some(inner.as_str()),
@@ -1857,6 +1908,13 @@ fn strip_exists_noop_paging(plan: LogicalPlan) -> LogicalPlan {
     }
 }
 
+fn peel_positive_exists_offset(plan: LogicalPlan) -> (LogicalPlan, Option<usize>) {
+    match plan {
+        LogicalPlan::Offset { input, count } if count > 0 => (*input, Some(count)),
+        plan => (plan, None),
+    }
+}
+
 /// Whether a correlated `IN` subquery exposes its equality key as the first
 /// projected value. `DISTINCT` is transparent here: it changes multiplicity,
 /// which a semi/anti join already ignores, but it must not make an otherwise
@@ -2598,8 +2656,8 @@ mod tests {
                 "correlated HAVING",
             ),
             (
-                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey OFFSET 1)",
-                "OFFSET inside a correlated subquery is not supported",
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > o_custkey OFFSET 1)",
+                "a positive correlated OFFSET requires one equality correlation",
             ),
             (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem l WHERE l.l_orderkey = o_orderkey AND x.l_quantity > 1)",
@@ -2654,6 +2712,26 @@ mod tests {
             panic!("expected outer projection")
         };
         assert!(matches!(*input, LogicalPlan::SemiJoin { .. }), "{input:?}");
+    }
+
+    #[test]
+    fn correlated_exists_positive_offset_uses_per_key_count() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey OFFSET 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected outer projection")
+        };
+        let LogicalPlan::SemiJoin { right, .. } = *input else {
+            panic!("expected semi join")
+        };
+        assert!(matches!(
+            *right,
+            LogicalPlan::Filter {
+                input,
+                predicate: Expr::BinaryOp { op: BinaryOp::Gt, .. }
+            } if matches!(*input, LogicalPlan::Aggregate { .. })
+        ));
     }
 
     #[test]
