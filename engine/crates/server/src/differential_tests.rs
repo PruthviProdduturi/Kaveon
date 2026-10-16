@@ -317,6 +317,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_parse_and_format",
+        "SELECT JSON_FORMAT(JSON_PARSE('{\"x\":7}')) AS formatted FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
