@@ -1,7 +1,7 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `51a767d7` (the workspace gate includes the
+**Source:** `origin/dev` at `65414bd4` (the workspace gate includes the
 correlated array-function, map-key, map-entry, per-row map-concat, named
 window, JSON object-constructor, JSON null-clause, and bounded recursive CTE
 regressions)
@@ -80,7 +80,7 @@ source:
 
 ```text
 cargo test -p kaveon-server --all-targets --no-fail-fast --quiet
-412 passed, 0 failed, 0 ignored (138.88s)
+412 passed, 0 failed, 0 ignored (139.13s)
 ```
 
 This includes the planner regression for projected-key `UNION DISTINCT` and
