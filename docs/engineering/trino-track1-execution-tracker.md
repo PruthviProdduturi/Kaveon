@@ -36,6 +36,8 @@ snapshot, not a session diary.
 
 The full-table aggregate evidence is retained in `docs/qualification/track1-aks-scale-aggregate-2026-10-15.md` and its raw JSON: two identical 100-row result sets after grouping all 504,000,000 source rows, across three stages, seven tasks, and all three workers. It strengthens item 4 correctness evidence; p95, skew, and sustained mixed-workload gates remain open.
 
+The full-table aggregate evidence is retained in `docs/qualification/track1-aks-scale-aggregate-2026-10-15.md` and its raw JSON: two identical 100-row result sets after grouping all 504,000,000 source rows, across three stages, seven tasks, and all three workers. It strengthens item 4 correctness evidence; p95, skew, and sustained mixed-workload gates remain open.
+
 ## Active item: 3 — distributed joins
 
 The next evidence package must include distributed outer-join equivalence,
