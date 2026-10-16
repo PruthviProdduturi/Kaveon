@@ -19,7 +19,7 @@ Kaveon should not claim to outperform Trino until the identical-data, identical-
 | Query entry | Remote-first CLI, HTTP coordinator with per-request settings and `SET SESSION`, the API bridge for Studio | CLI, JDBC, HTTP protocol, and ecosystem clients |
 | BI experience | Native Kaveon Studio | External BI tools |
 | NL→SQL | Deterministic DLM; no hosted LLM required | Outside Trino's engine boundary |
-| SQL surface | Joins, CTEs, derived tables, HAVING, DISTINCT, window functions with frames, set operations, CASE/LIKE/REGEXP, decorrelated EXISTS and scalar subqueries; TPC-H 21 of 22, every ClickBench statement. Refused by name: correlated non-equality subqueries, GROUPING SETS, approximate aggregates, array/map/JSON types (`docs/reference/engine-sql-compatibility.md`) | Substantially broader production SQL surface: lateral joins, GROUPING SETS, hundreds of scalar functions, table functions, prepared statements |
+| SQL surface | Joins, CTEs, derived tables, HAVING, DISTINCT, window functions with frames and named windows, set operations, bounded GROUPING SETS/CUBE/ROLLUP, CASE/LIKE/REGEXP, decorrelated EXISTS and scalar subqueries, bounded arrays/maps/rows/JSON, approximate aggregates, and prepared statements; broader correlated/lateral shapes remain open (`docs/reference/engine-sql-compatibility.md`) | Substantially broader production SQL surface: lateral joins, hundreds of scalar functions, table functions, and mature connector-specific SQL |
 
 ## Distributed execution
 
@@ -42,7 +42,7 @@ Kaveon's path is not yet equivalent to Trino's operational maturity. Streaming d
 | Projection pruning | Implemented | Connector/optimizer dependent and mature |
 | Static filter pushdown | Implemented conservatively with residual evaluation | Broad connector pushdown framework |
 | Parquet row-group pruning | Implemented, including byte-array statistics writers mark inexact | Supported by relevant connectors |
-| Dynamic filtering | Not implemented | Runtime join filters can reach scans and split enumeration |
+| Dynamic filtering | Implemented for supported single/composite-key Parquet, Delta, Iceberg and object-store scans; cloud pruning qualification remains open | Runtime join filters can reach scans and split enumeration |
 | Cost-based optimization | Exact-statistics broadcast choice only; no join reordering | Join enumeration/distribution use connector statistics |
 | Delta protocol | JSON commits and v1 checkpoints, pinned version; reader protocol v2 (column mapping, deletion vectors) and time travel refused | Mature Delta connector with a broader protocol surface |
 | Cloud object storage | ADLS Gen2 with workload identity, qualified on AKS; S3 through the same reader, unqualified | Mature object-storage support through connectors |

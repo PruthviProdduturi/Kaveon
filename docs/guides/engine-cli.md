@@ -590,9 +590,12 @@ SELECT region, COUNT(*) FROM events GROUP BY region;
 ```
 
 The Engine deliberately refuses syntax it cannot execute safely: recursive
-CTEs, `GROUPING SETS`/`ROLLUP`/`CUBE`, non-equality join residuals, complex
-array/map/JSON data types, general `CREATE TABLE AS`, `INSERT`, `UPDATE`,
-`DELETE`, and arbitrary user-table transactions. See the full
+CTEs, broader correlated/lateral forms, unsupported window modifiers,
+non-equality join residuals outside the qualified shapes, general `CREATE
+TABLE AS`, `INSERT`, `UPDATE`, `DELETE`, and arbitrary user-table
+transactions. Bounded `GROUPING SETS`/`ROLLUP`/`CUBE`, arrays, maps, rows,
+JSON, approximate aggregates, prepared statements, and metadata controls are
+implemented; see the full
 [SQL compatibility matrix](../reference/engine-sql-compatibility.md) for the
 exact boundary and the bounded product transaction API.
 
