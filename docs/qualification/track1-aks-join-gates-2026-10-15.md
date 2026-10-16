@@ -70,3 +70,4 @@ The same 1 MiB spill query was observed running on the current three-worker AKS 
 This qualifies bounded spill recovery across one worker loss. Disk exhaustion, larger high-cardinality joins, and sustained mixed-workload endurance remain open.
 
 Raw evidence: [`track1-aks-join-spill-worker-loss-2026-10-15.json`](./track1-aks-join-spill-worker-loss-2026-10-15.json).
+
