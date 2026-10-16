@@ -28,6 +28,10 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 The workspace Clippy gate was rerun after the TopN change and exited with code
 0 in 12.06 seconds.
 
+Against the current source above, `cargo fmt --all -- --check` and
+`cargo clippy --locked --workspace --all-targets -- -D warnings` both exited
+with code 0.
+
 After the workspace evidence was captured, the planner regression for
 unpartitioned windows was added and the current source was rechecked with the
 two focused gates below:
