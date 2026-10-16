@@ -9,7 +9,7 @@ use kaveon_core::{
     StoragePredicate, StorageType, TableReference, TableStatistics,
 };
 use kaveon_sql::logical_plan::{JoinDistribution, JoinType, LogicalPlan};
-use kaveon_storage::{DeltaTableReader, ParquetReader};
+use kaveon_storage::{DeltaTableReader, IcebergReader, ParquetReader};
 use std::{collections::HashMap, sync::Arc};
 
 const BROADCAST_BUILD_MAX_ROWS: u64 = 1_000_000;
@@ -60,7 +60,18 @@ pub fn optimize_join_builds(plan: LogicalPlan, catalog: &CatalogManager) -> Logi
                     DataFormat::Delta => DeltaTableReader::new(resolved.full_path())
                         .metadata()
                         .ok()?,
-                    DataFormat::Iceberg => return None,
+                    DataFormat::Iceberg => {
+                        let snapshot = IcebergReader::new(resolved.full_path()).snapshot().ok()?;
+                        return Some(RelationStatistics::exact(
+                            snapshot.row_count,
+                            snapshot
+                                .schema
+                                .fields()
+                                .iter()
+                                .map(|field| field.name().clone())
+                                .collect(),
+                        ));
+                    }
                 };
                 Some(RelationStatistics::exact(
                     metadata.row_count,
