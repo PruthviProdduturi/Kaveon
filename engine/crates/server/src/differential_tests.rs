@@ -651,6 +651,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "date_set_operation",
+        "SELECT value FROM (VALUES (DATE '2026-01-01'), (DATE '2026-01-02')) AS left_values(value) INTERSECT SELECT value FROM (VALUES (DATE '2026-01-02'), (DATE '2026-01-03')) AS right_values(value) ORDER BY value",
+        true,
+    ),
+    (
+        "decimal_set_operation",
+        "SELECT value FROM (VALUES (CAST(1.20 AS DECIMAL(10, 2))), (CAST(2.30 AS DECIMAL(10, 2)))) AS left_values(value) EXCEPT SELECT value FROM (VALUES (CAST(2.30 AS DECIMAL(10, 2)))) AS right_values(value) ORDER BY value",
+        true,
+    ),
+    (
         "union_all_complex_values",
         "SELECT ARRAY[1, 2] AS values UNION ALL SELECT ARRAY[3, NULL]",
         false,
