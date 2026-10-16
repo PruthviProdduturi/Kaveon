@@ -591,6 +591,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "correlated_in_ordered_positive_limit",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id ORDER BY i.actions DESC LIMIT 1)",
+        false,
+    ),
+    (
         "correlated_in_residual",
         "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > e.actions)",
         false,

@@ -1962,7 +1962,14 @@ fn strip_exists_noop_paging(plan: LogicalPlan) -> LogicalPlan {
 /// the tested set.
 fn strip_correlated_in_paging(plan: LogicalPlan) -> LogicalPlan {
     match plan {
-        LogicalPlan::Limit { input, count } if count > 0 => *input,
+        LogicalPlan::Project { input, columns } => LogicalPlan::Project {
+            input: Box::new(strip_correlated_in_paging(*input)),
+            columns,
+        },
+        LogicalPlan::Distinct { input } => LogicalPlan::Distinct {
+            input: Box::new(strip_correlated_in_paging(*input)),
+        },
+        LogicalPlan::Limit { input, count } if count > 0 => strip_correlated_in_paging(*input),
         LogicalPlan::Limit { count: 0, .. } => LogicalPlan::Filter {
             input: Box::new(LogicalPlan::Unnest {
                 expressions: vec![Expr::Function {
@@ -1977,6 +1984,7 @@ fn strip_correlated_in_paging(plan: LogicalPlan) -> LogicalPlan {
             predicate: Expr::Literal(kaveon_core::ScalarValue::Bool(false)),
         },
         LogicalPlan::Offset { input, count: 0 } => *input,
+        LogicalPlan::Sort { input, .. } => *input,
         plan => plan,
     }
 }
@@ -2000,7 +2008,7 @@ fn correlated_projection_matches(plan: &LogicalPlan, inner: Option<&str>) -> boo
         LogicalPlan::Distinct { input } => input.as_ref(),
         other => other,
     };
-    let LogicalPlan::Project { columns, .. } = plan else {
+    let LogicalPlan::Project { input, columns } = plan else {
         return false;
     };
     let first = columns.first().and_then(|column| match column {
@@ -2014,9 +2022,40 @@ fn correlated_projection_matches(plan: &LogicalPlan, inner: Option<&str>) -> boo
         },
         _ => None,
     });
-    first
+    if first
         .zip(source)
         .is_some_and(|(first, source)| first.rsplit('.').next() == source.rsplit('.').next())
+    {
+        return true;
+    }
+    if let (Some(first), Some(source)) = (first, source)
+        && projection_alias_resolves_to_first(input, source, first)
+    {
+        return true;
+    }
+    matches!(columns.first(), Some(Expr::Column(_)))
+        && correlated_projection_matches(input, Some(inner))
+}
+
+fn projection_alias_resolves_to_first(plan: &LogicalPlan, alias: &str, first: &str) -> bool {
+    match plan {
+        LogicalPlan::Distinct { input } => projection_alias_resolves_to_first(input, alias, first),
+        LogicalPlan::Project { input, columns } => {
+            for column in columns {
+                if let Expr::Alias { expr, name } = column
+                    && name == alias
+                    && let Expr::Column(source) = expr.as_ref()
+                {
+                    if source.rsplit('.').next() == first.rsplit('.').next() {
+                        return true;
+                    }
+                    return projection_alias_resolves_to_first(input, source, first);
+                }
+            }
+            projection_alias_resolves_to_first(input, alias, first)
+        }
+        _ => false,
+    }
 }
 
 fn is_aggregate(name: &str) -> bool {
@@ -2897,6 +2936,21 @@ mod tests {
             panic!("projection");
         };
         assert!(matches!(*input, LogicalPlan::AntiJoin { .. }));
+    }
+
+    #[test]
+    fn a_correlated_in_ordered_positive_limit_drops_order_before_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l.l_orderkey = o.o_orderkey ORDER BY l_quantity DESC LIMIT 1)",
+        );
+        let debug = format!("{plan:?}");
+        assert!(matches!(
+            plan,
+            LogicalPlan::Project { input, .. }
+                if matches!(*input, LogicalPlan::SemiJoin { .. })
+        ));
+        assert!(!debug.contains("Sort"), "{debug}");
+        assert!(!debug.contains("Limit"), "{debug}");
     }
 
     #[test]
