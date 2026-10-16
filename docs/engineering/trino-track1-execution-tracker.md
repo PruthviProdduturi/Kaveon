@@ -32,13 +32,15 @@ snapshot, not a session diary.
 | 13 | Join reordering and skew mitigation | Open | Statistics-aware inner-join reordering and bounded broadcast selection exist. | Skew splitting, multi-join cost policy, and plan-regression corpus. |
 | 14 | Connector federation | Open | Native Parquet, Delta, and Iceberg paths exist; registered SQL sources use passthrough API paths. | Authenticated pushdown and cross-source execution qualification. |
 | 15 | Upgrade and rollback | Open | Deployment artifacts and restart cleanup paths exist. | Rehearse upgrade, rollback, and state compatibility on the release image. |
-| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus three exact concurrent mixed-workload rounds exist. | Five-minute or longer soak with throughput, p95 latency, memory, spill, retry, and failure counts retained. |
+| 16 | Sustained distributed soak | Open | Focused correctness and failure tests plus a 350.584-second six-round concurrent mixed-workload run with exact results, resource samples, and zero retained spill exist. | Longer endurance, node-loss during the soak, broader topology, and retry/failure qualification. |
 
 The full-table aggregate evidence is retained in `docs/qualification/track1-aks-scale-aggregate-2026-10-15.md` and its raw JSON: two identical 100-row result sets after grouping all 504,000,000 source rows, across three stages, seven tasks, and all three workers. It strengthens item 4 correctness evidence; p95, skew, and sustained mixed-workload gates remain open.
 
 The five-run aggregate p95 sample is retained in `docs/qualification/track1-aks-scale-aggregate-5x-2026-10-15.md` and its raw JSON: five exact result hashes, an observed 24.546s p95, three stages, seven tasks, and all three workers. It is workload evidence, not a universal latency SLO.
 
 The bounded mixed-workload report is retained in `docs/qualification/track1-aks-mixed-workload-2026-10-15.md` and its raw JSON. Three concurrent rounds combined aggregate, join, window, and global-order queries; all results matched sequential baselines, all workers participated, and no spill files remained. Longer endurance remains open.
+
+The five-minute endurance report is retained in `docs/qualification/track1-aks-mixed-workload-6round-2026-10-15.md` and its raw JSON. Six concurrent rounds ran for 350.584 seconds with 24/24 exact requests, six resource samples, and zero retained worker spill files. Node-loss during the soak and longer endurance remain open.
 
 ## Active item: 3 — distributed joins
 
