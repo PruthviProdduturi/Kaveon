@@ -1749,6 +1749,56 @@ fn replace_scalar_subqueries(
 fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     if let LogicalPlan::Limit { input, count } = &plan
         && *count > 0
+        && let LogicalPlan::Offset {
+            input: offset_input,
+            count: offset_count,
+        } = input.as_ref()
+        && let LogicalPlan::Sort {
+            input: sorted_input,
+            order_by,
+        } = offset_input.as_ref()
+        && let LogicalPlan::Project {
+            input: projected_input,
+            columns,
+        } = sorted_input.as_ref()
+    {
+        let [column] = columns.as_slice() else {
+            return Err(sql_err("a scalar subquery must select exactly one column"));
+        };
+        if matches!(column, Expr::Star) {
+            return Err(sql_err("a scalar subquery must select exactly one column"));
+        }
+        let aliased = LogicalPlan::Project {
+            input: projected_input.clone(),
+            columns: vec![
+                column.clone(),
+                Expr::Alias {
+                    expr: Box::new(column.clone()),
+                    name: name.to_owned(),
+                },
+            ],
+        };
+        let sorted = LogicalPlan::Sort {
+            input: Box::new(aliased),
+            order_by: order_by.clone(),
+        };
+        let bounded = LogicalPlan::Limit {
+            input: Box::new(LogicalPlan::Offset {
+                input: Box::new(sorted),
+                count: *offset_count,
+            }),
+            count: *count,
+        };
+        return Ok(LogicalPlan::Project {
+            input: Box::new(bounded),
+            columns: vec![Expr::Alias {
+                expr: Box::new(Expr::Column(name.to_owned())),
+                name: name.to_owned(),
+            }],
+        });
+    }
+    if let LogicalPlan::Limit { input, count } = &plan
+        && *count > 0
         && let LogicalPlan::Sort {
             input: sorted_input,
             order_by,
@@ -1783,6 +1833,53 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
                 input: Box::new(sorted),
                 count: *count,
             }),
+            columns: vec![Expr::Alias {
+                expr: Box::new(Expr::Column(name.to_owned())),
+                name: name.to_owned(),
+            }],
+        });
+    }
+    // A bounded scalar relation may carry an OFFSET below its positive LIMIT.
+    // Keep the bound (and any ordering) while aliasing the source expression;
+    // without this case the planner rejects the otherwise safe
+    // `SELECT value FROM t OFFSET n LIMIT 1` shape because the Offset node is
+    // hidden beneath the scalar's top-level Limit.
+    if let LogicalPlan::Limit { input, count } = &plan
+        && *count > 0
+        && let LogicalPlan::Offset {
+            input: offset_input,
+            count: offset_count,
+        } = input.as_ref()
+        && let LogicalPlan::Project {
+            input: projected_input,
+            columns,
+        } = offset_input.as_ref()
+    {
+        let [column] = columns.as_slice() else {
+            return Err(sql_err("a scalar subquery must select exactly one column"));
+        };
+        if matches!(column, Expr::Star) {
+            return Err(sql_err("a scalar subquery must select exactly one column"));
+        }
+        let source = LogicalPlan::Project {
+            input: projected_input.clone(),
+            columns: vec![
+                column.clone(),
+                Expr::Alias {
+                    expr: Box::new(column.clone()),
+                    name: name.to_owned(),
+                },
+            ],
+        };
+        let bounded = LogicalPlan::Limit {
+            input: Box::new(LogicalPlan::Offset {
+                input: Box::new(source),
+                count: *offset_count,
+            }),
+            count: *count,
+        };
+        return Ok(LogicalPlan::Project {
+            input: Box::new(bounded),
             columns: vec![Expr::Alias {
                 expr: Box::new(Expr::Column(name.to_owned())),
                 name: name.to_owned(),
@@ -5839,6 +5936,29 @@ mod tests {
                 .expect("an ordered scalar limit remains bounded to one row");
         let debug = format!("{plan:?}");
         assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_non_aggregate_offset_then_positive_limit_is_bounded() {
+        let plan =
+            sql_to_logical_plan("SELECT (SELECT b FROM t OFFSET 1 LIMIT 1) AS answer FROM t")
+                .expect("an offset followed by a positive scalar limit remains bounded");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("Offset"), "{debug}");
+        assert!(debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_non_aggregate_ordered_offset_then_limit_is_bounded() {
+        let plan = sql_to_logical_plan(
+            "SELECT (SELECT b FROM t ORDER BY b OFFSET 1 LIMIT 1) AS answer FROM t",
+        )
+        .expect("an ordered offset followed by a scalar limit remains bounded");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("Offset"), "{debug}");
         assert!(debug.contains("Limit"), "{debug}");
     }
 

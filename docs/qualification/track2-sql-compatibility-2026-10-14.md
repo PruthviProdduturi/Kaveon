@@ -590,3 +590,15 @@ The current AKS image passed two exact-repeat executions for four bounded Trino-
 This strengthens the current-image wire evidence for arrays, JSON, maps, rows, and row-producing UNNEST. Correlated/lateral table functions, full complex-type coercion, and broader external-client differential coverage remain open.
 
 Raw evidence: [`track2-aks-wire-shapes-2026-10-15.json`](./track2-aks-wire-shapes-2026-10-15.json).
+
+## Bounded non-aggregate scalar OFFSET — 2026-10-16
+
+One-column non-aggregate scalar subqueries now preserve a positive `OFFSET`
+when it is followed by a positive `LIMIT`, in both ordered and unordered
+forms. The source expression is aliased before the offset/limit is applied,
+so the scalar projection remains valid without allowing an unbounded
+multi-row relation into a scalar position. The SQL focused tests passed 4/4,
+and the distributed differential sweep passed 20/20 test cases (375 filtered)
+including the deterministic ordered `OFFSET 1 LIMIT 1` shape. Unbounded
+non-aggregate scalar OFFSET, residual correlated OFFSET, and broader Apply
+forms remain intentionally unsupported.
