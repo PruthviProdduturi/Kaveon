@@ -13,8 +13,9 @@
 //! - an optional `WHERE` that is a conjunction of `dim = literal` and
 //!   `dim IN (literals)` over declared dimensions;
 //! - a projection that keeps the keys and aggregates as they are, renamed
-//!   at most. `ORDER BY`, `LIMIT`, `HAVING`, expressions over aggregates,
-//!   joins and everything else take the row path.
+//!   at most, with `ORDER BY` over those output columns and bounded
+//!   `OFFSET`/`LIMIT`. `HAVING`, expressions over aggregates, joins and
+//!   everything else take the row path.
 //!
 //! The cube must be current for the statement's pinned version; the
 //! caller establishes that.
@@ -66,6 +67,19 @@ pub struct CubeQuery {
     /// Equality and `IN` predicates: an axis and the literals it may equal,
     /// each coerced for the column's type; a conjunction.
     pub predicates: Vec<(usize, Vec<ScalarValue>)>,
+    /// Output-column ordering requested by the statement. The index points
+    /// into `outputs`; the server applies it after the cube has produced the
+    /// small grouped result.
+    pub order_by: Vec<CubeOrder>,
+    pub offset: usize,
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CubeOrder {
+    pub output: usize,
+    pub ascending: bool,
+    pub nulls_first: bool,
 }
 
 impl CubeQuery {
@@ -103,10 +117,17 @@ impl CubeQuery {
 /// cube-answerable statement (before the shape and the cube are known):
 /// the one scan under an aggregate.
 pub fn cube_candidate_table(plan: &LogicalPlan) -> Option<&str> {
-    let aggregate = match plan {
-        LogicalPlan::Project { input, .. } => input.as_ref(),
-        other => other,
-    };
+    let mut aggregate = plan;
+    loop {
+        aggregate = match aggregate {
+            LogicalPlan::Project { input, .. }
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. } => input.as_ref(),
+            LogicalPlan::Aggregate { .. } => break,
+            _ => return None,
+        };
+    }
     let LogicalPlan::Aggregate { input, .. } = aggregate else {
         return None;
     };
@@ -133,10 +154,44 @@ pub fn match_cube_query(
         return None;
     }
     let axes = shape.axes();
-    let (projection, aggregate) = match plan {
-        LogicalPlan::Project { input, columns } => (Some(columns), input.as_ref()),
-        other => (None, other),
-    };
+    let mut node = plan;
+    let mut projection = None;
+    let mut order_by = None;
+    let mut offset = 0usize;
+    let mut limit = None;
+    loop {
+        match node {
+            LogicalPlan::Project { input, columns } => {
+                if projection.is_some() {
+                    return None;
+                }
+                projection = Some(columns.as_slice());
+                node = input.as_ref();
+            }
+            LogicalPlan::Sort {
+                input,
+                order_by: keys,
+            } => {
+                if order_by.is_some() {
+                    return None;
+                }
+                order_by = Some(keys.as_slice());
+                node = input.as_ref();
+            }
+            LogicalPlan::Limit { input, count } => {
+                if limit.replace(*count).is_some() {
+                    return None;
+                }
+                node = input.as_ref();
+            }
+            LogicalPlan::Offset { input, count } => {
+                offset = offset.checked_add(*count)?;
+                node = input.as_ref();
+            }
+            _ => break,
+        }
+    }
+    let aggregate = node;
     let LogicalPlan::Aggregate {
         input,
         group_by,
@@ -397,11 +452,31 @@ pub fn match_cube_query(
             }
         }
     }
+    let order_by = order_by
+        .unwrap_or_default()
+        .iter()
+        .map(|(expr, ascending, nulls_first)| {
+            let Expr::Column(name) = expr else {
+                return None;
+            };
+            let output = outputs.iter().position(|output: &CubeOutput| {
+                output.name() == name || output.name().rsplit('.').next() == Some(name)
+            })?;
+            Some(CubeOrder {
+                output,
+                ascending: *ascending,
+                nulls_first: *nulls_first,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
     let query = CubeQuery {
         table,
         outputs,
         group_axes,
         predicates,
+        order_by,
+        offset,
+        limit,
     };
     // The cube holds groupings of at most two axes.
     (query.needed_axes().len() <= 2).then_some(query)
@@ -974,10 +1049,8 @@ mod tests {
             "SELECT COUNT(*) FROM t WHERE day = DATE '2024-01-01'",
             // The time column at another grain.
             "SELECT date_trunc('month', at), COUNT(*) FROM t GROUP BY date_trunc('month', at)",
-            // Expressions over aggregates, ordering, limits, having.
+            // Expressions over aggregates and having.
             "SELECT SUM(total) + 1 FROM t",
-            "SELECT region, SUM(total) FROM t GROUP BY region ORDER BY region",
-            "SELECT region, SUM(total) FROM t GROUP BY region LIMIT 3",
             "SELECT region FROM t GROUP BY region HAVING SUM(total) > 1",
             // Three axes, grouped or counting the predicate's.
             "SELECT region, status, day, COUNT(*) FROM t GROUP BY region, status, day",
@@ -985,6 +1058,19 @@ mod tests {
         ] {
             assert!(matched(sql).is_none(), "{sql}");
         }
+    }
+
+    #[test]
+    fn cube_matches_output_order_and_bounds() {
+        let ordered = matched(
+            "SELECT region, SUM(total) AS total FROM t GROUP BY region ORDER BY total DESC LIMIT 3 OFFSET 1",
+        )
+        .unwrap();
+        assert_eq!(ordered.order_by.len(), 1);
+        assert_eq!(ordered.order_by[0].output, 1);
+        assert!(!ordered.order_by[0].ascending);
+        assert_eq!(ordered.offset, 1);
+        assert_eq!(ordered.limit, Some(3));
     }
 
     /// A hand-built cube over region × status with sums, counts and a

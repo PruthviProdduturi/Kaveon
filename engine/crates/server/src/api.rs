@@ -10407,7 +10407,31 @@ fn cube_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<Cont
             data_type: presented_type(field.data_type()),
         })
         .collect();
-    let rows = batches_to_json(std::slice::from_ref(&batch));
+    let mut rows = batches_to_json(std::slice::from_ref(&batch));
+    if !query.order_by.is_empty() {
+        rows.sort_by(|left, right| {
+            for key in &query.order_by {
+                let ordering = compare_cube_values(
+                    left.get(key.output),
+                    right.get(key.output),
+                    key.nulls_first,
+                );
+                if ordering != std::cmp::Ordering::Equal {
+                    return if key.ascending {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    };
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+    }
+    let start = query.offset.min(rows.len());
+    let end = query.limit.map_or(rows.len(), |count| {
+        start.saturating_add(count).min(rows.len())
+    });
+    rows = rows[start..end].to_vec();
     let approximate = query
         .approximate_outputs()
         .into_iter()
@@ -10430,6 +10454,45 @@ fn cube_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<Cont
         current_source_version: relation.current_version()?,
         approximate,
     })
+}
+
+fn compare_cube_values(
+    left: Option<&serde_json::Value>,
+    right: Option<&serde_json::Value>,
+    nulls_first: bool,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left, right) {
+        (Some(serde_json::Value::Null) | None, Some(serde_json::Value::Null) | None) => {
+            Ordering::Equal
+        }
+        (Some(serde_json::Value::Null) | None, Some(_)) => {
+            if nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        }
+        (Some(_), Some(serde_json::Value::Null) | None) => {
+            if nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        }
+        (Some(left), Some(right)) => {
+            if let (Some(left), Some(right)) = (left.as_f64(), right.as_f64()) {
+                return left.partial_cmp(&right).unwrap_or(Ordering::Equal);
+            }
+            match (left, right) {
+                (serde_json::Value::String(left), serde_json::Value::String(right)) => {
+                    left.cmp(right)
+                }
+                (serde_json::Value::Bool(left), serde_json::Value::Bool(right)) => left.cmp(right),
+                _ => left.to_string().cmp(&right.to_string()),
+            }
+        }
+    }
 }
 
 /// The answer to a `COUNT(*)`, `MIN` or `MAX` statement with no predicate
@@ -18913,18 +18976,18 @@ mod tests {
             "SELECT COUNT(*), SUM(id) FROM events WHERE name = 'name-0001'",
             "SELECT day, SUM(score) FROM events WHERE name IN ('name-0001', 'name-0002') GROUP BY day",
             "SELECT COUNT(*) FROM events WHERE name = 'nobody'",
+            "SELECT name, SUM(id) AS total FROM events GROUP BY name ORDER BY total DESC LIMIT 2 OFFSET 1",
             // A distinct count from the cell sketches.
             "SELECT name, APPROX_COUNT_DISTINCT(id) AS ids FROM events GROUP BY name",
             "SET SESSION approximate = true; SELECT COUNT(DISTINCT id) FROM events WHERE name = 'name-0003'",
         ];
         let uncovered = [
             // An exact distinct count, an undeclared aggregate, a predicate
-            // on a measure, a non-dimension key, ordering.
+            // on a measure, and a non-dimension key.
             "SELECT name, COUNT(DISTINCT id) FROM events GROUP BY name",
             "SELECT AVG(id) FROM events GROUP BY name",
             "SELECT name, COUNT(*) FROM events WHERE id > 5 GROUP BY name",
             "SELECT id, COUNT(*) FROM events GROUP BY id",
-            "SELECT name, SUM(id) FROM events GROUP BY name ORDER BY name",
         ];
         // Scanned: no shape, no cube yet.
         let mut scanned = Vec::new();
@@ -18990,7 +19053,11 @@ mod tests {
         for (sql, (columns, data)) in statements.iter().zip(&scanned) {
             let (body, record) = submit_and_record(&state, sql).await;
             assert_eq!(&body["columns"], columns, "{sql}");
-            assert_eq!(sorted_rows(&body["data"]), sorted_rows(data), "{sql}");
+            if sql.contains("ORDER BY total") {
+                assert_eq!(&body["data"], data, "{sql}");
+            } else {
+                assert_eq!(sorted_rows(&body["data"]), sorted_rows(data), "{sql}");
+            }
             assert_eq!(record["execution"]["mode"], "context", "{sql}");
             let detail = record["execution"]["detail"].as_str().unwrap();
             assert!(
