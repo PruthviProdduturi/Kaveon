@@ -1,9 +1,9 @@
 # Track 1 and Track 2 workspace qualification — current source
 
 **Date:** 2026-10-16  
-**Source:** `origin/dev` at `5a5c7b36` (the workspace gate includes the
-correlated array-function, map-key, map-entry, and per-row map-concat
-regressions)
+**Source:** `origin/dev` at `1814e206` (the workspace gate includes the
+correlated array-function, map-key, map-entry, per-row map-concat, and named
+window regressions)
 
 The complete Rust workspace test command was run from `engine/`:
 
