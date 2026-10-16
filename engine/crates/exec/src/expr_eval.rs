@@ -12907,6 +12907,13 @@ mod tests {
             .unwrap(),
         ) as ArrayRef;
         let needle = Arc::new(Int32Array::from(vec![Some(42)])) as ArrayRef;
+        let contains = eval_scalar_function(
+            "MAP_CONTAINS_KEY",
+            &[Arc::clone(&map), Arc::clone(&needle)],
+            1,
+        )
+        .unwrap();
+        assert!(contains.as_boolean().value(0));
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
     }
