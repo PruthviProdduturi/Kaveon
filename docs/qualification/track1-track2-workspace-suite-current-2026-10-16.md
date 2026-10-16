@@ -79,7 +79,8 @@ the existing distributed join, aggregate, spill, retry, cancellation, and
 worker-loss coverage.
 
 The exchange-focused regression also verifies that nested array, map, and row
-keys partition successfully; map/row keys use the canonical nested fallback
+keys partition successfully, including two maps with reversed entry order
+landing in the same partition; map/row keys use the canonical nested fallback
 because Arrow's `RowConverter` does not implement Map values.
 
 The complete execution crate target suite was also rerun on this source:
