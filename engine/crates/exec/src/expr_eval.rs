@@ -8282,6 +8282,35 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             arithmetic(&args[0], BinaryOp::Modulo, &args[1])
         }
+        "BITWISE_AND" | "BITWISE_OR" | "BITWISE_XOR" => {
+            check_arity(name, args, 2)?;
+            let left = compute::cast(&args[0], &DataType::Int64)?;
+            let right = compute::cast(&args[1], &DataType::Int64)?;
+            let left = left.as_primitive::<Int64Type>();
+            let right = right.as_primitive::<Int64Type>();
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    if left.is_null(row) || right.is_null(row) {
+                        None
+                    } else {
+                        Some(match upper.as_str() {
+                            "BITWISE_AND" => left.value(row) & right.value(row),
+                            "BITWISE_OR" => left.value(row) | right.value(row),
+                            "BITWISE_XOR" => left.value(row) ^ right.value(row),
+                            _ => unreachable!(),
+                        })
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        "BITWISE_NOT" => {
+            check_arity(name, args, 1)?;
+            let values = compute::cast(&args[0], &DataType::Int64)?;
+            let values = values.as_primitive::<Int64Type>();
+            let result: Int64Array = values.iter().map(|value| value.map(|v| !v)).collect();
+            Ok(Arc::new(result))
+        }
         "SIGN" | "SIGNUM" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::signum)
@@ -11778,6 +11807,32 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("ff"), Some("-101"), None]
+        );
+    }
+
+    #[test]
+    fn bitwise_scalar_functions_preserve_integer_and_null_semantics() {
+        let left = Arc::new(Int64Array::from(vec![Some(0b1100), Some(7), None])) as ArrayRef;
+        let right = Arc::new(Int64Array::from(vec![Some(0b1010), None, Some(3)])) as ArrayRef;
+        let and = eval_scalar_function("BITWISE_AND", &[left.clone(), right.clone()], 3).unwrap();
+        assert_eq!(
+            and.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(8), None, None]
+        );
+        let or = eval_scalar_function("BITWISE_OR", &[left.clone(), right.clone()], 3).unwrap();
+        assert_eq!(
+            or.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(14), None, None]
+        );
+        let xor = eval_scalar_function("BITWISE_XOR", &[left.clone(), right], 3).unwrap();
+        assert_eq!(
+            xor.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(6), None, None]
+        );
+        let not = eval_scalar_function("BITWISE_NOT", &[left], 3).unwrap();
+        assert_eq!(
+            not.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(!0b1100), Some(!7), None]
         );
     }
 

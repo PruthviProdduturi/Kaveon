@@ -4212,6 +4212,38 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "First non-null value",
         ),
         (
+            "bitwise_and",
+            "bigint",
+            "[bigint, bigint]",
+            "scalar",
+            true,
+            "Bitwise AND of two integers",
+        ),
+        (
+            "bitwise_or",
+            "bigint",
+            "[bigint, bigint]",
+            "scalar",
+            true,
+            "Bitwise OR of two integers",
+        ),
+        (
+            "bitwise_xor",
+            "bigint",
+            "[bigint, bigint]",
+            "scalar",
+            true,
+            "Bitwise XOR of two integers",
+        ),
+        (
+            "bitwise_not",
+            "bigint",
+            "[bigint]",
+            "scalar",
+            true,
+            "Bitwise complement of an integer",
+        ),
+        (
             "concat",
             "varchar",
             "[varchar]",
@@ -22775,6 +22807,7 @@ mod streamed_root_tests {
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
         assert!(rows.iter().any(|row| row[0] == "array_sum"));
         assert!(rows.iter().any(|row| row[0] == "array_average"));
+        assert!(rows.iter().any(|row| row[0] == "bitwise_and"));
         let from_base = rows
             .iter()
             .find(|row| row[0] == "from_base")
