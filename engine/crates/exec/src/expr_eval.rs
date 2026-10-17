@@ -1805,15 +1805,16 @@ fn arrays_overlap_nested<L: OffsetSizeTrait>(
                         saw_null = true;
                         continue;
                     }
-                    if comparison(
+                    match comparison(
                         &left_values.slice(left_index, 1),
                         &right_values.slice(right_index, 1),
                         CompareKind::Eq,
-                    )
-                    .map(|equal| !equal.is_null(0) && equal.value(0))
-                    .unwrap_or(false)
-                    {
-                        return Some(true);
+                    ) {
+                        Ok(equal) if !equal.is_null(0) && equal.value(0) => {
+                            return Some(true);
+                        }
+                        Ok(equal) if equal.is_null(0) => saw_null = true,
+                        _ => {}
                     }
                 }
             }
@@ -15228,6 +15229,37 @@ mod tests {
         )
         .unwrap();
         assert!(result.as_boolean().value(0));
+    }
+
+    #[test]
+    fn arrays_overlap_preserves_unknown_nested_row_equality() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let row = |first: i64, second: Expr| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(first)), second],
+        };
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let typed_null = || Expr::Cast {
+            expr: Box::new(Expr::Literal(ScalarValue::Null)),
+            data_type: CastTarget::Int64,
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAYS_OVERLAP".into(),
+                args: vec![
+                    array(vec![row(1, typed_null())]),
+                    array(vec![row(1, Expr::Literal(ScalarValue::Int64(2)))]),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(result.as_boolean().is_null(0));
     }
 
     #[test]
