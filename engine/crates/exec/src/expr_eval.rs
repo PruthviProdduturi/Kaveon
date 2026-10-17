@@ -2318,9 +2318,15 @@ fn compare_sort_entries(
 fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let supported = matches!(
         list.value_type(),
-        DataType::Int32
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
             | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
             | DataType::UInt64
+            | DataType::Float32
             | DataType::Float64
             | DataType::Date32
             | DataType::Date64
@@ -7204,6 +7210,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
+                DataType::Int8 => sort_primitive!(Int8Type, PrimitiveBuilder::<Int8Type>::new()),
+                DataType::Int16 => {
+                    sort_primitive!(Int16Type, PrimitiveBuilder::<Int16Type>::new())
+                }
+                DataType::Int32 => {
+                    sort_primitive!(Int32Type, PrimitiveBuilder::<Int32Type>::new())
+                }
+                DataType::UInt8 => {
+                    sort_primitive!(UInt8Type, PrimitiveBuilder::<UInt8Type>::new())
+                }
+                DataType::UInt16 => {
+                    sort_primitive!(UInt16Type, PrimitiveBuilder::<UInt16Type>::new())
+                }
+                DataType::UInt32 => {
+                    sort_primitive!(UInt32Type, PrimitiveBuilder::<UInt32Type>::new())
+                }
                 DataType::UInt64 => {
                     sort_primitive!(UInt64Type, PrimitiveBuilder::<UInt64Type>::new())
                 }
@@ -7241,6 +7263,33 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         }
                         let inner = list.value(row);
                         let values = inner.as_primitive::<Float64Type>();
+                        let mut sorted = (0..values.len())
+                            .map(|index| values.is_valid(index).then(|| values.value(index)))
+                            .collect::<Vec<_>>();
+                        sorted.sort_by(|left, right| match (left, right) {
+                            (None, None) => std::cmp::Ordering::Equal,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (Some(left), Some(right)) => {
+                                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+                            }
+                        });
+                        for value in sorted {
+                            builder.values().append_option(value);
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Float32 => {
+                    let mut builder = ListBuilder::new(Float32Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<Float32Type>();
                         let mut sorted = (0..values.len())
                             .map(|index| values.is_valid(index).then(|| values.value(index)))
                             .collect::<Vec<_>>();
@@ -13708,6 +13757,52 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some(1), Some(2), Some(3), None]
+        );
+    }
+
+    #[test]
+    fn array_sort_accepts_narrow_integer_and_float32_lists() {
+        use arrow::array::{Float32Builder, Int32Builder, ListBuilder};
+
+        let mut integers = ListBuilder::new(Int32Builder::new());
+        integers.values().append_value(3);
+        integers.values().append_null();
+        integers.values().append_value(1);
+        integers.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SORT", &[Arc::new(integers.finish()) as ArrayRef], 1)
+                .unwrap();
+        let values = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            values
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(3), None]
+        );
+
+        let mut floats = ListBuilder::new(Float32Builder::new());
+        floats.values().append_value(2.5);
+        floats.values().append_value(-1.0);
+        floats.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SORT", &[Arc::new(floats.finish()) as ArrayRef], 1)
+                .unwrap();
+        let values = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            values
+                .as_primitive::<Float32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(-1.0), Some(2.5)]
         );
     }
 
