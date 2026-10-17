@@ -4268,6 +4268,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Test a string suffix",
         ),
         (
+            "from_base",
+            "bigint",
+            "[varchar, bigint]",
+            "scalar",
+            true,
+            "Decode a string in a radix",
+        ),
+        (
             "exp",
             "double",
             "[double]",
@@ -4391,6 +4399,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Test a string prefix",
         ),
         ("sum", "double", "[double]", "aggregate", true, "Sum values"),
+        (
+            "to_base",
+            "varchar",
+            "[bigint, bigint]",
+            "scalar",
+            true,
+            "Encode a number in a radix",
+        ),
         (
             "trim",
             "varchar",
@@ -22741,6 +22757,16 @@ mod streamed_root_tests {
         assert_eq!(sum[3], "aggregate");
         assert_eq!(sum[2], serde_json::json!(["double"]));
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
+        let from_base = rows
+            .iter()
+            .find(|row| row[0] == "from_base")
+            .expect("from_base metadata");
+        assert_eq!(from_base[1], "bigint");
+        let to_base = rows
+            .iter()
+            .find(|row| row[0] == "to_base")
+            .expect("to_base metadata");
+        assert_eq!(to_base[1], "varchar");
         let filtered = trino_functions_response(Some("sum%"));
         let body = axum::body::to_bytes(filtered.into_body(), 64 * 1024)
             .await
