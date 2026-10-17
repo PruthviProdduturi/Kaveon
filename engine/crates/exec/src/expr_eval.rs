@@ -8220,6 +8220,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             (start..end)
                                 .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
                         }
+                        DataType::Time32(TimeUnit::Second) => {
+                            map_element_at_primitive::<Time32SecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Time32(TimeUnit::Millisecond) => {
+                            map_element_at_primitive::<Time32MillisecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Time64(TimeUnit::Microsecond) => {
+                            map_element_at_primitive::<Time64MicrosecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Time64(TimeUnit::Nanosecond) => {
+                            map_element_at_primitive::<Time64NanosecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Timestamp(TimeUnit::Second, _) => {
+                            map_element_at_primitive::<TimestampSecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                            map_element_at_primitive::<TimestampMillisecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                            map_element_at_primitive::<TimestampMicrosecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                            map_element_at_primitive::<TimestampNanosecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
                         DataType::Utf8 => {
                             let keys = map_keys.as_string::<i32>();
                             let needle = requested.as_string::<i32>().value(row);
@@ -14869,6 +14909,10 @@ mod tests {
         )
         .unwrap();
         assert!(contains.as_boolean().value(0));
+        let element =
+            eval_scalar_function("ELEMENT_AT", &[Arc::clone(&map), Arc::clone(&needle)], 1)
+                .unwrap();
+        assert_eq!(element.as_primitive::<Int64Type>().value(0), 7);
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
     }
