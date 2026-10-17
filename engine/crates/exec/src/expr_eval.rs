@@ -3036,6 +3036,95 @@ fn array_split_into_chunks<L: OffsetSizeTrait>(
     )?))
 }
 
+/// Return every consecutive `n`-element window from each input array.
+/// `ARRAY_NGRAMS` is a row-wise array function; null inputs remain null and
+/// an n larger than the input produces an empty array.
+fn array_ngrams<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    sizes: &Int64Array,
+) -> Result<ArrayRef> {
+    if list.len() != sizes.len() {
+        return Err(KaveonError::Execution(
+            "ARRAY_NGRAMS requires one n value per row".into(),
+        ));
+    }
+    let mut windows = Vec::<ArrayRef>::new();
+    let mut inner_offsets = vec![0i32];
+    let mut outer_offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) || sizes.is_null(row) {
+            valid.push(false);
+            outer_offsets.push(L::from_usize(windows.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_NGRAMS result offset overflow".into())
+            })?);
+            continue;
+        }
+        let n = usize::try_from(sizes.value(row)).map_err(|_| {
+            KaveonError::Execution("ARRAY_NGRAMS n must be a positive integer".into())
+        })?;
+        if n == 0 {
+            return Err(KaveonError::Execution(
+                "ARRAY_NGRAMS n must be a positive integer".into(),
+            ));
+        }
+        let inner = list.value(row);
+        if n <= inner.len() {
+            for start in 0..=inner.len() - n {
+                windows.push(inner.slice(start, n));
+                let end = inner_offsets
+                    .last()
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(i32::try_from(n).map_err(|_| {
+                        KaveonError::Execution("ARRAY_NGRAMS inner offset overflow".into())
+                    })?)
+                    .ok_or_else(|| {
+                        KaveonError::Execution("ARRAY_NGRAMS inner offset overflow".into())
+                    })?;
+                inner_offsets.push(end);
+            }
+        }
+        valid.push(true);
+        outer_offsets.push(
+            L::from_usize(windows.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_NGRAMS result offset overflow".into())
+            })?,
+        );
+    }
+    let values = if windows.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let windows = windows
+            .iter()
+            .map(|window| window.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&windows)?
+    };
+    let inner_field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    let inner = Arc::new(ListArray::try_new(
+        inner_field,
+        OffsetBuffer::new(ScalarBuffer::from(inner_offsets)),
+        values,
+        None,
+    )?) as ArrayRef;
+    let outer_field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        inner.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        outer_field,
+        OffsetBuffer::new(ScalarBuffer::from(outer_offsets)),
+        inner,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     match list.value_type() {
         DataType::Int8 => array_histogram_primitive::<L, Int8Type>(list),
@@ -4189,6 +4278,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         return Err(KaveonError::Execution(
             "ARRAY_SPLIT_INTO_CHUNKS requires an ARRAY/List value".into(),
+        ));
+    }
+    if upper == "ARRAY_NGRAMS" {
+        check_arity(name, args, 2)?;
+        let sizes = compute::cast(&args[1], &DataType::Int64)?;
+        let sizes = sizes.as_primitive::<Int64Type>();
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_ngrams(list, sizes);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_ngrams(list, sizes);
+        }
+        return Err(KaveonError::Execution(
+            "ARRAY_NGRAMS requires an ARRAY/List value".into(),
         ));
     }
     if upper == "ARRAY_HISTOGRAM" {
@@ -15463,6 +15566,53 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("ARRAY_CUM_SUM bigint overflow"));
+    }
+
+    #[test]
+    fn array_ngrams_emits_consecutive_windows_and_empty_oversized_windows() {
+        let mut input = ListBuilder::new(Int64Builder::new());
+        for value in [1_i64, 2, 3, 4] {
+            input.values().append_value(value);
+        }
+        input.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_NGRAMS",
+            &[
+                Arc::new(input.finish()) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let windows_array = outer.value(0);
+        let windows = windows_array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(windows.len(), 3);
+        assert_eq!(
+            windows.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
+        );
+        assert_eq!(
+            windows.value(2).as_primitive::<Int64Type>().values(),
+            &[3, 4]
+        );
+
+        let mut oversized = ListBuilder::new(Int64Builder::new());
+        oversized.values().append_value(1);
+        oversized.values().append_value(2);
+        oversized.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_NGRAMS",
+            &[
+                Arc::new(oversized.finish()) as ArrayRef,
+                Arc::new(Int64Array::from(vec![3])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let empty = outer.value(0);
+        assert_eq!(empty.len(), 0);
     }
 
     #[test]
