@@ -507,6 +507,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "arrays_overlap_decimal",
+        "SELECT ARRAYS_OVERLAP(ARRAY[CAST(1.25 AS DECIMAL(10, 2))], ARRAY[CAST(1.25 AS DECIMAL(10, 2))]) AS decimal_overlap FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
