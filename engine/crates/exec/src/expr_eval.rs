@@ -5367,25 +5367,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     )
                     .is_some()
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
                     map_element_at_primitive::<TimestampSecondType>(
                         map_keys, &requested, row, start, end,
                     )
                     .is_some()
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
                     map_element_at_primitive::<TimestampMillisecondType>(
                         map_keys, &requested, row, start, end,
                     )
                     .is_some()
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
                     map_element_at_primitive::<TimestampMicrosecondType>(
                         map_keys, &requested, row, start, end,
                     )
                     .is_some()
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
                     map_element_at_primitive::<TimestampNanosecondType>(
                         map_keys, &requested, row, start, end,
                     )
@@ -5497,22 +5497,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         map_keys, &requested, row, start, end,
                     )
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
                     map_element_at_primitive::<TimestampSecondType>(
                         map_keys, &requested, row, start, end,
                     )
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
                     map_element_at_primitive::<TimestampMillisecondType>(
                         map_keys, &requested, row, start, end,
                     )
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
                     map_element_at_primitive::<TimestampMicrosecondType>(
                         map_keys, &requested, row, start, end,
                     )
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
                     map_element_at_primitive::<TimestampNanosecondType>(
                         map_keys, &requested, row, start, end,
                     )
@@ -14933,6 +14933,52 @@ mod tests {
         )
         .unwrap();
         assert!(contains.as_boolean().value(0));
+        let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
+        assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
+    }
+
+    #[test]
+    fn map_lookup_accepts_timezone_bearing_timestamp_keys() {
+        let timestamp_type = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", timestamp_type.clone(), false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let entries = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(
+                    TimestampMicrosecondArray::from(vec![Some(1_000_000)]).with_timezone("UTC"),
+                ) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+            ],
+            None,
+        );
+        let map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
+                entries,
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let needle =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(1_000_000)]).with_timezone("UTC"))
+                as ArrayRef;
+        let contains = eval_scalar_function(
+            "MAP_CONTAINS_KEY",
+            &[Arc::clone(&map), Arc::clone(&needle)],
+            1,
+        )
+        .unwrap();
+        assert!(contains.as_boolean().value(0));
+        let element =
+            eval_scalar_function("ELEMENT_AT", &[Arc::clone(&map), Arc::clone(&needle)], 1)
+                .unwrap();
+        assert_eq!(element.as_primitive::<Int64Type>().value(0), 7);
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
     }
