@@ -2573,6 +2573,33 @@ fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<A
             }
             Ok(Arc::new(result.finish()))
         }
+        DataType::Decimal128(precision, scale) => {
+            let values_builder = Decimal128Builder::new()
+                .with_precision_and_scale(precision, scale)
+                .map_err(|error| KaveonError::Execution(error.to_string()))?;
+            let mut result = values_builder;
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let values =
+                    compute::cast(&list.value(row), &DataType::Decimal128(precision, scale))?;
+                let values = values.as_primitive::<arrow::datatypes::Decimal128Type>();
+                let mut sum = 0_i128;
+                let mut seen = false;
+                for index in 0..values.len() {
+                    if values.is_valid(index) {
+                        sum = sum.checked_add(values.value(index)).ok_or_else(|| {
+                            KaveonError::Execution("ARRAY_SUM decimal overflow".into())
+                        })?;
+                        seen = true;
+                    }
+                }
+                result.append_option(seen.then_some(sum));
+            }
+            Ok(Arc::new(result.finish()))
+        }
         other => Err(KaveonError::Execution(format!(
             "ARRAY_SUM does not support list element type {other}"
         ))),
@@ -15666,7 +15693,7 @@ mod tests {
     }
 
     #[test]
-    fn array_average_accepts_decimal_elements() {
+    fn array_average_and_sum_accept_decimal_elements() {
         let mut decimals = ListBuilder::new(
             Decimal128Builder::new()
                 .with_precision_and_scale(10, 2)
@@ -15682,6 +15709,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_primitive::<Float64Type>().value(0), 1.775);
+
+        let mut decimals = ListBuilder::new(
+            Decimal128Builder::new()
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        decimals.values().append_value(125);
+        decimals.values().append_value(230);
+        decimals.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SUM", &[Arc::new(decimals.finish()) as ArrayRef], 1)
+                .unwrap();
+        let result = result.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(result.value(0), 355);
     }
 
     #[test]
