@@ -1377,7 +1377,7 @@ fn parquet_error(error: parquet::errors::ParquetError) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
+    use arrow::array::{ArrayRef, Date64Array, Int32Array, StringArray};
     use arrow::datatypes::{Field, Schema};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -1427,6 +1427,38 @@ mod tests {
             .expect("test writer must be valid");
         writer.write(&batch).expect("test batch must be writable");
         writer.close().expect("test writer must close");
+        file
+    }
+
+    fn date64_fixture() -> TestFile {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-date64-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "day",
+            DataType::Date64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Date64Array::from(vec![
+                1_704_067_200_000,
+                1_706_745_600_000,
+                1_709_251_200_000,
+                1_711_929_600_000,
+            ])) as ArrayRef],
+        )
+        .expect("Date64 batch must be valid");
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let output = File::create(&file.0).expect("Date64 file must be creatable");
+        let mut writer = ArrowWriter::try_new(output, schema, Some(properties))
+            .expect("Date64 writer must be valid");
+        writer.write(&batch).expect("Date64 batch must be writable");
+        writer.close().expect("Date64 writer must close");
         file
     }
 
@@ -1576,6 +1608,36 @@ mod tests {
             &ScalarValue::Int64(1_704_067_200_000),
             &DataType::Date64,
         ));
+    }
+
+    #[test]
+    fn applies_date64_runtime_filter_before_parquet_decode() {
+        let file = date64_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["day".to_owned()])
+            .read()
+            .expect("Date64 source must open");
+        assert!(
+            source
+                .apply_runtime_filter("day", &[ScalarValue::Int64(1_706_745_600_000)])
+                .expect("Date64 runtime filter must be accepted")
+        );
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("Date64 runtime-filtered parquet must decode");
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::Date64Array>()
+                    .expect("Date64 output")
+                    .iter()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1_706_745_600_000]);
     }
 
     #[test]
