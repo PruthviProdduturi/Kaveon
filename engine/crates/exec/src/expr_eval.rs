@@ -7097,9 +7097,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => distinct_primitive!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => distinct_primitive!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => distinct_primitive!(
                     TimestampMicrosecondType,
                     PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Second, _) => distinct_primitive!(
+                    TimestampSecondType,
+                    PrimitiveBuilder::<TimestampSecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => distinct_primitive!(
+                    TimestampMillisecondType,
+                    PrimitiveBuilder::<TimestampMillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => distinct_primitive!(
+                    TimestampNanosecondType,
+                    PrimitiveBuilder::<TimestampNanosecondType>::new()
                 ),
                 DataType::Decimal128(precision, scale) => {
                     let mut builder = ListBuilder::new(
@@ -16519,6 +16539,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
+    }
+
+    #[test]
+    fn array_distinct_accepts_non_microsecond_temporal_lists() {
+        let mut regular = ListBuilder::new(TimestampMillisecondBuilder::new());
+        regular.values().append_value(1_700_000_000_000);
+        regular.values().append_value(1_700_000_000_000);
+        regular.values().append_value(1_600_000_000_000);
+        regular.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_DISTINCT",
+            &[Arc::new(regular.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let inner = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let values = inner.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(1_700_000_000_000), Some(1_600_000_000_000),]
+        );
+
+        let mut large = LargeListBuilder::new(Time64NanosecondBuilder::new());
+        large.values().append_value(123_456_789);
+        large.values().append_value(123_456_789);
+        large.values().append_value(223_456_789);
+        large.append(true);
+        let result =
+            eval_scalar_function("ARRAY_DISTINCT", &[Arc::new(large.finish()) as ArrayRef], 1)
+                .unwrap();
+        let inner = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let values = inner.as_primitive::<Time64NanosecondType>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(123_456_789), Some(223_456_789),]
+        );
     }
 
     #[test]
