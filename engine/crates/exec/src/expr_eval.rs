@@ -11823,6 +11823,36 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                         Ok(Some(extract_from_micros(ts.value(i), field)))
                     }
                 }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
+                    let ts = source.as_primitive::<arrow::datatypes::TimestampSecondType>();
+                    if ts.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(
+                            ts.value(i).saturating_mul(1_000_000),
+                            field,
+                        )))
+                    }
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
+                    let ts = source.as_primitive::<arrow::datatypes::TimestampMillisecondType>();
+                    if ts.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(
+                            ts.value(i).saturating_mul(1_000),
+                            field,
+                        )))
+                    }
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
+                    let ts = source.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
+                    if ts.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(ts.value(i) / 1_000, field)))
+                    }
+                }
                 DataType::Date32 => {
                     let d = source.as_primitive::<arrow::datatypes::Date32Type>();
                     if d.is_null(i) {
@@ -19450,6 +19480,25 @@ mod tests {
                     .value(0),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn date_part_accepts_all_timestamp_units() {
+        let fields = StringArray::from(vec![Some("SECOND")]);
+        let expected = 16;
+        let sources: Vec<ArrayRef> = vec![
+            Arc::new(TimestampSecondArray::from(vec![Some(1_700_000_056)])),
+            Arc::new(TimestampMillisecondArray::from(vec![Some(
+                1_700_000_056_000,
+            )])),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(
+                1_700_000_056_000_000_000,
+            )])),
+        ];
+        for source in sources {
+            let result = eval_date_part(&fields, &source, 1).unwrap();
+            assert_eq!(result.as_primitive::<Int64Type>().value(0), expected);
         }
     }
 
