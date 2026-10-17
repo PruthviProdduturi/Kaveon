@@ -10248,6 +10248,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     DataType::Timestamp(TimeUnit::Microsecond, _) => {
                         arrays_overlap_primitive::<_, TimestampMicrosecondType>(left, right)
                     }
+                    DataType::Decimal128(_, _) => {
+                        arrays_overlap_primitive::<_, arrow::datatypes::Decimal128Type>(left, right)
+                    }
                     DataType::Boolean => arrays_overlap_boolean(left, right),
                     DataType::Utf8 => arrays_overlap_utf8(left, right),
                     DataType::LargeUtf8 => {
@@ -16232,6 +16235,37 @@ mod tests {
         assert_eq!(
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(false)]
+        );
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_large_decimal_lists() {
+        let mut left = LargeListBuilder::new(
+            Decimal128Builder::new()
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        left.values().append_value(125);
+        left.append(true);
+        let mut right = LargeListBuilder::new(
+            Decimal128Builder::new()
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        right.values().append_value(125);
+        right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(left.finish()) as ArrayRef,
+                Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
         );
     }
 
