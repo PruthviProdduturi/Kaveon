@@ -2505,8 +2505,15 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let supported = matches!(
         list.value_type(),
-        DataType::Int32
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
             | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
             | DataType::Float64
             | DataType::Date32
             | DataType::Date64
@@ -10014,6 +10021,24 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
+                DataType::Int8 => {
+                    temporal_extrema!(Int8Type, PrimitiveBuilder::<Int8Type>::new())
+                }
+                DataType::Int16 => {
+                    temporal_extrema!(Int16Type, PrimitiveBuilder::<Int16Type>::new())
+                }
+                DataType::Int32 => {
+                    temporal_extrema!(Int32Type, PrimitiveBuilder::<Int32Type>::new())
+                }
+                DataType::UInt8 => {
+                    temporal_extrema!(UInt8Type, PrimitiveBuilder::<UInt8Type>::new())
+                }
+                DataType::UInt16 => {
+                    temporal_extrema!(UInt16Type, PrimitiveBuilder::<UInt16Type>::new())
+                }
+                DataType::UInt32 => {
+                    temporal_extrema!(UInt32Type, PrimitiveBuilder::<UInt32Type>::new())
+                }
                 DataType::UInt64 => {
                     temporal_extrema!(UInt64Type, PrimitiveBuilder::<UInt64Type>::new())
                 }
@@ -10049,6 +10074,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         }
                         let values = list.value(row);
                         let values = values.as_primitive::<Float64Type>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
+                DataType::Float32 => {
+                    let mut result = Float32Builder::new();
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<Float32Type>();
                         let best = (0..values.len())
                             .filter(|&index| values.is_valid(index))
                             .map(|index| values.value(index))
@@ -13862,6 +13910,30 @@ mod tests {
         for (name, expected) in [("ARRAY_MIN", 1_u64), ("ARRAY_MAX", 9_u64)] {
             let result = eval_scalar_function(name, std::slice::from_ref(&list), 1).unwrap();
             assert_eq!(result.as_primitive::<UInt64Type>().value(0), expected);
+        }
+    }
+
+    #[test]
+    fn array_extrema_accept_narrow_integer_and_float32_lists() {
+        let mut integers = ListBuilder::new(PrimitiveBuilder::<Int32Type>::new());
+        integers.values().append_value(9);
+        integers.values().append_null();
+        integers.values().append_value(1);
+        integers.append(true);
+        let integers = Arc::new(integers.finish()) as ArrayRef;
+        for (name, expected) in [("ARRAY_MIN", 1_i32), ("ARRAY_MAX", 9_i32)] {
+            let result = eval_scalar_function(name, std::slice::from_ref(&integers), 1).unwrap();
+            assert_eq!(result.as_primitive::<Int32Type>().value(0), expected);
+        }
+
+        let mut floats = ListBuilder::new(Float32Builder::new());
+        floats.values().append_value(2.5);
+        floats.values().append_value(-1.0);
+        floats.append(true);
+        let floats = Arc::new(floats.finish()) as ArrayRef;
+        for (name, expected) in [("ARRAY_MIN", -1.0_f32), ("ARRAY_MAX", 2.5_f32)] {
+            let result = eval_scalar_function(name, std::slice::from_ref(&floats), 1).unwrap();
+            assert_eq!(result.as_primitive::<Float32Type>().value(0), expected);
         }
     }
 
