@@ -2519,6 +2519,58 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
     Ok(compute::concat(&chunks)?)
 }
 
+fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    match list.value_type() {
+        DataType::Int64 => {
+            let mut result = Int64Builder::with_capacity(list.len());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let values = list.value(row);
+                let values = values.as_primitive::<Int64Type>();
+                let mut sum = 0_i64;
+                let mut seen = false;
+                for index in 0..values.len() {
+                    if values.is_valid(index) {
+                        sum = sum.checked_add(values.value(index)).ok_or_else(|| {
+                            KaveonError::Execution("ARRAY_SUM bigint overflow".into())
+                        })?;
+                        seen = true;
+                    }
+                }
+                result.append_option(seen.then_some(sum));
+            }
+            Ok(Arc::new(result.finish()))
+        }
+        DataType::Float64 => {
+            let mut result = Float64Builder::with_capacity(list.len());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let values = list.value(row);
+                let values = values.as_primitive::<Float64Type>();
+                let mut sum = 0.0_f64;
+                let mut seen = false;
+                for index in 0..values.len() {
+                    if values.is_valid(index) {
+                        sum += values.value(index);
+                        seen = true;
+                    }
+                }
+                result.append_option(seen.then_some(sum));
+            }
+            Ok(Arc::new(result.finish()))
+        }
+        other => Err(KaveonError::Execution(format!(
+            "ARRAY_SUM does not support list element type {other}"
+        ))),
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ArraySetOp {
     Union,
@@ -9425,6 +9477,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ))),
             }
         }
+        "ARRAY_SUM" => {
+            check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_sum_numeric(list);
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_SUM requires an ARRAY/List value".into())
+                })?;
+            array_sum_numeric(list)
+        }
         "ARRAY_MIN" | "ARRAY_MAX" => {
             check_arity(name, args, 1)?;
             if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
@@ -15152,6 +15217,8 @@ mod tests {
             let result = eval_scalar_function(name, &[extrema()], 1).unwrap();
             assert_eq!(result.as_primitive::<Int64Type>().value(0), expected);
         }
+        let result = eval_scalar_function("ARRAY_SUM", &[extrema()], 1).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 14);
     }
 
     #[test]

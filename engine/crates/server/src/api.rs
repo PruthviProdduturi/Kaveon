@@ -4180,6 +4180,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Sort an array",
         ),
         (
+            "array_sum",
+            "bigint",
+            "[array(bigint)]",
+            "scalar",
+            true,
+            "Sum numeric array elements",
+        ),
+        (
             "cardinality",
             "bigint",
             "[array]",
@@ -22757,6 +22765,7 @@ mod streamed_root_tests {
         assert_eq!(sum[3], "aggregate");
         assert_eq!(sum[2], serde_json::json!(["double"]));
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
+        assert!(rows.iter().any(|row| row[0] == "array_sum"));
         let from_base = rows
             .iter()
             .find(|row| row[0] == "from_base")
