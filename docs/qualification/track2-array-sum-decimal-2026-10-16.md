@@ -2,7 +2,7 @@
 
 Kaveon now supports `ARRAY_SUM` over Decimal128 list elements. The result preserves the input decimal precision and scale, ignores null elements, returns null for an all-null list, and reports a deterministic execution error on checked `i128` overflow. The same expression is exercised in the local and distributed differential corpus alongside decimal `ARRAY_AVERAGE` and `ARRAY_CUM_SUM`.
 
-The focused execution test covers a scale-2 decimal list (`1.25 + 2.30 = 3.55`) and verifies the stored decimal value. The distributed differential sweep compares the result across the supported Parquet encodings and execution paths.
+The focused execution test covers a scale-2 decimal list (`1.25 + 2.30 = 3.55`), verifies the stored decimal value, checks decimal overflow rejection, and checks that all-null and NULL-array inputs produce NULL. The distributed differential sweep compares the result across the supported Parquet encodings and execution paths.
 
 Validation from the Engine worktree:
 
