@@ -15736,6 +15736,22 @@ mod tests {
             eval_scalar_function("ARRAY_SUM", &[Arc::new(overflow.finish()) as ArrayRef], 1)
                 .unwrap_err();
         assert!(error.to_string().contains("ARRAY_SUM decimal overflow"));
+
+        let mut all_null = ListBuilder::new(Int64Builder::new());
+        all_null.values().append_null();
+        all_null.values().append_null();
+        all_null.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SUM", &[Arc::new(all_null.finish()) as ArrayRef], 1)
+                .unwrap();
+        assert!(result.is_null(0));
+
+        let mut null_array = ListBuilder::new(Int64Builder::new());
+        null_array.append(false);
+        let result =
+            eval_scalar_function("ARRAY_SUM", &[Arc::new(null_array.finish()) as ArrayRef], 1)
+                .unwrap();
+        assert!(result.is_null(0));
     }
 
     #[test]
