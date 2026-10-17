@@ -1370,6 +1370,16 @@ return;
       }, 100);
 
       const userEmail = account?.email || account?.username || null;
+      // Whatever was running is now nobody's answer. Release it on the
+      // coordinator first -- a replaced AbortController only stops the
+      // browser reading, while the statement goes on scanning -- then
+      // abort the request that was waiting on it.
+      const previousRun = streamRunRef.current;
+      if (previousRun?.active) {
+        releaseStreamedStatement(previousRun);
+      }
+      streamRunRef.current = null;
+      abortControllerRef.current?.abort();
       abortControllerRef.current = new AbortController();
       if (usingEngine && currentEngineSourceId) {
         await executeEngineStreamed(text, currentEngineSourceId, abortControllerRef.current.signal);
