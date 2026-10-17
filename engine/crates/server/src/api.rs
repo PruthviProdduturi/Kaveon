@@ -4188,6 +4188,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Sum numeric array elements",
         ),
         (
+            "array_average",
+            "double",
+            "[array(double)]",
+            "scalar",
+            true,
+            "Average numeric array elements",
+        ),
+        (
             "cardinality",
             "bigint",
             "[array]",
@@ -22766,6 +22774,7 @@ mod streamed_root_tests {
         assert_eq!(sum[2], serde_json::json!(["double"]));
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
         assert!(rows.iter().any(|row| row[0] == "array_sum"));
+        assert!(rows.iter().any(|row| row[0] == "array_average"));
         let from_base = rows
             .iter()
             .find(|row| row[0] == "from_base")
