@@ -18,10 +18,13 @@ test result: ok. 1 passed; 0 failed
 
 cargo test -p kaveon-storage compares_date64_columns_with_integer_day_millis_literals --quiet
 test result: ok. 1 passed; 0 failed
+
+cargo test -p kaveon-storage applies_date64_runtime_filter_before_parquet_decode --quiet
+test result: ok. 1 passed; 0 failed
 ```
 
 The full workspace suite also passed, including the distributed differential
-sweep:
+sweep, before this focused regression was added:
 
 ```text
 cargo test --workspace --no-fail-fast --quiet
@@ -31,6 +34,8 @@ cargo test --workspace --no-fail-fast --quiet
 
 ## Boundary
 
-This is a local Parquet qualification. It does not claim cloud snapshot
-qualification, Iceberg date-statistics support, or a universal latency SLO.
-Those remain open in the parity tracker.
+The end-to-end test writes two Parquet row groups containing Date64 values,
+applies an integer millisecond runtime filter before collection, and returns
+only the matching value. This is a local Parquet qualification. It does not
+claim cloud snapshot qualification, Iceberg date-statistics support, or a
+universal latency SLO. Those remain open in the parity tracker.
