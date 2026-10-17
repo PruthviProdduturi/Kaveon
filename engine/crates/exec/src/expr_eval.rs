@@ -4910,6 +4910,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 | DataType::Float64
                 | DataType::Date32
                 | DataType::Date64
+                | DataType::Time32(TimeUnit::Second)
+                | DataType::Time32(TimeUnit::Millisecond)
+                | DataType::Time64(TimeUnit::Microsecond)
+                | DataType::Time64(TimeUnit::Nanosecond)
+                | DataType::Timestamp(_, _)
                 | DataType::Decimal128(_, _)
                 | DataType::Utf8
                 | DataType::LargeUtf8
@@ -15419,6 +15424,54 @@ mod tests {
         assert_eq!(
             result.keys().as_primitive::<Date32Type>().values(),
             &[19_000_i32, 19_001_i32]
+        );
+    }
+
+    #[test]
+    fn map_from_entries_accepts_time64_key_types() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new(
+                "key",
+                DataType::Time64(TimeUnit::Nanosecond),
+                false,
+            )),
+            Arc::new(arrow::datatypes::Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Time64NanosecondArray::from(vec![1_000, 2_000])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+            ],
+            None,
+        );
+        let list = ListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            Arc::new(rows),
+            None,
+        );
+        let input = RecordBatch::try_from_iter([("entries", Arc::new(list) as ArrayRef)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            result
+                .keys()
+                .as_primitive::<Time64NanosecondType>()
+                .values(),
+            &[1_000_i64, 2_000_i64]
         );
     }
 
