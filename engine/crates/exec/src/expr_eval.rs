@@ -2551,6 +2551,32 @@ fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<A
             }
             Ok(Arc::new(result.finish()))
         }
+        DataType::UInt64 => {
+            let mut result = Int64Builder::with_capacity(list.len());
+            for row in 0..list.len() {
+                if list.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let values = list.value(row);
+                let values = values.as_primitive::<UInt64Type>();
+                let mut sum = 0_i64;
+                let mut seen = false;
+                for index in 0..values.len() {
+                    if values.is_valid(index) {
+                        let value = i64::try_from(values.value(index)).map_err(|_| {
+                            KaveonError::Execution("ARRAY_SUM bigint overflow".into())
+                        })?;
+                        sum = sum.checked_add(value).ok_or_else(|| {
+                            KaveonError::Execution("ARRAY_SUM bigint overflow".into())
+                        })?;
+                        seen = true;
+                    }
+                }
+                result.append_option(seen.then_some(sum));
+            }
+            Ok(Arc::new(result.finish()))
+        }
         DataType::Float32 | DataType::Float64 => {
             let mut result = Float64Builder::with_capacity(list.len());
             for row in 0..list.len() {
@@ -15768,6 +15794,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(average.as_primitive::<Float64Type>().value(0), 2.0);
+    }
+
+    #[test]
+    fn array_sum_accepts_uint64_elements_without_wrapping() {
+        let mut unsigned = LargeListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        unsigned.values().append_value(1);
+        unsigned.values().append_value(3);
+        unsigned.append(true);
+        let sum = eval_scalar_function("ARRAY_SUM", &[Arc::new(unsigned.finish()) as ArrayRef], 1)
+            .unwrap();
+        assert_eq!(sum.as_primitive::<Int64Type>().value(0), 4);
+
+        let mut overflow = LargeListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        overflow.values().append_value(i64::MAX as u64 + 1);
+        overflow.append(true);
+        let error =
+            eval_scalar_function("ARRAY_SUM", &[Arc::new(overflow.finish()) as ArrayRef], 1)
+                .unwrap_err();
+        assert!(error.to_string().contains("ARRAY_SUM bigint overflow"));
     }
 
     #[test]
