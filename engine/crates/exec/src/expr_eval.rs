@@ -1316,6 +1316,24 @@ fn text_value(arr: &ArrayRef, row: usize) -> Result<Option<&str>> {
     }
 }
 
+fn format_integer_in_base(value: i64, radix: u32) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut magnitude = i128::from(value).abs();
+    let radix = i128::from(radix);
+    let mut digits = Vec::new();
+    loop {
+        digits.push(DIGITS[(magnitude % radix) as usize] as char);
+        magnitude /= radix;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if value < 0 {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
 fn split_text_parts(value: &str, delimiter: &str, limit: Option<usize>) -> Vec<String> {
     if delimiter.is_empty() {
         let characters = value
@@ -7840,6 +7858,68 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Ok(Arc::new(builder.finish()))
             }
         }
+        "FROM_BASE" => {
+            check_arity(name, args, 2)?;
+            let radix = compute::cast(&args[1], &DataType::Int64)?;
+            let radix = radix.as_primitive::<Int64Type>();
+            let mut result = Int64Builder::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let (Some(value), Some(radix)) = (
+                    text_value(&args[0], row)?,
+                    (!radix.is_null(row)).then(|| radix.value(row)),
+                ) else {
+                    result.append_null();
+                    continue;
+                };
+                let radix = u32::try_from(radix).map_err(|_| {
+                    KaveonError::Execution("FROM_BASE radix must be between 2 and 36".into())
+                })?;
+                if !(2..=36).contains(&radix) {
+                    return Err(KaveonError::Execution(
+                        "FROM_BASE radix must be between 2 and 36".into(),
+                    ));
+                }
+                let (negative, digits) = value
+                    .strip_prefix('-')
+                    .map_or((false, value), |v| (true, v));
+                let digits = digits.strip_prefix('+').unwrap_or(digits);
+                let parsed = i128::from_str_radix(digits, radix).map_err(|_| {
+                    KaveonError::Execution(
+                        "FROM_BASE value is invalid for the supplied radix".into(),
+                    )
+                })?;
+                let parsed = if negative { -parsed } else { parsed };
+                let parsed = i64::try_from(parsed).map_err(|_| {
+                    KaveonError::Execution("FROM_BASE value overflows BIGINT".into())
+                })?;
+                result.append_value(parsed);
+            }
+            Ok(Arc::new(result.finish()))
+        }
+        "TO_BASE" => {
+            check_arity(name, args, 2)?;
+            let values = compute::cast(&args[0], &DataType::Int64)?;
+            let values = values.as_primitive::<Int64Type>();
+            let radix = compute::cast(&args[1], &DataType::Int64)?;
+            let radix = radix.as_primitive::<Int64Type>();
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows * 2);
+            for row in 0..num_rows {
+                if values.is_null(row) || radix.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let radix = u32::try_from(radix.value(row)).map_err(|_| {
+                    KaveonError::Execution("TO_BASE radix must be between 2 and 36".into())
+                })?;
+                if !(2..=36).contains(&radix) {
+                    return Err(KaveonError::Execution(
+                        "TO_BASE radix must be between 2 and 36".into(),
+                    ));
+                }
+                result.append_value(format_integer_in_base(values.value(row), radix));
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "REVERSE" => {
             check_arity(name, args, 1)?;
             match args[0].data_type() {
@@ -11519,6 +11599,58 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(0.0), Some(1.234567), None, Some(-2.5)]
+        );
+    }
+
+    #[test]
+    fn base_conversion_functions_match_trino_radix_and_null_semantics() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("text", DataType::Utf8, true),
+            arrow::datatypes::Field::new("value", DataType::Int64, true),
+            arrow::datatypes::Field::new("radix", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("ff"), Some("-101"), None])),
+                Arc::new(Int64Array::from(vec![Some(255), Some(-5), None])),
+                Arc::new(Int64Array::from(vec![Some(16), Some(2), Some(10)])),
+            ],
+        )
+        .unwrap();
+
+        let from_base = evaluate(
+            &Expr::Function {
+                name: "FROM_BASE".into(),
+                args: vec![Expr::Column("text".into()), Expr::Column("radix".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            from_base
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(255), Some(-5), None]
+        );
+
+        let to_base = evaluate(
+            &Expr::Function {
+                name: "TO_BASE".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("radix".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            to_base
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("ff"), Some("-101"), None]
         );
     }
 
