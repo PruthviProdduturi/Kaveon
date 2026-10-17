@@ -11875,6 +11875,44 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                         )))
                     }
                 }
+                DataType::Time32(arrow::datatypes::TimeUnit::Second) => {
+                    let time = source.as_primitive::<arrow::datatypes::Time32SecondType>();
+                    if time.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(
+                            time.value(i) as i64 * 1_000_000,
+                            field,
+                        )))
+                    }
+                }
+                DataType::Time32(arrow::datatypes::TimeUnit::Millisecond) => {
+                    let time = source.as_primitive::<arrow::datatypes::Time32MillisecondType>();
+                    if time.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(
+                            time.value(i) as i64 * 1_000,
+                            field,
+                        )))
+                    }
+                }
+                DataType::Time64(arrow::datatypes::TimeUnit::Microsecond) => {
+                    let time = source.as_primitive::<arrow::datatypes::Time64MicrosecondType>();
+                    if time.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(time.value(i), field)))
+                    }
+                }
+                DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond) => {
+                    let time = source.as_primitive::<arrow::datatypes::Time64NanosecondType>();
+                    if time.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(time.value(i) / 1_000, field)))
+                    }
+                }
                 _ => Err(KaveonError::Execution(format!(
                     "DATE_PART not supported for type {}",
                     source.data_type()
@@ -19507,6 +19545,7 @@ mod tests {
                 1_700_000_056_000_000_000,
             )])),
             Arc::new(Date64Array::from(vec![Some(1_700_000_056_000)])),
+            Arc::new(Time64NanosecondArray::from(vec![Some(16_000_000_000)])),
         ];
         for source in sources {
             let result = eval_date_part(&fields, &source, 1).unwrap();
