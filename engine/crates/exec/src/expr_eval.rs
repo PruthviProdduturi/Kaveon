@@ -2689,7 +2689,7 @@ fn array_cumulative_sum_numeric<L: OffsetSizeTrait>(
             | DataType::Int64
     );
     let floating = matches!(list.value_type(), DataType::Float32 | DataType::Float64);
-    if !integer && !floating {
+    if !integer && !floating && !matches!(list.value_type(), DataType::UInt64) {
         if let DataType::Decimal128(precision, scale) = list.value_type() {
             let values_builder = Decimal128Builder::new()
                 .with_precision_and_scale(precision, scale)
@@ -2724,6 +2724,36 @@ fn array_cumulative_sum_numeric<L: OffsetSizeTrait>(
             "ARRAY_CUM_SUM does not support list element type {}",
             list.value_type()
         )));
+    }
+
+    if matches!(list.value_type(), DataType::UInt64) {
+        let mut builder = GenericListBuilder::<L, Int64Builder>::new(Int64Builder::new());
+        for row in 0..list.len() {
+            if list.is_null(row) {
+                builder.append(false);
+                continue;
+            }
+            let values_array = list.value(row);
+            let values = values_array.as_primitive::<UInt64Type>();
+            let mut sum = 0_i64;
+            let mut valid = true;
+            for index in 0..values.len() {
+                if !valid || values.is_null(index) {
+                    valid = false;
+                    builder.values().append_null();
+                } else {
+                    let value = i64::try_from(values.value(index)).map_err(|_| {
+                        KaveonError::Execution("ARRAY_CUM_SUM bigint overflow".into())
+                    })?;
+                    sum = sum.checked_add(value).ok_or_else(|| {
+                        KaveonError::Execution("ARRAY_CUM_SUM bigint overflow".into())
+                    })?;
+                    builder.values().append_value(sum);
+                }
+            }
+            builder.append(true);
+        }
+        return Ok(Arc::new(builder.finish()));
     }
 
     if integer {
@@ -15813,6 +15843,43 @@ mod tests {
             eval_scalar_function("ARRAY_SUM", &[Arc::new(overflow.finish()) as ArrayRef], 1)
                 .unwrap_err();
         assert!(error.to_string().contains("ARRAY_SUM bigint overflow"));
+    }
+
+    #[test]
+    fn array_cum_sum_accepts_uint64_elements_without_wrapping() {
+        let mut unsigned = LargeListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        unsigned.values().append_value(1);
+        unsigned.values().append_value(3);
+        unsigned.values().append_null();
+        unsigned.values().append_value(5);
+        unsigned.append(true);
+        let cumulative = eval_scalar_function(
+            "ARRAY_CUM_SUM",
+            &[Arc::new(unsigned.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let outer = cumulative
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap();
+        let values = outer.value(0);
+        let values = values.as_primitive::<Int64Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 4);
+        assert!(values.is_null(2));
+        assert!(values.is_null(3));
+
+        let mut overflow = LargeListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        overflow.values().append_value(i64::MAX as u64 + 1);
+        overflow.append(true);
+        let error = eval_scalar_function(
+            "ARRAY_CUM_SUM",
+            &[Arc::new(overflow.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ARRAY_CUM_SUM bigint overflow"));
     }
 
     #[test]
