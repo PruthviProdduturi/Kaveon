@@ -10964,6 +10964,25 @@ async fn list_queries(
     }
 }
 
+/// A record as a reader should see it: elapsed measured to now while the
+/// statement is still moving.
+///
+/// `elapsed_ms` is written once, on the way to a terminal state, so a record
+/// read mid-flight carried the zero it was created with. A statement that had
+/// been retrying across three workers for two minutes reported `Elapsed 0 ms`
+/// -- which reads as nothing happening, when the truth was the opposite.
+///
+/// Only the view is adjusted. The stored record keeps its zero until the
+/// statement finishes and writes the real figure, so nothing downstream --
+/// the journal, the audit line, the history row -- learns a number that was
+/// never measured.
+fn with_live_elapsed(mut record: QueryRecord) -> QueryRecord {
+    if matches!(record.state, QueryState::Queued | QueryState::Running) {
+        record.elapsed_ms = unix_time_ms().saturating_sub(record.submitted_at_ms);
+    }
+    record
+}
+
 async fn get_query(
     Path(query_id): Path<String>,
     Extension(identity): Extension<Identity>,
@@ -10971,7 +10990,7 @@ async fn get_query(
     let store = QUERY_STORE.read().await;
     match store.queries.get(&query_id) {
         Some(record) if identity.can_view(record.context.principal.as_deref()) => {
-            Json(record.clone()).into_response()
+            Json(with_live_elapsed(record.clone())).into_response()
         }
         _ => (
             StatusCode::NOT_FOUND,
