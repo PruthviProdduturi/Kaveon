@@ -2521,7 +2521,12 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
             | DataType::Date64
             | DataType::Time32(TimeUnit::Second)
             | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Timestamp(TimeUnit::Second, _)
+            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Timestamp(TimeUnit::Nanosecond, _)
             | DataType::Decimal128(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
@@ -10127,9 +10132,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => temporal_extrema!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => temporal_extrema!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => temporal_extrema!(
                     TimestampMicrosecondType,
                     PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Second, _) => temporal_extrema!(
+                    TimestampSecondType,
+                    PrimitiveBuilder::<TimestampSecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => temporal_extrema!(
+                    TimestampMillisecondType,
+                    PrimitiveBuilder::<TimestampMillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => temporal_extrema!(
+                    TimestampNanosecondType,
+                    PrimitiveBuilder::<TimestampNanosecondType>::new()
                 ),
                 DataType::Decimal128(precision, scale) => {
                     let mut result = Decimal128Builder::new()
@@ -16339,6 +16364,46 @@ mod tests {
         assert_eq!(
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true)]
+        );
+    }
+
+    #[test]
+    fn array_extrema_accepts_non_microsecond_temporal_lists() {
+        let mut regular = ListBuilder::new(TimestampMillisecondBuilder::new());
+        regular.values().append_value(1_700_000_000_000);
+        regular.values().append_value(1_600_000_000_000);
+        regular.append(true);
+        let regular = Arc::new(regular.finish()) as ArrayRef;
+        let min = eval_scalar_function("ARRAY_MIN", std::slice::from_ref(&regular), 1).unwrap();
+        let max = eval_scalar_function("ARRAY_MAX", std::slice::from_ref(&regular), 1).unwrap();
+        assert_eq!(
+            min.data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, None)
+        );
+        assert_eq!(
+            min.as_primitive::<TimestampMillisecondType>().value(0),
+            1_600_000_000_000
+        );
+        assert_eq!(
+            max.as_primitive::<TimestampMillisecondType>().value(0),
+            1_700_000_000_000
+        );
+
+        let mut large = LargeListBuilder::new(Time64NanosecondBuilder::new());
+        large.values().append_value(123_456_789);
+        large.values().append_value(223_456_789);
+        large.append(true);
+        let large = Arc::new(large.finish()) as ArrayRef;
+        let min = eval_scalar_function("ARRAY_MIN", std::slice::from_ref(&large), 1).unwrap();
+        let max = eval_scalar_function("ARRAY_MAX", std::slice::from_ref(&large), 1).unwrap();
+        assert_eq!(min.data_type(), &DataType::Time64(TimeUnit::Nanosecond));
+        assert_eq!(
+            min.as_primitive::<Time64NanosecondType>().value(0),
+            123_456_789
+        );
+        assert_eq!(
+            max.as_primitive::<Time64NanosecondType>().value(0),
+            223_456_789
         );
     }
 
