@@ -5142,8 +5142,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         if !matches!(
             &key_type,
             DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
                 | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
                 | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Timestamp(_, _)
+                | DataType::Decimal128(_, _)
                 | DataType::Utf8
                 | DataType::LargeUtf8
         ) {
@@ -11177,6 +11191,22 @@ fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Res
         DataType::Float64 => primitive_keys_equal!(Float64Array),
         DataType::Date32 => primitive_keys_equal!(Date32Array),
         DataType::Date64 => primitive_keys_equal!(Date64Array),
+        DataType::Time32(TimeUnit::Second) => primitive_keys_equal!(Time32SecondArray),
+        DataType::Time32(TimeUnit::Millisecond) => {
+            primitive_keys_equal!(Time32MillisecondArray)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => primitive_keys_equal!(Time64MicrosecondArray),
+        DataType::Time64(TimeUnit::Nanosecond) => primitive_keys_equal!(Time64NanosecondArray),
+        DataType::Timestamp(TimeUnit::Second, _) => primitive_keys_equal!(TimestampSecondArray),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            primitive_keys_equal!(TimestampMillisecondArray)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            primitive_keys_equal!(TimestampMicrosecondArray)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            primitive_keys_equal!(TimestampNanosecondArray)
+        }
         DataType::Decimal128(_, _) => primitive_keys_equal!(Decimal128Array),
         DataType::Utf8 => {
             let values = left.as_any().downcast_ref::<StringArray>().unwrap();
@@ -14982,6 +15012,57 @@ mod tests {
         assert_eq!(
             map.keys().as_string::<i64>().iter().collect::<Vec<_>>(),
             vec![Some("a"), Some("b"), Some("c")]
+        );
+        assert_eq!(
+            map.values().as_primitive::<Int64Type>().values().as_ref(),
+            &[1, 20, 3]
+        );
+    }
+
+    #[test]
+    fn map_concat_accepts_time64_keys() {
+        let build_map = |keys: &[i64], values: &[i64]| {
+            let fields: arrow::datatypes::Fields = vec![
+                Arc::new(Field::new(
+                    "key",
+                    DataType::Time64(TimeUnit::Nanosecond),
+                    false,
+                )),
+                Arc::new(Field::new("value", DataType::Int64, true)),
+            ]
+            .into();
+            let entries = StructArray::new(
+                fields.clone(),
+                vec![
+                    Arc::new(Time64NanosecondArray::from(keys.to_vec())) as ArrayRef,
+                    Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+                ],
+                None,
+            );
+            Arc::new(
+                MapArray::try_new(
+                    Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, keys.len() as i32])),
+                    entries,
+                    None,
+                    false,
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
+        let result = eval_scalar_function(
+            "MAP_CONCAT",
+            &[
+                build_map(&[1_000, 2_000], &[1, 2]),
+                build_map(&[2_000, 3_000], &[20, 3]),
+            ],
+            1,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            map.keys().as_primitive::<Time64NanosecondType>().values(),
+            &[1_000, 2_000, 3_000]
         );
         assert_eq!(
             map.values().as_primitive::<Int64Type>().values().as_ref(),
