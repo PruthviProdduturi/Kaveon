@@ -1319,6 +1319,7 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
                     | DataType::UInt32
                     | DataType::UInt64
                     | DataType::Date32
+                    | DataType::Date64
             )
             | (
                 ScalarValue::Float64(_),
@@ -1567,6 +1568,14 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(labels, vec!["a", "e"]);
+    }
+
+    #[test]
+    fn runtime_filter_accepts_date64_columns() {
+        assert!(scalar_matches_data_type(
+            &ScalarValue::Int64(1_704_067_200_000),
+            &DataType::Date64,
+        ));
     }
 
     #[test]
