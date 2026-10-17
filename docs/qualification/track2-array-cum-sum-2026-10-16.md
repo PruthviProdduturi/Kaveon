@@ -21,13 +21,14 @@ From `engine/` on the pinned Rust 1.98.1 toolchain:
 ```text
 cargo fmt --all
 cargo test -p kaveon-exec array_cum_sum_preserves_null_tail_and_overflow_contract --quiet
+cargo test -p kaveon-exec array_cum_sum_accepts_uint64_elements_without_wrapping --quiet
 cargo test -p kaveon-server trino_show_functions_exposes_supported_function_metadata --quiet
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths --quiet
 ```
 
 All commands passed. The differential sweep completed with 1 test passed, 0
-failed, and 426 filtered tests.
+failed, and 426 filtered tests; the focused UInt64 regression also passed.
 
 This is a bounded numeric function qualification. Higher-order array
 functions, lambda semantics, and the remaining complex element types remain
