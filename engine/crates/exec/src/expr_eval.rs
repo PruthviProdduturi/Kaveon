@@ -7584,6 +7584,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => reverse_primitive!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => reverse_primitive!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => reverse_primitive!(
                     TimestampMicrosecondType,
                     PrimitiveBuilder::<TimestampMicrosecondType>::new()
@@ -14287,6 +14295,24 @@ mod tests {
             values.iter().collect::<Vec<_>>(),
             vec![Some("b"), None, Some("a")]
         );
+    }
+
+    #[test]
+    fn array_reverse_supports_time64_elements() {
+        let mut values = ListBuilder::new(PrimitiveBuilder::<Time64NanosecondType>::new());
+        values.values().append_value(1_000);
+        values.values().append_null();
+        values.values().append_value(2_000);
+        values.append(true);
+        let input = Arc::new(values.finish()) as ArrayRef;
+        let result = eval_scalar_function("ARRAY_REVERSE", &[input], 1).unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = list
+            .value(0)
+            .as_primitive::<Time64NanosecondType>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some(2_000), None, Some(1_000)]);
     }
 
     #[test]

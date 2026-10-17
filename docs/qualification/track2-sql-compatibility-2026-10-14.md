@@ -69,7 +69,9 @@ SELECT semantics, joins and semi/anti joins, CTEs and derived relations, set
 operations, grouping sets and metadata functions, `COUNT_IF`, windows and QUALIFY, arrays/maps/rows, JSON paths,
 prepared statements and typed parameters, metadata statements, global ordering
 and limits (including `FETCH … WITH TIES`), grouping metadata functions, and
-local/distributed exact-result execution.
+local/distributed exact-result execution. The temporal array regression now
+also verifies `ARRAY_REVERSE` over `Time64` elements while preserving null
+positions.
 
 ## Correlated subquery boundary — 2026-10-15
 
