@@ -337,6 +337,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_concat_three_way_replacement",
+        "SELECT MAP_ELEMENT_AT(MAP_CONCAT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), MAP(ARRAY['b', 'c'], ARRAY[30, 40]), MAP(ARRAY['c', 'd'], ARRAY[50, 60])), 'c') AS replaced, CARDINALITY(MAP_CONCAT(MAP(ARRAY['a'], ARRAY[10]), MAP(ARRAY['b'], ARRAY[20]), MAP(ARRAY['c'], ARRAY[30]))) AS key_count FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_from_entries_and_projection",
         "SELECT MAP_ELEMENT_AT(MAP_FROM_ENTRIES(ARRAY[ROW('a', 10), ROW('b', 20)]), 'b') AS value, MAP_KEYS(MAP_FROM_ENTRIES(ARRAY[ROW('a', 10), ROW('b', 20)])) AS keys FROM {T} LIMIT 1",
         false,
