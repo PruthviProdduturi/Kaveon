@@ -8032,6 +8032,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::sqrt)
         }
+        "CBRT" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::cbrt)
+        }
         "SIN" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::sin)
@@ -8043,6 +8047,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         "TAN" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::tan)
+        }
+        "COSH" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::cosh)
+        }
+        "SINH" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::sinh)
+        }
+        "TANH" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::tanh)
         }
         "ASIN" => {
             check_arity(name, args, 1)?;
@@ -8159,6 +8175,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(Float64Array::from(vec![
                 std::f64::consts::PI;
+                num_rows
+            ])))
+        }
+        "E" => {
+            if !args.is_empty() {
+                return Err(KaveonError::Execution("E takes no arguments".into()));
+            }
+            Ok(Arc::new(Float64Array::from(vec![
+                std::f64::consts::E;
                 num_rows
             ])))
         }
@@ -11284,6 +11309,42 @@ mod tests {
         assert!((base_log.as_primitive::<Float64Type>().value(0) - 2.0).abs() < 1e-12);
         assert!((value("LOG10", 100.0) - 2.0).abs() < 1e-12);
         assert!((value("LOG2", 8.0) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trino_math_constants_and_hyperbolic_functions_are_supported() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("row", DataType::Int64, false),
+        ]));
+        let input =
+            RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![0]))]).unwrap();
+        let evaluate_one = |name: &str, args: Vec<Expr>| {
+            evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args,
+                },
+                &input,
+            )
+            .unwrap()
+            .as_primitive::<Float64Type>()
+            .value(0)
+        };
+        assert!((evaluate_one("E", vec![]) - std::f64::consts::E).abs() < 1e-12);
+        assert!(
+            (evaluate_one("CBRT", vec![Expr::Literal(ScalarValue::Float64(27.0))]) - 3.0).abs()
+                < 1e-12
+        );
+        assert!(
+            (evaluate_one("COSH", vec![Expr::Literal(ScalarValue::Float64(0.0))]) - 1.0).abs()
+                < 1e-12
+        );
+        assert!(
+            (evaluate_one("SINH", vec![Expr::Literal(ScalarValue::Float64(0.0))])).abs() < 1e-12
+        );
+        assert!(
+            (evaluate_one("TANH", vec![Expr::Literal(ScalarValue::Float64(0.0))])).abs() < 1e-12
+        );
     }
 
     #[test]
