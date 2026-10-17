@@ -368,7 +368,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "trigonometric_scalar_compatibility",
-        "SELECT SIN(PI() / 2) AS sine, COS(0) AS cosine, TAN(0) AS tangent, ATAN2(1, 1) AS atan2_value, DEGREES(PI()) AS degrees, RADIANS(180) AS radians, CBRT(27) AS cube_root, COSH(0) AS hyper_cosine, SINH(0) AS hyper_sine, TANH(0) AS hyper_tangent, E() AS euler, SIN(NULL) AS null_sine FROM {T} LIMIT 1",
+        "SELECT SIN(PI() / 2) AS sine, COS(0) AS cosine, TAN(0) AS tangent, ATAN2(1, 1) AS atan2_value, DEGREES(PI()) AS degrees, RADIANS(180) AS radians, CBRT(27) AS cube_root, COSH(0) AS hyper_cosine, SINH(0) AS hyper_sine, TANH(0) AS hyper_tangent, E() AS euler, IS_INFINITE(INFINITY()) AS infinity, IS_NAN(NAN()) AS nan, SIN(NULL) AS null_sine FROM {T} LIMIT 1",
         false,
     ),
     (
