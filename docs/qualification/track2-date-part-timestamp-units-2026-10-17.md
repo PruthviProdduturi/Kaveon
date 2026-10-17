@@ -2,14 +2,14 @@
 
 Date: 2026-10-17  
 Scope: timestamp values represented in Arrow seconds, milliseconds, and
-nanoseconds.
+nanoseconds and Arrow Date64.
 
 `DATE_PART` now normalizes all timestamp units to microseconds before applying
 the existing calendar extraction logic. This removes the previous unit-specific
 behavior where only microsecond timestamps were accepted.
 
 Focused execution coverage evaluates the `SECOND` field against equivalent
-second, millisecond, and nanosecond timestamp values and verifies the same
+second, millisecond, nanosecond, and Date64 values and verifies the same
 result for each representation. The execution crate passes the warning-clean
 clippy gate.
 

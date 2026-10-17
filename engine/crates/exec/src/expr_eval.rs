@@ -11864,6 +11864,17 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                         )))
                     }
                 }
+                DataType::Date64 => {
+                    let d = source.as_primitive::<arrow::datatypes::Date64Type>();
+                    if d.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(
+                            d.value(i).saturating_mul(1_000),
+                            field,
+                        )))
+                    }
+                }
                 _ => Err(KaveonError::Execution(format!(
                     "DATE_PART not supported for type {}",
                     source.data_type()
@@ -19495,6 +19506,7 @@ mod tests {
             Arc::new(TimestampNanosecondArray::from(vec![Some(
                 1_700_000_056_000_000_000,
             )])),
+            Arc::new(Date64Array::from(vec![Some(1_700_000_056_000)])),
         ];
         for source in sources {
             let result = eval_date_part(&fields, &source, 1).unwrap();
