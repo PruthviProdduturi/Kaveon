@@ -15,5 +15,7 @@ preserving exact decimal equality.
 - Result: all seven overlap evaluator tests passed; clippy passed for all
   execution targets.
 
-The distributed differential sweep remains the release-level regression for
-the previously qualified numeric overlap cases.
+Distributed regression: `arrays_overlap_decimal` in
+`engine/crates/server/src/differential_tests.rs` passed in the full
+Parquet-encoding and local/distributed execution-path sweep (1 test, 0
+failures, 170.45 seconds).
