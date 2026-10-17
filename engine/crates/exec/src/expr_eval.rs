@@ -9,6 +9,8 @@ use arrow::array::{
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
+#[cfg(test)]
+use arrow::array::{Time64NanosecondBuilder, TimestampMillisecondBuilder};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
@@ -10248,6 +10250,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     DataType::Timestamp(TimeUnit::Microsecond, _) => {
                         arrays_overlap_primitive::<_, TimestampMicrosecondType>(left, right)
                     }
+                    DataType::Time64(TimeUnit::Microsecond) => {
+                        arrays_overlap_primitive::<_, Time64MicrosecondType>(left, right)
+                    }
+                    DataType::Time64(TimeUnit::Nanosecond) => {
+                        arrays_overlap_primitive::<_, Time64NanosecondType>(left, right)
+                    }
+                    DataType::Timestamp(TimeUnit::Second, _) => {
+                        arrays_overlap_primitive::<_, TimestampSecondType>(left, right)
+                    }
+                    DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                        arrays_overlap_primitive::<_, TimestampMillisecondType>(left, right)
+                    }
+                    DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                        arrays_overlap_primitive::<_, TimestampNanosecondType>(left, right)
+                    }
                     DataType::Decimal128(_, _) => {
                         arrays_overlap_primitive::<_, arrow::datatypes::Decimal128Type>(left, right)
                     }
@@ -10363,6 +10380,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, _) => {
                     overlap_primitive!(TimestampMicrosecondType)
+                }
+                DataType::Time64(TimeUnit::Microsecond) => {
+                    overlap_primitive!(Time64MicrosecondType)
+                }
+                DataType::Time64(TimeUnit::Nanosecond) => overlap_primitive!(Time64NanosecondType),
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    overlap_primitive!(TimestampSecondType)
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    overlap_primitive!(TimestampMillisecondType)
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    overlap_primitive!(TimestampNanosecondType)
                 }
                 DataType::Decimal128(_, _) => (0..num_rows)
                     .map(|row| {
@@ -16259,6 +16289,49 @@ mod tests {
             &[
                 Arc::new(left.finish()) as ArrayRef,
                 Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_non_microsecond_temporal_lists() {
+        let mut left = ListBuilder::new(TimestampMillisecondBuilder::new());
+        left.values().append_value(1_700_000_000_000);
+        left.append(true);
+        let mut right = ListBuilder::new(TimestampMillisecondBuilder::new());
+        right.values().append_value(1_700_000_000_000);
+        right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(left.finish()) as ArrayRef,
+                Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+
+        let mut large_left = LargeListBuilder::new(Time64NanosecondBuilder::new());
+        large_left.values().append_value(123_456_789);
+        large_left.append(true);
+        let mut large_right = LargeListBuilder::new(Time64NanosecondBuilder::new());
+        large_right.values().append_value(123_456_789);
+        large_right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(large_left.finish()) as ArrayRef,
+                Arc::new(large_right.finish()) as ArrayRef,
             ],
             1,
         )
