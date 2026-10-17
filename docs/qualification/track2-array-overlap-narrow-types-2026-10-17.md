@@ -13,6 +13,10 @@ NULL result when a NULL element is present but no definite match exists.
 - Inputs: `INTEGER [1, 3]` vs `[2, 3]`, and `REAL [1.5]` vs `[2.5]`.
 - Expected results: `TRUE` and `FALSE`.
 - Result: all six overlap evaluator tests passed.
+- Distributed regression: `arrays_overlap_narrow_numeric` in
+  `engine/crates/server/src/differential_tests.rs` passed in the full
+  Parquet-encoding and local/distributed execution-path sweep (1 test, 0
+  failures, 166.44 seconds).
 
-This is focused evaluator evidence; the broader differential and deployment
-gates remain required for full complex-type parity claims.
+The broader deployment gates and full complex-type function matrix remain
+required for full Trino parity claims.
