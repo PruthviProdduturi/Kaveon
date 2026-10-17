@@ -3382,6 +3382,18 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         }
         DataType::Date32 => array_histogram_primitive::<L, Date32Type>(list),
         DataType::Date64 => array_histogram_primitive::<L, Date64Type>(list),
+        DataType::Time32(TimeUnit::Second) => {
+            array_histogram_primitive::<L, Time32SecondType>(list)
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            array_histogram_primitive::<L, Time32MillisecondType>(list)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            array_histogram_primitive::<L, Time64MicrosecondType>(list)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            array_histogram_primitive::<L, Time64NanosecondType>(list)
+        }
         DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
             array_histogram_primitive::<L, TimestampSecondType>(list)
         }
@@ -13704,6 +13716,25 @@ mod tests {
         let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
         let map = value.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map.keys().data_type(), &DataType::Decimal128(10, 2));
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 1]);
+    }
+
+    #[test]
+    fn array_histogram_supports_time64_elements() {
+        let values = Time64NanosecondArray::from(vec![Some(1_000), Some(1_000), Some(2_000)]);
+        let list = ListArray::try_new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 3_i32])),
+            Arc::new(values),
+            None,
+        )
+        .unwrap();
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            map.keys().as_primitive::<Time64NanosecondType>().values(),
+            &[1_000, 2_000]
+        );
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 1]);
     }
 
