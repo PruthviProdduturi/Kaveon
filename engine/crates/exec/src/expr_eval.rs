@@ -2521,7 +2521,13 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
 
 fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     match list.value_type() {
-        DataType::Int64 => {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::Int64 => {
             let mut result = Int64Builder::with_capacity(list.len());
             for row in 0..list.len() {
                 if list.is_null(row) {
@@ -2529,6 +2535,7 @@ fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<A
                     continue;
                 }
                 let values = list.value(row);
+                let values = compute::cast(&values, &DataType::Int64)?;
                 let values = values.as_primitive::<Int64Type>();
                 let mut sum = 0_i64;
                 let mut seen = false;
@@ -2544,7 +2551,7 @@ fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<A
             }
             Ok(Arc::new(result.finish()))
         }
-        DataType::Float64 => {
+        DataType::Float32 | DataType::Float64 => {
             let mut result = Float64Builder::with_capacity(list.len());
             for row in 0..list.len() {
                 if list.is_null(row) {
@@ -2552,6 +2559,7 @@ fn array_sum_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<A
                     continue;
                 }
                 let values = list.value(row);
+                let values = compute::cast(&values, &DataType::Float64)?;
                 let values = values.as_primitive::<Float64Type>();
                 let mut sum = 0.0_f64;
                 let mut seen = false;
@@ -15219,6 +15227,14 @@ mod tests {
         }
         let result = eval_scalar_function("ARRAY_SUM", &[extrema()], 1).unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 14);
+        let mut narrow = LargeListBuilder::new(Int32Builder::new());
+        for value in [1_i32, 2, 3] {
+            narrow.values().append_value(value);
+        }
+        narrow.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SUM", &[Arc::new(narrow.finish()) as ArrayRef], 1).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 6);
     }
 
     #[test]
