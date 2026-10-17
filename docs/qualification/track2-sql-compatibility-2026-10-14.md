@@ -81,7 +81,9 @@ The standard `ELEMENT_AT(map, key)` path covers the same typed key.
 It also covers narrow integer keys through the standard path, matching the
 dedicated map operators.
 The distributed differential sweep now includes the standard map path and
-temporal timestamp-key replacement through `MAP_CONCAT`.
+temporal timestamp-key replacement through `MAP_CONCAT`. It also exercises
+`ARRAY_HISTOGRAM` over timestamp keys across the Parquet encoding and
+multi-fragment execution paths.
 
 ## Correlated subquery boundary — 2026-10-15
 
