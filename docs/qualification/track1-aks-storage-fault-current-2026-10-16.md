@@ -1,25 +1,32 @@
-# Track 1 AKS: current-image object-store fault recovery
+# Track 1 AKS storage-fault recovery gate — 2026-10-16
+
+This bounded gate injects one scoped ADLS egress fault on `kaveon-worker-0`
+while allowing cluster and DNS traffic. The harness removes the policy in a
+`finally` block and never records credentials.
+
+## Environment
+
+- Context: `kaveon-aks`, namespace `kaveon`
+- Catalog snapshot: `sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3`
+- Query: `SELECT COUNT(*) FROM kaveon_events_enriched WHERE actions >= 0`
+- Baseline result: `504000000`
+- Baseline result SHA-256: `17b44689d4c8fb0c665d8a42992b6e0ff9d15a1b3822afd043ad1a9d58b287c5`
 
 ## Result
 
-The current AKS image passed the scoped ADLS/object-store fault qualification.
-The harness temporarily blocked public object-store egress for `kaveon-worker-0`
-while a distributed scan was running, then removed the policy in cleanup.
+| Check | Result |
+| --- | --- |
+| Exact result after the injected storage fault | Pass |
+| Stage retry observed | Pass |
+| No retained coordinator exchange files | Pass |
+| No retained worker spill files | Pass |
+| Fault policy removed | Pass |
 
-All checks passed:
+The baseline completed in 26.7 seconds and the fault-injected retry completed
+in 91.5 seconds. Both responses had the same result hash and two stages with
+four tasks. The raw report is retained only in the local qualification
+workspace as `tmp/track1-aks-storage-fault-current.json`.
 
-- the post-fault result matched the exact baseline (`COUNT(*) = 504000000`);
-- a stage retry was observed;
-- no exchange or spill files remained before or after the fault;
-- credentials were not recorded and no subscription-level policy was changed.
-
-The run used catalog snapshot
-`sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3` and
-three workers. The raw harness report is retained in
-`track1-aks-storage-fault-current-2026-10-16.json`.
-
-## Boundary
-
-This refreshes the bounded exchange/object-store recovery evidence for Track 1.
-Cross-region storage, physical disk exhaustion, and broader endurance remain
-open.
+This qualifies the declared single-worker object-store fault and exact retry
+cleanup. It does not close cross-region storage, repeated-fault, disk
+exhaustion, or sustained mixed-workload gates.
