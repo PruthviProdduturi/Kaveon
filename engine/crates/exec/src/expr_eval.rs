@@ -2591,6 +2591,7 @@ fn array_average_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal128(_, _)
     );
     if !supported {
         return Err(KaveonError::Execution(format!(
@@ -15662,6 +15663,25 @@ mod tests {
         let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
         let empty = outer.value(0);
         assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn array_average_accepts_decimal_elements() {
+        let mut decimals = ListBuilder::new(
+            Decimal128Builder::new()
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        decimals.values().append_value(125);
+        decimals.values().append_value(230);
+        decimals.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_AVERAGE",
+            &[Arc::new(decimals.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Float64Type>().value(0), 1.775);
     }
 
     #[test]
