@@ -95,6 +95,12 @@
 .glyph { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); justify-self: center }
 .glyphRunning { background: var(--warning); box-shadow: 0 0 0 3px rgba(245, 158, 11, .18) }
 .glyphFailed { background: var(--error) }
+/* Succeeded was grey, the same as the default, so nothing on the row said it
+   had worked. Cancelled stays grey deliberately: a person stopped it. */
+.glyphFinished { background: var(--success) }
+.glyphCanceled { background: var(--text-faint) }
+.rowCanceled .sql { color: var(--text-secondary) }
+.rowCanceled .barFill { background: var(--text-faint) }
 .time { font: 12px var(--mono); color: var(--text-secondary); white-space: nowrap }
 .sqlWrap { display: block; min-width: 0; overflow: hidden }
 .sql { display: block; font: 12.5px/1.45 var(--mono); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
