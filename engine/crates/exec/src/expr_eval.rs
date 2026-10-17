@@ -15723,6 +15723,19 @@ mod tests {
                 .unwrap();
         let result = result.as_primitive::<arrow::datatypes::Decimal128Type>();
         assert_eq!(result.value(0), 355);
+
+        let mut overflow = ListBuilder::new(
+            Decimal128Builder::new()
+                .with_precision_and_scale(38, 0)
+                .unwrap(),
+        );
+        overflow.values().append_value(i128::MAX);
+        overflow.values().append_value(1);
+        overflow.append(true);
+        let error =
+            eval_scalar_function("ARRAY_SUM", &[Arc::new(overflow.finish()) as ArrayRef], 1)
+                .unwrap_err();
+        assert!(error.to_string().contains("ARRAY_SUM decimal overflow"));
     }
 
     #[test]
