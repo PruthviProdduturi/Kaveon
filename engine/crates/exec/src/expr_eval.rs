@@ -2334,7 +2334,12 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
             | DataType::Date64
             | DataType::Time32(TimeUnit::Second)
             | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Timestamp(TimeUnit::Second, _)
+            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Timestamp(TimeUnit::Nanosecond, _)
             | DataType::Decimal128(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
@@ -7336,9 +7341,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => sort_primitive!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => sort_primitive!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => sort_primitive!(
                     TimestampMicrosecondType,
                     PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Second, _) => sort_primitive!(
+                    TimestampSecondType,
+                    PrimitiveBuilder::<TimestampSecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => sort_primitive!(
+                    TimestampMillisecondType,
+                    PrimitiveBuilder::<TimestampMillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => sort_primitive!(
+                    TimestampNanosecondType,
+                    PrimitiveBuilder::<TimestampNanosecondType>::new()
                 ),
                 DataType::Decimal128(precision, scale) => {
                     let mut builder = ListBuilder::new(
@@ -16404,6 +16429,44 @@ mod tests {
         assert_eq!(
             max.as_primitive::<Time64NanosecondType>().value(0),
             223_456_789
+        );
+    }
+
+    #[test]
+    fn array_sort_accepts_non_microsecond_temporal_lists() {
+        let mut regular = ListBuilder::new(TimestampMillisecondBuilder::new());
+        regular.values().append_value(1_700_000_000_000);
+        regular.values().append_value(1_600_000_000_000);
+        regular.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SORT", &[Arc::new(regular.finish()) as ArrayRef], 1)
+                .unwrap();
+        let inner = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let values = inner.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(1_600_000_000_000), Some(1_700_000_000_000),]
+        );
+
+        let mut large = LargeListBuilder::new(Time64NanosecondBuilder::new());
+        large.values().append_value(223_456_789);
+        large.values().append_value(123_456_789);
+        large.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SORT", &[Arc::new(large.finish()) as ArrayRef], 1).unwrap();
+        let inner = result
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap()
+            .value(0);
+        let values = inner.as_primitive::<Time64NanosecondType>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(123_456_789), Some(223_456_789),]
         );
     }
 
