@@ -6,7 +6,7 @@ This qualification records the bounded Trino-compatible numeric
 ## Semantics covered
 
 - signed and unsigned integer elements are accumulated as checked `bigint`
-  values;
+  values, and Decimal128 elements preserve their precision and scale;
 - `real` and `double` elements are accumulated as `double` values;
 - a null array remains null;
 - null elements produce a null at that position and at every following
