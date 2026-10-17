@@ -82,7 +82,14 @@ class EngineLabQueryTests(unittest.IsolatedAsyncioTestCase):
             response = await lab.run_query(None, body, ctx)
         self.assertEqual(response["columns"], ["order_id"])
         self.assertEqual(response["rows"], [[1]])
-        execute.assert_called_once_with("SELECT * FROM kavedb.silver.orders", "kavedb", "analyst@example.com", "Analyst", "silver")
+        # A bare `SELECT *` with no bound is capped before it reaches the
+        # Engine, and the answer says so. Without the cap this statement reads
+        # the whole table: on the billion-row telemetry table that is a
+        # quarter-gigabyte result and a disk-quota failure, for someone who
+        # wanted to see the table's shape.
+        execute.assert_called_once_with(
+            "SELECT * FROM kavedb.silver.orders LIMIT 1000",
+            "kavedb", "analyst@example.com", "Analyst", "silver")
 
 
 class DatasetPreviewResolutionTests(unittest.IsolatedAsyncioTestCase):
