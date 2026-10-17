@@ -8111,11 +8111,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect::<Vec<_>>();
             Ok(Arc::new(BooleanArray::from(result)))
         }
-        // Trino's LOG is the natural logarithm; LOG10 is the base-10
-        // variant. Keeping these separate matters for composed expressions.
+        // Trino's LOG(x) is the natural logarithm and LOG(b, x) is the
+        // logarithm of x in base b; LOG10 is the fixed base-10 variant.
         "LOG" => {
-            check_arity(name, args, 1)?;
-            unary_float_fn(&args[0], f64::ln)
+            if args.len() == 1 {
+                unary_float_fn(&args[0], f64::ln)
+            } else if args.len() == 2 {
+                let base = compute::cast(&args[0], &DataType::Float64)?;
+                let value = compute::cast(&args[1], &DataType::Float64)?;
+                let base = base.as_primitive::<Float64Type>();
+                let value = value.as_primitive::<Float64Type>();
+                let result: Float64Array = (0..num_rows)
+                    .map(|row| {
+                        if base.is_null(row) || value.is_null(row) {
+                            None
+                        } else {
+                            Some(value.value(row).ln() / base.value(row).ln())
+                        }
+                    })
+                    .collect();
+                Ok(Arc::new(result))
+            } else {
+                Err(KaveonError::Execution(
+                    "LOG requires 1 or 2 arguments".into(),
+                ))
+            }
         }
         "LOG10" => {
             check_arity(name, args, 1)?;
@@ -11250,6 +11270,18 @@ mod tests {
             .value(0)
         };
         assert!((value("LOG", std::f64::consts::E) - 1.0).abs() < 1e-12);
+        let base_log = evaluate(
+            &Expr::Function {
+                name: "LOG".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Float64(10.0)),
+                    Expr::Literal(ScalarValue::Float64(100.0)),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert!((base_log.as_primitive::<Float64Type>().value(0) - 2.0).abs() < 1e-12);
         assert!((value("LOG10", 100.0) - 2.0).abs() < 1e-12);
         assert!((value("LOG2", 8.0) - 3.0).abs() < 1e-12);
     }
