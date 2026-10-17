@@ -6850,9 +6850,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     DataType::Time32(TimeUnit::Millisecond)
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => position_primitive!(
+                    Time64MicrosecondType,
+                    DataType::Time64(TimeUnit::Microsecond)
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => position_primitive!(
+                    Time64NanosecondType,
+                    DataType::Time64(TimeUnit::Nanosecond)
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, timezone) => position_primitive!(
                     TimestampMicrosecondType,
                     DataType::Timestamp(TimeUnit::Microsecond, timezone.clone())
+                ),
+                DataType::Timestamp(TimeUnit::Second, timezone) => position_primitive!(
+                    TimestampSecondType,
+                    DataType::Timestamp(TimeUnit::Second, timezone.clone())
+                ),
+                DataType::Timestamp(TimeUnit::Millisecond, timezone) => position_primitive!(
+                    TimestampMillisecondType,
+                    DataType::Timestamp(TimeUnit::Millisecond, timezone.clone())
+                ),
+                DataType::Timestamp(TimeUnit::Nanosecond, timezone) => position_primitive!(
+                    TimestampNanosecondType,
+                    DataType::Timestamp(TimeUnit::Nanosecond, timezone.clone())
                 ),
                 DataType::Decimal128(precision, scale) => {
                     let needle = compute::cast(&args[1], &DataType::Decimal128(precision, scale))?;
@@ -16468,6 +16488,37 @@ mod tests {
             values.iter().collect::<Vec<_>>(),
             vec![Some(123_456_789), Some(223_456_789),]
         );
+    }
+
+    #[test]
+    fn array_position_accepts_non_microsecond_temporal_lists() {
+        let mut regular = ListBuilder::new(TimestampMillisecondBuilder::new());
+        regular.values().append_value(1_700_000_000_000);
+        regular.values().append_value(1_600_000_000_000);
+        regular.append(true);
+        let needle = Arc::new(TimestampMillisecondArray::from(vec![Some(
+            1_600_000_000_000,
+        )])) as ArrayRef;
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[Arc::new(regular.finish()) as ArrayRef, needle],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
+
+        let mut large = LargeListBuilder::new(Time64NanosecondBuilder::new());
+        large.values().append_value(223_456_789);
+        large.values().append_value(123_456_789);
+        large.append(true);
+        let needle = Arc::new(Time64NanosecondArray::from(vec![Some(123_456_789)])) as ArrayRef;
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[Arc::new(large.finish()) as ArrayRef, needle],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]
