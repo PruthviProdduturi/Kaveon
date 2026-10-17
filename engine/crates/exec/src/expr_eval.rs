@@ -2178,14 +2178,17 @@ fn array_distinct_nested<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
                 continue;
             }
             let candidate = inner.slice(index, 1);
-            let duplicate = selected[row_start..].iter().any(|previous| {
+            let mut duplicate = false;
+            for previous in &selected[row_start..] {
                 if previous.null_count() != 0 {
-                    return false;
+                    continue;
                 }
-                comparison(&candidate, previous, CompareKind::Eq)
-                    .map(|equal| !equal.is_null(0) && equal.value(0))
-                    .unwrap_or(false)
-            });
+                let equal = null_safe_equal(&candidate, previous)?;
+                if equal.value(0) {
+                    duplicate = true;
+                    break;
+                }
+            }
             if !duplicate {
                 selected.push(candidate);
             }
@@ -15216,6 +15219,36 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert_eq!(values.value(0).as_primitive::<Int64Type>().value(0), 1);
         assert_eq!(values.value(1).as_primitive::<Int64Type>().value(0), 2);
+
+        let row_with_null = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(value)),
+                Expr::Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Null)),
+                    data_type: CastTarget::Int64,
+                },
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![array(vec![
+                    row_with_null(1),
+                    row_with_null(1),
+                    row_with_null(2),
+                ])],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let row_values = outer.value(0);
+        let rows = row_values.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert!(rows.column(1).is_null(0));
+        assert!(rows.column(1).is_null(1));
     }
 
     #[test]
