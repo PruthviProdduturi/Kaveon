@@ -10086,6 +10086,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 return match left.value_type() {
                     DataType::Int32 => arrays_overlap_primitive::<_, Int32Type>(left, right),
                     DataType::Int64 => arrays_overlap_primitive::<_, Int64Type>(left, right),
+                    DataType::UInt64 => arrays_overlap_primitive::<_, UInt64Type>(left, right),
                     DataType::Float64 => arrays_overlap_primitive::<_, Float64Type>(left, right),
                     DataType::Date32 => arrays_overlap_primitive::<_, Date32Type>(left, right),
                     DataType::Date64 => arrays_overlap_primitive::<_, Date64Type>(left, right),
@@ -10170,6 +10171,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         primitive_arrays_overlap(
                             left.value(row).as_primitive::<Int64Type>(),
                             right.value(row).as_primitive::<Int64Type>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::UInt64 => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        primitive_arrays_overlap(
+                            left.value(row).as_primitive::<UInt64Type>(),
+                            right.value(row).as_primitive::<UInt64Type>(),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -15649,6 +15661,71 @@ mod tests {
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 6);
         let average = eval_scalar_function("ARRAY_AVERAGE", &[extrema()], 1).unwrap();
         assert_eq!(average.as_primitive::<Float64Type>().value(0), 14.0 / 3.0);
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_uint64_lists_with_null_semantics() {
+        use arrow::array::{LargeListBuilder, ListBuilder, UInt64Builder};
+
+        let mut left = ListBuilder::new(UInt64Builder::new());
+        left.values().append_value(1);
+        left.values().append_value(u64::MAX);
+        left.append(true);
+        let mut right = ListBuilder::new(UInt64Builder::new());
+        right.values().append_value(7);
+        right.values().append_value(u64::MAX);
+        right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(left.finish()) as ArrayRef,
+                Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+
+        let mut nullable_left = ListBuilder::new(UInt64Builder::new());
+        nullable_left.values().append_value(1);
+        nullable_left.values().append_null();
+        nullable_left.append(true);
+        let mut disjoint_right = ListBuilder::new(UInt64Builder::new());
+        disjoint_right.values().append_value(2);
+        disjoint_right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(nullable_left.finish()) as ArrayRef,
+                Arc::new(disjoint_right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(result.as_boolean().is_null(0));
+
+        let mut large_left = LargeListBuilder::new(UInt64Builder::new());
+        large_left.values().append_value(u64::MAX);
+        large_left.append(true);
+        let mut large_right = LargeListBuilder::new(UInt64Builder::new());
+        large_right.values().append_value(u64::MAX);
+        large_right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(large_left.finish()) as ArrayRef,
+                Arc::new(large_right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
     }
 
     #[test]
