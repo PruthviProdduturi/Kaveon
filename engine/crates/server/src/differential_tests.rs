@@ -313,7 +313,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "map_scalar_functions",
-        "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, MAP_CONTAINS_KEY(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'a') AS has_key, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
+        "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS element_value, MAP_CONTAINS_KEY(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'a') AS has_key, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
         false,
     ),
     (
@@ -329,6 +329,11 @@ const CASES: &[(&str, &str, bool)] = &[
     (
         "map_from_entries_and_projection",
         "SELECT MAP_ELEMENT_AT(MAP_FROM_ENTRIES(ARRAY[ROW('a', 10), ROW('b', 20)]), 'b') AS value, MAP_KEYS(MAP_FROM_ENTRIES(ARRAY[ROW('a', 10), ROW('b', 20)])) AS keys FROM {T} LIMIT 1",
+        false,
+    ),
+    (
+        "map_temporal_keys",
+        "SELECT ELEMENT_AT(MAP(ARRAY[TIMESTAMP '2024-01-01 00:00:00'], ARRAY[7]), TIMESTAMP '2024-01-01 00:00:00') AS value, MAP_ELEMENT_AT(MAP_CONCAT(MAP(ARRAY[TIMESTAMP '2024-01-01 00:00:00'], ARRAY[1]), MAP(ARRAY[TIMESTAMP '2024-01-01 00:00:00'], ARRAY[2])), TIMESTAMP '2024-01-01 00:00:00') AS replaced FROM {T} LIMIT 1",
         false,
     ),
     (
