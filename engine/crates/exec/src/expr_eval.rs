@@ -3394,16 +3394,16 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         DataType::Time64(TimeUnit::Nanosecond) => {
             array_histogram_primitive::<L, Time64NanosecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
             array_histogram_primitive::<L, TimestampSecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
             array_histogram_primitive::<L, TimestampMillisecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
             array_histogram_primitive::<L, TimestampMicrosecondType>(list)
         }
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None) => {
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
             array_histogram_primitive::<L, TimestampNanosecondType>(list)
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
@@ -13884,6 +13884,32 @@ mod tests {
         assert_eq!(
             map.keys().as_primitive::<Time64NanosecondType>().values(),
             &[1_000, 2_000]
+        );
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 1]);
+    }
+
+    #[test]
+    fn array_histogram_supports_timezone_bearing_timestamp_elements() {
+        let values = TimestampMicrosecondArray::from(vec![
+            Some(1_704_067_200_000_000),
+            Some(1_704_067_200_000_000),
+            Some(1_706_745_600_000_000),
+        ])
+        .with_timezone("UTC");
+        let list = ListArray::try_new(
+            Arc::new(Field::new("item", values.data_type().clone(), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 3_i32])),
+            Arc::new(values),
+            None,
+        )
+        .unwrap();
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            map.keys()
+                .as_primitive::<TimestampMicrosecondType>()
+                .values(),
+            &[1_704_067_200_000_000, 1_706_745_600_000_000]
         );
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 1]);
     }
