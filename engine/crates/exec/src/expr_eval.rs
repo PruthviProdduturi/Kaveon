@@ -15249,6 +15249,47 @@ mod tests {
         assert_eq!(rows.column(0).as_primitive::<Int64Type>().values(), &[1, 2]);
         assert!(rows.column(1).is_null(0));
         assert!(rows.column(1).is_null(1));
+
+        let map_with_nullable_value = |key: &str, value: Expr| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                array(vec![Expr::Literal(ScalarValue::Utf8(key.into()))]),
+                array(vec![value]),
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![array(vec![
+                    map_with_nullable_value("a", Expr::Literal(ScalarValue::Int64(1))),
+                    map_with_nullable_value("a", Expr::Literal(ScalarValue::Int64(1))),
+                    map_with_nullable_value(
+                        "a",
+                        Expr::Cast {
+                            expr: Box::new(Expr::Literal(ScalarValue::Null)),
+                            data_type: CastTarget::Int64,
+                        },
+                    ),
+                    map_with_nullable_value(
+                        "a",
+                        Expr::Cast {
+                            expr: Box::new(Expr::Literal(ScalarValue::Null)),
+                            data_type: CastTarget::Int64,
+                        },
+                    ),
+                ])],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let maps = outer.value(0);
+        let maps = maps.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(maps.len(), 2);
+        assert_eq!(maps.keys().as_string::<i32>().value(0), "a");
+        assert_eq!(maps.keys().as_string::<i32>().value(1), "a");
+        assert_eq!(maps.values().as_primitive::<Int64Type>().value(0), 1);
+        assert!(maps.values().is_null(1));
     }
 
     #[test]
