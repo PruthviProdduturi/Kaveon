@@ -272,6 +272,23 @@ def list_records(kind: ProductKind, actor: str, role: str, *, max_records: int =
             raise HTTPException(502, "KaveonDB returned an invalid product list cursor")
 
 
+# What the Engine says when a cursor outlives the snapshot it was issued
+# against, and how many times a listing restarts before giving up.
+#
+# A listing pages a hundred records at a time, so a family at the ceiling is
+# ten round trips. Anything written in between moves the snapshot, and the
+# Engine then refuses the cursor with an upstream 400 that the bridge reports
+# as 502. `query_history` takes a write on every statement a person runs, so
+# its own reads were the ones most likely to be interrupted -- by the reader.
+_CURSOR_DRIFTED = "product cursor belongs to a different snapshot"
+_LIST_RESTARTS = 3
+
+
+def _cursor_drifted(error: HTTPException) -> bool:
+    """Whether *error* is the snapshot moving rather than a real failure."""
+    return _CURSOR_DRIFTED in str(error.detail)
+
+
 def list_records_capped(kind: ProductKind, actor: str, role: str, *,
                         limit: int = 1000) -> tuple[list[dict], bool]:
     """At most *limit* records, and whether the family holds more.
@@ -293,6 +310,22 @@ def list_records_capped(kind: ProductKind, actor: str, role: str, *,
         raise HTTPException(422, "Unsupported product record kind")
     if not isinstance(limit, int) or limit < 1 or limit > COUNT_BOUND:
         raise HTTPException(422, "Invalid product list limit")
+    for attempt in range(_LIST_RESTARTS):
+        try:
+            return _list_capped_once(kind, actor, role, limit)
+        except HTTPException as error:
+            # Restarting is the only correct response: the pages already read
+            # describe a snapshot that no longer exists, so continuing would
+            # splice two different versions of the family together.
+            if attempt == _LIST_RESTARTS - 1 or not (
+                    _cursor_drifted(error) or error.status_code == 409):
+                raise
+    raise RuntimeError("unreachable")
+
+
+def _list_capped_once(kind: ProductKind, actor: str, role: str,
+                      limit: int) -> tuple[list[dict], bool]:
+    """One pass of the capped listing, against one snapshot."""
     records, cursor, snapshot_id = [], None, None
     while True:
         query = "?limit=100" + (("&cursor=" + quote(cursor, safe="")) if cursor else "")
