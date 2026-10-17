@@ -73,6 +73,8 @@ local/distributed exact-result execution. The temporal array regression now
 also verifies `ARRAY_APPEND`, `ARRAY_PREPEND`, `ARRAY_REMOVE`, `ARRAY_REVERSE`,
 `ARRAY_SLICE`, and `ARRAY_HISTOGRAM` over `Time64` elements while preserving
 null positions and histogram counts.
+Map lookup coverage also verifies `MAP_CONTAINS_KEY` and `MAP_ELEMENT_AT` for
+Time64 nanosecond keys.
 
 ## Correlated subquery boundary — 2026-10-15
 
