@@ -373,7 +373,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "logarithm_scalar_compatibility",
-        "SELECT LOG(EXP(1)) AS natural_log, LOG10(100) AS decimal_log, LOG2(8) AS binary_log FROM {T} LIMIT 1",
+        "SELECT LOG(EXP(1)) AS natural_log, LOG(10, 100) AS base_log, LOG10(100) AS decimal_log, LOG2(8) AS binary_log FROM {T} LIMIT 1",
         false,
     ),
     (
