@@ -9927,6 +9927,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
+                DataType::UInt64 => {
+                    temporal_extrema!(UInt64Type, PrimitiveBuilder::<UInt64Type>::new())
+                }
                 DataType::Int64 => {
                     let mut result = Int64Builder::new();
                     for row in 0..num_rows {
@@ -13713,6 +13716,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(1), Some(u64::MAX)]
         );
+    }
+
+    #[test]
+    fn array_extrema_accept_uint64_lists() {
+        let mut list = ListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        list.values().append_value(9);
+        list.values().append_null();
+        list.values().append_value(1);
+        list.append(true);
+        let list = Arc::new(list.finish()) as ArrayRef;
+        for (name, expected) in [("ARRAY_MIN", 1_u64), ("ARRAY_MAX", 9_u64)] {
+            let result = eval_scalar_function(name, std::slice::from_ref(&list), 1).unwrap();
+            assert_eq!(result.as_primitive::<UInt64Type>().value(0), expected);
+        }
     }
 
     #[test]
