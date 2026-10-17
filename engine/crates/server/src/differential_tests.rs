@@ -262,6 +262,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_ngrams",
+        "SELECT ARRAY_NGRAMS(ARRAY[1, 2, 3, 4], 2) AS ngrams FROM {T} LIMIT 1",
+        true,
+    ),
+    (
         "array_histogram",
         "SELECT ARRAY_HISTOGRAM(ARRAY[2, 1, NULL, 2]) AS histogram FROM {T} LIMIT 1",
         true,
