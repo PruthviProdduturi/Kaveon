@@ -2279,6 +2279,19 @@ fn array_reverse_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
     )?))
 }
 
+fn nested_sortable_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Map(_, _) => false,
+        DataType::List(field) | DataType::LargeList(field) => {
+            nested_sortable_type(field.data_type())
+        }
+        DataType::Struct(fields) => fields
+            .iter()
+            .all(|field| nested_sortable_type(field.data_type())),
+        _ => true,
+    }
+}
+
 fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let supported = matches!(
         list.value_type(),
@@ -2298,7 +2311,7 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
             | DataType::List(_)
             | DataType::LargeList(_)
             | DataType::Struct(_)
-    );
+    ) && nested_sortable_type(&list.value_type());
     if !supported {
         return Err(KaveonError::Execution(format!(
             "ARRAY_SORT does not support list element type {}",
@@ -15333,6 +15346,26 @@ mod tests {
         assert_eq!(rows.column(0).as_primitive::<Int64Type>().value(0), 1);
         assert_eq!(rows.column(0).as_primitive::<Int64Type>().value(1), 2);
         assert!(rows.column(0).is_null(2));
+
+        let map = Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                array(vec![Expr::Literal(ScalarValue::Utf8("a".into()))]),
+                array(vec![Expr::Literal(ScalarValue::Int64(1))]),
+            ],
+        };
+        let error = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT".into(),
+                args: vec![array(vec![Expr::Function {
+                    name: "ROW".into(),
+                    args: vec![map],
+                }])],
+            },
+            &batch,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ARRAY_SORT does not support"));
     }
 
     #[test]
