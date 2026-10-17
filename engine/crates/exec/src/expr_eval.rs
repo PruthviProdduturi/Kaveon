@@ -2295,6 +2295,9 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Boolean
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Struct(_)
     );
     if !supported {
         return Err(KaveonError::Execution(format!(
@@ -7138,6 +7141,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .ok_or_else(|| {
                     KaveonError::Execution("ARRAY_SORT requires an ARRAY/List value".into())
                 })?;
+            if matches!(
+                list.value_type(),
+                DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_)
+            ) {
+                return array_sort_generic(list);
+            }
             macro_rules! sort_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let mut builder = ListBuilder::new($builder);
@@ -15290,6 +15299,40 @@ mod tests {
         assert_eq!(maps.keys().as_string::<i32>().value(1), "a");
         assert_eq!(maps.values().as_primitive::<Int64Type>().value(0), 1);
         assert!(maps.values().is_null(1));
+    }
+
+    #[test]
+    fn array_sort_orders_nested_rows_and_places_nulls_last() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let row = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value))],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT".into(),
+                args: vec![array(vec![
+                    row(2),
+                    Expr::Literal(ScalarValue::Null),
+                    row(1),
+                ])],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let rows = outer.value(0);
+        let rows = rows.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().value(0), 1);
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().value(1), 2);
+        assert!(rows.column(0).is_null(2));
     }
 
     #[test]
