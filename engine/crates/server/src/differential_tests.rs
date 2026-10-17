@@ -368,7 +368,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "trigonometric_scalar_compatibility",
-        "SELECT SIN(PI() / 2) AS sine, COS(0) AS cosine, TAN(0) AS tangent, ATAN2(1, 1) AS atan2_value, DEGREES(PI()) AS degrees, RADIANS(180) AS radians, CBRT(27) AS cube_root, COSH(0) AS hyper_cosine, SINH(0) AS hyper_sine, TANH(0) AS hyper_tangent, E() AS euler, IS_INFINITE(INFINITY()) AS infinity, IS_NAN(NAN()) AS nan, FROM_BASE('ff', 16) AS from_base, TO_BASE(255, 16) AS to_base, ARRAY_SUM(ARRAY[1, 2, 3]) AS array_sum, ARRAY_AVERAGE(ARRAY[1, 2, 3]) AS array_average, BITWISE_AND(12, 10) AS bitwise_and, BITWISE_OR(12, 10) AS bitwise_or, BITWISE_XOR(12, 10) AS bitwise_xor, BITWISE_NOT(12) AS bitwise_not, SIN(NULL) AS null_sine FROM {T} LIMIT 1",
+        "SELECT SIN(PI() / 2) AS sine, COS(0) AS cosine, TAN(0) AS tangent, ATAN2(1, 1) AS atan2_value, DEGREES(PI()) AS degrees, RADIANS(180) AS radians, CBRT(27) AS cube_root, COSH(0) AS hyper_cosine, SINH(0) AS hyper_sine, TANH(0) AS hyper_tangent, E() AS euler, IS_INFINITE(INFINITY()) AS infinity, IS_NAN(NAN()) AS nan, FROM_BASE('ff', 16) AS from_base, TO_BASE(255, 16) AS to_base, ARRAY_SUM(ARRAY[1, 2, 3]) AS array_sum, ARRAY_AVERAGE(ARRAY[1, 2, 3]) AS array_average, ARRAY_CUM_SUM(ARRAY[1, 2, 3]) AS array_cum_sum, BITWISE_AND(12, 10) AS bitwise_and, BITWISE_OR(12, 10) AS bitwise_or, BITWISE_XOR(12, 10) AS bitwise_xor, BITWISE_NOT(12) AS bitwise_not, SIN(NULL) AS null_sine FROM {T} LIMIT 1",
         false,
     ),
     (
