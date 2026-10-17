@@ -6687,10 +6687,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 if list.value_type() == DataType::LargeUtf8 {
                     return array_position_large_utf8(list, &args[1]);
                 }
-                return Err(KaveonError::Execution(format!(
-                    "ARRAY_POSITION does not support list element type {}",
-                    list.value_type()
-                )));
+                return array_position_nested(list, &args[1]);
             }
             let list = args[0]
                 .as_any()
@@ -15759,6 +15756,27 @@ mod tests {
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 6);
         let average = eval_scalar_function("ARRAY_AVERAGE", &[extrema()], 1).unwrap();
         assert_eq!(average.as_primitive::<Float64Type>().value(0), 14.0 / 3.0);
+    }
+
+    #[test]
+    fn array_position_accepts_large_uint64_lists() {
+        let mut values = LargeListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        values.values().append_value(7);
+        values.values().append_null();
+        values.values().append_value(u64::MAX);
+        values.append(true);
+        let mut needle = PrimitiveBuilder::<UInt64Type>::new();
+        needle.append_value(u64::MAX);
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[
+                Arc::new(values.finish()) as ArrayRef,
+                Arc::new(needle.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
     }
 
     #[test]
