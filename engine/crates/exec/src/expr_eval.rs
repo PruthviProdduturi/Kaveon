@@ -8111,7 +8111,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect::<Vec<_>>();
             Ok(Arc::new(BooleanArray::from(result)))
         }
-        "LOG" | "LOG10" => {
+        // Trino's LOG is the natural logarithm; LOG10 is the base-10
+        // variant. Keeping these separate matters for composed expressions.
+        "LOG" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], f64::ln)
+        }
+        "LOG10" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::log10)
         }
@@ -11223,6 +11229,30 @@ fn fold_extreme(rest: &[ArrayRef], first: &ArrayRef, kind: CompareKind) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logarithm_functions_follow_trino_bases() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("row", DataType::Int64, false),
+        ]));
+        let input =
+            RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![0]))]).unwrap();
+        let value = |name: &str, arg: f64| {
+            evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![Expr::Literal(ScalarValue::Float64(arg))],
+                },
+                &input,
+            )
+            .unwrap()
+            .as_primitive::<Float64Type>()
+            .value(0)
+        };
+        assert!((value("LOG", std::f64::consts::E) - 1.0).abs() < 1e-12);
+        assert!((value("LOG10", 100.0) - 2.0).abs() < 1e-12);
+        assert!((value("LOG2", 8.0) - 3.0).abs() < 1e-12);
+    }
 
     #[test]
     fn in_list_uses_three_valued_null_logic() {
