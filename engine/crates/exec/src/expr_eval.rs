@@ -2292,6 +2292,29 @@ fn nested_sortable_type(data_type: &DataType) -> bool {
     }
 }
 
+fn compare_sort_entries(
+    left: Option<&ArrayRef>,
+    right: Option<&ArrayRef>,
+) -> Result<std::cmp::Ordering> {
+    match (left, right) {
+        (None, None) => Ok(std::cmp::Ordering::Equal),
+        (None, Some(_)) => Ok(std::cmp::Ordering::Greater),
+        (Some(_), None) => Ok(std::cmp::Ordering::Less),
+        (Some(left), Some(right)) => {
+            let less = comparison(left, right, CompareKind::Lt)?;
+            if !less.is_null(0) && less.value(0) {
+                return Ok(std::cmp::Ordering::Less);
+            }
+            let greater = comparison(left, right, CompareKind::Gt)?;
+            if !greater.is_null(0) && greater.value(0) {
+                Ok(std::cmp::Ordering::Greater)
+            } else {
+                Ok(std::cmp::Ordering::Equal)
+            }
+        }
+    }
+}
+
 fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let supported = matches!(
         list.value_type(),
@@ -2340,26 +2363,19 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
                 }
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| match (left, right) {
-            (None, None) => std::cmp::Ordering::Equal,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (Some(left), Some(right)) => {
-                let less = comparison(left, right, CompareKind::Lt)
-                    .map(|value| !value.is_null(0) && value.value(0))
-                    .unwrap_or(false);
-                let greater = comparison(left, right, CompareKind::Gt)
-                    .map(|value| !value.is_null(0) && value.value(0))
-                    .unwrap_or(false);
-                if less {
-                    std::cmp::Ordering::Less
-                } else if greater {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Equal
-                }
+        // `sort_by` cannot propagate evaluator errors.  Use an insertion
+        // sort here so nested comparison failures remain visible to SQL
+        // callers instead of being silently treated as equality.
+        for index in 1..entries.len() {
+            let mut cursor = index;
+            while cursor > 0
+                && compare_sort_entries(entries[cursor - 1].as_ref(), entries[cursor].as_ref())?
+                    == std::cmp::Ordering::Greater
+            {
+                entries.swap(cursor - 1, cursor);
+                cursor -= 1;
             }
-        });
+        }
         selected.extend(entries.into_iter().map(|value| {
             value.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1))
         }));
