@@ -7,7 +7,7 @@ From `engine/` on Rust 1.98.1:
 
 ```text
 cargo fmt --all
-cargo test -p kaveon-exec array_average_accepts_decimal_elements --quiet
+cargo test -p kaveon-exec array_average_and_sum_accept_decimal_elements --quiet
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths --quiet
 ```
