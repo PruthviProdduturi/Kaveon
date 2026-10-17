@@ -322,6 +322,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_concat_variadic",
+        "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_scalar_functions",
         "SELECT MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS value, ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'b') AS element_value, MAP_CONTAINS_KEY(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'a') AS has_key, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) = MAP(ARRAY['b', 'a'], ARRAY[20, 10]) AS same FROM {T} LIMIT 1",
         false,
