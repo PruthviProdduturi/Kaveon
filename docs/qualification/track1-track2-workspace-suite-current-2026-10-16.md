@@ -5,16 +5,16 @@ the boundary or evidence changes; do not append session notes or duplicate
 historical ledgers. Detailed implementation history remains in git history and
 the parity tracker.
 
-**Source:** current `dev` source at the pinned Rust 1.98.1 toolchain, including
-the numeric-function and string-scalar differential coverage in commit
-`7d9b9c74`.
+**Source:** current `dev` source at the pinned Rust 1.98.1 toolchain, commit
+`d13d0eef`.
 
 ## Current evidence
 
 | Area | Command or scope | Result |
 | --- | --- | --- |
-| Server distributed execution | `cargo test -p kaveon-server --all-targets --no-fail-fast --quiet` | **423 passed, 0 failed, 0 ignored**; includes joins, aggregates, exchange, spill, retry, cancellation, worker-loss, set operations, lateral joins, and the differential sweep (151.33 s) |
-| Execution operators | `cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet` | **390 passed, 0 failed, 4 ignored** |
+| Server distributed execution | `cargo test -p kaveon-server --all-targets --no-fail-fast --quiet` | **427 passed, 0 failed, 0 ignored**; includes joins, aggregates, exchange, spill, retry, cancellation, worker-loss, set operations, lateral joins, and the differential sweep (166.41 s) |
+| Execution operators | `cargo test -p kaveon-exec --all-targets --no-fail-fast --quiet` | **395 passed, 0 failed, 4 ignored** |
+| Full workspace/all-target suite | `cargo test --workspace --all-targets --quiet` | **All suites passed**: 74, 211, 89, 395, 74, 427, 193, and 124 passed; benchmark targets completed successfully |
 | SQL compatibility | Differential local/distributed corpus | Exact results for qualified array/map/row operations, set operations, typed histograms, map lookup, nested keys, numeric finiteness/`WIDTH_BUCKET`, Trino `DATE_ADD` units, and string scalar cases (`CONCAT_WS`, `REGEXP_LIKE`, `REGEXP_EXTRACT`, invalid `TRY_CAST`); cube answers also preserve output-column `ORDER BY`, `NULLS FIRST/LAST`, `OFFSET`, and bounded `LIMIT` without a scan |
 | Parser regression | `cargo test -p kaveon-sql bracketed_identifiers -- --nocapture` | **1 passed, 0 failed**; covers Studio-generated bracketed identifiers such as `SELECT DISTINCT [year] ...` |
 | Formatting | `cargo fmt --all -- --check` | Passed |
