@@ -709,12 +709,27 @@ impl ExecutableFragmentBuilder<'_> {
             LogicalPlan::Limit { input, count } => self.build_single_exchange(
                 input,
                 FragmentOperator::Limit { limit: *count },
-                // A generic LIMIT cannot be applied independently on each
-                // partition: an outer projection may carry a hidden ORDER
-                // BY key, which prevents the TopN recognizer from matching.
-                // Keep the limit after the global exchange until that shape
-                // has a dedicated TopN representation.
-                None,
+                // Each worker stops at `count` and ships `count`, but only
+                // when nothing under the limit orders its rows.
+                //
+                // The hazard this used to decline for is real: an outer
+                // projection can carry a hidden ORDER BY key, and taking n
+                // rows per partition before an ordering gives the wrong n.
+                // It needs an ordering to exist. Where the subtree has none,
+                // any n rows satisfy the limit, so the partial is exact
+                // rather than an approximation -- the final limit after the
+                // exchange still cuts the union of the partials to n.
+                //
+                // Declining it cost the whole table: every worker scanned its
+                // partition and uploaded every row, so a billion-row
+                // `SELECT * ... LIMIT 1` moved a billion rows through the
+                // exchange to return one. That is the exchange buffer's 507
+                // and the result quota's 256 MiB, from one cause.
+                if orders_rows(input) {
+                    None
+                } else {
+                    Some(FragmentOperator::Limit { limit: *count })
+                },
             ),
             LogicalPlan::Offset { input, count } => {
                 self.build_single_exchange(input, FragmentOperator::Offset { offset: *count }, None)
@@ -1399,6 +1414,27 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
             }
         })
         .collect()
+}
+
+/// Whether anything in *plan* decides which rows come back, rather than only
+/// how many.
+///
+/// A per-fragment LIMIT is exact when the answer does not depend on which
+/// rows a worker happens to hold, and that is true only when nothing below
+/// orders or ranks them. Sort is the obvious case; a window function ranks
+/// within a partition and a set operation decides membership across inputs,
+/// so each of those keeps the limit after the exchange.
+///
+/// Deliberately conservative: an unrecognised shape is treated as ordering,
+/// because the cost of being wrong here is wrong rows, and the cost of being
+/// cautious is the behaviour that was there before.
+fn orders_rows(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Sort { .. } | LogicalPlan::Window { .. } => true,
+        LogicalPlan::Intersect { .. } | LogicalPlan::Except { .. } => true,
+        LogicalPlan::Scan { .. } | LogicalPlan::Unnest { .. } => false,
+        other => other.inputs().iter().any(|input| orders_rows(input)),
+    }
 }
 
 fn sort_specs(order_by: &[OrderKey]) -> Vec<SortSpec> {
@@ -3268,6 +3304,76 @@ mod tests {
         // The SQL layer binds the repeated select item to its output name.
         assert_eq!(top_n[0].expression, Expr::Column("expr_1".into()));
         assert!(!top_n[0].ascending);
+    }
+
+    #[test]
+    fn an_unordered_limit_is_applied_on_every_fragment() {
+        // Without this each worker scanned its whole partition and uploaded
+        // every row, and the limit was applied once after the global
+        // exchange -- a billion rows moved to return one.
+        let fixture = fixture();
+        let mut plan =
+            kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM items LIMIT 2").unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let fragments = build_executable_fragments("q-test", &plan, &fixture.catalog, 2).unwrap();
+        let limits = fragments
+            .values()
+            .flat_map(|fragment| fragment.nodes.iter())
+            .filter(|node| matches!(node.operator, FragmentOperator::Limit { limit: 2 }))
+            .count();
+        assert!(
+            limits >= 2,
+            "the limit should bound the scanning fragment as well as the final one, saw {limits}"
+        );
+    }
+
+    #[test]
+    fn an_ordered_limit_keeps_its_limit_after_the_exchange() {
+        // The hazard the pushdown is guarded against: taking n rows per
+        // partition before an ordering gives the wrong n. One limit only,
+        // after the global exchange.
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT id FROM (SELECT id FROM items ORDER BY id DESC) t LIMIT 2",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let fragments = build_executable_fragments("q-test", &plan, &fixture.catalog, 2).unwrap();
+        let limits = fragments
+            .values()
+            .flat_map(|fragment| fragment.nodes.iter())
+            .filter(|node| matches!(node.operator, FragmentOperator::Limit { .. }))
+            .count();
+        assert_eq!(
+            limits, 1,
+            "an ordered limit must not be pushed per fragment"
+        );
+    }
+
+    #[test]
+    fn orders_rows_recognises_what_decides_which_rows_return() {
+        let scan = kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM items").unwrap();
+        assert!(!super::orders_rows(&scan));
+
+        let filtered =
+            kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM items WHERE id > 1")
+                .unwrap();
+        assert!(!super::orders_rows(&filtered));
+
+        // A sort anywhere beneath counts, however deeply nested.
+        let sorted = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT id FROM (SELECT id FROM items ORDER BY id) t WHERE id > 0",
+        )
+        .unwrap();
+        assert!(super::orders_rows(&sorted));
+
+        // A window function ranks within a partition, so which rows a worker
+        // holds changes the answer.
+        let windowed = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT row_number() OVER (ORDER BY id) AS rn FROM items",
+        )
+        .unwrap();
+        assert!(super::orders_rows(&windowed));
     }
 
     #[test]
