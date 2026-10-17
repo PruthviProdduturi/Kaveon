@@ -347,6 +347,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_timestamp_keys_with_timezone",
+        "SELECT MAP_CONTAINS_KEY(MAP(ARRAY[TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00Z'], ARRAY[7]), TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00Z') AS has_key, ELEMENT_AT(MAP(ARRAY[TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00Z'], ARRAY[7]), TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00Z') AS value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "map_nullable_equality",
         "SELECT MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) = MAP(ARRAY['b', 'a'], ARRAY[NULL, 10]) AS same, MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) = MAP(ARRAY['a', 'b'], ARRAY[11, NULL]) AS different FROM {T} LIMIT 1",
         false,
