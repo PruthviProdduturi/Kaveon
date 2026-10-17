@@ -11986,6 +11986,38 @@ fn temporal_nanoseconds(source: &ArrayRef, row: usize) -> Result<Option<i128>> {
                 Some(values.value(row) as i128)
             }
         }
+        DataType::Time32(TimeUnit::Second) => {
+            let values = source.as_primitive::<Time32SecondType>();
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000_000_000i128)
+            }
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            let values = source.as_primitive::<Time32MillisecondType>();
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000_000i128)
+            }
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            let values = source.as_primitive::<Time64MicrosecondType>();
+            if values.is_null(row) {
+                None
+            } else {
+                Some((values.value(row) as i128) * 1_000i128)
+            }
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            let values = source.as_primitive::<Time64NanosecondType>();
+            if values.is_null(row) {
+                None
+            } else {
+                Some(values.value(row) as i128)
+            }
+        }
         other => {
             return Err(KaveonError::Execution(format!(
                 "DATE_DIFF requires DATE or timestamp inputs, got {other}"
@@ -12823,6 +12855,82 @@ mod tests {
         assert!(
             error.to_string().contains("unsupported DATE_DIFF unit"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn date_diff_accepts_time32_and_time64_values() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("start", DataType::Time64(TimeUnit::Microsecond), true),
+            arrow::datatypes::Field::new("end", DataType::Time64(TimeUnit::Nanosecond), true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Time64MicrosecondArray::from(vec![
+                    Some(0),
+                    Some(3_600_000_000),
+                ])),
+                Arc::new(Time64NanosecondArray::from(vec![
+                    Some(90_000_000_000),
+                    Some(7_200_000_000_000),
+                ])),
+            ],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("SECOND".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(90), Some(3600)]
+        );
+
+        let time32_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("start", DataType::Time32(TimeUnit::Second), true),
+            arrow::datatypes::Field::new("end", DataType::Time32(TimeUnit::Millisecond), true),
+        ]));
+        let time32 = RecordBatch::try_new(
+            time32_schema,
+            vec![
+                Arc::new(Time32SecondArray::from(vec![Some(0), Some(3600)])),
+                Arc::new(Time32MillisecondArray::from(vec![
+                    Some(90_000),
+                    Some(7_200_000),
+                ])),
+            ],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("SECOND".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &time32,
+        )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(90), Some(3600)]
         );
     }
 
