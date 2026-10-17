@@ -2281,6 +2281,7 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
         list.value_type(),
         DataType::Int32
             | DataType::Int64
+            | DataType::UInt64
             | DataType::Float64
             | DataType::Date32
             | DataType::Date64
@@ -7165,6 +7166,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
+                DataType::UInt64 => {
+                    sort_primitive!(UInt64Type, PrimitiveBuilder::<UInt64Type>::new())
+                }
                 DataType::Int64 => {
                     let mut builder = ListBuilder::new(Int64Builder::new());
                     for row in 0..num_rows {
@@ -13663,6 +13667,51 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some(1), Some(2), Some(3), None]
+        );
+    }
+
+    #[test]
+    fn array_sort_accepts_uint64_lists_and_keeps_nulls_last() {
+        use arrow::array::{LargeListBuilder, ListBuilder, UInt64Builder};
+
+        let mut regular = ListBuilder::new(UInt64Builder::new());
+        regular.values().append_value(u64::MAX);
+        regular.values().append_null();
+        regular.values().append_value(1);
+        regular.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SORT", &[Arc::new(regular.finish()) as ArrayRef], 1)
+                .unwrap();
+        let values = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            values
+                .as_primitive::<UInt64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(u64::MAX), None]
+        );
+
+        let mut large = LargeListBuilder::new(UInt64Builder::new());
+        large.values().append_value(u64::MAX);
+        large.values().append_value(1);
+        large.append(true);
+        let result =
+            eval_scalar_function("ARRAY_SORT", &[Arc::new(large.finish()) as ArrayRef], 1).unwrap();
+        let values = result
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            values
+                .as_primitive::<UInt64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(u64::MAX)]
         );
     }
 
