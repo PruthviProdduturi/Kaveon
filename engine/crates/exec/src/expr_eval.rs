@@ -7875,6 +7875,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => slice_primitive!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => slice_primitive!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => slice_primitive!(
                     TimestampMicrosecondType,
                     PrimitiveBuilder::<TimestampMicrosecondType>::new()
@@ -13928,6 +13936,35 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let values = list.value(0).as_primitive::<Int64Type>().clone();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(40), Some(20)]);
+    }
+
+    #[test]
+    fn array_slice_supports_time64_elements() {
+        let mut values = ListBuilder::new(PrimitiveBuilder::<Time64NanosecondType>::new());
+        values.values().append_value(1_000);
+        values.values().append_value(2_000);
+        values.values().append_null();
+        values.values().append_value(4_000);
+        values.append(true);
+        let input = Arc::new(values.finish()) as ArrayRef;
+        let result = eval_scalar_function(
+            "ARRAY_SLICE",
+            &[
+                input,
+                Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![4])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = list
+            .value(0)
+            .as_primitive::<Time64NanosecondType>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some(2_000), None, Some(4_000)]);
     }
 
     #[test]
