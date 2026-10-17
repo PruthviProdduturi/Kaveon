@@ -9714,6 +9714,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
                 ),
+                DataType::Time64(TimeUnit::Microsecond) => append_primitive!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => append_primitive!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
+                ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => append_primitive!(
                     TimestampMicrosecondType,
                     PrimitiveBuilder::<TimestampMicrosecondType>::new()
@@ -9937,6 +9945,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 DataType::Time32(TimeUnit::Millisecond) => remove_primitive!(
                     Time32MillisecondType,
                     PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Microsecond) => remove_primitive!(
+                    Time64MicrosecondType,
+                    PrimitiveBuilder::<Time64MicrosecondType>::new()
+                ),
+                DataType::Time64(TimeUnit::Nanosecond) => remove_primitive!(
+                    Time64NanosecondType,
+                    PrimitiveBuilder::<Time64NanosecondType>::new()
                 ),
                 DataType::Timestamp(TimeUnit::Microsecond, _) => remove_primitive!(
                     TimestampMicrosecondType,
@@ -15780,6 +15796,42 @@ mod tests {
         let removed = removed_value.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(removed.len(), 1);
         assert_eq!(removed.value(0).as_primitive::<Int64Type>().value(0), 10);
+    }
+
+    #[test]
+    fn array_append_prepend_and_remove_support_time64_elements() {
+        let mut values = ListBuilder::new(PrimitiveBuilder::<Time64NanosecondType>::new());
+        values.values().append_value(1_000);
+        values.values().append_value(2_000);
+        values.append(true);
+        let input = Arc::new(values.finish()) as ArrayRef;
+        let element = Arc::new(Time64NanosecondArray::from(vec![Some(3_000)])) as ArrayRef;
+
+        for (name, expected) in [
+            ("ARRAY_APPEND", vec![Some(1_000), Some(2_000), Some(3_000)]),
+            ("ARRAY_PREPEND", vec![Some(3_000), Some(1_000), Some(2_000)]),
+        ] {
+            let result =
+                eval_scalar_function(name, &[Arc::clone(&input), Arc::clone(&element)], 1).unwrap();
+            let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+            assert_eq!(
+                list.value(0)
+                    .as_primitive::<Time64NanosecondType>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+
+        let remove = eval_scalar_function("ARRAY_REMOVE", &[input, element], 1).unwrap();
+        let list = remove.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(
+            list.value(0)
+                .as_primitive::<Time64NanosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1_000), Some(2_000)]
+        );
     }
 
     #[test]
