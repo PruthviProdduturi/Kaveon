@@ -16,5 +16,9 @@ define an ordered MAP type.
 - Expected result: `[ROW(1), ROW(2), NULL]`.
 - Result: focused test passed with no failures.
 
+The `array_sort_nested_rows` case is also part of the server differential
+corpus. The full local/distributed sweep passed with 0 failures in 167.13 s,
+including the pinned reference comparison.
+
 This is focused evaluator evidence; it does not claim full nested-function or
 distributed window/order qualification.
