@@ -83,7 +83,8 @@ dedicated map operators.
 The distributed differential sweep now includes the standard map path and
 temporal timestamp-key replacement through `MAP_CONCAT`. It also exercises
 `ARRAY_HISTOGRAM` over timestamp keys across the Parquet encoding and
-multi-fragment execution paths.
+multi-fragment execution paths, including timestamp values carrying timezone
+metadata.
 
 ## Correlated subquery boundary — 2026-10-15
 
