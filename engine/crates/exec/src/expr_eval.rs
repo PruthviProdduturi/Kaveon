@@ -10227,9 +10227,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     ));
                 }
                 return match left.value_type() {
+                    DataType::Int8 => arrays_overlap_primitive::<_, Int8Type>(left, right),
+                    DataType::Int16 => arrays_overlap_primitive::<_, Int16Type>(left, right),
                     DataType::Int32 => arrays_overlap_primitive::<_, Int32Type>(left, right),
                     DataType::Int64 => arrays_overlap_primitive::<_, Int64Type>(left, right),
+                    DataType::UInt8 => arrays_overlap_primitive::<_, UInt8Type>(left, right),
+                    DataType::UInt16 => arrays_overlap_primitive::<_, UInt16Type>(left, right),
+                    DataType::UInt32 => arrays_overlap_primitive::<_, UInt32Type>(left, right),
                     DataType::UInt64 => arrays_overlap_primitive::<_, UInt64Type>(left, right),
+                    DataType::Float32 => arrays_overlap_primitive::<_, Float32Type>(left, right),
                     DataType::Float64 => arrays_overlap_primitive::<_, Float64Type>(left, right),
                     DataType::Date32 => arrays_overlap_primitive::<_, Date32Type>(left, right),
                     DataType::Date64 => arrays_overlap_primitive::<_, Date64Type>(left, right),
@@ -10306,6 +10312,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 };
             }
             let rows = match left.value_type() {
+                DataType::Int8 => overlap_primitive!(Int8Type),
+                DataType::Int16 => overlap_primitive!(Int16Type),
+                DataType::Int32 => overlap_primitive!(Int32Type),
                 DataType::Int64 => (0..num_rows)
                     .map(|row| {
                         if left.is_null(row) || right.is_null(row) {
@@ -10317,6 +10326,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         )
                     })
                     .collect::<Vec<_>>(),
+                DataType::UInt8 => overlap_primitive!(UInt8Type),
+                DataType::UInt16 => overlap_primitive!(UInt16Type),
+                DataType::UInt32 => overlap_primitive!(UInt32Type),
                 DataType::UInt64 => (0..num_rows)
                     .map(|row| {
                         if left.is_null(row) || right.is_null(row) {
@@ -10328,6 +10340,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         )
                     })
                     .collect::<Vec<_>>(),
+                DataType::Float32 => overlap_primitive!(Float32Type),
                 DataType::Float64 => (0..num_rows)
                     .map(|row| {
                         if left.is_null(row) || right.is_null(row) {
@@ -16174,6 +16187,51 @@ mod tests {
         assert_eq!(
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true)]
+        );
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_narrow_integer_and_float32_lists() {
+        let mut left = ListBuilder::new(Int32Builder::new());
+        left.values().append_value(1);
+        left.values().append_value(3);
+        left.append(true);
+        let mut right = ListBuilder::new(Int32Builder::new());
+        right.values().append_value(2);
+        right.values().append_value(3);
+        right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(left.finish()) as ArrayRef,
+                Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+
+        let mut float_left = ListBuilder::new(Float32Builder::new());
+        float_left.values().append_value(1.5);
+        float_left.append(true);
+        let mut float_right = ListBuilder::new(Float32Builder::new());
+        float_right.values().append_value(2.5);
+        float_right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(float_left.finish()) as ArrayRef,
+                Arc::new(float_right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false)]
         );
     }
 
