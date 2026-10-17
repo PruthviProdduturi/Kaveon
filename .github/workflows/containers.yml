@@ -26,7 +26,9 @@ on:
       - ".github/workflows/containers.yml"
 
 concurrency:
-  group: containers-${{ github.ref }}
+  # Keep validation tied to the exact source revision. A hung or cancelled
+  # run for an older commit must not hold the gate for a newer commit.
+  group: containers-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
