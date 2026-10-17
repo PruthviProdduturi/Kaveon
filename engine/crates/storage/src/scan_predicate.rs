@@ -281,7 +281,8 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
-            | DataType::Date32,
+            | DataType::Date32
+            | DataType::Date64,
         ) => {
             let literal = Int64Array::from(vec![*value]);
             arrow::compute::cast_with_options(
@@ -571,7 +572,7 @@ impl LateMaterialisation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray, StringDictionaryBuilder};
+    use arrow::array::{Date64Array, Int64Array, StringArray, StringDictionaryBuilder};
     use arrow::datatypes::{Field, Schema};
 
     fn batch() -> RecordBatch {
@@ -631,6 +632,30 @@ mod tests {
             .as_primitive::<arrow::datatypes::Int64Type>()
             .values()
             .to_vec()
+    }
+
+    #[test]
+    fn compares_date64_columns_with_integer_day_millis_literals() {
+        let batch = RecordBatch::try_from_iter([(
+            "day",
+            Arc::new(Date64Array::from(vec![
+                Some(1_704_067_200_000),
+                Some(1_706_745_600_000),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let predicate = StoragePredicate::Compare {
+            column: "day".into(),
+            op: CompareOp::Eq,
+            value: ScalarValue::Int64(1_706_745_600_000),
+        };
+        let compiled = CompiledPredicate::compile(&predicate, &batch.schema())
+            .expect("Date64 comparisons should compile");
+        let mask = compiled.selection(&batch).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true)]
+        );
     }
 
     #[test]
