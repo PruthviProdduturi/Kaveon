@@ -769,7 +769,25 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         Some(ob) => build_order_by(plan, &ob.exprs, &bindings)?,
         None => (plan, None),
     };
-    let plan = build_limit_offset(plan, &query.limit, &query.offset, query.fetch.as_ref())?;
+    // T-SQL's `TOP n`, which sqlparser hands back on the Select and which
+    // nothing here used to read. It belongs at the same point as LIMIT rather
+    // than inside the select: `SELECT TOP 3 ... ORDER BY x` means the first
+    // three of the ordered result, so applying it before the sort would take
+    // an arbitrary three and then order those.
+    let top = select_top(&query.body)?;
+    let limit = match (top, &query.limit) {
+        (Some(_), Some(_)) => {
+            return Err(sql_err(
+                "TOP and LIMIT cannot both bound one query; use one of them",
+            ));
+        }
+        (Some(count), None) => Some(count),
+        (None, _) => None,
+    };
+    let plan = match limit {
+        Some(count) => build_limit_offset(plan, &Some(count), &query.offset, query.fetch.as_ref())?,
+        None => build_limit_offset(plan, &query.limit, &query.offset, query.fetch.as_ref())?,
+    };
     // ORDER BY on a column the query does not select: the column rode
     // along through the sort and limit and is dropped here.
     let plan = match visible {
@@ -3107,6 +3125,37 @@ fn bind_order_keys_to_projection(
             .collect::<Vec<_>>()
     });
     Ok((LogicalPlan::Project { input, columns }, visible))
+}
+
+/// The row count a `SELECT TOP n` asks for, as the expression LIMIT would
+/// have carried.
+///
+/// Returns `None` when the statement has no TOP. The quantity is required to
+/// be a plain count: `TOP n PERCENT` and `WITH TIES` are refused rather than
+/// approximated, because both change which rows come back and a limit that
+/// returns the wrong rows is the fault this exists to remove.
+fn select_top(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
+    let ast::SetExpr::Select(select) = body else {
+        return Ok(None);
+    };
+    let Some(top) = &select.top else {
+        return Ok(None);
+    };
+    if top.percent {
+        return Err(sql_err("TOP PERCENT is unsupported; use TOP n"));
+    }
+    if top.with_ties {
+        return Err(sql_err("TOP WITH TIES is unsupported; use TOP n"));
+    }
+    match &top.quantity {
+        Some(ast::TopQuantity::Expr(expr)) => Ok(Some(expr.clone())),
+        Some(ast::TopQuantity::Constant(count)) => Ok(Some(ast::Expr::Value(ast::Value::Number(
+            count.to_string(),
+            false,
+        )))),
+        // `TOP` with no quantity is not a bound at all.
+        None => Err(sql_err("TOP requires a row count")),
+    }
 }
 
 fn build_limit_offset(
@@ -7446,6 +7495,55 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_CAST(payload AS JSONB) FROM events").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("TRY_JSON_PARSE"), "{debug}");
+    }
+
+    #[test]
+    fn top_bounds_the_query_rather_than_being_discarded() {
+        // sqlparser parses TOP onto the Select and nothing read that field,
+        // so this lowered to an unbounded scan: on a billion-row table the
+        // query asked for a hundred rows and returned every row it could
+        // write before the result quota stopped it.
+        let plan = sql_to_logical_plan("SELECT TOP 100 * FROM events").unwrap();
+        let LogicalPlan::Limit { count, .. } = &plan else {
+            panic!("TOP did not bound the plan: {plan:?}");
+        };
+        assert_eq!(*count, 100);
+    }
+
+    #[test]
+    fn top_bounds_the_ordered_result_not_the_scan() {
+        // T-SQL takes the first n OF THE ORDERED result, so the limit sits
+        // above the sort. Applied inside the select it would take an
+        // arbitrary n and then order those.
+        let plan = sql_to_logical_plan("SELECT TOP 3 * FROM events ORDER BY user_id").unwrap();
+        let LogicalPlan::Limit { input, count } = &plan else {
+            panic!("expected a bounded plan: {plan:?}");
+        };
+        assert_eq!(*count, 3);
+        assert!(
+            format!("{input:?}").contains("Sort"),
+            "the sort must be under the limit: {input:?}"
+        );
+    }
+
+    #[test]
+    fn top_and_limit_together_are_refused() {
+        // Two bounds on one query is a question with two answers.
+        let error = sql_to_logical_plan("SELECT TOP 5 * FROM events LIMIT 10").unwrap_err();
+        assert!(error.to_string().contains("TOP and LIMIT"), "{error}");
+    }
+
+    #[test]
+    fn top_variants_that_change_which_rows_return_are_refused() {
+        // Refused rather than approximated: both change the result set, and
+        // silently returning the wrong rows is the fault being removed here.
+        for statement in [
+            "SELECT TOP 10 PERCENT * FROM events",
+            "SELECT TOP 3 WITH TIES * FROM events ORDER BY user_id",
+        ] {
+            let error = sql_to_logical_plan(statement).unwrap_err();
+            assert!(error.to_string().contains("TOP"), "{statement}: {error}");
+        }
     }
 
     #[test]
