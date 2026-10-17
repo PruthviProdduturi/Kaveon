@@ -202,6 +202,13 @@ impl AggExpr {
         self
     }
 
+    /// Whether this aggregate needs a distinct-value state while executing.
+    /// DISTINCT is semantically redundant for MIN/MAX, so those expressions
+    /// can use the regular extrema state and retain the vectorized fast path.
+    pub fn needs_distinct_state(&self) -> bool {
+        self.distinct && !matches!(self.func, AggFunc::Min | AggFunc::Max)
+    }
+
     pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
         self.alias = Some(alias.into());
         self
@@ -2532,10 +2539,12 @@ impl HashAggregate {
             }
         }
         for agg in &aggregates {
-            if agg.distinct && matches!(agg.func, AggFunc::Min | AggFunc::Max) {
-                return Err(exec_err("DISTINCT is not supported for MIN/MAX"));
-            }
-            if agg.distinct && agg.column == "*" {
+            // DISTINCT does not change an extrema: MIN(DISTINCT x) and
+            // MAX(DISTINCT x) have the same result as their non-DISTINCT
+            // forms.  Keep the modifier in the logical expression for
+            // Trino-compatible parsing, but use the existing extrema state
+            // instead of rejecting a valid query at execution validation.
+            if agg.needs_distinct_state() && agg.column == "*" {
                 return Err(exec_err("COUNT(DISTINCT *) is not supported"));
             }
             if agg.func.is_sketched() {
@@ -3045,10 +3054,10 @@ impl HashAggregate {
                         )?;
                         continue;
                     }
-                    if !aggregate.distinct && fold_batch_into(state, array)? {
+                    if !aggregate.needs_distinct_state() && fold_batch_into(state, array)? {
                         continue;
                     }
-                    if aggregate.distinct
+                    if aggregate.needs_distinct_state()
                         && let Some(dictionary) = int32_dictionary(array)
                     {
                         // The batch's distinct values are its used dictionary
@@ -3083,7 +3092,7 @@ impl HashAggregate {
                         if array.is_null(row) {
                             continue;
                         }
-                        if aggregate.distinct {
+                        if aggregate.needs_distinct_state() {
                             let value: AggregateValue = extract_key(array, row).into();
                             let admitted = admit_distinct_value(
                                 state,
@@ -3295,7 +3304,7 @@ impl HashAggregate {
                     .iter()
                     .enumerate()
                     .all(|(index, aggregate)| {
-                        if aggregate.distinct {
+                        if aggregate.needs_distinct_state() {
                             // COUNT(DISTINCT dictionary column): distinct pairs
                             // of (group, value) per batch through a bitset.
                             matches!(aggregate.func, AggFunc::Count)
@@ -3347,7 +3356,7 @@ impl HashAggregate {
                                 }
                             }
                         }
-                        Some(array) if aggregate.distinct => {
+                        Some(array) if aggregate.needs_distinct_state() => {
                             let dictionary =
                                 int32_dictionary(array).expect("checked before this path");
                             let values = dictionary.values();
@@ -3571,7 +3580,7 @@ impl HashAggregate {
                     } else if let Some(array) = aggregate_arrays[index]
                         && !array.is_null(row)
                     {
-                        if aggregate.distinct {
+                        if aggregate.needs_distinct_state() {
                             let value: AggregateValue = extract_key(array, row).into();
                             let admitted = admit_distinct_value(
                                 &mut accumulators[index],
@@ -6608,6 +6617,33 @@ mod tests {
                 .value(0),
             18
         );
+    }
+
+    #[test]
+    fn distinct_min_max_are_valid_and_match_regular_extrema() {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(Int64Array::from(vec![
+                Some(4),
+                Some(2),
+                Some(4),
+                None,
+                Some(9),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            Vec::new(),
+            vec![
+                AggExpr::new(AggFunc::Min, "value").distinct(),
+                AggExpr::new(AggFunc::Max, "value").distinct(),
+            ],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(output.column(0).as_primitive::<Int64Type>().value(0), 2);
+        assert_eq!(output.column(1).as_primitive::<Int64Type>().value(0), 9);
     }
 
     #[test]
