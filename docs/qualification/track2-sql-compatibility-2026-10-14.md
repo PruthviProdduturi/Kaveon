@@ -76,6 +76,7 @@ null positions and histogram counts.
 Map lookup coverage also verifies `MAP_CONTAINS_KEY` and `MAP_ELEMENT_AT` for
 Time64 nanosecond keys. `MAP_FROM_ENTRIES` now accepts the same Time64 key
 representation and preserves its typed key values.
+`MAP_CONCAT` also preserves replacement semantics for Time64 nanosecond keys.
 
 ## Correlated subquery boundary — 2026-10-15
 
