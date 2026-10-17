@@ -252,6 +252,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_sort_nested_rows",
+        "SELECT ARRAY_SORT(ARRAY[ROW(2), ROW(1)]) AS sorted_rows FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_set_and_extrema_functions",
         "SELECT ARRAY_UNION(ARRAY[1, 2], ARRAY[2, 3]) AS unioned, ARRAY_INTERSECT(ARRAY[1, 2], ARRAY[2, 3]) AS intersected, ARRAY_EXCEPT(ARRAY[1, 2], ARRAY[2, 3]) AS excepted, ARRAY_FIRST(ARRAY[4, 5]) AS first_value, ARRAY_LAST(ARRAY[4, 5]) AS last_value, ARRAY_MIN(ARRAY[4, 5]) AS min_value, ARRAY_MAX(ARRAY[4, 5]) AS max_value FROM {T} LIMIT 1",
         false,
