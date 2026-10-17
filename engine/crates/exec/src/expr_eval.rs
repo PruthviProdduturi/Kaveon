@@ -2615,6 +2615,7 @@ fn array_average_numeric<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Resu
             | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
+            | DataType::UInt64
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
@@ -15752,6 +15753,21 @@ mod tests {
             eval_scalar_function("ARRAY_SUM", &[Arc::new(null_array.finish()) as ArrayRef], 1)
                 .unwrap();
         assert!(result.is_null(0));
+    }
+
+    #[test]
+    fn array_average_accepts_uint64_elements() {
+        let mut unsigned = LargeListBuilder::new(PrimitiveBuilder::<UInt64Type>::new());
+        unsigned.values().append_value(1);
+        unsigned.values().append_value(3);
+        unsigned.append(true);
+        let average = eval_scalar_function(
+            "ARRAY_AVERAGE",
+            &[Arc::new(unsigned.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        assert_eq!(average.as_primitive::<Float64Type>().value(0), 2.0);
     }
 
     #[test]

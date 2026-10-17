@@ -14,3 +14,5 @@ cargo test -p kaveon-server differential_tests::the_differential_sweep_matches_a
 ```
 
 This qualifies the supported Decimal128 `ARRAY_SUM` expression. It does not qualify arbitrary nested decimal casts, unbounded decimal precision, or general typed-table DML.
+
+The adjacent `ARRAY_AVERAGE` path also accepts UInt64 list elements and returns a DOUBLE result; this is covered by `array_average_accepts_uint64_elements`.
