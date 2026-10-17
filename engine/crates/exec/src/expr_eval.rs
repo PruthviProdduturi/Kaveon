@@ -8196,6 +8196,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let start = map.value_offsets()[row] as usize;
                     let end = map.value_offsets()[row + 1] as usize;
                     let found = match map_keys.data_type() {
+                        DataType::Boolean => {
+                            let keys = map_keys.as_boolean();
+                            let needle = requested.as_boolean().value(row);
+                            (start..end)
+                                .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                        }
+                        DataType::Int8 => map_element_at_primitive::<Int8Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
+                        DataType::Int16 => map_element_at_primitive::<Int16Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
                         DataType::Float64 => {
                             let keys = map_keys.as_primitive::<Float64Type>();
                             let needle = requested.as_primitive::<Float64Type>().value(row);
@@ -8214,6 +8226,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             (start..end)
                                 .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
                         }
+                        DataType::UInt8 => map_element_at_primitive::<UInt8Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
+                        DataType::UInt16 => map_element_at_primitive::<UInt16Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
+                        DataType::UInt32 => map_element_at_primitive::<UInt32Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
                         DataType::UInt64 => {
                             let keys = map_keys.as_primitive::<UInt64Type>();
                             let needle = requested.as_primitive::<UInt64Type>().value(row);
@@ -8237,6 +8258,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         }
                         DataType::Time64(TimeUnit::Nanosecond) => {
                             map_element_at_primitive::<Time64NanosecondType>(
+                                map_keys, &requested, row, start, end,
+                            )
+                        }
+                        DataType::Float32 => map_element_at_primitive::<Float32Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
+                        DataType::Date32 => map_element_at_primitive::<Date32Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
+                        DataType::Date64 => map_element_at_primitive::<Date64Type>(
+                            map_keys, &requested, row, start, end,
+                        ),
+                        DataType::Decimal128(_, _) => {
+                            map_element_at_primitive::<arrow::datatypes::Decimal128Type>(
                                 map_keys, &requested, row, start, end,
                             )
                         }
@@ -14827,6 +14862,10 @@ mod tests {
         )
         .unwrap();
         assert!(contains.as_boolean().value(0));
+        let element =
+            eval_scalar_function("ELEMENT_AT", &[Arc::clone(&map), Arc::clone(&needle)], 1)
+                .unwrap();
+        assert_eq!(element.as_primitive::<Int64Type>().value(0), 7);
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
     }
