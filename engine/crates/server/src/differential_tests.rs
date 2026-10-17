@@ -502,6 +502,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "arrays_overlap_narrow_numeric",
+        "SELECT ARRAYS_OVERLAP(ARRAY[CAST(1 AS INTEGER), CAST(3 AS INTEGER)], ARRAY[CAST(2 AS INTEGER), CAST(3 AS INTEGER)]) AS int_overlap, ARRAYS_OVERLAP(ARRAY[CAST(1.5 AS REAL)], ARRAY[CAST(2.5 AS REAL)]) AS float_overlap FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
