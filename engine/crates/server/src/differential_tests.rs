@@ -262,6 +262,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_narrow_extrema",
+        "SELECT ARRAY_MIN(ARRAY[CAST(9 AS INTEGER), CAST(1 AS INTEGER)]) AS min_value, ARRAY_MAX(ARRAY[CAST(9 AS INTEGER), CAST(1 AS INTEGER)]) AS max_value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_split_into_chunks",
         "SELECT ARRAY_SPLIT_INTO_CHUNKS(ARRAY[1, 2, 3, 4, 5], 2) AS chunks FROM {T} LIMIT 1",
         true,

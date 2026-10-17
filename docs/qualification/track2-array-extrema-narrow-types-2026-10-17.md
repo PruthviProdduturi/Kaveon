@@ -15,5 +15,9 @@ and returning NULL for a NULL or all-NULL input list.
 - Result: all three `ARRAY_MIN/MAX` evaluator tests passed; `kaveon-exec`
   Clippy passed.
 
+The `array_narrow_extrema` case is also in the server differential corpus. The
+full local/distributed sweep passed with 0 failures in 165.87 s, including the
+pinned reference comparison.
+
 This is focused evaluator evidence; broader differential and deployment gates
 remain required for full Trino compatibility claims.
