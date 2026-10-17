@@ -63,6 +63,7 @@ def main() -> int:
     parser.add_argument("--namespace", default="kaveon")
     parser.add_argument("--output", type=Path, default=Path("tmp/aks-join-gates.json"))
     args = parser.parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
 
     kube = MODULE.Kube(args.context, args.namespace)
     report = {
@@ -139,7 +140,6 @@ def main() -> int:
                 forward.kill()
         if log is not None:
             log.close()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"passed": report["passed"], "checks": report["checks"]}, sort_keys=True))
     return 0 if report["passed"] else 1

@@ -1,20 +1,33 @@
-# Track 1 AKS: current-image join gates
+# Track 1 AKS join and skew gate — 2026-10-16
 
-## Result
+This is a bounded deployed qualification of distributed join correctness. It
+does not close the larger disk-exhaustion, high-cardinality, or sustained
+mixed-workload gates in the parity tracker.
 
-The current AKS Engine image passed the bounded distributed join qualification:
+## Environment
 
-- three catalog-compatible workers were active;
-- left outer self-join results matched on two exact repeats;
-- full outer cross-source join results matched on two exact repeats;
-- the skewed grouped join matched on two exact repeats;
-- every case finished successfully with no admission refusal.
+- Context: `kaveon-aks`, namespace `kaveon`
+- Topology: three Ready workers and one coordinator
+- Worker image digest: `kaveonacr.azurecr.io/kaveon-engine@sha256:2c43a790ca59cc39155e53a8d4513c5a713b8c4e9566c336fa8357b4ea1c85fc`
+- Catalog snapshot: `sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3`
+- Worker restarts during the gate: zero
 
-The run used Engine image `kaveonacr.azurecr.io/kaveon-engine@sha256:6a4fa35e1d511bdd533d6d3ee22c331137775a0848544bfd0fd98c2e6dea5b18` and catalog snapshot `sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3`.
+## Gate
 
-The raw harness report is retained in
-`track1-aks-join-gates-current-2026-10-16.json`.
+The repository harness `scripts/qualify-aks-join-gates.py` submitted each case
+twice through the TLS coordinator endpoint and required both executions to
+finish with byte-identical result data.
 
-## Boundary
+| Case | Run 1 | Run 2 | Exact repeat |
+| --- | ---: | ---: | --- |
+| Left outer self-join grouped by region | 2,484 ms | 2,141 ms | Pass |
+| Full outer cross-source join | 2,167 ms | 2,364 ms | Pass |
+| Skewed grouped self-join | 2,223 ms | 2,330 ms | Pass |
 
-This strengthens the bounded join evidence for Track 1 item 3. Physical disk exhaustion, larger input volumes, sustained mixed-workload join pressure, and repeated node-loss endurance remain open gates.
+All six requests finished, all three workers were catalog-compatible, and the
+gate passed. The raw report was written to the local qualification workspace
+(`tmp/track1-aks-join-gates-current.json`) and is intentionally not committed.
+
+This evidence qualifies exact-result execution for the declared bounded cases;
+it does not claim general skew splitting, disk-exhaustion recovery, or a
+universal latency SLO.
