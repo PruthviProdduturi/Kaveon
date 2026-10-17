@@ -8187,6 +8187,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 num_rows
             ])))
         }
+        "INFINITY" => {
+            if !args.is_empty() {
+                return Err(KaveonError::Execution("INFINITY takes no arguments".into()));
+            }
+            Ok(Arc::new(Float64Array::from(vec![f64::INFINITY; num_rows])))
+        }
+        "NAN" => {
+            if !args.is_empty() {
+                return Err(KaveonError::Execution("NAN takes no arguments".into()));
+            }
+            Ok(Arc::new(Float64Array::from(vec![f64::NAN; num_rows])))
+        }
 
         // ── Null-handling functions ──────────────────────────────────────
         "COALESCE" => {
@@ -11331,6 +11343,8 @@ mod tests {
             .value(0)
         };
         assert!((evaluate_one("E", vec![]) - std::f64::consts::E).abs() < 1e-12);
+        assert!(evaluate_one("INFINITY", vec![]).is_infinite());
+        assert!(evaluate_one("NAN", vec![]).is_nan());
         assert!(
             (evaluate_one("CBRT", vec![Expr::Literal(ScalarValue::Float64(27.0))]) - 3.0).abs()
                 < 1e-12
