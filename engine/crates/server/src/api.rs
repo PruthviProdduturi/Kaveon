@@ -4196,6 +4196,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Average numeric array elements",
         ),
         (
+            "array_cum_sum",
+            "array",
+            "[array(bigint)]",
+            "scalar",
+            true,
+            "Cumulative sum of numeric array elements",
+        ),
+        (
             "cardinality",
             "bigint",
             "[array]",
@@ -22807,6 +22815,7 @@ mod streamed_root_tests {
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
         assert!(rows.iter().any(|row| row[0] == "array_sum"));
         assert!(rows.iter().any(|row| row[0] == "array_average"));
+        assert!(rows.iter().any(|row| row[0] == "array_cum_sum"));
         assert!(rows.iter().any(|row| row[0] == "bitwise_and"));
         let from_base = rows
             .iter()
