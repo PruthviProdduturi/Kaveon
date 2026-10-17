@@ -359,6 +359,29 @@ export interface LabWorkbenchProps {
   schema?: string | null;
 }
 
+/** What a history row's status looks like, and what it is called.
+ *
+ * The API has recorded `success` / `cancelled` / `error` on every statement
+ * since the streamed path landed, and the panel showed none of it: a query
+ * that failed and one that returned ten thousand rows looked identical, so
+ * the only way to tell them apart was to run it again. Grey for cancelled
+ * rather than red, because cancelling is something a person chose to do. */
+function historyStatusColor(status?: string | null): string {
+  const value = (status ?? "").toLowerCase();
+  if (value === "success") return "var(--success)";
+  if (value === "cancelled" || value === "canceled") return "var(--text-faint)";
+  if (value === "error" || value === "failed") return "var(--error)";
+  return "var(--text-faint)";
+}
+
+function historyStatusLabel(status?: string | null): string {
+  const value = (status ?? "").toLowerCase();
+  if (value === "success") return "Succeeded";
+  if (value === "cancelled" || value === "canceled") return "Cancelled";
+  if (value === "error" || value === "failed") return "Failed";
+  return "Unknown status";
+}
+
 export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceId = null, schema: embeddedSchema = null }: LabWorkbenchProps) {
   const { isAuthenticated, account } = useAuth();
   const { isAdmin } = useRole();

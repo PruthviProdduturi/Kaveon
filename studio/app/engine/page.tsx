@@ -13,10 +13,17 @@ import {
 
 const POLL_MS = 5000;
 const MAX_SAMPLES = 48;
-type Filter = "ALL" | "RUNNING" | "FINISHED" | "FAILED";
-/** The filter a record falls under: queued counts as running, canceled as failed. */
+type Filter = "ALL" | "RUNNING" | "FINISHED" | "FAILED" | "CANCELED";
+/** The filter a record falls under: queued counts as running.
+ *
+ * A cancellation used to count as a failure, which made the Failed tile
+ * disagree with the rows underneath it -- the tile called a cancelled query
+ * failed while the row rendered it as a success. It is neither. */
 const bucket = (q: QueryRecord): Filter =>
-  inProgress(q.state) ? "RUNNING" : q.state === "FINISHED" ? "FINISHED" : "FAILED";
+  inProgress(q.state) ? "RUNNING"
+    : q.state === "FINISHED" ? "FINISHED"
+    : q.state === "CANCELED" ? "CANCELED"
+    : "FAILED";
 
 function Sparkline({ values }: { values: number[] }) {
   if (values.length < 2) return <svg className={s.cellSpark} viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true" />;
@@ -208,13 +215,17 @@ export default function EngineConsolePage() {
                 <span /><span>Submitted</span><span>Query</span><span>Client · user</span><span>Duration</span><span>Output</span>
               </div>
               {visible.map(q => {
+                // Cancelling is something a person chose to do, not a fault,
+                // so it is its own state: grey rather than red, and never the
+                // success styling it used to fall through to.
+                const canceled = q.state === "CANCELED";
                 const failed = q.state === "FAILED", running = inProgress(q.state);
                 const pct = Math.max(2, Math.round(((q.elapsed_ms || 0) / slowest) * 100));
                 return (
                   <Link key={q.id} href={`/engine/queries/${encodeURIComponent(q.id)}`}
-                    className={`${s.row} ${failed ? s.rowFailed : ""} ${running ? s.rowRunning : ""}`}
+                    className={`${s.row} ${failed ? s.rowFailed : ""} ${running ? s.rowRunning : ""} ${canceled ? s.rowCanceled : ""}`}
                     aria-label={`${q.state.toLowerCase()} query ${q.id}`}>
-                    <span className={`${s.glyph} ${failed ? s.glyphFailed : ""} ${running ? s.glyphRunning : ""}`} />
+                    <span className={`${s.glyph} ${failed ? s.glyphFailed : ""} ${running ? s.glyphRunning : ""} ${canceled ? s.glyphCanceled : !failed && !running ? s.glyphFinished : ""}`} />
                     <span className={s.time} title={absoluteTime(q.submitted_at_ms)}>{relativeTime(q.submitted_at_ms, now)}</span>
                     <span className={s.sqlWrap}>
                       <span className={s.sql}>{firstLine(q.sql)}</span>
@@ -227,6 +238,7 @@ export default function EngineConsolePage() {
                     </span>
                     <span className={s.out}>
                       {running ? <span>{q.state === "QUEUED" ? "queued" : "running"}</span>
+                        : canceled ? <span>cancelled</span>
                         : failed ? <span>—</span>
                         : <>{(q.row_count ?? q.rows?.length ?? 0).toLocaleString()} <span>{(q.row_count ?? q.rows?.length ?? 0) === 1 ? "row" : "rows"}</span>{(q.stage_count ?? q.stages?.length ?? 0) ? <> <span>· {q.stage_count ?? q.stages?.length} {(q.stage_count ?? q.stages?.length) === 1 ? "stage" : "stages"}</span></> : null}</>}
                     </span>
