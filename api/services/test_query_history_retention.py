@@ -315,3 +315,54 @@ class TheHistoryPanelShowsSomethingPastTheCeiling(unittest.TestCase):
 
     def test_an_empty_history_is_still_empty(self):
         self.assertEqual(self._read([], False), [])
+
+
+class AListingSurvivesTheSnapshotMoving(unittest.TestCase):
+    """Reading a busy family must not fail because it is busy.
+
+    A listing pages a hundred at a time, so a family at the ceiling is ten
+    round trips, and `query_history` takes a write on every statement a person
+    runs. The snapshot moved mid-pagination and the Engine refused the next
+    cursor with an upstream 400 the bridge reported as 502 -- so the panel
+    said the server "did not answer" when what had happened was that the
+    reader's own queries were being recorded.
+    """
+
+    def _drifted(self):
+        return HTTPException(502, "Engine rejected the request (upstream HTTP 400): "
+                                  "ENGINE_ERROR - product cursor belongs to a different snapshot")
+
+    def test_a_drifted_cursor_restarts_the_listing(self):
+        from services import product_store
+        answers = [self._drifted(), ([{"document": {"id": "1"}}], False)]
+
+        def once(*_args, **_kwargs):
+            answer = answers.pop(0)
+            if isinstance(answer, HTTPException):
+                raise answer
+            return answer
+
+        with patch.object(product_store, "_list_capped_once", side_effect=once) as passes:
+            records, truncated = product_store.list_records_capped(
+                "query_history", "alice", "Viewer", limit=10)
+        self.assertEqual(len(records), 1)
+        self.assertFalse(truncated)
+        self.assertEqual(passes.call_count, 2)
+
+    def test_a_listing_that_never_settles_surfaces_the_failure(self):
+        from services import product_store
+        with patch.object(product_store, "_list_capped_once",
+                          side_effect=self._drifted()) as passes:
+            with self.assertRaises(HTTPException):
+                product_store.list_records_capped("query_history", "alice", "Viewer", limit=10)
+        self.assertEqual(passes.call_count, product_store._LIST_RESTARTS)
+
+    def test_a_real_failure_is_not_retried(self):
+        """Restarting is only right for a moved snapshot. A refused credential
+        or an unreachable Engine is not improved by asking twice more."""
+        from services import product_store
+        with patch.object(product_store, "_list_capped_once",
+                          side_effect=HTTPException(502, "Engine is unavailable")) as passes:
+            with self.assertRaises(HTTPException):
+                product_store.list_records_capped("query_history", "alice", "Viewer", limit=10)
+        self.assertEqual(passes.call_count, 1)
