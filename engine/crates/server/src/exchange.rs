@@ -556,38 +556,7 @@ pub async fn upload_chunks(
         let token = token.to_owned();
         pending.push(async move {
             let body = Bytes::from(chunk.encode(limits)?);
-            let mut attempt = 0;
-            loop {
-                attempt += 1;
-                let result = client
-                    .post(&url)
-                    .bearer_auth(&token)
-                    .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
-                    .body(body.clone())
-                    .send()
-                    .await
-                    .map_err(|error| ExchangeError::Transport(error.to_string()))
-                    .and_then(|response| {
-                        if response.status().is_success() {
-                            Ok(())
-                        } else {
-                            Err(ExchangeError::HttpStatus(response.status().as_u16()))
-                        }
-                    });
-                match result {
-                    Ok(()) => return Ok(()),
-                    Err(error)
-                        if attempt < EXCHANGE_UPLOAD_ATTEMPTS
-                            && retryable_exchange_request_error(&error) =>
-                    {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            25 * (1 << (attempt - 1)),
-                        ))
-                        .await;
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
+            upload_exchange_body_with_retry(&client, &url, &token, body).await
         });
     }
     let mut uploads = futures::stream::iter(pending).buffer_unordered(IN_FLIGHT);
@@ -602,6 +571,44 @@ fn retryable_exchange_request_error(error: &ExchangeError) -> bool {
         error,
         ExchangeError::Transport(_) | ExchangeError::HttpStatus(500..=599)
     )
+}
+
+async fn upload_exchange_body_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    body: Bytes,
+) -> ExchangeResult<()> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let result = client
+            .post(url)
+            .bearer_auth(token)
+            .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
+            .body(body.clone())
+            .send()
+            .await
+            .map_err(|error| ExchangeError::Transport(error.to_string()))
+            .and_then(|response| {
+                if response.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(ExchangeError::HttpStatus(response.status().as_u16()))
+                }
+            });
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt < EXCHANGE_UPLOAD_ATTEMPTS
+                    && retryable_exchange_request_error(&error) =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(25 * (1 << (attempt - 1))))
+                    .await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 pub async fn fetch_payload(
@@ -1008,18 +1015,8 @@ pub async fn upload_chunk_stream(
         let token = token.clone();
         async move {
             let bytes = chunk.payload.len() as u64;
-            let body = chunk.encode(limits)?;
-            let response = client
-                .post(url)
-                .bearer_auth(token)
-                .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
-                .body(body)
-                .send()
-                .await
-                .map_err(|error| ExchangeError::Transport(error.to_string()))?;
-            if !response.status().is_success() {
-                return Err(ExchangeError::HttpStatus(response.status().as_u16()));
-            }
+            let body = Bytes::from(chunk.encode(limits)?);
+            upload_exchange_body_with_retry(&client, &url, &token, body).await?;
             Ok::<u64, ExchangeError>(bytes)
         }
     };
