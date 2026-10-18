@@ -220,13 +220,21 @@ pub fn merge_top_n(
             "TopN merge received incompatible batch schemas".into(),
         ));
     }
+    // Empty worker candidates are common after selective predicates. Remove
+    // them once before the typed and sorted merge paths so key evaluation and
+    // the comparator matrix scale with contributing workers only.
+    let non_empty = batches
+        .iter()
+        .filter(|batch| batch.num_rows() > 0)
+        .cloned()
+        .collect::<Vec<_>>();
 
     // Distributed aggregate TopN commonly orders by one integer COUNT/SUM
     // column. Keep only row references while ranking those batches so the
     // final merge does not concatenate every payload column before selecting
     // the result. Unsupported expressions retain the general Arrow path.
     if sort_exprs.len() == 1
-        && let Some(result) = try_integer_batch_top_n(schema, batches, &sort_exprs[0], limit)?
+        && let Some(result) = try_integer_batch_top_n(schema, &non_empty, &sort_exprs[0], limit)?
     {
         return Ok(Some(result));
     }
@@ -236,15 +244,10 @@ pub fn merge_top_n(
     // concatenating the payload columns at the coordinator.  The integer
     // specialization above remains the cheaper hot path; this generic path
     // keeps Arrow's comparator semantics for every other key type.
-    if let Some(result) = try_sorted_batch_top_n(schema, batches, sort_exprs, limit)? {
+    if let Some(result) = try_sorted_batch_top_n(schema, &non_empty, sort_exprs, limit)? {
         return Ok(Some(result));
     }
 
-    let non_empty = batches
-        .iter()
-        .filter(|batch| batch.num_rows() > 0)
-        .cloned()
-        .collect::<Vec<_>>();
     let combined = if non_empty.len() == 1 {
         non_empty[0].clone()
     } else {
@@ -1520,6 +1523,41 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(incremental, all);
+    }
+
+    #[test]
+    fn global_top_n_ignores_empty_worker_candidates_without_changing_order() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let empty = RecordBatch::new_empty(schema.clone());
+        let worker = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(9), Some(3), Some(7)])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .unwrap();
+        let ordering = vec![
+            SortExpr::new(Expr::Column("score".into()), false),
+            SortExpr::new(Expr::Column("name".into()), true),
+        ];
+
+        let with_empty = merge_top_n(
+            &schema,
+            &[empty.clone(), worker.clone(), empty.clone()],
+            &ordering,
+            2,
+        )
+        .unwrap()
+        .unwrap();
+        let without_empty = merge_top_n(&schema, &[worker], &ordering, 2)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(with_empty, without_empty);
     }
 
     #[test]
