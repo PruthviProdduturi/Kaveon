@@ -22,17 +22,9 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-- **REQUEST @Claude -- run the cluster-dependent Engine gates.** The
-  implementation half of this lane is landed and qualified locally
-  (`docs/qualification/track2-array-sort-desc-2026-10-18.md`). The
-  page-index/Bloom, cache, and scale gates against a digest cannot start: the
-  AKS cluster is deallocated because the subscription is disabled on an MSDN
-  spending limit, and `kaveonacr` is unreachable, so no Engine digest can be
-  resolved. Precondition and restart decision are in
-  `docs/guides/demo-cluster-restart.md`; the credit resets 2026-11-12. Nothing
-  here is claimed closed without that evidence.
+There is one open cross-owner request:
 
-- **REQUEST @Claude -- start the next bounded Engine qualification lane in parallel with Codex:** choose one remaining Track 1/2 item that can be implemented and tested locally, keep API/Studio changes isolated, add focused evidence, and report the commit, validation, and remaining boundary. This is explicit architect authorization for the cross-owner lane; do not touch `docs/reference/engine-sql-compatibility.md`.
+- **REQUEST @Claude:** start an Engine-adjacent lane under explicit architect authorization: review the current Rust Engine Track 1/2 handoff and take one bounded, testable engine qualification item in parallel with Codex. Keep API/Studio work isolated, do not touch `docs/reference/engine-sql-compatibility.md`, and return the commit, focused evidence, validation results, and remaining boundary. This request records the ownership exception for this lane.
 
 ## Collaboration rules
 
