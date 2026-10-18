@@ -5813,3 +5813,41 @@ fn the_distributed_cube_read_matches_the_coordinator_build() {
     }
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// FETCH ... WITH TIES must preserve the complete boundary peer set when
+/// worker candidates are merged. Compare a three-worker result with the
+/// single-partition reference and repeat the distributed run to guard the
+/// tie ordering against task completion order.
+#[test]
+fn distributed_global_topn_fetch_with_ties_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-global-topn-fetch-ties-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT country, actions FROM events ORDER BY actions DESC FETCH FIRST 1 ROW WITH TIES";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-global-topn-fetch-ties", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert!(!expected.is_empty());
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    let repeat = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed repeat: {error}")),
+        false,
+    );
+    assert_eq!(repeat, actual);
+    assert!(actual.len() > 1, "fixture must exercise a peer set");
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
