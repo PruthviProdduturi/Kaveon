@@ -1648,24 +1648,26 @@ impl ColumnarGroups {
     /// old buffers stay alive until the copy is done. Small tables are
     /// covered by the per-group figure.
     pub fn growth_bytes(&self, incoming: usize) -> u64 {
+        let needed = self.len.saturating_add(incoming);
         let mut capacity = self.index.capacity();
-        if capacity < 1 << 16 || self.len + incoming <= capacity {
+        if capacity < 1 << 16 || needed <= capacity {
             return 0;
         }
         // Find the largest table that will be copied by a growth within the
         // batch. The reservation is the additional allocation: one current
         // table for a doubling, three current tables for a fourfold growth.
-        while self.len + incoming > capacity {
+        while needed > capacity {
             let multiplier = if self.uses_large_integer_growth()
-                && capacity / INDEX_LOAD_NUMERATOR * INDEX_LOAD_DENOMINATOR
-                    >= INDEX_LARGE_GROWTH_THRESHOLD
+                && capacity
+                    >= (INDEX_LARGE_GROWTH_THRESHOLD / INDEX_LOAD_DENOMINATOR)
+                        * INDEX_LOAD_NUMERATOR
             {
                 4
             } else {
                 2
             };
             let next = capacity.saturating_mul(multiplier);
-            if next >= self.len + incoming {
+            if next >= needed {
                 return (capacity as u64)
                     .saturating_mul((multiplier - 1) as u64)
                     .saturating_mul(self.slot_bytes());
@@ -3160,5 +3162,8 @@ mod tests {
             groups.growth_bytes(capacity * 4 + 1 - groups.len()),
             (capacity as u64) * 12 * groups.slot_bytes()
         );
+        // A hostile or malformed batch length must not wrap the admission
+        // calculation and bypass the growth reservation.
+        assert!(groups.growth_bytes(usize::MAX) > 0);
     }
 }
