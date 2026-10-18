@@ -175,10 +175,59 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
 
 fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
     match expr {
+        Expr::Literal(value) => Some(value.data_type()),
         Expr::Column(name) => crate::expr_eval::resolve_column_index(schema, name)
             .ok()
             .map(|index| schema.field(index).data_type().clone()),
         Expr::Alias { expr, .. } => expression_data_type(expr, schema),
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ROW") => {
+            let fields = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    Some(Field::new(
+                        format!("field{index}"),
+                        expression_data_type(arg, schema)?,
+                        true,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(DataType::Struct(fields.into()))
+        }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ARRAY") => {
+            let element_type = args
+                .iter()
+                .filter_map(|arg| expression_data_type(arg, schema))
+                .find(|data_type| *data_type != DataType::Null)?;
+            Some(DataType::List(Arc::new(Field::new(
+                "item",
+                element_type,
+                true,
+            ))))
+        }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") && args.len() == 2 => {
+            let (DataType::List(keys) | DataType::LargeList(keys)) =
+                expression_data_type(&args[0], schema)?
+            else {
+                return None;
+            };
+            let (DataType::List(values) | DataType::LargeList(values)) =
+                expression_data_type(&args[1], schema)?
+            else {
+                return None;
+            };
+            let entries = DataType::Struct(
+                vec![
+                    Field::new("key", keys.data_type().clone(), false),
+                    Field::new("value", values.data_type().clone(), true),
+                ]
+                .into(),
+            );
+            Some(DataType::Map(
+                Arc::new(Field::new("entries", entries, false)),
+                false,
+            ))
+        }
         Expr::Function { name, args }
             if name.eq_ignore_ascii_case("ROW_FIELD") && args.len() == 2 =>
         {
@@ -192,6 +241,19 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 .iter()
                 .find(|candidate| candidate.name().eq_ignore_ascii_case(field))
                 .map(|candidate| candidate.data_type().clone())
+        }
+        Expr::Function { name, args }
+            if (name.eq_ignore_ascii_case("MAP_ELEMENT_AT")
+                || name.eq_ignore_ascii_case("ELEMENT_AT"))
+                && args.len() == 2 =>
+        {
+            let DataType::Map(entries, _) = expression_data_type(&args[0], schema)? else {
+                return None;
+            };
+            let DataType::Struct(fields) = entries.data_type() else {
+                return None;
+            };
+            fields.get(1).map(|field| field.data_type().clone())
         }
         _ => None,
     }
