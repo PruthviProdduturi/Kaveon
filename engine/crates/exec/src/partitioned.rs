@@ -1548,6 +1548,17 @@ impl BatchOperator for PartitionedHashAggregate {
 /// budget's message rather than repartitioning forever.
 pub const MAX_JOIN_SPILL_DEPTH: u32 = 3;
 
+// A spill partition that is at least four times the exact mean of the
+// non-empty partitions is worth one bounded secondary split.  The minimum
+// keeps tiny inputs on the established path: for those, another round of
+// Arrow IPC is more expensive than the imbalance it removes.  This is a
+// routing decision only; both sides are split with the same salt, so it
+// cannot change join semantics.  A single hot key deliberately does not
+// qualify: no hash repartition can separate equal keys and the existing
+// depth cap remains the fail-closed guard for that case.
+const JOIN_SKEW_SPLIT_RATIO: u128 = 4;
+const JOIN_SKEW_SPLIT_MIN_ROWS: u64 = 4_096;
+
 const JOIN_SPILL_METRICS_RESOURCE: &str = "kaveon.exec.join-spill-metrics.v1";
 
 /// What the joins of one query wrote to the spill: bytes of runs,
@@ -1647,6 +1658,44 @@ fn spill_salt(depth: u32) -> u64 {
                 .wrapping_add(u64::from(depth).wrapping_mul(0x9E37_79B9_7F4A_7C15)),
         ) | 1
     }
+}
+
+/// Return the index of a partition whose exact row count is sufficiently
+/// above the mean to justify one bounded secondary split.
+///
+/// The calculation uses only writer-captured run row counts.  It never reads
+/// or samples values, and returning `None` is always safe: the ordinary
+/// spill/repartition path remains the fallback.  A sole non-empty partition
+/// is intentionally excluded because it is either a single hot key or a
+/// small-domain hash collision; repartitioning it cannot be assumed to help.
+fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
+    let mut total = 0_u64;
+    let mut non_empty = 0_u64;
+    let mut largest = None;
+    for (index, partition) in partitions.iter().enumerate() {
+        let rows = partition
+            .iter()
+            .map(SpillRun::rows)
+            .fold(0_u64, u64::saturating_add);
+        if rows == 0 {
+            continue;
+        }
+        non_empty = non_empty.saturating_add(1);
+        total = total.saturating_add(rows);
+        if largest.is_none_or(|(_, current)| rows > current) {
+            largest = Some((index, rows));
+        }
+    }
+    let Some((index, largest)) = largest else {
+        return None;
+    };
+    if non_empty < 2 || total < JOIN_SKEW_SPLIT_MIN_ROWS {
+        return None;
+    }
+    // largest / (total / non_empty) >= ratio, written without a lossy
+    // integer mean and evaluated in u128 to avoid overflow.
+    (u128::from(largest) * u128::from(non_empty) >= u128::from(total) * JOIN_SKEW_SPLIT_RATIO)
+        .then_some(index)
 }
 
 /// The level a refused build partitions to: the first for a whole
@@ -1959,11 +2008,62 @@ impl PartitionedHashJoin {
         )?;
         self.metrics.record(&left_runs, depth);
         self.metrics.record(&right_runs, depth);
-        Ok(left_runs
-            .into_iter()
-            .zip(right_runs)
-            .map(|(left, right)| JoinPartition { left, right, depth })
-            .collect())
+        let mut partitions = VecDeque::new();
+        let left_skew = skewed_partition_index(&left_runs);
+        let right_skew = skewed_partition_index(&right_runs);
+        for (index, (left, right)) in left_runs.into_iter().zip(right_runs).enumerate() {
+            // One bounded secondary split is enough to spread a genuinely
+            // multi-key hot bucket. A single-key bucket remains on the normal
+            // depth-capped path, where it fails closed rather than creating
+            // unbounded spill work.
+            if depth < MAX_JOIN_SPILL_DEPTH
+                && (left_skew == Some(index) || right_skew == Some(index))
+            {
+                let left_keys = self
+                    .keys
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>();
+                let right_keys = self
+                    .keys
+                    .iter()
+                    .map(|(_, key)| key.clone())
+                    .collect::<Vec<_>>();
+                let child_depth = depth + 1;
+                let mut left_source = RunSource::new(Arc::clone(&self.left_schema), left);
+                let left_runs = partition_input_salted(
+                    &mut left_source,
+                    &left_keys,
+                    self.count,
+                    spill_salt(child_depth),
+                    &self.memory,
+                    &self.spill,
+                    flush,
+                )?;
+                let mut right_source = RunSource::new(Arc::clone(&self.right_schema), right);
+                let right_runs = partition_input_salted(
+                    &mut right_source,
+                    &right_keys,
+                    self.count,
+                    spill_salt(child_depth),
+                    &self.memory,
+                    &self.spill,
+                    flush,
+                )?;
+                self.metrics.record(&left_runs, child_depth);
+                self.metrics.record(&right_runs, child_depth);
+                partitions.extend(left_runs.into_iter().zip(right_runs).map(|(left, right)| {
+                    JoinPartition {
+                        left,
+                        right,
+                        depth: child_depth,
+                    }
+                }));
+            } else {
+                partitions.push_back(JoinPartition { left, right, depth });
+            }
+        }
+        Ok(partitions)
     }
 
     /// The refusal of a build with `left` still in hand: partition the
@@ -2688,6 +2788,122 @@ mod tests {
             64 * 1024 * 1024,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn skew_policy_uses_exact_run_counts_and_excludes_single_hot_buckets() {
+        let disk = spill();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let run = |rows: usize| {
+            disk.write_run(
+                &schema,
+                &[RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(vec![Some(1); rows]))],
+                )
+                .unwrap()],
+            )
+            .unwrap()
+        };
+
+        let skewed = std::iter::once(vec![run(10_000)])
+            .chain((0..7).map(|_| vec![run(1_000)]))
+            .collect::<Vec<_>>();
+        assert_eq!(skewed_partition_index(&skewed), Some(0));
+
+        // A single non-empty bucket can be a single hot key. Splitting it
+        // again cannot separate equal join keys, so the depth cap owns it.
+        let single = vec![vec![run(10_000)], Vec::new(), Vec::new()];
+        assert_eq!(skewed_partition_index(&single), None);
+        drop(single);
+
+        let small = vec![vec![run(1_000)], vec![run(1_000)]];
+        assert_eq!(skewed_partition_index(&small), None);
+        drop(skewed);
+        drop(small);
+        assert_eq!(disk.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn skew_split_keeps_both_join_inputs_hash_aligned() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let candidates = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values(0..100_000))],
+        )
+        .unwrap();
+        let partitioner = crate::exchange::HashPartitioner::try_new_salted(
+            &schema,
+            &["id".into()],
+            16,
+            crate::exchange::SPILL_PARTITION_SALT,
+        )
+        .unwrap();
+        let buckets = partitioner.partition(&candidates).unwrap();
+        let keys = buckets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, bucket)| {
+                (!bucket.is_empty()).then(|| {
+                    let values = bucket
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    (index, values.value(0), values.len())
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(keys.len() >= 8, "not enough hash buckets: {keys:?}");
+        let hot_bucket = keys[0].0;
+        let hot_keys = buckets[hot_bucket]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .values()
+            .iter()
+            .take(32)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(hot_keys.len(), 32);
+        let mut rows = Vec::new();
+        for key in hot_keys {
+            rows.extend(std::iter::repeat(Some(key)).take(512));
+        }
+        for (_, key, _) in keys.iter().skip(1).take(7) {
+            rows.extend(std::iter::repeat(Some(*key)).take(512));
+        }
+
+        let pool = QueryMemoryPool::new("skew-split", 64 * 1024 * 1024).unwrap();
+        let spill = spill();
+        let mut join = PartitionedHashJoin::new(
+            input(rows.clone(), 512),
+            input(rows, 512),
+            JoinType::Inner,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        let left = join.left.take().unwrap();
+        let right = join.right.take().unwrap();
+        let partitions = join.partition_pair(left, right, 0).unwrap();
+        assert!(
+            partitions.iter().any(|partition| partition.depth == 1),
+            "expected the measured hot bucket to receive a secondary split"
+        );
+        assert!(
+            partitions.len() > 16,
+            "secondary split did not expand partitions"
+        );
+        drop(partitions);
+        drop(join);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert_eq!(spill.snapshot().current_bytes, 0);
     }
 
     #[test]
