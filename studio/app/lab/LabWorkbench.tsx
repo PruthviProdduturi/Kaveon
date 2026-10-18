@@ -382,6 +382,92 @@ function historyStatusLabel(status?: string | null): string {
   return "Unknown status";
 }
 
+/** Query history, as a pane rather than a strip.
+ *
+ * The same rows the sidebar used to hold, given the width to show a
+ * statement without truncating it at eighty characters and the height to
+ * show more than a handful. Clicking one puts it back in the composer,
+ * which is the whole reason this is in the editor and not only on the
+ * engine console.
+ */
+function LabQueryHistory({
+  rows, loading, unknown, search, onSearch, onOpen,
+}: {
+  rows: QueryHistoryRow[];
+  loading: boolean;
+  unknown: ReadFailure | null;
+  search: string;
+  onSearch: (value: string) => void;
+  onOpen: (row: QueryHistoryRow) => void;
+}) {
+  const term = search.trim().toLowerCase();
+  const shown = rows.filter((row) => !term || (row.sql_text || "").toLowerCase().includes(term));
+  return (
+    <div className="lab-history">
+      <div className="lab-history__bar">
+        <div className="sidebar-search-wrap">
+          <i className="fas fa-search sidebar-search-icon" />
+          <input
+            className="sidebar-search-input"
+            placeholder="Search history…"
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            aria-label="Search query history"
+          />
+        </div>
+        {rows.length > 0 && (
+          <span className="lab-history__count">
+            {shown.length === rows.length
+              ? `${rows.length.toLocaleString()} statements`
+              : `${shown.length.toLocaleString()} of ${rows.length.toLocaleString()}`}
+          </span>
+        )}
+      </div>
+
+      {loading && (
+        <div className="column-loading"><i className="fas fa-spinner fa-spin" /><span>Loading…</span></div>
+      )}
+
+      {!loading && unknown && (
+        <div className="lab-history__note"><UnknownLine {...unknown} /></div>
+      )}
+
+      {!loading && !unknown && rows.length === 0 && (
+        <div className="lab-history__note">
+          Nothing yet. Statements you run here are recorded as KaveonDB commits them.
+        </div>
+      )}
+
+      {!loading && !unknown && rows.length > 0 && shown.length === 0 && (
+        <div className="lab-history__note">No statement matches “{search.trim()}”.</div>
+      )}
+
+      {!loading && shown.map((row) => (
+        <button
+          key={row.id}
+          type="button"
+          className="lab-history__row"
+          onClick={() => onOpen(row)}
+          title="Open this statement in the editor"
+        >
+          <span
+            aria-hidden="true"
+            className="lab-history__dot"
+            style={{ background: historyStatusColor(row.status) }}
+          />
+          <span className="lab-history__sql">{row.sql_text}</span>
+          <span className="lab-history__meta">
+            {historyStatusLabel(row.status)}
+            {row.started_at ? ` · ${row.started_at.slice(0, 16).replace("T", " ")}` : ""}
+            {row.row_count != null ? ` · ${row.row_count.toLocaleString()} rows` : ""}
+            {row.duration_ms != null ? ` · ${row.duration_ms.toLocaleString()} ms` : ""}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceId = null, schema: embeddedSchema = null }: LabWorkbenchProps) {
   const { isAuthenticated, account } = useAuth();
   const { isAdmin } = useRole();
@@ -410,7 +496,11 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const [columnErrors, setColumnErrors] = useState<Record<string, string>>({});
 
   // Query history panel
-  const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
+  // Which tab the lower pane shows. History used to be a collapsible
+  // strip under the schema tree, which is where a feature goes to be
+  // ignored; it is an editing tool -- its value is putting a statement
+  // back in the composer -- so it belongs beside the result it replaces.
+  const [resultsTab, setResultsTab] = useState<"results" | "history">("results");
   const [queryHistory, setQueryHistory] = useState<QueryHistoryRow[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyUnknown, setHistoryUnknown] = useState<ReadFailure | null>(null);
@@ -858,7 +948,10 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // history nobody had managed to ask for, which is the one mistake
   // `components/Reading` exists to prevent.
   useEffect(() => {
-    if (!isHistoryPanelOpen || !isAuthenticated || queryHistory.length > 0) return;
+    // Loaded when the tab is first opened rather than on mount: most
+    // sessions never look at history, and this is a listing of the
+    // whole family.
+    if (resultsTab !== "history" || !isAuthenticated || queryHistory.length > 0) return;
     const load = async () => {
       setIsLoadingHistory(true);
       setHistoryUnknown(null);
@@ -882,7 +975,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
       }
     };
     void load();
-  }, [isHistoryPanelOpen, isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resultsTab, isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -2790,72 +2883,6 @@ return;
                   </div>
                 ))}
             </div>
-            {/* Query History Panel */}
-            <div style={{ borderTop: "1px solid var(--border)", flexShrink: 0 }}>
-              <div
-                role="button"
-                tabIndex={0}
-                aria-expanded={isHistoryPanelOpen}
-                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.5rem 0.75rem", cursor: "pointer", fontSize: "0.78rem", fontWeight: 600, color: "var(--text-secondary)", userSelect: "none" }}
-                onClick={() => setIsHistoryPanelOpen((p) => !p)}
-                onKeyDown={onActivateKey(() => setIsHistoryPanelOpen((open) => !open))}
-              >
-                <span><i className="fas fa-history" style={{ marginRight: 6 }} />Query History</span>
-                <i className={`fas fa-chevron-${isHistoryPanelOpen ? "up" : "down"}`} style={{ fontSize: "0.7rem", color: "var(--text-muted)" }} />
-              </div>
-              {isHistoryPanelOpen && (
-                <div style={{ maxHeight: 220, overflowY: "auto", borderTop: "1px solid var(--border)" }}>
-                  <div style={{ padding: "0.5rem" }}>
-                    <div className="sidebar-search-wrap">
-                      <i className="fas fa-search sidebar-search-icon" />
-                      <input
-                        className="sidebar-search-input"
-                        placeholder="Search history…"
-                        value={historySearch}
-                        onChange={(e) => setHistorySearch(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                  {isLoadingHistory && (
-                    <div className="column-loading"><i className="fas fa-spinner fa-spin" /><span>Loading…</span></div>
-                  )}
-                  {!isLoadingHistory && queryHistory
-                    .filter((h) => !historySearch || h.sql_text?.toLowerCase().includes(historySearch.toLowerCase()))
-                    .slice(0, 50)
-                    .map((h) => (
-                      <div
-                        key={h.id}
-                        role="button"
-                        tabIndex={0}
-                        style={{ padding: "0.4rem 0.75rem", cursor: "pointer", borderBottom: "1px solid var(--border)", fontSize: "0.75rem" }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = "")}
-                        onFocus={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                        onBlur={(e) => (e.currentTarget.style.background = "")}
-                        onClick={() => openHistoryStatement(h)}
-                        onKeyDown={onActivateKey(() => openHistoryStatement(h))}
-                      >
-                        <div style={{ fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-primary)" }}>
-                          {h.sql_text?.slice(0, 80)}{(h.sql_text?.length ?? 0) > 80 ? "…" : ""}
-                        </div>
-                        <div style={{ color: "var(--text-muted)", fontSize: "0.7rem", marginTop: 2 }}>
-                          {h.started_at?.slice(0, 10)} · {(h.row_count ?? 0).toLocaleString()} rows
-                          {h.duration_ms != null && ` · ${h.duration_ms}ms`}
-                        </div>
-                      </div>
-                    ))
-                  }
-                  {!isLoadingHistory && historyUnknown && (
-                    <div style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}>
-                      <UnknownLine {...historyUnknown} />
-                    </div>
-                  )}
-                  {!isLoadingHistory && !historyUnknown && queryHistory.length === 0 && (
-                    <div style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>No history yet.</div>
-                  )}
-                </div>
-              )}
-            </div>
           </aside>
           )}
 
@@ -3156,7 +3183,24 @@ return;
                   than a line of one-off controls. */}
               <div className="results-bar">
                 <div className="results-bar__lead">
-                  <h3 className="results-bar__title">Results</h3>
+                  <div className="results-bar__tabs" role="tablist" aria-label="Result pane">
+                    <button
+                      type="button" role="tab" id="lab-tab-results"
+                      aria-selected={resultsTab === "results"}
+                      className={`results-bar__tab${resultsTab === "results" ? " is-active" : ""}`}
+                      onClick={() => setResultsTab("results")}
+                    >
+                      Results
+                    </button>
+                    <button
+                      type="button" role="tab" id="lab-tab-history"
+                      aria-selected={resultsTab === "history"}
+                      className={`results-bar__tab${resultsTab === "history" ? " is-active" : ""}`}
+                      onClick={() => setResultsTab("history")}
+                    >
+                      Query history
+                    </button>
+                  </div>
                   <span className="results-bar__summary">
                     {isExecuting ? (
                       <span className="result-stats__running">
@@ -3328,7 +3372,19 @@ return;
                 </div>
               </div>
 
-              <div id="resultsContainer" className={`results-container ${styles.pane}`}>
+              <div id="resultsContainer" className={`results-container ${styles.pane}`}
+                   role="tabpanel"
+                   aria-labelledby={resultsTab === "history" ? "lab-tab-history" : "lab-tab-results"}>
+                {resultsTab === "history" && (
+                  <LabQueryHistory
+                    rows={queryHistory}
+                    loading={isLoadingHistory}
+                    unknown={historyUnknown}
+                    search={historySearch}
+                    onSearch={setHistorySearch}
+                    onOpen={(row) => { openHistoryStatement(row); setResultsTab("results"); }}
+                  />
+                )}
                 {/* Two different moments, and they must not look the same.
                     With nothing of the result on screen the pane is empty
                     and the panel can hold it — that is the same moment as a

@@ -620,7 +620,7 @@ main.main-lab {
 .overview-primary-btn {
   border-radius: 10px;
   border: none;
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   color: #ffffff;
   font-size: 0.82rem;
   font-weight: 600;
@@ -716,7 +716,7 @@ main.main-lab {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   color: #fff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   transition: all 0.2s;
@@ -1585,7 +1585,7 @@ main.main-lab {
 }
 
 .save-query-btn-primary {
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   color: #ffffff;
   border: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -1740,7 +1740,7 @@ main.main-lab {
 }
 
 .connect-btn {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
+  background: linear-gradient(135deg, var(--lens-primary, #0078d4), var(--lens-dark, #106ebe));
   color: white;
   border: none;
   padding: 0.85rem 2.25rem;
@@ -1932,7 +1932,7 @@ main.main-lab {
 }
 
 .auth-button {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
+  background: linear-gradient(135deg, var(--lens-primary, #0078d4), var(--lens-dark, #106ebe));
   color: white;
   border: none;
   padding: 1rem 2.5rem;
@@ -2285,7 +2285,7 @@ main.main-lab {
 
 /* Primary quick action tiles (uses theme colors) */
 .welcome-btn-primary {
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   border: none;
   color: #ffffff;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -2293,7 +2293,7 @@ main.main-lab {
 }
 
 .welcome-btn-primary:hover {
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   color: #ffffff;
@@ -3646,7 +3646,7 @@ main.main-wide {
 }
 
 .chart-save-modal-btn-primary {
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   color: #ffffff;
   border: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -3666,7 +3666,7 @@ main.main-wide {
 }
 
 .feature-card:nth-child(1) .feature-icon {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
+  background: linear-gradient(135deg, var(--lens-primary), var(--lens-primary-hover));
   color: #ffffff;
   border-color: rgba(59, 130, 246, 0.5);
 }
@@ -4389,7 +4389,7 @@ main.main-wide {
 }
 
 .save-btn {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
+  background: linear-gradient(135deg, var(--lens-primary), var(--lens-primary-hover));
   color: white;
 }
 
@@ -4665,8 +4665,8 @@ main.main-wide {
   min-width: 16px;
   padding: 0 4px;
   border-radius: 9px;
-  background: var(--accent-strong);
-  color: var(--on-accent);
+  background: var(--accent);
+  color: #ffffff;
   font-size: 0.68rem;
   font-weight: 600;
   text-align: center;
@@ -5385,7 +5385,7 @@ main.main-wide {
 }
 
 .query-preview-btn-primary {
-  background: linear-gradient(135deg, var(--accent-strong) 0%, var(--accent-strong-deep) 100%);
+  background: linear-gradient(135deg, var(--lens-primary) 0%, var(--lens-dark) 100%);
   color: #ffffff;
   border: none;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
@@ -6030,4 +6030,136 @@ main.main-wide {
 .save-query-field-container {
   display: block;
   margin-bottom: 1rem;
+}
+
+/* ---------------------------------------------------------------------------
+   SQL Lab: Results and Query history as tabs on one pane.
+
+   History used to be a collapsible strip pinned under the schema tree at a
+   fixed 220px. It is an editing tool -- its value is putting a statement back
+   in the composer -- so it belongs where the result it replaces sits, with
+   the room to read a statement without truncating it. The engine console
+   keeps its own cluster-wide history for the other question: what the cluster
+   is doing, with stages, plans and timings.
+
+   The tabs take the title's typography rather than a new one, so the bar
+   still reads as one family.
+   --------------------------------------------------------------------------- */
+.results-bar__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.results-bar__tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.results-bar__tab:hover { color: var(--text-primary); }
+
+.results-bar__tab.is-active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-dark);
+}
+
+.results-bar__tab:focus-visible {
+  outline: 2px solid var(--accent-dark);
+  outline-offset: 2px;
+}
+
+/* The pane fills what the results grid would have used. */
+.lab-history {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.lab-history__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-surface);
+  z-index: 1;
+}
+
+.lab-history__count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.lab-history__note {
+  padding: 1rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.lab-history__row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "dot sql" ".   meta";
+  gap: 2px 8px;
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.lab-history__row:hover { background: var(--bg-hover); }
+
+.lab-history__row:focus-visible {
+  outline: 2px solid var(--accent-dark);
+  outline-offset: -2px;
+}
+
+.lab-history__dot {
+  grid-area: dot;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 6px;
+}
+
+/* The statement, wrapped rather than cut at eighty characters -- the width
+   is the whole reason this moved out of the sidebar. */
+.lab-history__sql {
+  grid-area: sql;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lab-history__meta {
+  grid-area: meta;
+  font-size: 0.7rem;
+  color: var(--text-muted);
 }
