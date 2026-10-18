@@ -2680,7 +2680,8 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let supported = matches!(
         list.value_type(),
-        DataType::Int8
+        DataType::Boolean
+            | DataType::Int8
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
@@ -2746,6 +2747,9 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
         .iter()
         .map(|value| value.as_ref() as &dyn Array)
         .collect::<Vec<_>>();
+    if chunks.is_empty() {
+        return Ok(arrow::array::new_empty_array(&list.value_type()));
+    }
     Ok(compute::concat(&chunks)?)
 }
 
@@ -10909,6 +10913,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
+                DataType::Boolean => array_extrema_generic(list, take_max, name),
                 DataType::Int8 => {
                     temporal_extrema!(Int8Type, PrimitiveBuilder::<Int8Type>::new())
                 }
@@ -15652,6 +15657,20 @@ mod tests {
         for (name, expected) in [("ARRAY_MIN", -1.0_f32), ("ARRAY_MAX", 2.5_f32)] {
             let result = eval_scalar_function(name, std::slice::from_ref(&floats), 1).unwrap();
             assert_eq!(result.as_primitive::<Float32Type>().value(0), expected);
+        }
+    }
+
+    #[test]
+    fn array_extrema_accept_boolean_lists() {
+        let mut values = ListBuilder::new(BooleanBuilder::new());
+        values.values().append_value(true);
+        values.values().append_null();
+        values.values().append_value(false);
+        values.append(true);
+        let values = Arc::new(values.finish()) as ArrayRef;
+        for (name, expected) in [("ARRAY_MIN", false), ("ARRAY_MAX", true)] {
+            let result = eval_scalar_function(name, std::slice::from_ref(&values), 1).unwrap();
+            assert_eq!(result.as_boolean().value(0), expected);
         }
     }
 
