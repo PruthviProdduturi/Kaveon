@@ -12,7 +12,10 @@
 > `scale-suite-2026-09-16.md`), G5 (ClickBench: every statement has run,
 > geometric mean 1.39× over 42 on the `8d15fd3` pass,
 > `clickbench-2026-09-16.md`) and G6's data (TPC-H SF100 generated as Delta,
-> 21 of 22 statements plan and execute, `tpch/coverage.md`). Open: E3
+> 21 of 22 statements plan and execute, `tpch/coverage.md`). E3's
+> reader/storage gate is verified in
+> `docs/qualification/track1-page-index-bloom-storage-2026-10-18.md`; its
+> end-to-end workload gate remains open. Open: E3
 > (page index and Bloom pruning), E6, E8, E9, E10, D2, D3, P1, P2, P4, P5,
 > P6, G1, G3, G4, the five-round campaigns. `KAVEON_LOCAL_PARALLELISM`
 > defaults to min(cores, 4) since `cf576ca`; the row below that says it
@@ -43,7 +46,7 @@ Ordered by measured payoff. Each item has a done-when, taken from the statements
 |---|---|---|---|
 | E1 | **Row-group pruning that actually skips I/O** | Every columnar engine (Trino, DuckDB, Velox, DataFusion) prunes on footer min/max before scheduling any byte read; a pruned row group costs nothing. | `actions in 2025` and `errors last 7 days` under 1 s; `row_groups_read` equals `row_groups_selected`. |
 | E2 | **Intra-worker parallelism on scans** | Morsel-driven pipelines (DuckDB, Velox, Photon): row groups are the morsels, every core decodes one at a time, partial aggregates merge locally. The Engine already has `ParallelPartials`/`LazyFinalAggregate`; it is off by default and applies after the scan, not to it. | Worker CPU at ≥2.5 of 3 cores during a full pass; `SUM(actions)` under 3 s. |
-| E3 | **Page-index and Bloom pruning** | Parquet ColumnIndex/OffsetIndex prune pages inside a row group; Bloom filters answer `=`/`IN` without decoding. Trino and DuckDB use both. | `surface = 'Chat'` and `country = 'United States'` under 4 s on a page-indexed file (see D1). |
+| E3 | **Page-index and Bloom pruning** | Parquet ColumnIndex/OffsetIndex prune pages inside a row group; Bloom filters answer `=`/`IN` without decoding. Trino and DuckDB use both. The storage gate is verified for local, ADLS-shaped, and generic object readers; see `docs/qualification/track1-page-index-bloom-storage-2026-10-18.md`. | The remaining gate is `surface = 'Chat'` and `country = 'United States'` under 4 s on a page-indexed production-shaped file (see D1), including the distributed/cloud path. |
 | E4 | **Dictionary-aware execution** | Evaluate `=`/`IN` predicates once per dictionary, not per row; group on dictionary indices and map keys once per group (Velox, DuckDB, Photon). The Engine groups on dictionary keys since `e68294c`; the predicate and hash paths do not use them yet. | One Utf8 key within 1.5× of the one-column pass; two keys within 2×. |
 | E5 | **Late materialisation** | Decode only the columns the filter needs, then fetch the rest for surviving rows (Velox, DuckDB `RowFilter` in arrow-rs). The reader already builds a `RowFilter`; extend it to the projection order. | Filtered aggregates read bytes proportional to selectivity (`compressed_bytes_selected`). |
 | E6 | **Per-statement floor** | Plan cache keyed by SQL + catalog snapshot; single dispatch round-trip for one-fragment plans; keep-alive worker connections (already), no exchange for single-row results. | Trivial statements under 200 ms end to end. |

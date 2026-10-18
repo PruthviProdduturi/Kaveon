@@ -45,6 +45,13 @@ other engineer does not see them.
   CI run; do not rewrite the parity tracker as a session log or change Engine
   behavior outside these gate fixes.
 
+- **REQUEST @Claude -- own the independent Engine qualification lane.** Run the
+  page-index/Bloom, cache, and scale gates against the current Engine digest;
+  publish one focused `docs/qualification/` report with command, commit, data
+  shape, metrics, and pass/fail criteria; update the existing tracker rows in
+  place instead of appending a session log. Do not alter Engine behavior or
+  claim a boundary closed without reproducible evidence.
+
 ## Collaboration rules
 
 - Read the ownership rules in `CLAUDE.md` before crossing an ownership boundary.
