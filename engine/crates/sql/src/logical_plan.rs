@@ -554,15 +554,31 @@ fn bind_parameters(
     let mut error = None;
     let mut question_index = 0usize;
     let mut maximum_positional_index = 0usize;
+    let mut saw_question_placeholder = false;
+    let mut saw_dollar_placeholder = false;
     let mut used_named_parameters = std::collections::HashSet::new();
     let mut bind = |expr: &mut ast::Expr| {
         let ast::Expr::Value(ast::Value::Placeholder(name)) = expr else {
             return ControlFlow::<()>::Continue(());
         };
         let index = if name == "?" {
+            if saw_dollar_placeholder {
+                error = Some(sql_err(
+                    "cannot mix '?' and '$n' parameter placeholders".to_owned(),
+                ));
+                return ControlFlow::Break(());
+            }
+            saw_question_placeholder = true;
             question_index += 1;
             question_index
         } else if let Some(index) = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) {
+            if saw_question_placeholder {
+                error = Some(sql_err(
+                    "cannot mix '?' and '$n' parameter placeholders".to_owned(),
+                ));
+                return ControlFlow::Break(());
+            }
+            saw_dollar_placeholder = true;
             maximum_positional_index = maximum_positional_index.max(index);
             index
         } else if let Some(key) = name.strip_prefix(':') {
@@ -6908,6 +6924,26 @@ mod tests {
                 .to_string()
                 .contains("named parameter :unused was supplied but is not used")
         );
+    }
+
+    #[test]
+    fn mixed_positional_parameter_styles_fail_before_planning() {
+        for sql in [
+            "SELECT * FROM t WHERE id = ? AND region = $2",
+            "SELECT * FROM t WHERE id = $1 AND region = ?",
+        ] {
+            let error = sql_to_logical_plan_for_binder_with_parameters(
+                sql,
+                &[ScalarValue::Int64(1), ScalarValue::Utf8("EU".into())],
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot mix '?' and '$n' parameter placeholders"),
+                "{sql}: {error}"
+            );
+        }
     }
 
     #[test]
