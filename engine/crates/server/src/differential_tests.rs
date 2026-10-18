@@ -2002,6 +2002,26 @@ fn distributed_repeat_array_alias_preserves_inner_arrays() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Narrow signed/unsigned integer join keys must widen only for hashing while
+/// preserving NULL exclusion and extreme values through the distributed path.
+#[test]
+fn distributed_narrow_integer_join_keys_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-narrow-integer-join-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT l.k FROM (VALUES (CAST(0 AS SMALLINT)), (CAST(32767 AS SMALLINT)), (CAST(NULL AS SMALLINT))) l(k) JOIN (VALUES (CAST(32767 AS SMALLINT)), (CAST(-32768 AS SMALLINT)), (CAST(NULL AS SMALLINT))) r(k) USING (k) ORDER BY l.k";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-narrow-integer-join", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["32767"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A bounded recursive CTE written with UNION (rather than UNION ALL) should
 /// retain its recursive integer sequence through the distributed planner.
 #[test]
