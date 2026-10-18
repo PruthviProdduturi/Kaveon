@@ -351,14 +351,12 @@ fn relation(
         let source_rows = estimate.rows;
         estimate.rows = estimate.rows.min(*count as u64);
         estimate.bytes = estimate.bytes.map(|bytes| {
-            if source_rows == 0 {
-                0
+            let selectivity = if source_rows == 0 {
+                0.0
             } else {
-                bytes
-                    .saturating_mul(estimate.rows)
-                    .checked_div(source_rows)
-                    .unwrap_or(0)
-            }
+                estimate.rows as f64 / source_rows as f64
+            };
+            scaled_upper_bound(bytes, selectivity)
         });
         return Some(estimate);
     }
@@ -367,14 +365,12 @@ fn relation(
         let source_rows = estimate.rows;
         estimate.rows = source_rows.saturating_sub(*count as u64);
         estimate.bytes = estimate.bytes.map(|bytes| {
-            if source_rows == 0 {
-                0
+            let selectivity = if source_rows == 0 {
+                0.0
             } else {
-                bytes
-                    .saturating_mul(estimate.rows)
-                    .checked_div(source_rows)
-                    .unwrap_or(0)
-            }
+                estimate.rows as f64 / source_rows as f64
+            };
+            scaled_upper_bound(bytes, selectivity)
         });
         return Some(estimate);
     }
@@ -929,6 +925,24 @@ mod tests {
             panic!("join missing")
         };
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn keeps_nonzero_byte_upper_bound_through_a_small_limit() {
+        let plan = sql_to_logical_plan("SELECT id FROM small LIMIT 1").unwrap();
+        let estimate = relation(&plan, &mut |_| {
+            Some(RelationStatistics::exact_with_bytes(
+                3,
+                vec!["id".into()],
+                2,
+            ))
+        })
+        .expect("limited scan should retain exact source statistics");
+
+        assert_eq!(estimate.rows, 1);
+        // A non-empty limited relation must not become a zero-byte build just
+        // because integer division rounded the proportional estimate down.
+        assert_eq!(estimate.bytes, Some(1));
     }
 
     fn estimate(rows: u64, bytes: Option<u64>) -> Estimate {
