@@ -50,6 +50,12 @@ pub(crate) struct BuiltSide {
     reservations: Vec<MemoryReservation>,
 }
 
+impl BuiltSide {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.right.num_rows() == 0
+    }
+}
+
 /// A bounded runtime key filter derived from an in-memory build side. It is
 /// intentionally separate from the join index so callers can apply it to
 /// probe batches before hash probing without changing outer-join semantics.
