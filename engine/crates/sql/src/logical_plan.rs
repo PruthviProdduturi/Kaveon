@@ -8113,6 +8113,17 @@ mod tests {
     }
 
     #[test]
+    fn inferred_recursive_cte_column_lowers_to_sequence_unnest() {
+        let plan = sql_to_logical_plan(
+            "WITH RECURSIVE numbers AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM numbers WHERE n < 3) SELECT n FROM numbers ORDER BY n",
+        )
+        .expect("seed alias should infer a bounded recursive CTE column");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("name: \"SEQUENCE\""), "{debug}");
+        assert!(debug.contains("Unnest"), "{debug}");
+    }
+
+    #[test]
     fn values_relation_lowers_to_columnar_unnest() {
         let plan = sql_to_logical_plan("VALUES (1, 'a'), (2, 'b')").unwrap();
         let LogicalPlan::Unnest {
