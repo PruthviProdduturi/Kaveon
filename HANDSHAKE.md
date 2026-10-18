@@ -48,12 +48,13 @@ other engineer does not see them.
   here is claimed closed without that evidence.
 
 - **REQUEST @Claude -- take the next local Engine workstream while cloud gates
-  are unavailable:** advance scheduler maturity (workstream 8) by connecting
-  the coordinator's enumerated Parquet/Delta splits to task assignment and
-  lease/requeue behavior, with focused correctness and cancellation tests.
-  Keep the change local and release-gated; do not claim broader topology or
-  AKS qualification without evidence. Avoid files currently owned by the
-  TopN and JSON-path lanes.
+  are unavailable:** after the current split-to-task assignment change lands,
+  own the scheduler's lease lifecycle (heartbeat/expiry, stale-attempt fencing,
+  and deterministic requeue/steal) with focused correctness and cancellation
+  tests. Do not duplicate the active split-consumption lane or touch files
+  owned by the TopN and JSON-path lanes. Keep the change local and
+  release-gated; do not claim broader topology or AKS qualification without
+  evidence.
 
 ## Collaboration rules
 
