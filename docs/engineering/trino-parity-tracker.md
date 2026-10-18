@@ -78,3 +78,5 @@ A parity claim requires the exact-result reference, workload inputs, image or
 commit digest, latency/resource measurements, and failure count to be retained
 under `docs/qualification/`. Passing focused tests alone does not qualify a
 three-worker, cloud, or broad federated claim.
+
+<!-- JSON typed coercion evidence: docs/qualification/distributed-json-typed-varchar-2026-10-18.md -->
