@@ -4226,9 +4226,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         if has_int64 && has_integer {
             data_type = DataType::Int64;
         }
-        if data_type == DataType::Int64
-            && args.iter().any(|arg| arg.data_type() == &DataType::Float64)
-        {
+        if has_integer && args.iter().any(|arg| arg.data_type() == &DataType::Float64) {
             data_type = DataType::Float64;
         }
         if data_type == DataType::Utf8
@@ -4241,7 +4239,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         if args.iter().any(|arg| {
             arg.data_type() != &data_type
                 && arg.data_type() != &DataType::Null
-                && !(data_type == DataType::Float64 && arg.data_type() == &DataType::Int64)
+                && !(data_type == DataType::Float64
+                    && matches!(
+                        arg.data_type(),
+                        DataType::Int8
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::Int64
+                            | DataType::UInt8
+                            | DataType::UInt16
+                            | DataType::UInt32
+                            | DataType::UInt64
+                    ))
                 && !(data_type == DataType::LargeUtf8 && arg.data_type() == &DataType::Utf8)
                 && !(data_type == DataType::Int64
                     && matches!(
@@ -4338,6 +4347,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             for row in 0..num_rows {
                 for value in &values {
                     let value = value.as_primitive::<Int64Type>();
+                    builder
+                        .values()
+                        .append_option(value.is_valid(row).then(|| value.value(row)));
+                }
+                builder.append(true);
+            }
+            return Ok(Arc::new(builder.finish()) as ArrayRef);
+        }
+        if data_type == DataType::Float64
+            && args.iter().any(|arg| arg.data_type() != &DataType::Float64)
+        {
+            let values = args
+                .iter()
+                .map(|arg| compute::cast(arg, &DataType::Float64))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut builder = ListBuilder::new(Float64Builder::new());
+            for row in 0..num_rows {
+                for value in &values {
+                    let value = value.as_primitive::<Float64Type>();
                     builder
                         .values()
                         .append_option(value.is_valid(row).then(|| value.value(row)));
@@ -14382,6 +14410,19 @@ mod tests {
         assert_eq!(
             arrays.value(0).as_primitive::<Int64Type>().values(),
             &[1, 2]
+        );
+    }
+
+    #[test]
+    fn array_constructor_promotes_integer_and_double_to_double() {
+        let integer = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let double = Arc::new(Float64Array::from(vec![Some(2.5)])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[integer, double], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Float64);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Float64Type>().values(),
+            &[1.0, 2.5]
         );
     }
 
