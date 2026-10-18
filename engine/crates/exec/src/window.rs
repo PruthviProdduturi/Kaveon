@@ -127,17 +127,21 @@ impl BatchOperator for WindowOperator {
             // ORDER BY while differing only in frame or function. Reuse the
             // expensive lexsort permutation for that exact layout; each
             // expression still evaluates its own frame and output values.
-            let mut sorted_cache = HashMap::<String, Vec<usize>>::new();
+            let mut sorted_cache = HashMap::<String, Arc<Vec<usize>>>::new();
             for expr in &self.expressions {
                 let sort_key = window_sort_key(expr);
                 let sorted = if let Some(sorted) = sorted_cache.get(&sort_key) {
-                    sorted.clone()
+                    Arc::clone(sorted)
                 } else {
-                    let sorted = window_sort_indices(expr, &batch)?;
-                    sorted_cache.insert(sort_key, sorted.clone());
+                    let sorted = Arc::new(window_sort_indices(expr, &batch)?);
+                    sorted_cache.insert(sort_key, Arc::clone(&sorted));
                     sorted
                 };
-                columns.push(evaluate_window_with_sorted(expr, &batch, Some(&sorted))?);
+                columns.push(evaluate_window_with_sorted(
+                    expr,
+                    &batch,
+                    Some(sorted.as_ref()),
+                )?);
             }
             Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?))
         })
