@@ -3,6 +3,7 @@
 import { ReactNode, useState, useEffect, useRef, createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../auth/useAuth";
+import { ServiceNotice } from "./ServiceNotice";
 import { AuthScreen } from "./AuthScreen";
 import { Layout } from "./Layout";
 import { KaveonMark } from "./KaveonMark";
@@ -117,6 +118,10 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   // Authenticated — show sidebar layout
   return (
     <SetupContext.Provider value={{ isSetupOk }}>
+      {/* Only the application surfaces. The public pages above return early
+          and genuinely work, so telling someone reading the documentation
+          that a cluster they were not using is offline would be noise. */}
+      <ServiceNotice />
       <Layout>{children}</Layout>
     </SetupContext.Provider>
   );

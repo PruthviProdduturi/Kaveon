@@ -87,6 +87,30 @@ the `cargo-chef` base carries, which is how a change can pass `cargo fmt`,
 `cargo clippy -D warnings` and the whole test suite and still fail in the
 registry.
 
+## Pausing the hosted demo
+
+When the cluster is deliberately offline, the application surfaces say so
+rather than failing silently. Two Studio variables control it:
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_KAVEON_SERVICE_NOTICE` | The message. Unset, nothing renders. |
+| `NEXT_PUBLIC_KAVEON_SERVICE_NOTICE_RETURNS` | When it is expected back, e.g. `12 November 2026`. |
+
+Ending the window is a configuration change rather than a deploy of new code.
+A dismissal is keyed on the message text, so changing the message shows it
+again to people who dismissed the previous one.
+
+The notice appears only on the application surfaces. `ClientLayout` serves
+`/`, `/login` and `/docs` outside the shell and those are unaffected by the
+cluster being down -- interrupting someone reading the documentation to tell
+them a cluster they were not using is offline would be noise.
+
+Studio is deployed to Vercel and does not depend on the AKS cluster, so the
+product overview and the whole documentation site stay available while the
+cluster is stopped. What stops is everything that reads data: SQL Lab, the
+catalog, charts, dashboards and chat.
+
 ## Manual operator check
 
 ```powershell
