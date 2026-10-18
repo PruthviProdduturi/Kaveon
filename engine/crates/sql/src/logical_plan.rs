@@ -1246,9 +1246,12 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     // the allow-list explicit so scalar functions and
                     // arbitrary table functions remain fail-closed.
                     || name.eq_ignore_ascii_case("ARRAY_CONCAT")
+                    || name.eq_ignore_ascii_case("ARRAY_APPEND")
                     || name.eq_ignore_ascii_case("ARRAY_DISTINCT")
                     || name.eq_ignore_ascii_case("ARRAY_FLATTEN")
                     || name.eq_ignore_ascii_case("ARRAY_REPEAT")
+                    || name.eq_ignore_ascii_case("ARRAY_PREPEND")
+                    || name.eq_ignore_ascii_case("ARRAY_REMOVE")
                     || name.eq_ignore_ascii_case("ARRAY_REVERSE")
                     || name.eq_ignore_ascii_case("ARRAY_SLICE")
                     || name.eq_ignore_ascii_case("ARRAY_SORT")
@@ -5766,6 +5769,18 @@ mod tests {
             plan,
             LogicalPlan::Unnest { columns, .. } if columns == vec!["value"]
         ));
+    }
+
+    #[test]
+    fn parses_array_append_prepend_and_remove_unnest_in_from() {
+        for function in ["ARRAY_APPEND", "ARRAY_PREPEND", "ARRAY_REMOVE"] {
+            let sql = format!("SELECT * FROM UNNEST({function}(ARRAY[1, 2], 3)) AS t(value)");
+            let plan = sql_to_logical_plan(&sql).unwrap();
+            assert!(
+                matches!(plan, LogicalPlan::Unnest { ref columns, .. } if columns == &["value".to_owned()]),
+                "{sql}: {plan:?}"
+            );
+        }
     }
 
     #[test]
