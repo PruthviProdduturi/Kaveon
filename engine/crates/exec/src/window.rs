@@ -1187,6 +1187,37 @@ mod tests {
             vec![Some(3), Some(30), Some(3), Some(30)]
         );
     }
+
+    #[test]
+    fn partitioned_window_keeps_null_keys_together_with_ordered_frames() {
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("group", DataType::Utf8, true),
+                Field::new("x", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![None, Some("a"), None, Some("a")])),
+                Arc::new(Int64Array::from(vec![2, 1, 1, 3])),
+            ],
+        )
+        .unwrap();
+        let expr = Expr::WindowFunction {
+            name: "ROW_NUMBER".into(),
+            args: vec![],
+            partition_by: vec![Expr::Column("group".into())],
+            order_by: vec![(Expr::Column("x".into()), true, false)],
+            frame: None,
+        };
+        assert_eq!(
+            evaluate_window(&expr, &input)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1), Some(1), Some(2)]
+        );
+    }
+
     struct Source {
         schema: SchemaRef,
         batch: Option<RecordBatch>,
