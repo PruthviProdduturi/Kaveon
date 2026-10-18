@@ -11230,6 +11230,11 @@ async fn cancel_query(
     if let Some(store) = &state.disk_exchange_store {
         store.finish_query(&query_id);
     }
+    // The coordinator can use the in-memory exchange store when disk
+    // spooling is disabled. Finalize both stores before returning the cancel
+    // response so chunks already buffered locally cannot survive a client
+    // cancellation or be repopulated by a late producer.
+    let _ = state.exchange_store.finish_query(&query_id);
     if !was_running {
         return StatusCode::NO_CONTENT.into_response();
     }
@@ -17593,6 +17598,26 @@ mod tests {
                 break id;
             }
         };
+        let buffered = crate::exchange::ExchangeChunk {
+            identity: crate::exchange::ExchangeIdentity {
+                exchange_id: kaveon_core::ExchangeId("cancel-exchange".into()),
+                task_id: kaveon_core::TaskId {
+                    query_id: queued_id.clone(),
+                    stage_id: kaveon_core::StageId(0),
+                    partition: 0,
+                    attempt: 0,
+                },
+                output_partition: 0,
+            },
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: axum::body::Bytes::from_static(b"queued-exchange"),
+        };
+        state.exchange_store.insert(buffered.clone()).unwrap();
+        assert_eq!(
+            state.exchange_store.buffered_bytes().unwrap(),
+            buffered.payload.len()
+        );
         super::cancel_query(
             axum::extract::State(state.clone()),
             axum::Extension(analyst.clone()),
@@ -17601,6 +17626,11 @@ mod tests {
         .await;
         let (status, _) = submitting.await.unwrap();
         assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(state.exchange_store.buffered_bytes().unwrap(), 0);
+        assert_eq!(
+            state.exchange_store.insert(buffered),
+            Err(crate::exchange::ExchangeError::QueryFinished)
+        );
         drop(occupied);
         let canceled = ledger_lines(
             &state,
