@@ -580,20 +580,24 @@ impl Binder<'_> {
                 let mut correlations = left.correlations;
                 correlations.extend(deeper);
                 if !lateral.is_empty() {
-                    let key_names = lateral
-                        .iter()
-                        .map(|correlation| match correlation {
-                            Correlation::Key { inner, .. } => Ok(inner.clone()),
-                            Correlation::Residual { .. } => Err(KaveonError::Sql(
-                                "a positive correlated scalar OFFSET requires equality correlations only; OFFSET inside a correlated subquery is not supported for residual predicates"
-                                    .into(),
-                            )),
-                        })
-                        .collect::<Result<Vec<_>>>()?;
                     if let Some((mut plan, offset, limit, order_by)) =
                         peel_scalar_paging(right.plan.clone())
                     {
                         if offset > 0 && limit == 1 {
+                            // Equality correlations are required only by the
+                            // per-key ROW_NUMBER rewrite below. Ordinary
+                            // residual LATERAL joins do not use that rewrite
+                            // and must retain their residual predicates.
+                            let key_names = lateral
+                                .iter()
+                                .map(|correlation| match correlation {
+                                    Correlation::Key { inner, .. } => Ok(inner.clone()),
+                                    Correlation::Residual { .. } => Err(KaveonError::Sql(
+                                        "a positive correlated scalar OFFSET requires equality correlations only; OFFSET inside a correlated subquery is not supported for residual predicates"
+                                            .into(),
+                                    )),
+                                })
+                                .collect::<Result<Vec<_>>>()?;
                             // The scalar projection hides the sort keys. Carry
                             // each key through that projection before the
                             // per-key window evaluates it; otherwise the
