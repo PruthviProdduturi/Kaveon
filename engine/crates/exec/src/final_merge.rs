@@ -113,6 +113,7 @@ pub struct HybridFinalMerge {
     drained: bool,
     failed: bool,
     spilled: FinalMergeSpill,
+    spill_threshold: u64,
 }
 
 impl HybridFinalMerge {
@@ -133,6 +134,7 @@ impl HybridFinalMerge {
             return Err(error("final merge needs at least one sub-partition"));
         }
         let partitions = spill.as_ref().map_or(0, |(_, count)| *count);
+        let spill_threshold = memory.query().snapshot().limit_bytes / 2;
         Ok(Self {
             source: Some(source),
             schema,
@@ -165,6 +167,7 @@ impl HybridFinalMerge {
             drained: false,
             failed: false,
             spilled: FinalMergeSpill::default(),
+            spill_threshold,
         })
     }
 
@@ -442,6 +445,21 @@ impl HybridFinalMerge {
                 }
             } else {
                 self.push(batch)?;
+                // Threaded final merges share a query budget with their
+                // partials. Spill a live table once its account crosses
+                // half the budget so a sibling refusal can still make room;
+                // serial merges retain the refusal-driven path below.
+                if self
+                    .merger
+                    .as_ref()
+                    .is_some_and(|merger| merger.group_count() > 0)
+                    && self.spill.is_some()
+                    && self.pressure.is_some()
+                    && self.memory.snapshot().current_bytes > self.spill_threshold
+                {
+                    let merger = self.merger.take().expect("checked above");
+                    self.spill_table(merger)?;
+                }
             }
         }
         Ok(())
