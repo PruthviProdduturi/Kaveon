@@ -720,7 +720,10 @@ verifies the `SEQUENCE(1, 5, 1)` equivalent and the parser regression verifies t
 recursive keyword is removed only after the safe rewrite. A malformed or
 non-linear recursive CTE still reaches the explicit unsupported-recursion
 diagnostic; general recursive graphs, multiple members, joins, and cycle
-detection are not claimed.
+detection are not claimed. The same bounded form also accepts an explicit
+`AS numbers` alias on both the seed and recursive projection, provided those
+aliases match the declared CTE column; unrelated aliases remain outside the
+rewrite so they cannot silently change column semantics.
 
 Validation on the clean checkout:
 

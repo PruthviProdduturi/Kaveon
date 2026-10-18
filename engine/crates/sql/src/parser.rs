@@ -107,17 +107,20 @@ fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
     // identical results for UNION and UNION ALL. Accept both spellings while
     // keeping general recursive UNION graphs explicitly unsupported.
     let (seed_sql, recursive_sql) = split_top_level_union(body)?;
-    let seed = parse_single_integer_select(seed_sql.trim())?;
+    let seed = parse_single_integer_select(seed_sql.trim(), &column)?;
     let tokens = recursive_sql.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() != 10
+    let from = if tokens.len() == 12 { 6 } else { 4 };
+    if !(tokens.len() == 10 || tokens.len() == 12)
         || !tokens[0].eq_ignore_ascii_case("SELECT")
         || !tokens[1].eq_ignore_ascii_case(&column)
         || !matches!(tokens[2], "+" | "-")
-        || !tokens[4].eq_ignore_ascii_case("FROM")
-        || !tokens[5].eq_ignore_ascii_case(&cte_name)
-        || !tokens[6].eq_ignore_ascii_case("WHERE")
-        || !tokens[7].eq_ignore_ascii_case(&column)
-        || !matches!(tokens[8], "<" | "<=" | ">" | ">=")
+        || !tokens[from].eq_ignore_ascii_case("FROM")
+        || (tokens.len() == 12
+            && (!tokens[4].eq_ignore_ascii_case("AS") || !tokens[5].eq_ignore_ascii_case(&column)))
+        || !tokens[from + 1].eq_ignore_ascii_case(&cte_name)
+        || !tokens[from + 2].eq_ignore_ascii_case("WHERE")
+        || !tokens[from + 3].eq_ignore_ascii_case(&column)
+        || !matches!(tokens[from + 4], "<" | "<=" | ">" | ">=")
     {
         return None;
     }
@@ -127,11 +130,11 @@ fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
     } else {
         magnitude
     };
-    let bound = tokens[9].parse::<i64>().ok()?;
+    let bound = tokens[from + 5].parse::<i64>().ok()?;
     if step == 0 {
         return None;
     }
-    let stop = match (step.signum(), tokens[8]) {
+    let stop = match (step.signum(), tokens[from + 4]) {
         (1, "<") => bound,
         (1, "<=") => bound.checked_add(step)?,
         (-1, ">") => bound,
@@ -263,12 +266,18 @@ fn split_top_level_union(body: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_single_integer_select(sql: &str) -> Option<i64> {
+fn parse_single_integer_select(sql: &str, column: &str) -> Option<i64> {
     let tokens = sql.split_whitespace().collect::<Vec<_>>();
-    if tokens.len() == 2 && tokens[0].eq_ignore_ascii_case("SELECT") {
-        tokens[1].parse().ok()
-    } else {
-        None
+    match tokens.as_slice() {
+        [select, value] if select.eq_ignore_ascii_case("SELECT") => value.parse().ok(),
+        [select, value, as_token, alias]
+            if select.eq_ignore_ascii_case("SELECT")
+                && as_token.eq_ignore_ascii_case("AS")
+                && alias.eq_ignore_ascii_case(column) =>
+        {
+            value.parse().ok()
+        }
+        _ => None,
     }
 }
 
@@ -956,6 +965,21 @@ mod tests {
         let rendered = statements[0].to_string();
         assert!(rendered.contains("SEQUENCE(1, 3, 1)"), "{rendered}");
         assert!(!rendered.contains("WITH RECURSIVE"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_linear_recursive_cte_accepts_matching_seed_and_step_aliases() {
+        let source = "WITH RECURSIVE numbers(n) AS (SELECT 1 AS n UNION ALL SELECT n + 1 AS n FROM numbers WHERE n < 3) SELECT n FROM numbers ORDER BY n";
+        assert!(
+            normalize_bounded_linear_recursive_cte(source).is_some(),
+            "rewrite should match"
+        );
+        let statements = parse_sql(source).expect("aliased bounded recursive CTE should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("SEQUENCE(1, 3, 1)"), "{rendered}");
+        assert!(!rendered.contains("WITH RECURSIVE"), "{rendered}");
+        let mismatched = source.replace("AS n FROM numbers", "AS other FROM numbers");
+        assert!(normalize_bounded_linear_recursive_cte(&mismatched).is_none());
     }
 
     #[test]
