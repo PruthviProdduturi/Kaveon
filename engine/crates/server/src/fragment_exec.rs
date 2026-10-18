@@ -1224,7 +1224,7 @@ pub(crate) fn compile_final_aggregate(
     {
         let spill = kaveon_exec::partitioned::spill_from_environment(memory)?;
         return hybrid_final_aggregate(
-            input, group_by, aggregates, memory, spill, None, None, None,
+            input, group_by, aggregates, memory, spill, None, None, None, true,
         );
     }
     compile_final_aggregate_in_memory(input, group_by, aggregates, memory)
@@ -1410,6 +1410,7 @@ pub(crate) fn compile_final_aggregate_parallel(
                 None,
                 None,
                 None,
+                true,
             )?,
             memory,
         );
@@ -1477,6 +1478,7 @@ pub(crate) fn compile_final_aggregate_parallel(
                     .pressure
                     .as_ref()
                     .map(|pressure| pressure.responder(context.index)),
+                true,
             )?;
             match &thread_tail {
                 Some(tail) => tail(merged, Some(pool)),
@@ -1539,6 +1541,7 @@ fn hybrid_final_aggregate(
     rendezvous: Option<kaveon_exec::local_parallel::RendezvousTicket>,
     selection: Option<(usize, usize)>,
     pressure: Option<kaveon_exec::local_parallel::PressureTicket>,
+    proactive_spill: bool,
 ) -> Result<Box<dyn BatchOperator>> {
     let group_types = grouped_aggregate_key_types(input.schema())?;
     if group_types.len() != group_by.len() {
@@ -1562,6 +1565,7 @@ fn hybrid_final_aggregate(
     if let Some(ticket) = pressure {
         merge = merge.with_pressure(ticket);
     }
+    merge = merge.with_proactive_spill(proactive_spill);
     Ok(Box::new(HybridFinalOutput {
         merge,
         schema,
@@ -1604,6 +1608,12 @@ struct FinalUnit {
     groups: FinalGroups,
     _reservations: Vec<kaveon_core::MemoryReservation>,
     offset: usize,
+}
+
+impl Drop for HybridFinalOutput {
+    fn drop(&mut self) {
+        self.merge.cancel();
+    }
 }
 
 enum FinalGroups {
@@ -1670,9 +1680,11 @@ impl BatchOperator for HybridFinalOutput {
             self.current = None;
             let Some((merged, reservations)) = self.merge.next_groups()? else {
                 if self.emitted {
+                    self.merge.cancel();
                     return Ok(None);
                 }
                 self.emitted = true;
+                self.merge.cancel();
                 return Ok(Some(RecordBatch::new_empty(Arc::clone(&self.schema))));
             };
             let groups = match merged {
@@ -2815,6 +2827,7 @@ mod tests {
             None,
             None,
             None,
+            true,
         )
         .unwrap();
         let mut rows = 0;
@@ -2994,6 +3007,7 @@ mod tests {
             None,
             None,
             None,
+            true,
         )
         .unwrap();
         let output = operator.next_batch().unwrap().unwrap();
