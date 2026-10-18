@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::scan_predicate::RowFilterPlan;
+use crate::scan_predicate::{RowFilterPlan, rescale_decimal128, rescale_decimal256};
 use crate::{ScanMetrics, ScanPartition};
 
 // Larger batches amortize parquet decoder and aggregate dispatch overhead on
@@ -1327,7 +1327,8 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
         (
             ScalarValue::Decimal128 { scale, value, .. },
             DataType::Decimal128(precision, column_scale),
-        ) => scale == column_scale && decimal_fits_precision(*value, *precision),
+        ) => rescale_decimal128(*value, *scale, *column_scale)
+            .is_some_and(|value| decimal_fits_precision(value, *precision)),
         (
             ScalarValue::Decimal256 {
                 value,
@@ -1335,11 +1336,9 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
                 scale,
             },
             DataType::Decimal256(column_precision, column_scale),
-        ) => {
-            scale == column_scale
-                && arrow::datatypes::i256::from_string(value).is_some()
-                && decimal256_fits_precision(value, *column_precision)
-        }
+        ) => arrow::datatypes::i256::from_string(value)
+            .and_then(|value| rescale_decimal256(value, *scale, *column_scale))
+            .is_some_and(|value| decimal256_fits_precision(&value.to_string(), *column_precision)),
         (ScalarValue::Utf8(_), DataType::Utf8 | DataType::LargeUtf8) => true,
         _ => false,
     }
@@ -1954,6 +1953,52 @@ mod tests {
     }
 
     #[test]
+    fn applies_decimal_runtime_filter_after_exact_scale_conversion() {
+        let file = decimal_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["amount".to_owned()])
+            .read()
+            .expect("Decimal source must open");
+        // The build side carries DECIMAL(38,3), while the parquet probe is
+        // DECIMAL(10,2).  1.250 and 4.000 are exactly representable at the
+        // probe scale and must survive validation and predicate compilation.
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "amount",
+                    &[
+                        ScalarValue::Decimal128 {
+                            value: 1_250,
+                            precision: 38,
+                            scale: 3,
+                        },
+                        ScalarValue::Decimal128 {
+                            value: 4_000,
+                            precision: 38,
+                            scale: 3,
+                        },
+                    ],
+                )
+                .expect("scale-convertible Decimal runtime filter must be accepted")
+        );
+        let values = source
+            .collect::<Result<Vec<_>>>()
+            .expect("scale-converted Decimal runtime filter must decode")
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .expect("Decimal output")
+                    .iter()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![125, 400]);
+    }
+
+    #[test]
     fn applies_decimal256_runtime_filter_without_narrowing() {
         let file = decimal256_fixture();
         let mut source = ParquetReader::new(&file.0)
@@ -1983,6 +2028,50 @@ mod tests {
             .collect::<Result<Vec<_>>>()
             .expect("Decimal256 runtime-filtered parquet must decode");
         let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Decimal256Array>()
+                    .expect("Decimal256 output")
+                    .iter()
+                    .flatten()
+                    .map(|value| value.to_string())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec!["125".to_owned(), "400".to_owned()]);
+    }
+
+    #[test]
+    fn applies_decimal256_runtime_filter_after_exact_scale_conversion() {
+        let file = decimal256_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["amount".to_owned()])
+            .read()
+            .expect("Decimal256 source must open");
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "amount",
+                    &[
+                        ScalarValue::Decimal256 {
+                            value: "1250".to_owned(),
+                            precision: 76,
+                            scale: 3,
+                        },
+                        ScalarValue::Decimal256 {
+                            value: "4000".to_owned(),
+                            precision: 76,
+                            scale: 3,
+                        },
+                    ],
+                )
+                .expect("scale-convertible Decimal256 runtime filter must be accepted")
+        );
+        let values = source
+            .collect::<Result<Vec<_>>>()
+            .expect("scale-converted Decimal256 runtime filter must decode")
             .iter()
             .flat_map(|batch| {
                 batch

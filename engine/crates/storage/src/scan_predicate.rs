@@ -352,7 +352,7 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
 /// accepted only when discarded digits are zero; increasing scale is checked
 /// for overflow. Returning None deliberately leaves the runtime filter at the
 /// exact batch-level path when coercion would be lossy.
-fn rescale_decimal128(value: i128, from_scale: i8, to_scale: i8) -> Option<i128> {
+pub(crate) fn rescale_decimal128(value: i128, from_scale: i8, to_scale: i8) -> Option<i128> {
     let delta = i32::from(to_scale) - i32::from(from_scale);
     if delta == 0 {
         return Some(value);
@@ -365,7 +365,7 @@ fn rescale_decimal128(value: i128, from_scale: i8, to_scale: i8) -> Option<i128>
     }
 }
 
-fn rescale_decimal256(
+pub(crate) fn rescale_decimal256(
     value: arrow::datatypes::i256,
     from_scale: i8,
     to_scale: i8,
