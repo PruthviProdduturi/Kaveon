@@ -109,6 +109,28 @@ impl BuildKeyFilter {
                 .into());
         }
         if let (
+            JoinIndex::Bool {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let values = batch
+                .column(*left)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| exec_err("runtime filter key type changed after planning"))?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    values.is_valid(row)
+                        && (first_rows.contains_key(&values.value(row))
+                            || duplicate_rows.contains_key(&values.value(row)))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
             JoinIndex::UInt64 {
                 first_rows,
                 duplicate_rows,
@@ -247,6 +269,12 @@ impl BuildKeyFilter {
             .first()
             .map(|(left, _)| schema.field(*left).name().to_owned());
         let values = match &self.index {
+            JoinIndex::Bool { first_rows, .. } => Some(
+                first_rows
+                    .keys()
+                    .map(|value| ScalarValue::Bool(*value))
+                    .collect(),
+            ),
             JoinIndex::Int32 { first_rows, .. } => Some(
                 first_rows
                     .keys()
@@ -1078,6 +1106,10 @@ enum Key {
 /// Other key layouts use the existing exact typed composite representation.
 #[derive(Clone)]
 enum JoinIndex {
+    Bool {
+        first_rows: AHashMap<bool, usize>,
+        duplicate_rows: AHashMap<bool, Vec<usize>>,
+    },
     Int32 {
         first_rows: AHashMap<i32, usize>,
         duplicate_rows: AHashMap<i32, Vec<usize>>,
@@ -1112,6 +1144,33 @@ impl JoinIndex {
         keys: &[(usize, usize)],
         memory: Option<&OperatorMemoryAccount>,
     ) -> Result<Self> {
+        if let [(.., index)] = keys
+            && right.column(*index).data_type() == &DataType::Boolean
+        {
+            let values = right.column(*index).as_boolean();
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<bool, Vec<usize>> = AHashMap::new();
+            for row in 0..values.len() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if values.is_valid(row) {
+                    let key = values.value(row);
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Bool {
+                first_rows,
+                duplicate_rows,
+            });
+        }
         if let [(.., index)] = keys
             && right.column(*index).data_type() == &DataType::Int32
         {
@@ -1321,6 +1380,25 @@ impl JoinIndex {
         keys: &[(usize, usize)],
     ) -> Result<Option<&[usize]>> {
         Ok(match self {
+            Self::Bool {
+                first_rows,
+                duplicate_rows,
+            } => {
+                let values = left.column(keys[0].0).as_boolean();
+                if values.is_null(row) {
+                    None
+                } else {
+                    let key = values.value(row);
+                    if duplicate_rows.is_empty() {
+                        first_rows.get(&key).map(std::slice::from_ref)
+                    } else {
+                        duplicate_rows
+                            .get(&key)
+                            .map(Vec::as_slice)
+                            .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                    }
+                }
+            }
             Self::Int32 {
                 first_rows,
                 duplicate_rows,
@@ -2027,6 +2105,47 @@ mod tests {
         assert_eq!(
             mask.iter().collect::<Vec<_>>(),
             vec![Some(false), Some(true), Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn boolean_runtime_filter_uses_typed_index_and_storage_predicate() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "enabled",
+            DataType::Boolean,
+            true,
+        )]));
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let StoragePredicate::In { values, .. } = filter.storage_predicate(&schema).unwrap() else {
+            panic!("expected boolean single-key IN predicate");
+        };
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&ScalarValue::Bool(true)));
+        assert!(values.contains(&ScalarValue::Bool(false)));
+        let mask = filter.filter_batch(&probe).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(false)]
         );
     }
 
