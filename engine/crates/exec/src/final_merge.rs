@@ -455,13 +455,17 @@ impl HybridFinalMerge {
     /// shared query budget. The selection and non-selection paths use the
     /// same pressure policy.
     fn spill_at_shared_pressure(&mut self) -> Result<()> {
+        let threshold = if self.rendezvous.is_some() {
+            self.spill_threshold / 5
+        } else {
+            self.spill_threshold
+        };
         if self
             .merger
             .as_ref()
             .is_some_and(|merger| merger.group_count() > 0)
             && self.spill.is_some()
-            && self.pressure.is_some()
-            && self.memory.snapshot().current_bytes > self.spill_threshold
+            && self.memory.query().snapshot().current_bytes > threshold
         {
             let merger = self.merger.take().expect("checked above");
             self.spill_table(merger)?;
