@@ -3923,6 +3923,30 @@ fn trino_expr_type(expression: &Expr) -> String {
             "bigint".to_owned()
         }
         Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_PARSE") => "json".to_owned(),
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ARRAY") => {
+            let element_type = args
+                .iter()
+                .map(trino_expr_type)
+                .find(|data_type| data_type != "unknown")
+                .unwrap_or_else(|| "unknown".to_owned());
+            format!("array({element_type})")
+        }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") => {
+            let [keys, values] = args.as_slice() else {
+                return "unknown".to_owned();
+            };
+            let key_type = trino_expr_type(keys)
+                .strip_prefix("array(")
+                .and_then(|data_type| data_type.strip_suffix(')'))
+                .unwrap_or("unknown")
+                .to_owned();
+            let value_type = trino_expr_type(values)
+                .strip_prefix("array(")
+                .and_then(|data_type| data_type.strip_suffix(')'))
+                .unwrap_or("unknown")
+                .to_owned();
+            format!("map({key_type},{value_type})")
+        }
         Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_FORMAT") => {
             "varchar".to_owned()
         }
@@ -23301,6 +23325,20 @@ mod streamed_root_tests {
                 ("total".to_owned(), "bigint".to_owned(), true),
                 ("is_ordered".to_owned(), "boolean".to_owned(), true),
                 ("label".to_owned(), "varchar".to_owned(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn trino_describe_output_infers_array_and_map_metadata() {
+        let metadata =
+            trino_output_metadata("SELECT ARRAY[1, 2] AS ids, MAP(ARRAY['a'], ARRAY[1]) AS flags")
+                .expect("complex expression metadata");
+        assert_eq!(
+            metadata,
+            vec![
+                ("ids".to_owned(), "array(bigint)".to_owned(), true),
+                ("flags".to_owned(), "map(varchar,bigint)".to_owned(), true),
             ]
         );
     }
