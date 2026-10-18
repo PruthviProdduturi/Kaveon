@@ -1587,6 +1587,17 @@ mod tests {
     }
 
     #[test]
+    fn json_path_mode_prefixes_accept_whitespace_separators() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, 'lax   $.x'), JSON_QUERY(payload, 'strict\t$.items') FROM t",
+        )
+        .expect("SQL/JSON mode prefixes should allow whitespace separators");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("'lax   $.x'"), "{rendered}");
+        assert!(rendered.contains("'strict\t$.items'"), "{rendered}");
+    }
+
+    #[test]
     fn json_query_typed_error_default_lowers_through_cast() {
         let statements = parse_sql(
             "SELECT JSON_QUERY('not-json', '$.missing' RETURNING JSON ON ERROR DEFAULT '{\"fallback\":2}') FROM t",
