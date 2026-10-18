@@ -1320,6 +1320,7 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
                     | DataType::UInt64
                     | DataType::Date32
                     | DataType::Date64
+                    | DataType::Timestamp(_, _)
             )
             | (
                 ScalarValue::Float64(_),
@@ -1377,8 +1378,8 @@ fn parquet_error(error: parquet::errors::ParquetError) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Date64Array, Int32Array, StringArray};
-    use arrow::datatypes::{Field, Schema};
+    use arrow::array::{ArrayRef, Date64Array, Int32Array, StringArray, TimestampMicrosecondArray};
+    use arrow::datatypes::{Field, Schema, TimeUnit};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -1459,6 +1460,40 @@ mod tests {
             .expect("Date64 writer must be valid");
         writer.write(&batch).expect("Date64 batch must be writable");
         writer.close().expect("Date64 writer must close");
+        file
+    }
+
+    fn timestamp_fixture() -> TestFile {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-timestamp-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "at",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![
+                1_704_067_200_000_000,
+                1_706_745_600_000_000,
+                1_709_251_200_000_000,
+                1_711_929_600_000_000,
+            ])) as ArrayRef],
+        )
+        .expect("Timestamp batch must be valid");
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let output = File::create(&file.0).expect("Timestamp file must be creatable");
+        let mut writer = ArrowWriter::try_new(output, schema, Some(properties))
+            .expect("Timestamp writer must be valid");
+        writer
+            .write(&batch)
+            .expect("Timestamp batch must be writable");
+        writer.close().expect("Timestamp writer must close");
         file
     }
 
@@ -1611,6 +1646,14 @@ mod tests {
     }
 
     #[test]
+    fn runtime_filter_accepts_timestamp_columns() {
+        assert!(scalar_matches_data_type(
+            &ScalarValue::Int64(1_706_745_600_000_000),
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        ));
+    }
+
+    #[test]
     fn applies_date64_runtime_filter_before_parquet_decode() {
         let file = date64_fixture();
         let mut source = ParquetReader::new(&file.0)
@@ -1638,6 +1681,36 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![1_706_745_600_000]);
+    }
+
+    #[test]
+    fn applies_timestamp_runtime_filter_before_parquet_decode() {
+        let file = timestamp_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["at".to_owned()])
+            .read()
+            .expect("Timestamp source must open");
+        assert!(
+            source
+                .apply_runtime_filter("at", &[ScalarValue::Int64(1_706_745_600_000_000)])
+                .expect("Timestamp runtime filter must be accepted")
+        );
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("Timestamp runtime-filtered parquet must decode");
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .expect("Timestamp output")
+                    .iter()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1_706_745_600_000_000]);
     }
 
     #[test]

@@ -282,7 +282,8 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
             | DataType::UInt32
             | DataType::UInt64
             | DataType::Date32
-            | DataType::Date64,
+            | DataType::Date64
+            | DataType::Timestamp(_, _),
         ) => {
             let literal = Int64Array::from(vec![*value]);
             arrow::compute::cast_with_options(
