@@ -2294,6 +2294,47 @@ fn nested_sortable_type(data_type: &DataType) -> bool {
     }
 }
 
+/// Which way `ARRAY_SORT`/`ARRAY_SORT_DESC` orders present values.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum SortDirection {
+    Ascending,
+    Descending,
+}
+
+impl SortDirection {
+    /// The SQL function this direction belongs to, for error messages.
+    fn function(self) -> &'static str {
+        match self {
+            Self::Ascending => "ARRAY_SORT",
+            Self::Descending => "ARRAY_SORT_DESC",
+        }
+    }
+}
+
+/// Order two array elements, honouring the requested direction.
+///
+/// NULL is not one of the values being ordered: Trino sorts it after every
+/// value in *both* directions, so `ARRAY_SORT_DESC` is not `ARRAY_SORT`
+/// reversed -- reversing would lead with the nulls. The direction is therefore
+/// applied only when both sides are present, and the null cases keep the
+/// ordering `compare_sort_entries` already defines.
+fn compare_sort_entries_directed(
+    left: Option<&ArrayRef>,
+    right: Option<&ArrayRef>,
+    direction: SortDirection,
+) -> Result<std::cmp::Ordering> {
+    match (left, right) {
+        (Some(_), Some(_)) => {
+            let ordering = compare_sort_entries(left, right)?;
+            Ok(match direction {
+                SortDirection::Ascending => ordering,
+                SortDirection::Descending => ordering.reverse(),
+            })
+        }
+        _ => compare_sort_entries(left, right),
+    }
+}
+
 fn compare_sort_entries(
     left: Option<&ArrayRef>,
     right: Option<&ArrayRef>,
@@ -2318,6 +2359,13 @@ fn compare_sort_entries(
 }
 
 fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    array_sort_generic_directed(list, SortDirection::Ascending)
+}
+
+fn array_sort_generic_directed<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    direction: SortDirection,
+) -> Result<ArrayRef> {
     let supported = matches!(
         list.value_type(),
         DataType::Int8
@@ -2350,7 +2398,8 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
     ) && nested_sortable_type(&list.value_type());
     if !supported {
         return Err(KaveonError::Execution(format!(
-            "ARRAY_SORT does not support list element type {}",
+            "{} does not support list element type {}",
+            direction.function(),
             list.value_type()
         )));
     }
@@ -2361,7 +2410,7 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
         if list.is_null(row) {
             valid.push(false);
             offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
-                KaveonError::Execution("ARRAY_SORT result offset overflow".into())
+                KaveonError::Execution(format!("{} result offset overflow", direction.function()))
             })?);
             continue;
         }
@@ -2382,8 +2431,11 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
         for index in 1..entries.len() {
             let mut cursor = index;
             while cursor > 0
-                && compare_sort_entries(entries[cursor - 1].as_ref(), entries[cursor].as_ref())?
-                    == std::cmp::Ordering::Greater
+                && compare_sort_entries_directed(
+                    entries[cursor - 1].as_ref(),
+                    entries[cursor].as_ref(),
+                    direction,
+                )? == std::cmp::Ordering::Greater
             {
                 entries.swap(cursor - 1, cursor);
                 cursor -= 1;
@@ -2392,11 +2444,9 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
         selected.extend(entries.into_iter().map(|value| {
             value.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1))
         }));
-        offsets.push(
-            L::from_usize(selected.len()).ok_or_else(|| {
-                KaveonError::Execution("ARRAY_SORT result offset overflow".into())
-            })?,
-        );
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution(format!("{} result offset overflow", direction.function()))
+        })?);
     }
     let values = if selected.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
@@ -7347,6 +7397,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "ARRAY_DISTINCT does not support list element type {other}"
                 ))),
             }
+        }
+        // Routed entirely through the generic path rather than the primitive
+        // fast paths below: that path already covers every element type
+        // ARRAY_SORT accepts, and one correct implementation is worth more
+        // here than a second set of per-type macros to keep in step.
+        "ARRAY_SORT_DESC" => {
+            check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_sort_generic_directed(list, SortDirection::Descending);
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_SORT_DESC requires an ARRAY/List value".into())
+                })?;
+            array_sort_generic_directed(list, SortDirection::Descending)
         }
         "ARRAY_SORT" => {
             check_arity(name, args, 1)?;
@@ -14553,6 +14620,67 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some(1), Some(2), Some(3), None]
+        );
+    }
+
+    #[test]
+    fn array_sort_desc_orders_values_descending_and_keeps_nulls_last() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT_DESC".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(3)),
+                        Expr::Literal(ScalarValue::Null),
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_primitive::<Int64Type>();
+        // Descending values, and the NULL still trails them. Reversing the
+        // ascending result would have led with it: [None, 3, 2, 1].
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(3), Some(2), Some(1), None]
+        );
+    }
+
+    #[test]
+    fn array_sort_desc_orders_strings_descending() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT_DESC".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("apple".into())),
+                        Expr::Literal(ScalarValue::Utf8("pear".into())),
+                        Expr::Literal(ScalarValue::Utf8("fig".into())),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("pear"), Some("fig"), Some("apple")]
         );
     }
 

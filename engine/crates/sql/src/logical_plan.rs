@@ -1252,6 +1252,7 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("ARRAY_REVERSE")
                     || name.eq_ignore_ascii_case("ARRAY_SLICE")
                     || name.eq_ignore_ascii_case("ARRAY_SORT")
+                    || name.eq_ignore_ascii_case("ARRAY_SORT_DESC")
                     || name.eq_ignore_ascii_case("ARRAY_ZIP")
                     || name.eq_ignore_ascii_case("MAP_KEYS")
                     || name.eq_ignore_ascii_case("MAP_VALUES")
