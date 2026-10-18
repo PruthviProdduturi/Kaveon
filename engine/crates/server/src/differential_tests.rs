@@ -1965,6 +1965,26 @@ fn distributed_map_keys_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Missing map keys return false/NULL through the Trino-compatible lookup
+/// functions without turning absence into an execution error.
+#[test]
+fn distributed_map_lookup_missing_key_matches_trino_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-map-lookup-missing-key-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT MAP_CONTAINS_KEY(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'missing') AS has_key, MAP_ELEMENT_AT(MAP(ARRAY['a', 'b'], ARRAY[10, 20]), 'missing') AS value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-lookup-missing-key", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["false\u{1f}NULL"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// MAP_VALUES is a row-producing map projection and must retain value order
 /// and values through the distributed UNNEST path, just like MAP_KEYS.
 #[test]
