@@ -912,6 +912,8 @@ pub struct PartitionedHashAggregate {
     schema: SchemaRef,
     group_by: Vec<String>,
     aggregates: Vec<AggExpr>,
+    group_types: Vec<arrow::datatypes::DataType>,
+    aggregate_types: Vec<arrow::datatypes::DataType>,
     memory: OperatorMemoryAccount,
     spill: SpillManager,
     count: usize,
@@ -1311,6 +1313,16 @@ impl PartitionedHashAggregate {
     ) -> Result<Self> {
         validate_partitions(partition_count)?;
         let input_schema = Arc::clone(source.schema());
+        let group_types = group_by
+            .iter()
+            .map(|name| {
+                input_schema
+                    .field_with_name(name)
+                    .map(|field| crate::aggregate::exchanged_group_key_type(field.data_type()))
+                    .map_err(KaveonError::from)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate_types = aggregate_output_types(&aggregates, &input_schema)?;
         let probe = HashAggregate::new(
             Box::new(RunSource::new(Arc::clone(&input_schema), Vec::new())),
             group_by.clone(),
@@ -1327,6 +1339,8 @@ impl PartitionedHashAggregate {
             schema: Arc::clone(probe.schema()),
             group_by,
             aggregates,
+            group_types,
+            aggregate_types,
             memory,
             spill,
             count,
@@ -1371,25 +1385,11 @@ impl PartitionedHashAggregate {
         operator.partial = true;
         operator.schema = grouped_aggregate_states_to_schema_batch(
             &[],
-            &operator.group_types()?,
-            &aggregate_output_types(&operator.aggregates, &operator.input_schema)?,
+            &operator.group_types,
+            &operator.aggregate_types,
         )?
         .schema();
         Ok(operator)
-    }
-
-    fn group_types(&self) -> Result<Vec<arrow::datatypes::DataType>> {
-        // Keys leave the operator as their logical values (a dictionary
-        // column as its value type), the same as the in-memory aggregate.
-        self.group_by
-            .iter()
-            .map(|name| {
-                self.input_schema
-                    .field_with_name(name)
-                    .map(|field| crate::aggregate::exchanged_group_key_type(field.data_type()))
-                    .map_err(KaveonError::from)
-            })
-            .collect()
     }
 
     fn aggregate_batch(
@@ -1407,10 +1407,8 @@ impl PartitionedHashAggregate {
             operator = operator.with_reserved_input();
         }
         let batch = if self.partial {
-            let (batch, _state_memory) = operator.into_partial_batch(
-                &self.group_types()?,
-                &aggregate_output_types(&self.aggregates, &self.input_schema)?,
-            )?;
+            let (batch, _state_memory) =
+                operator.into_partial_batch(&self.group_types, &self.aggregate_types)?;
             Some(batch)
         } else {
             operator.next_batch()?
