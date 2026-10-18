@@ -340,20 +340,33 @@ fn try_sorted_batch_top_n(
         return Ok(None);
     }
 
-    let mut cursors = vec![0usize; batches.len()];
+    // Keep only one head per worker in a binary heap.  The previous linear
+    // scan was O(limit * workers), which made a large distributed TopN spend
+    // most of its coordinator time comparing the same worker heads over and
+    // over.  The heap keeps the exact comparator and tie behavior while
+    // reducing the merge to O(limit * log(workers)).
+    let mut heap = batches
+        .iter()
+        .enumerate()
+        .filter_map(|(batch, input)| (input.num_rows() > 0).then_some((batch, 0)))
+        .collect::<Vec<_>>();
+    heap_build(&mut heap, |left, right| {
+        compare(offsets[left.0] + left.1, offsets[right.0] + right.1)
+    });
     let mut references = Vec::with_capacity(limit.min(offset));
     while references.len() < limit {
-        let next = batches
-            .iter()
-            .enumerate()
-            .filter_map(|(batch, input)| {
-                let row = cursors[batch];
-                (row < input.num_rows()).then_some((batch, row))
-            })
-            .min_by(|left, right| compare(offsets[left.0] + left.1, offsets[right.0] + right.1));
-        let Some((batch, row)) = next else { break };
+        let Some((batch, row)) = heap_pop(&mut heap, |left, right| {
+            compare(offsets[left.0] + left.1, offsets[right.0] + right.1)
+        }) else {
+            break;
+        };
         references.push((batch, row));
-        cursors[batch] += 1;
+        let next_row = row + 1;
+        if next_row < batches[batch].num_rows() {
+            heap_push(&mut heap, (batch, next_row), |left, right| {
+                compare(offsets[left.0] + left.1, offsets[right.0] + right.1)
+            });
+        }
     }
     if references.is_empty() {
         return Ok(None);
@@ -401,6 +414,77 @@ fn try_sorted_batch_top_n(
         .map(|column| take(column.as_ref(), &order, None))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
+}
+
+/// Maintains a min-heap using a caller-provided ordering.  `std::collections`
+/// cannot express the per-query Arrow comparator without allocating a wrapper
+/// around it, so this small heap keeps the hot merge path allocation-free.
+fn heap_build<T, F>(heap: &mut [T], compare: F)
+where
+    F: Fn(&T, &T) -> std::cmp::Ordering + Copy,
+{
+    if heap.len() < 2 {
+        return;
+    }
+    for index in (0..heap.len() / 2).rev() {
+        heap_sift_down(heap, index, &compare);
+    }
+}
+
+fn heap_push<T, F>(heap: &mut Vec<T>, value: T, compare: F)
+where
+    F: Fn(&T, &T) -> std::cmp::Ordering,
+{
+    heap.push(value);
+    let mut index = heap.len() - 1;
+    while index > 0 {
+        let parent = (index - 1) / 2;
+        if compare(&heap[index], &heap[parent]) == std::cmp::Ordering::Less {
+            heap.swap(index, parent);
+            index = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+fn heap_pop<T, F>(heap: &mut Vec<T>, compare: F) -> Option<T>
+where
+    F: Fn(&T, &T) -> std::cmp::Ordering,
+{
+    let last = heap.pop()?;
+    if heap.is_empty() {
+        return Some(last);
+    }
+    let result = std::mem::replace(&mut heap[0], last);
+    heap_sift_down(heap, 0, &compare);
+    Some(result)
+}
+
+fn heap_sift_down<T, F>(heap: &mut [T], mut index: usize, compare: &F)
+where
+    F: Fn(&T, &T) -> std::cmp::Ordering,
+{
+    loop {
+        let left = index * 2 + 1;
+        if left >= heap.len() {
+            return;
+        }
+        let right = left + 1;
+        let child = if right < heap.len()
+            && compare(&heap[right], &heap[left]) == std::cmp::Ordering::Less
+        {
+            right
+        } else {
+            left
+        };
+        if compare(&heap[child], &heap[index]) == std::cmp::Ordering::Less {
+            heap.swap(index, child);
+            index = child;
+        } else {
+            return;
+        }
+    }
 }
 
 fn try_integer_batch_top_n(
@@ -461,21 +545,30 @@ fn try_integer_batch_top_n(
     let references = if batches_are_sorted {
         // Worker TopN operators emit sorted batches. Merge their heads instead
         // of materializing and sorting every candidate row at the coordinator.
+        // A heap avoids rescanning every worker head for each output row.
         // The fallback below remains available for raw/unsorted inputs.
-        let mut cursors = vec![0usize; keys.len()];
+        let mut heap = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(batch, values)| (!values.is_empty()).then_some((batch, 0)))
+            .collect::<Vec<_>>();
+        heap_build(&mut heap, |left, right| {
+            compare_keys(keys[left.0][left.1], keys[right.0][right.1])
+        });
         let mut merged = Vec::with_capacity(limit.min(keys.iter().map(Vec::len).sum()));
         while merged.len() < limit {
-            let next = keys
-                .iter()
-                .enumerate()
-                .filter_map(|(batch, values)| {
-                    let row = cursors[batch];
-                    (row < values.len()).then_some((batch, row))
-                })
-                .min_by(|left, right| compare_keys(keys[left.0][left.1], keys[right.0][right.1]));
-            let Some((batch, row)) = next else { break };
+            let Some((batch, row)) = heap_pop(&mut heap, |left, right| {
+                compare_keys(keys[left.0][left.1], keys[right.0][right.1])
+            }) else {
+                break;
+            };
             merged.push((batch, row));
-            cursors[batch] += 1;
+            let next_row = row + 1;
+            if next_row < keys[batch].len() {
+                heap_push(&mut heap, (batch, next_row), |left, right| {
+                    compare_keys(keys[left.0][left.1], keys[right.0][right.1])
+                });
+            }
         }
         merged
     } else {
