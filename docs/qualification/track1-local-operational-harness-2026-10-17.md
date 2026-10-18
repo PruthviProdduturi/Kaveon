@@ -16,15 +16,17 @@ python -m pytest `
   scripts/test_record_postgresql_operational_evidence.py `
   scripts/test_rehearse_kaveondb_adls_restore.py `
   scripts/test_retirement_evidence_helm.py `
-  scripts/test_retirement_qualification_summary.py -q
+  scripts/test_retirement_qualification_summary.py `
+  api/services/test_kaveondb_restore_rehearsal.py -q
 ```
 
-Result on 2026-10-17: **26 passed, 0 failed**.
+Result on 2026-10-18: **31 passed, 0 failed**.
 
 The tests cover machine-readable failure behavior, restore cleanup publication
-only after a successful copy, restart and rollback probe dispatch, receipt
-age/rollback-bound validation, Helm retirement evidence checks, and the
-fail-closed final qualification summary.
+only after a successful copy, source and read-after-write digest verification,
+create-only destination semantics, restart and rollback probe dispatch,
+receipt age/rollback-bound validation, Helm retirement evidence checks, and
+the fail-closed final qualification summary.
 
 ## Boundary
 
