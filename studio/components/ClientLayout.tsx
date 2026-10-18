@@ -106,22 +106,35 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     })();
   }, [isAuthenticated]);
 
-  // Public pages — render on their own (no app sidebar, no auth gate).
-  if (pathname === "/" || pathname === "/auth/microsoft" || pathname === "/login" || pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
+  // The two surfaces that need nothing from the cluster: the product page and
+  // the documentation. Both render whole with the API down, so they are left
+  // alone — interrupting someone reading the documentation to tell them a
+  // cluster they were not using is offline would be noise.
+  if (pathname === "/" || pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
 
-  // Still checking auth — render nothing (avoids white flash before login)
-  if (isConnecting) return null;
+  // Everything below depends on the API, sign-in included, so the notice sits
+  // above the auth gate rather than behind it. Behind it — where it was — the
+  // only people who could see a message about the service being unavailable
+  // were people who had already signed in, which needs the service to be
+  // available. It was unreachable by its own audience.
+  const notice = <ServiceNotice />;
+
+  if (pathname === "/auth/microsoft" || pathname === "/login") {
+    return <>{notice}{children}</>;
+  }
+
+  // Still checking auth. This returned null: a blank page for as long as the
+  // check takes, and nothing behind the notice once it is dismissed. The mark
+  // and the word are the difference between a slow page and a broken one.
+  if (isConnecting) return <>{notice}<InlineLoading /></>;
 
   // Not authenticated — show login page (no sidebar)
-  if (!isAuthenticated) return <AuthScreen />;
+  if (!isAuthenticated) return <>{notice}<AuthScreen /></>;
 
   // Authenticated — show sidebar layout
   return (
     <SetupContext.Provider value={{ isSetupOk }}>
-      {/* Only the application surfaces. The public pages above return early
-          and genuinely work, so telling someone reading the documentation
-          that a cluster they were not using is offline would be noise. */}
-      <ServiceNotice />
+      {notice}
       <Layout>{children}</Layout>
     </SetupContext.Provider>
   );

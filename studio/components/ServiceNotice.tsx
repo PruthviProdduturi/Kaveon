@@ -12,10 +12,15 @@ import Link from "next/link";
  * guess. A failure nobody explains reads as a broken product; a maintenance
  * window with a date reads as a maintained one.
  *
- * Shown on the application surfaces only. `ClientLayout` serves `/`, `/login`
- * and `/docs` outside the shell, and those genuinely work — interrupting
- * someone reading the documentation to tell them a cluster they were not
- * using is offline would be noise.
+ * Mounted above the auth gate, not inside it. Signing in needs the API, so
+ * while the API is unreachable nobody reaches an authenticated page — and
+ * mounting this behind that gate, as it first was, showed a message about the
+ * service being down only to people the outage had already locked out. It now
+ * covers the sign-in page, the session check and the authenticated shell.
+ *
+ * `/` and `/docs` are excluded on purpose: both render whole with the cluster
+ * offline, and interrupting someone reading the documentation to tell them a
+ * cluster they were not using is offline would be noise.
  *
  * Controlled by `NEXT_PUBLIC_KAVEON_SERVICE_NOTICE`, so ending the window is
  * a configuration change rather than a code change. Unset, nothing renders
