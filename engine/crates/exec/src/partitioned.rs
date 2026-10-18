@@ -1671,7 +1671,8 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     let mut total_rows = 0_u64;
     let mut total_bytes = 0_u64;
     let mut non_empty = 0_u64;
-    let mut largest = None;
+    let mut largest_rows = None;
+    let mut largest_bytes = None;
     for (index, partition) in partitions.iter().enumerate() {
         let rows = partition
             .iter()
@@ -1687,14 +1688,18 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
         non_empty = non_empty.saturating_add(1);
         total_rows = total_rows.saturating_add(rows);
         total_bytes = total_bytes.saturating_add(bytes);
-        if largest.is_none_or(|(_, current_rows, _)| rows > current_rows) {
-            largest = Some((index, rows, bytes));
+        if largest_rows.is_none_or(|(_, current)| rows > current) {
+            largest_rows = Some((index, rows));
+        }
+        if largest_bytes.is_none_or(|(_, current)| bytes > current) {
+            largest_bytes = Some((index, bytes));
         }
     }
-    let (index, largest_rows, largest_bytes) = largest?;
     if non_empty < 2 {
         return None;
     }
+    let (row_index, largest_rows) = largest_rows?;
+    let (byte_index, largest_bytes) = largest_bytes?;
     // A partition may be hot by encoded bytes even when its row count is
     // ordinary (for example, a wide string key). Split when either exact
     // row or byte counts show a four-times mean imbalance, with independent
@@ -1705,7 +1710,13 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     let bytes_skewed = total_bytes >= JOIN_SKEW_SPLIT_MIN_BYTES
         && u128::from(largest_bytes) * u128::from(non_empty)
             >= u128::from(total_bytes) * JOIN_SKEW_SPLIT_RATIO;
-    (rows_skewed || bytes_skewed).then_some(index)
+    if rows_skewed {
+        Some(row_index)
+    } else if bytes_skewed {
+        Some(byte_index)
+    } else {
+        None
+    }
 }
 
 /// The level a refused build partitions to: the first for a whole
@@ -2871,6 +2882,16 @@ mod tests {
             .chain((0..7).map(|_| vec![run(512, 1)]))
             .collect::<Vec<_>>();
         assert_eq!(skewed_partition_index(&partitions), Some(0));
+        drop(partitions);
+
+        // The widest bucket need not be the bucket with the most rows. The
+        // policy must route the byte-skewed bucket itself, rather than using
+        // the row-largest bucket's byte total.
+        let partitions = std::iter::once(vec![run(512, 1)])
+            .chain(std::iter::once(vec![run(512, 10_000)]))
+            .chain((0..6).map(|_| vec![run(512, 1)]))
+            .collect::<Vec<_>>();
+        assert_eq!(skewed_partition_index(&partitions), Some(1));
         drop(partitions);
         assert_eq!(disk.snapshot().current_bytes, 0);
     }
