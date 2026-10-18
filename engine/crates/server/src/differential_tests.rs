@@ -607,6 +607,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_size_container_scalar_null",
+        "SELECT JSON_SIZE(JSON_PARSE('{\"items\":[1,2],\"name\":\"x\"}'), '$.items') AS array_size, JSON_SIZE(JSON_PARSE('{\"items\":1}'), '$.items') AS scalar_size, JSON_SIZE(JSON_PARSE('{\"items\":null}'), '$.items') AS null_size FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
