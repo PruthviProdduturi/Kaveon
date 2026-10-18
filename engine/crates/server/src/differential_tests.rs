@@ -497,6 +497,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_scalar_path_returning_bigint",
+        "SELECT JSON_VALUE(JSON_PARSE('{\"x\":7}'), '$.x' RETURNING BIGINT) AS value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_exists_path",
         "SELECT JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.x') AS present, JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.missing') AS absent FROM {T} LIMIT 1",
         false,
@@ -504,6 +509,11 @@ const CASES: &[(&str, &str, bool)] = &[
     (
         "json_query_path",
         "SELECT JSON_QUERY(JSON_PARSE('{\"x\":{\"y\":7}}'), '$.x') AS object_value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
+        "json_query_path_returning_json",
+        "SELECT JSON_QUERY(JSON_PARSE('{\"x\":{\"y\":7}}'), '$.x' RETURNING JSON) AS object_value FROM {T} LIMIT 1",
         false,
     ),
     (
