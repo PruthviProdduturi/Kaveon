@@ -496,6 +496,15 @@ struct TaskExecutionMetrics {
     join_spill_partitions: u64,
     #[serde(default)]
     join_spill_depth: u64,
+    /// Spill partition row counts, used to identify skew without reopening
+    /// spill files. These counters describe observed partitions; they do not
+    /// change join planning or result semantics.
+    #[serde(default)]
+    join_spill_non_empty_partitions: u64,
+    #[serde(default)]
+    join_spill_min_partition_rows: u64,
+    #[serde(default)]
+    join_spill_max_partition_rows: u64,
 }
 
 #[derive(Default)]
@@ -2763,6 +2772,9 @@ async fn execute_fragment_task(
     metrics.join_spill_bytes_written = join_spill.bytes_written;
     metrics.join_spill_partitions = join_spill.partitions;
     metrics.join_spill_depth = join_spill.max_depth;
+    metrics.join_spill_non_empty_partitions = join_spill.non_empty_partitions;
+    metrics.join_spill_min_partition_rows = join_spill.min_partition_rows;
+    metrics.join_spill_max_partition_rows = join_spill.max_partition_rows;
     Ok((
         execution.result_schema,
         execution.result_batches,

@@ -1545,6 +1545,12 @@ pub struct JoinSpillSnapshot {
     pub bytes_written: u64,
     pub partitions: u64,
     pub max_depth: u64,
+    /// Number of non-empty spill partitions observed at any level.
+    pub non_empty_partitions: u64,
+    /// Smallest and largest non-empty partition, in rows. These are
+    /// diagnostic facts only; no execution decision is based on them.
+    pub min_partition_rows: u64,
+    pub max_partition_rows: u64,
 }
 
 #[derive(Default)]
@@ -1552,6 +1558,9 @@ pub struct JoinSpillMetrics {
     bytes_written: AtomicU64,
     partitions: AtomicU64,
     max_depth: AtomicU64,
+    non_empty_partitions: AtomicU64,
+    min_partition_rows: AtomicU64,
+    max_partition_rows: AtomicU64,
 }
 
 impl JoinSpillMetrics {
@@ -1561,6 +1570,9 @@ impl JoinSpillMetrics {
             bytes_written: self.bytes_written.load(Ordering::Acquire),
             partitions: self.partitions.load(Ordering::Acquire),
             max_depth: self.max_depth.load(Ordering::Acquire),
+            non_empty_partitions: self.non_empty_partitions.load(Ordering::Acquire),
+            min_partition_rows: self.min_partition_rows.load(Ordering::Acquire),
+            max_partition_rows: self.max_partition_rows.load(Ordering::Acquire),
         }
     }
 
@@ -1577,6 +1589,22 @@ impl JoinSpillMetrics {
         );
         self.max_depth
             .fetch_max(u64::from(depth), Ordering::Relaxed);
+        for partition in runs {
+            let rows = partition
+                .iter()
+                .map(SpillRun::rows)
+                .fold(0_u64, u64::saturating_add);
+            if rows == 0 {
+                continue;
+            }
+            self.non_empty_partitions.fetch_add(1, Ordering::Relaxed);
+            let _ = self.min_partition_rows.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |current| (current == 0 || rows < current).then_some(rows),
+            );
+            self.max_partition_rows.fetch_max(rows, Ordering::Relaxed);
+        }
     }
 }
 
@@ -3788,6 +3816,12 @@ mod tests {
         );
         let metrics = join_spill_metrics(&pool).unwrap().snapshot();
         assert_eq!(metrics.max_depth, u64::from(MAX_JOIN_SPILL_DEPTH));
+        assert_eq!(metrics.min_partition_rows, 800);
+        assert_eq!(metrics.max_partition_rows, 800);
+        assert_eq!(
+            metrics.non_empty_partitions,
+            u64::from(MAX_JOIN_SPILL_DEPTH + 1) * 2
+        );
         assert!(join.next_batch().unwrap().is_none());
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
