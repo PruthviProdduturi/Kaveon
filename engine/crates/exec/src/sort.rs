@@ -6,6 +6,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
+    StoragePredicate,
 };
 
 use crate::expr_eval::evaluate;
@@ -270,6 +271,14 @@ fn sort_batches(
 impl BatchOperator for SortOperator {
     fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    fn apply_runtime_predicate(&mut self, predicate: &StoragePredicate) -> Result<bool> {
+        // Sorting preserves rows and columns, so an exact build-side filter
+        // can be pushed below it before the source is opened. This avoids
+        // decoding rows that the join will discard while preserving the sort
+        // input exactly.
+        self.source.apply_runtime_predicate(predicate)
     }
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {

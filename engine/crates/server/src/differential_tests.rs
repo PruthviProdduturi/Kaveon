@@ -4161,7 +4161,7 @@ fn distributed_runtime_filter_crosses_probe_identity_projection() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement = "SELECT l.key, r.country FROM (SELECT user_id AS key FROM events) l JOIN users r ON l.key = r.user_id ORDER BY l.key, r.country";
+    let statement = "SELECT l.key, r.country FROM (SELECT user_id AS key FROM events ORDER BY user_id) l JOIN users r ON l.key = r.user_id ORDER BY l.key, r.country";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-runtime-filter-projection", 32 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
