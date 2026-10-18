@@ -4783,6 +4783,30 @@ fn distributed_integer_join_index_widths_match_local() {
     );
 }
 
+#[test]
+fn distributed_array_has_duplicates_nested_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-array-has-duplicates-nested-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT ARRAY_HAS_DUPLICATES(ARRAY[ARRAY[1, 2], ARRAY[1, 2]]) AS duplicate_arrays, ARRAY_HAS_DUPLICATES(ARRAY[ARRAY[1, 2], ARRAY[2, 1]]) AS distinct_arrays FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-array-has-duplicates-nested", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec![String::from("true\u{1f}false")]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Runtime filtering must preserve Float32 identity. Values above the
 /// Float32 integer precision boundary are intentionally used so a filter that
 /// widens or narrows through an imprecise host representation cannot admit or
