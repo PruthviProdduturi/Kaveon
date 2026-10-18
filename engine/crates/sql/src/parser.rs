@@ -17,7 +17,9 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // scalar function ARRAY. Quote identifier-shaped brackets before parsing;
     // leave numeric/list brackets untouched so ARRAY[...] remains available
     // for the syntax that explicitly supports it.
-    let normalized = normalize_lateral_unnest(&normalize_bracket_identifiers(sql));
+    let bracket_normalized = normalize_bracket_identifiers(sql);
+    let json_returning_normalized = normalize_json_returning(&bracket_normalized);
+    let normalized = normalize_lateral_unnest(&json_returning_normalized);
     // Lower the one recursive shape that has a finite, deterministic
     // equivalent in the existing UNNEST/SEQUENCE execution path.  More
     // general recursive graphs remain explicitly unsupported in the logical
@@ -53,6 +55,178 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),
     }
+}
+
+/// Lower the bounded SQL/JSON typed-return form to the existing typed CAST
+/// path.  Trino's JSON_VALUE/JSON_QUERY functions accept a `RETURNING` clause;
+/// the executor already implements the equivalent conversion after the JSON
+/// scalar/document has been extracted.  Keep this rewrite deliberately narrow
+/// so unsupported SQL/JSON clauses remain parser errors rather than silently
+/// receiving different semantics.
+fn normalize_json_returning(sql: &str) -> String {
+    let mut output = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    while cursor < sql.len() {
+        let Some((name_start, name, open)) = next_json_function(sql, cursor) else {
+            output.push_str(&sql[cursor..]);
+            break;
+        };
+        output.push_str(&sql[cursor..name_start]);
+        let Some(close) = matching_paren(sql, open) else {
+            output.push_str(&sql[name_start..]);
+            break;
+        };
+        let inner = normalize_json_returning(&sql[open + 1..close]);
+        if let Some((arguments, data_type)) = split_json_returning(&inner) {
+            output.push_str("CAST(");
+            output.push_str(&name);
+            output.push('(');
+            output.push_str(arguments.trim_end());
+            output.push_str(") AS ");
+            output.push_str(data_type);
+            output.push(')');
+        } else {
+            output.push_str(&name);
+            output.push('(');
+            output.push_str(&inner);
+            output.push(')');
+        }
+        cursor = close + 1;
+    }
+    output
+}
+
+fn next_json_function(sql: &str, start: usize) -> Option<(usize, String, usize)> {
+    let bytes = sql.as_bytes();
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'\'' || bytes[cursor] == b'"' {
+            cursor = quoted_sql_end(sql, cursor);
+            continue;
+        }
+        let name_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        if cursor == name_start {
+            cursor += 1;
+            continue;
+        }
+        let name = &sql[name_start..cursor];
+        let upper = name.to_ascii_uppercase();
+        if (upper == "JSON_VALUE" || upper == "JSON_QUERY")
+            && bytes
+                .get(name_start.wrapping_sub(1))
+                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+        {
+            let mut open = cursor;
+            while open < bytes.len() && bytes[open].is_ascii_whitespace() {
+                open += 1;
+            }
+            if bytes.get(open) == Some(&b'(') {
+                return Some((name_start, name.to_owned(), open));
+            }
+        }
+    }
+    None
+}
+
+fn matching_paren(sql: &str, open: usize) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    let mut depth = 0usize;
+    let mut cursor = open;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' | b'"' => cursor = quoted_sql_end(sql, cursor),
+            b'(' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(cursor);
+                }
+                cursor += 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+    None
+}
+
+fn quoted_sql_end(sql: &str, quote: usize) -> usize {
+    let bytes = sql.as_bytes();
+    let delimiter = bytes[quote];
+    let mut cursor = quote + 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == delimiter {
+            if bytes.get(cursor + 1) == Some(&delimiter) {
+                cursor += 2;
+                continue;
+            }
+            return cursor + 1;
+        }
+        if bytes[cursor] == b'\\' && delimiter == b'\'' {
+            cursor = (cursor + 2).min(bytes.len());
+        } else {
+            cursor += 1;
+        }
+    }
+    bytes.len()
+}
+
+fn split_json_returning(inner: &str) -> Option<(&str, &'static str)> {
+    let bytes = inner.as_bytes();
+    let mut depth = 0usize;
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' | b'"' => cursor = quoted_sql_end(inner, cursor),
+            b'(' | b'[' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+            }
+            _ if depth == 0 && json_is_sql_word_at(inner, cursor, "RETURNING") => {
+                let arguments = &inner[..cursor];
+                let type_start = cursor + "RETURNING".len();
+                let type_name = inner[type_start..].trim();
+                let data_type = match type_name.to_ascii_uppercase().as_str() {
+                    "BIGINT" => "BIGINT",
+                    "INTEGER" => "INTEGER",
+                    "DOUBLE" => "DOUBLE",
+                    "REAL" => "REAL",
+                    "BOOLEAN" => "BOOLEAN",
+                    "VARCHAR" => "VARCHAR",
+                    "JSON" => "JSON",
+                    _ => return None,
+                };
+                return (!arguments.trim().is_empty()).then_some((arguments, data_type));
+            }
+            _ => cursor += 1,
+        }
+    }
+    None
+}
+
+fn json_is_sql_word_at(sql: &str, offset: usize, word: &str) -> bool {
+    let end = offset.saturating_add(word.len());
+    sql.get(offset..end)
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(word))
+        && !sql
+            .as_bytes()
+            .get(offset.wrapping_sub(1))
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        && !sql
+            .as_bytes()
+            .get(end)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
 }
 
 /// Rewrites a single-column, monotonic integer recursive CTE into a bounded
@@ -928,6 +1102,39 @@ mod tests {
         let rendered = statements[0].to_string();
         assert!(rendered.contains("\"year\""));
         assert!(!rendered.contains("ARRAY"));
+    }
+
+    #[test]
+    fn json_returning_clause_lowers_to_a_typed_cast() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(JSON_PARSE('{\"count\":7}'), '$.count' RETURNING BIGINT) AS count, JSON_QUERY(JSON_PARSE('{\"items\":[1]}'), '$.items' RETURNING JSON) AS items FROM t",
+        )
+        .expect("bounded JSON RETURNING forms should parse");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("CAST(JSON_VALUE(JSON_PARSE('{\"count\":7}'), '$.count') AS BIGINT)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("CAST(JSON_QUERY(JSON_PARSE('{\"items\":[1]}'), '$.items') AS JSON)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn json_returning_rewrite_preserves_nested_calls_and_literals() {
+        let sql = "SELECT JSON_VALUE(JSON_PARSE('{\"label\":\"RETURNING BIGINT\"}'), '$.label' RETURNING VARCHAR) FROM t WHERE note = 'JSON_VALUE(x RETURNING BIGINT)'";
+        let normalized = normalize_json_returning(sql);
+        assert_eq!(
+            normalized,
+            "SELECT CAST(JSON_VALUE(JSON_PARSE('{\"label\":\"RETURNING BIGINT\"}'), '$.label') AS VARCHAR) FROM t WHERE note = 'JSON_VALUE(x RETURNING BIGINT)'"
+        );
+    }
+
+    #[test]
+    fn unsupported_json_returning_type_remains_rejected() {
+        let sql = "SELECT JSON_VALUE(payload, '$.count' RETURNING DECIMAL(10, 2)) FROM t";
+        assert!(parse_sql(sql).is_err());
     }
 
     #[test]
