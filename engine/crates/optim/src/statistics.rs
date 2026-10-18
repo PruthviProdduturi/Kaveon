@@ -390,6 +390,19 @@ fn relation(
         return relation(input, stats);
     }
 
+    // A filter over a bounded/derived relation cannot make that relation
+    // larger.  Keep the input's upper bound when the filter is not directly
+    // over a scan; the direct-scan case below still uses column statistics to
+    // estimate selectivity.  This lets a query such as
+    // `FROM (SELECT ... LIMIT 1000) s WHERE ...` retain its safe broadcast
+    // bound instead of falling back to a partitioned join merely because the
+    // predicate is outside the subquery.
+    if let LogicalPlan::Filter { input, .. } = plan
+        && !matches!(input.as_ref(), LogicalPlan::Scan { .. })
+    {
+        return relation(input, stats);
+    }
+
     let (scan, predicate) = match plan {
         LogicalPlan::Filter { input, predicate } => (input.as_ref(), Some(predicate)),
         other => (other, None),
@@ -795,7 +808,7 @@ mod tests {
         .unwrap();
         let optimized = optimize_with_statistics(plan, &mut stats);
         let LogicalPlan::Join { distribution, .. } = optimized else {
-            panic!("join missing")
+            panic!("join missing: {optimized:?}")
         };
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
     }
@@ -808,6 +821,22 @@ mod tests {
         .unwrap();
         let optimized = optimize_with_statistics(plan, &mut stats);
         let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join missing: {optimized:?}")
+        };
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn keeps_a_limit_bound_through_a_filter_on_a_derived_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM big b JOIN (SELECT id, value FROM small LIMIT 1000) s ON b.id=s.id WHERE s.id > 5",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut stats);
+        let LogicalPlan::Filter { input, .. } = optimized else {
+            panic!("outer filter missing: {optimized:?}")
+        };
+        let LogicalPlan::Join { distribution, .. } = *input else {
             panic!("join missing")
         };
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
