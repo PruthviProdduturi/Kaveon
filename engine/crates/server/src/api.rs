@@ -842,6 +842,7 @@ impl JournaledQuery {
 /// the Engine ran.
 mod query_journal {
     use super::{JournaledQuery, QUERY_JOURNAL_LINES, QUERY_JOURNAL_REWRITE_AFTER};
+    use fd_lock::RwLock;
     use std::collections::VecDeque;
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -851,6 +852,15 @@ mod query_journal {
     pub(super) struct Journal {
         path: PathBuf,
         file: std::fs::File,
+        /// Interprocess advisory lock for the journal's append/compact cycle.
+        ///
+        /// A failover coordinator may open the same state directory while the
+        /// previous process is being drained.  Without a shared lock, two
+        /// writers can interleave lines or race a compaction rename.  Every
+        /// coordinator must use this journal implementation for the lock to be
+        /// effective; it is intentionally not presented as a lease or leader
+        /// election mechanism.
+        lock: RwLock<std::fs::File>,
         /// The newest lines, so a rewrite needs no read.
         recent: VecDeque<String>,
         appended: usize,
@@ -867,34 +877,52 @@ mod query_journal {
         /// the directory would not take: the Engine keeps no history
         /// rather than refusing to start.
         pub(super) fn open(path: &Path) -> (Option<Self>, Vec<JournaledQuery>) {
-            let mut entries: Vec<JournaledQuery> = Vec::new();
-            if let Ok(text) = std::fs::read_to_string(path) {
-                let mut by_id: Vec<JournaledQuery> = Vec::new();
-                for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                    let Ok(entry) = serde_json::from_str::<JournaledQuery>(line) else {
-                        continue;
-                    };
-                    // A later line for the same query is the later state
-                    // of it: a cancellation after a failure, say.
-                    by_id.retain(|held| held.id != entry.id);
-                    by_id.push(entry);
+            let lock_path = path.with_extension("jsonl.lock");
+            let Some(lock_file) = std::fs::OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .open(&lock_path)
+                .ok()
+            else {
+                return (None, Vec::new());
+            };
+            let mut lock = RwLock::new(lock_file);
+            let (entries, recent) = {
+                let Ok(_guard) = lock.write() else {
+                    return (None, Vec::new());
+                };
+                let mut entries: Vec<JournaledQuery> = Vec::new();
+                if let Ok(text) = std::fs::read_to_string(path) {
+                    let mut by_id: Vec<JournaledQuery> = Vec::new();
+                    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                        let Ok(entry) = serde_json::from_str::<JournaledQuery>(line) else {
+                            continue;
+                        };
+                        // A later line for the same query is the later state
+                        // of it: a cancellation after a failure, say.
+                        by_id.retain(|held| held.id != entry.id);
+                        by_id.push(entry);
+                    }
+                    let first = by_id.len().saturating_sub(QUERY_JOURNAL_LINES);
+                    entries = by_id.split_off(first);
                 }
-                let first = by_id.len().saturating_sub(QUERY_JOURNAL_LINES);
-                entries = by_id.split_off(first);
-            }
-            let recent: VecDeque<String> = entries
-                .iter()
-                .filter_map(|entry| serde_json::to_string(entry).ok())
-                .collect();
-            if let Some(parent) = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if std::fs::write(path, lines_of(&recent).as_bytes()).is_err() {
-                return (None, entries);
-            }
+                let recent: VecDeque<String> = entries
+                    .iter()
+                    .filter_map(|entry| serde_json::to_string(entry).ok())
+                    .collect();
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::write(path, lines_of(&recent).as_bytes()).is_err() {
+                    return (None, entries);
+                }
+                (entries, recent)
+            };
             let journal = std::fs::OpenOptions::new()
                 .append(true)
                 .open(path)
@@ -902,6 +930,7 @@ mod query_journal {
                 .map(|file| Self {
                     path: path.to_path_buf(),
                     file,
+                    lock,
                     recent,
                     appended: 0,
                 });
@@ -914,18 +943,24 @@ mod query_journal {
         /// does not fail the statement — the journal is a history, not
         /// the answer.
         pub(super) fn append(&mut self, entry: &JournaledQuery) {
-            let Ok(line) = serde_json::to_string(entry) else {
-                return;
+            let should_rewrite = {
+                let Ok(_guard) = self.lock.write() else {
+                    return;
+                };
+                let Ok(line) = serde_json::to_string(entry) else {
+                    return;
+                };
+                if self.file.write_all(format!("{line}\n").as_bytes()).is_err() {
+                    return;
+                }
+                self.recent.push_back(line);
+                while self.recent.len() > QUERY_JOURNAL_LINES {
+                    self.recent.pop_front();
+                }
+                self.appended += 1;
+                self.appended >= QUERY_JOURNAL_REWRITE_AFTER
             };
-            if self.file.write_all(format!("{line}\n").as_bytes()).is_err() {
-                return;
-            }
-            self.recent.push_back(line);
-            while self.recent.len() > QUERY_JOURNAL_LINES {
-                self.recent.pop_front();
-            }
-            self.appended += 1;
-            if self.appended >= QUERY_JOURNAL_REWRITE_AFTER {
+            if should_rewrite {
                 self.rewrite();
             }
         }
@@ -934,8 +969,29 @@ mod query_journal {
         /// temporary file and a rename, so a reader never sees a part of
         /// it.
         fn rewrite(&mut self) {
+            let Ok(_guard) = self.lock.write() else {
+                return;
+            };
+            // Another coordinator may have appended since this handle last
+            // compacted.  Re-read while holding the interprocess lock so a
+            // stale in-memory `recent` deque cannot discard its entries.
+            let mut by_id = Vec::new();
+            if let Ok(text) = std::fs::read_to_string(&self.path) {
+                for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                    let Ok(entry) = serde_json::from_str::<JournaledQuery>(line) else {
+                        continue;
+                    };
+                    by_id.retain(|held: &JournaledQuery| held.id != entry.id);
+                    by_id.push(entry);
+                }
+            }
+            let first = by_id.len().saturating_sub(QUERY_JOURNAL_LINES);
+            let recent: VecDeque<String> = by_id[first..]
+                .iter()
+                .filter_map(|entry| serde_json::to_string(entry).ok())
+                .collect();
             let staged = self.path.with_extension("jsonl.rewriting");
-            if std::fs::write(&staged, lines_of(&self.recent).as_bytes()).is_err()
+            if std::fs::write(&staged, lines_of(&recent).as_bytes()).is_err()
                 || std::fs::rename(&staged, &self.path).is_err()
             {
                 let _ = std::fs::remove_file(&staged);
@@ -943,6 +999,7 @@ mod query_journal {
             }
             if let Ok(file) = std::fs::OpenOptions::new().append(true).open(&self.path) {
                 self.file = file;
+                self.recent = recent;
                 self.appended = 0;
             }
         }
@@ -15632,6 +15689,65 @@ mod tests {
         std::fs::remove_dir_all(&directory).ok();
     }
 
+    /// Two coordinator processes can briefly overlap while a replacement is
+    /// taking over a shared state volume.  Their terminal history writes must
+    /// remain line-delimited and readable by the replacement; a process-local
+    /// mutex cannot provide that guarantee.
+    #[test]
+    fn concurrent_coordinator_journals_keep_every_terminal_record_parseable() {
+        use super::query_journal::Journal;
+        use std::collections::BTreeSet;
+        use std::sync::{Arc, Barrier};
+
+        let directory = journal_directory("concurrent-coordinators");
+        let path = directory.join("query-history.jsonl");
+        let (left, restored) = Journal::open(&path);
+        assert!(restored.is_empty());
+        let left = left.expect("the primary coordinator journal opens");
+        let (right, restored) = Journal::open(&path);
+        assert!(restored.is_empty());
+        let right = right.expect("the replacement coordinator journal opens");
+        let start = Arc::new(Barrier::new(3));
+
+        std::thread::scope(|scope| {
+            let left_start = Arc::clone(&start);
+            scope.spawn(move || {
+                let mut journal = left;
+                left_start.wait();
+                for index in 0..600 {
+                    journal.append(&journaled_query(&format!("primary-{index}"), "SELECT 1"));
+                }
+            });
+            let right_start = Arc::clone(&start);
+            scope.spawn(move || {
+                let mut journal = right;
+                right_start.wait();
+                for index in 0..600 {
+                    journal.append(&journaled_query(
+                        &format!("replacement-{index}"),
+                        "SELECT 2",
+                    ));
+                }
+            });
+            start.wait();
+        });
+
+        let (_, restored) = Journal::open(&path);
+        let ids = restored
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), 1_000, "the journal remains bounded");
+        assert!(ids.iter().any(|id| id.starts_with("primary-")));
+        assert!(ids.iter().any(|id| id.starts_with("replacement-")));
+        assert!(ids.iter().all(|id| {
+            id.strip_prefix("primary-")
+                .or_else(|| id.strip_prefix("replacement-"))
+                .is_some_and(|index| index.parse::<usize>().is_ok())
+        }));
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
     /// The pairs a cube build reads come from the counts its single axes
     /// observed, not from the caps the declaration guessed: at the
     /// default cap of 10,000 the declaration plans no pair at all, and
@@ -22653,6 +22769,73 @@ mod streamed_root_tests {
         let wire_page_json: serde_json::Value =
             serde_json::from_slice(&wire_page_body).expect("wire result page JSON");
         assert_eq!(wire_page_json["data"], serde_json::json!([[7]]));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// The Trino wire route must preserve ARRAY_SORT_DESC's typed array result
+    /// and its NULL-last descending contract.  Local evaluator tests cannot
+    /// catch a serialization or prepared-statement regression here.
+    #[tokio::test]
+    async fn trino_wire_array_sort_desc_preserves_null_last_result() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-trino-array-sort-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        let query =
+            "SELECT ARRAY_SORT_DESC(ARRAY[3, NULL, 1, 2]) AS sorted_values FROM numbers LIMIT 1";
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-trino-prepared-statement",
+            axum::http::HeaderValue::from_str(&format!(
+                "sort_desc={}",
+                trino_percent_encode(query)
+            ))
+            .unwrap(),
+        );
+
+        let executed = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            alice(),
+            headers,
+            Bytes::from("EXECUTE sort_desc"),
+        )
+        .await;
+        let executed_status = executed.status();
+        let executed_body = axum::body::to_bytes(executed.into_body(), usize::MAX)
+            .await
+            .expect("array sort wire execute body");
+        assert_eq!(
+            executed_status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&executed_body)
+        );
+        let executed_json: serde_json::Value =
+            serde_json::from_slice(&executed_body).expect("array sort wire execute JSON");
+        let query_id = executed_json["id"]
+            .as_str()
+            .expect("array sort wire query id")
+            .to_owned();
+
+        let page = get_trino_result_page(
+            State(std::sync::Arc::clone(&state)),
+            axum::extract::Path((query_id, 0)),
+            axum::Extension(alice()),
+        )
+        .await;
+        let page_status = page.status();
+        let page_body = axum::body::to_bytes(page.into_body(), usize::MAX)
+            .await
+            .expect("array sort wire result page body");
+        assert_eq!(
+            page_status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&page_body)
+        );
+        let page_json: serde_json::Value =
+            serde_json::from_slice(&page_body).expect("array sort wire result page JSON");
+        assert_eq!(page_json["data"], serde_json::json!([[[3, 2, 1, null]]]));
         let _ = std::fs::remove_dir_all(directory);
     }
 
