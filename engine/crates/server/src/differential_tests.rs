@@ -2376,7 +2376,7 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
-    let statement = "SELECT record[1] AS first, record[2] AS second, ROW_FIELD(record, 'field0') AS named_first, ROW_FIELD(record, 'field1') AS named_second, ROW_FIELD(ROW_FIELD(record, 'nested'), 'value') AS nested_value FROM events";
+    let statement = "SELECT record[1] AS first, record[2] AS second, ROW_FIELD(record, 'field0') AS named_first, ROW_FIELD(record, 'field1') AS named_second, ROW_FIELD(record, 'FIELD0') AS case_named_first, ROW_FIELD(ROW_FIELD(record, 'nested'), 'value') AS nested_value FROM events";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-row-subscript", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
@@ -2401,9 +2401,9 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
     assert_eq!(
         actual,
         vec![
-            "11\u{1f}c\u{1f}11\u{1f}c\u{1f}NULL",
-            "7\u{1f}a\u{1f}7\u{1f}a\u{1f}21",
-            "NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL",
+            "11\u{1f}c\u{1f}11\u{1f}c\u{1f}11\u{1f}NULL",
+            "7\u{1f}a\u{1f}7\u{1f}a\u{1f}7\u{1f}21",
+            "NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL",
         ]
     );
     assert_eq!(pool.snapshot().current_bytes, 0);

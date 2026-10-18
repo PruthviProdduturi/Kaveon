@@ -5109,10 +5109,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         } else {
             field.value(0)
         };
-        let child = row
-            .column_by_name(field)
-            .cloned()
+        let child_index = row
+            .fields()
+            .iter()
+            .position(|candidate| candidate.name().eq_ignore_ascii_case(field))
             .ok_or_else(|| KaveonError::Execution(format!("ROW_FIELD '{field}' not found")))?;
+        let child = Arc::clone(row.column(child_index));
         // A dereference of a NULL ROW is NULL, even when Arrow's child
         // column still contains a physical value in that slot.  This is
         // common for nested Parquet structs and must be applied before the

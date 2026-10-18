@@ -113,7 +113,9 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
                 && args.len() == 2
                 && let (Some(DataType::Struct(fields)), Expr::Literal(ScalarValue::Utf8(field))) =
                     (expression_data_type(&args[0], schema), &args[1])
-                && let Some(child) = fields.iter().find(|candidate| candidate.name() == field)
+                && let Some(child) = fields
+                    .iter()
+                    .find(|candidate| candidate.name().eq_ignore_ascii_case(field))
             {
                 return Ok((
                     Field::new(output_name, child.data_type().clone(), true),
@@ -188,7 +190,7 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
             };
             fields
                 .iter()
-                .find(|candidate| candidate.name() == field)
+                .find(|candidate| candidate.name().eq_ignore_ascii_case(field))
                 .map(|candidate| candidate.data_type().clone())
         }
         _ => None,
