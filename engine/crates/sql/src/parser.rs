@@ -1587,6 +1587,21 @@ mod tests {
     }
 
     #[test]
+    fn json_query_typed_error_default_lowers_through_cast() {
+        let statements = parse_sql(
+            "SELECT JSON_QUERY('not-json', '$.missing' RETURNING JSON ON ERROR DEFAULT '{\"fallback\":2}') FROM t",
+        )
+        .expect("typed JSON_QUERY error defaults should lower through the cast path");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains(
+                "CAST(JSON_QUERY_DEFAULT('not-json', '$.missing', NULL, '{\"fallback\":2}') AS JSON)"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn json_object_with_unique_keys_lowers_to_existing_duplicate_key_guard() {
         let statements = parse_sql(
             "SELECT JSON_OBJECT('answer' : 7, 'label' VALUE 'x' WITH UNIQUE KEYS) FROM t",
