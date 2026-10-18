@@ -673,9 +673,14 @@ pub(crate) struct ColumnInfo {
     pub(crate) data_type: String,
 }
 
-/// The lines the query journal keeps, and so the records a restart
-/// restores: the same bound the in-memory history has.
-const QUERY_JOURNAL_LINES: usize = QUERY_HISTORY_LIMIT;
+/// The lines the query journal keeps across coordinator restarts.
+///
+/// This is deliberately independent of the in-memory history limit. Tests
+/// raise the latter so concurrent requests do not evict one another while
+/// they are asserting behavior, and the live API may use a smaller working
+/// set, but the durable journal has a stable one-thousand-record retention
+/// contract for failover and audit inspection.
+const QUERY_JOURNAL_LINES: usize = 1_000;
 /// The lines appended before the journal is rewritten from the ones it
 /// kept. Twice the bound, so a rewrite happens once per that many
 /// statements rather than on every one.
