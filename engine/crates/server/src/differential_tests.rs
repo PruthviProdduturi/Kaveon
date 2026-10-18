@@ -2547,8 +2547,7 @@ fn distributed_cte_scope_survives_subquery_membership() {
 
 #[test]
 fn distributed_chained_cte_join_matches_local_semantics() {
-    let directory =
-        std::env::temp_dir().join(format!("kaveon-cte-chain-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("kaveon-cte-chain-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     let statement = "WITH base(id, label) AS (VALUES (1, 'a'), (2, 'b'), (3, 'c')), filtered(id) AS (SELECT id FROM base WHERE id > 1) SELECT f.id, b.label FROM filtered f JOIN base b ON f.id = b.id ORDER BY f.id";
