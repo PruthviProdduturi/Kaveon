@@ -14496,6 +14496,23 @@ mod tests {
     }
 
     #[test]
+    fn array_constructor_promotes_decimal_and_double_to_double() {
+        let decimal = Arc::new(
+            Decimal128Array::from(vec![Some(125_i128)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        ) as ArrayRef;
+        let double = Arc::new(Float64Array::from(vec![Some(2.5)])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[decimal, double], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Float64);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Float64Type>().values(),
+            &[1.25, 2.5]
+        );
+    }
+
+    #[test]
     fn array_set_operations_deduplicate_and_match_nulls() {
         let batch =
             RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
