@@ -55,7 +55,7 @@ The current AKS wire corpus is retained in `docs/qualification/track2-aks-wire-c
 | Prepared statements | Qualified (bounded) | SQL PREPARE/EXECUTE/DEALLOCATE, Trino prepared headers, typed scalar/array/map binding, DESCRIBE INPUT/OUTPUT, ownership isolation; the current immutable AKS image passes the external wire lifecycle and exact distributed result gate. | Broader external-client and complex-type qualification remains open. |
 | Parameters | Implemented (declared surface) | Positional, repeated positional, named, nested arrays and string-keyed maps bind without SQL interpolation. Positional `?` and `$n` styles are mutually exclusive, so mixed client bindings fail before planning instead of silently assigning different ordinals; the rejection is covered in `docs/qualification/track2-parameter-placeholder-style-2026-10-18.md`. | Differential coverage from external Trino clients. |
 | Native DML | Partial | Typed multi-row product-record DML and transaction visibility are supported on the declared product tables. | General typed lake-table DML, constraints, and broader transactional SQL. |
-| Metadata protocol | Qualified (bounded) | SHOW SESSION, SHOW FUNCTIONS, catalog/schema/table metadata, EXPLAIN, response paging, cancellation links, and session update headers. The current AKS image passes an authenticated Trino-wire sweep for these controls with exact rows and drained pages. | Broader external-client compatibility and release-corpus coverage. |
+| Metadata protocol | Qualified (bounded) | SHOW SESSION, SHOW FUNCTIONS, catalog/schema/table metadata, EXPLAIN, response paging, cancellation links, and session update headers. The current AKS image passes an authenticated Trino-wire sweep for these controls with exact rows and drained pages. Trino response shaping now validates native `next_uri` links and emits only relative `/v1/trino/query/<id>/results/<page>` links, rejecting unrelated routes, malformed/non-numeric pages, query strings, fragments, and non-string values (`docs/qualification/track2-trino-next-uri-guard-2026-10-18.md`). | Broader external-client compatibility and release-corpus coverage. |
 | Explicit unsupported behavior | Qualified | Unsupported syntax fails closed with actionable SQL error names and no silent coordinator fallback; `TRY` now lowers JSON parse/format/array-get failures to NULL. | Keep rejection corpus in every release gate. |
 
 ## Qualification commands
@@ -78,7 +78,3 @@ A parity claim requires the exact-result reference, workload inputs, image or
 commit digest, latency/resource measurements, and failure count to be retained
 under `docs/qualification/`. Passing focused tests alone does not qualify a
 three-worker, cloud, or broad federated claim.
-
-
-
-
