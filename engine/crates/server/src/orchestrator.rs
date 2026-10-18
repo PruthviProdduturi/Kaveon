@@ -1067,6 +1067,58 @@ mod tests {
     }
 
     #[test]
+    fn sequential_worker_losses_recover_the_same_query_on_the_last_survivor() {
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            graph(),
+            fragments(),
+            vec![worker("worker-a"), worker("worker-b"), worker("worker-c")],
+        )
+        .unwrap();
+        orchestrator.set_stage_retry_limit(2);
+
+        // Produce the first exchange and start both consumers. Losing b moves
+        // its consumer spool and replays the finished producer stage.
+        run_stage(&mut orchestrator, 0);
+        let first_consumers = orchestrator.ready_dispatches().unwrap();
+        for consumer in &first_consumers {
+            orchestrator
+                .start_task(&consumer.assignment.task_id)
+                .unwrap();
+        }
+        let first_loss = orchestrator.lose_worker("worker-b").unwrap();
+        assert_eq!(first_loss.worker, "worker-b");
+        assert_eq!(first_loss.reexecuted_stages, vec![0]);
+        assert_eq!(orchestrator.live_workers().len(), 2);
+        run_stage(&mut orchestrator, 0);
+
+        // The second loss removes the worker holding the rebuilt exchange.
+        // The producer stage is replayed once more, but never exceeds the
+        // configured per-query retry budget.
+        let second_consumers = orchestrator.ready_dispatches().unwrap();
+        let pending_consumer = second_consumers
+            .iter()
+            .find(|dispatch| dispatch.assignment.task_id.partition == 1)
+            .unwrap();
+        orchestrator
+            .start_task(&pending_consumer.assignment.task_id)
+            .unwrap();
+        let second_loss = orchestrator.lose_worker("worker-c").unwrap();
+        assert_eq!(second_loss.worker, "worker-c");
+        assert_eq!(second_loss.reexecuted_stages, vec![0]);
+        assert_eq!(second_loss.stage_retries.len(), 3);
+        assert_eq!(orchestrator.live_workers().len(), 1);
+        assert_eq!(orchestrator.live_workers()[0].node_id, "worker-a");
+
+        run_stage(&mut orchestrator, 0);
+        run_stage(&mut orchestrator, 1);
+        orchestrator
+            .finish_task(&first_consumers[0].assignment.task_id)
+            .unwrap();
+        assert!(orchestrator.is_finished());
+        assert!(orchestrator.drain_exchange_cleanup().is_ok());
+    }
+
+    #[test]
     fn a_reexecuted_stage_whose_inputs_were_released_reexecutes_its_producers_too() {
         let mut deep = graph();
         deep.root_stage = StageId(2);
