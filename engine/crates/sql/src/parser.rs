@@ -254,17 +254,23 @@ fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
     cursor = skip_sql_space(trimmed, cursor);
     let (cte_name, next) = take_sql_word(trimmed, cursor)?;
     cursor = skip_sql_space(trimmed, next);
-    if trimmed.as_bytes().get(cursor) != Some(&b'(') {
-        return None;
-    }
-    cursor += 1;
-    cursor = skip_sql_space(trimmed, cursor);
-    let (column, next) = take_sql_word(trimmed, cursor)?;
-    cursor = skip_sql_space(trimmed, next);
-    if trimmed.as_bytes().get(cursor) != Some(&b')') {
-        return None;
-    }
-    cursor = skip_sql_space(trimmed, cursor + 1);
+    // Trino permits the recursive column list to be omitted when the seed
+    // projection supplies its column name.  Keep this bounded rewrite safe by
+    // inferring exactly one identifier from `SELECT <integer> AS <name>`; a
+    // nameless or multi-column seed remains on the explicit unsupported path.
+    let explicit_column = if trimmed.as_bytes().get(cursor) == Some(&b'(') {
+        cursor += 1;
+        cursor = skip_sql_space(trimmed, cursor);
+        let (column, next) = take_sql_word(trimmed, cursor)?;
+        cursor = skip_sql_space(trimmed, next);
+        if trimmed.as_bytes().get(cursor) != Some(&b')') {
+            return None;
+        }
+        cursor = skip_sql_space(trimmed, cursor + 1);
+        Some(column)
+    } else {
+        None
+    };
     cursor = consume_sql_token(trimmed, cursor, "AS")?;
     cursor = skip_sql_space(trimmed, cursor);
     if trimmed.as_bytes().get(cursor) != Some(&b'(') {
@@ -281,7 +287,13 @@ fn normalize_bounded_linear_recursive_cte(sql: &str) -> Option<String> {
     // identical results for UNION and UNION ALL. Accept both spellings while
     // keeping general recursive UNION graphs explicitly unsupported.
     let (seed_sql, recursive_sql) = split_top_level_union(body)?;
-    let seed = parse_single_integer_select(seed_sql.trim(), &column)?;
+    let (seed, inferred_column) = parse_integer_seed(seed_sql.trim())?;
+    if let (Some(expected), Some(actual)) = (&explicit_column, &inferred_column)
+        && !expected.eq_ignore_ascii_case(actual)
+    {
+        return None;
+    }
+    let column = explicit_column.or(inferred_column)?;
     let tokens = recursive_sql.split_whitespace().collect::<Vec<_>>();
     let from = if tokens.len() == 12 { 6 } else { 4 };
     if !(tokens.len() == 10 || tokens.len() == 12)
@@ -440,16 +452,16 @@ fn split_top_level_union(body: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_single_integer_select(sql: &str, column: &str) -> Option<i64> {
+fn parse_integer_seed(sql: &str) -> Option<(i64, Option<String>)> {
     let tokens = sql.split_whitespace().collect::<Vec<_>>();
     match tokens.as_slice() {
-        [select, value] if select.eq_ignore_ascii_case("SELECT") => value.parse().ok(),
+        [select, value] if select.eq_ignore_ascii_case("SELECT") => {
+            Some((value.parse().ok()?, None))
+        }
         [select, value, as_token, alias]
-            if select.eq_ignore_ascii_case("SELECT")
-                && as_token.eq_ignore_ascii_case("AS")
-                && alias.eq_ignore_ascii_case(column) =>
+            if select.eq_ignore_ascii_case("SELECT") && as_token.eq_ignore_ascii_case("AS") =>
         {
-            value.parse().ok()
+            Some((value.parse().ok()?, Some((*alias).to_owned())))
         }
         _ => None,
     }
@@ -1187,6 +1199,22 @@ mod tests {
         assert!(!rendered.contains("WITH RECURSIVE"), "{rendered}");
         let mismatched = source.replace("AS n FROM numbers", "AS other FROM numbers");
         assert!(normalize_bounded_linear_recursive_cte(&mismatched).is_none());
+    }
+
+    #[test]
+    fn bounded_recursive_cte_infers_single_column_from_seed_alias() {
+        let source = "WITH RECURSIVE numbers AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM numbers WHERE n < 3) SELECT n FROM numbers ORDER BY n";
+        let rewritten = normalize_bounded_linear_recursive_cte(source)
+            .expect("seed alias should supply the recursive column");
+        assert!(rewritten.contains("numbers(n)") && rewritten.contains("SEQUENCE(1, 3, 1)"));
+        let statements = parse_sql(source).expect("inferred recursive column should parse");
+        assert!(!statements[0].to_string().contains("WITH RECURSIVE"));
+    }
+
+    #[test]
+    fn recursive_cte_without_column_list_still_requires_seed_alias() {
+        let source = "WITH RECURSIVE numbers AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 3) SELECT n FROM numbers";
+        assert!(normalize_bounded_linear_recursive_cte(source).is_none());
     }
 
     #[test]
