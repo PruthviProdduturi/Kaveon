@@ -1384,7 +1384,8 @@ fn parquet_error(error: parquet::errors::ParquetError) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, Date64Array, Decimal128Array, Int32Array, StringArray, TimestampMicrosecondArray,
+        ArrayRef, Date64Array, Decimal128Array, Float32Array, Int32Array, StringArray,
+        TimestampMicrosecondArray,
     };
     use arrow::datatypes::{Field, Schema, TimeUnit};
     use parquet::arrow::ArrowWriter;
@@ -1530,6 +1531,37 @@ mod tests {
             .write(&batch)
             .expect("Decimal batch must be writable");
         writer.close().expect("Decimal writer must close");
+        file
+    }
+
+    fn float32_fixture() -> TestFile {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-float32-runtime-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "score",
+            DataType::Float32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(vec![
+                1.5_f32, 2.25_f32, 3.5_f32, 4.75_f32,
+            ])) as ArrayRef],
+        )
+        .expect("Float32 batch must be valid");
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let output = File::create(&file.0).expect("Float32 file must be creatable");
+        let mut writer = ArrowWriter::try_new(output, schema, Some(properties))
+            .expect("Float32 writer must be valid");
+        writer
+            .write(&batch)
+            .expect("Float32 batch must be writable");
+        writer.close().expect("Float32 writer must close");
         file
     }
 
@@ -1794,6 +1826,36 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![125, 400]);
+    }
+
+    #[test]
+    fn applies_float32_runtime_filter_without_rounding() {
+        let file = float32_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["score".to_owned()])
+            .read()
+            .expect("Float32 source must open");
+        assert!(
+            source
+                .apply_runtime_filter("score", &[ScalarValue::Float64(2.25)])
+                .expect("Float32 runtime filter must be accepted")
+        );
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("Float32 runtime-filtered parquet must decode");
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .expect("Float32 output")
+                    .iter()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![2.25_f32]);
     }
 
     #[test]
