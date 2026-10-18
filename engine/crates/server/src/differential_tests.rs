@@ -2698,6 +2698,32 @@ fn distributed_typed_json_default_matches_local_semantics() {
 }
 
 #[test]
+fn distributed_typed_json_query_default_matches_local_semantics() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-query-default-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_QUERY(JSON_PARSE('{}'), '$.missing' RETURNING JSON ON EMPTY DEFAULT '{\"fallback\":1}') AS fallback_value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-query-default", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec![r#"{"fallback":1}"#]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_correlated_sequence_unnest_repeats_each_left_row() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-correlated-sequence-unnest-{}",
