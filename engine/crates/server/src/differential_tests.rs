@@ -2079,6 +2079,27 @@ fn distributed_json_array_length_non_arrays_are_null() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// JSON_ARRAY_CONTAINS must return false for a valid JSON object rather than
+/// treating the object as a one-element array. Keep this on the distributed
+/// path because the JSON parse and membership evaluator run on each worker.
+#[test]
+fn distributed_json_array_contains_non_array_is_false() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-array-contains-non-array-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_ARRAY_CONTAINS(JSON_PARSE('{\"value\":1}'), CAST(1 AS BIGINT)) AS object_result FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-array-contains-non-array", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["false"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// ROW subscripts are one-based and preserve a NULL parent row as NULL for
 /// every selected field.  Run the same typed struct column through the local
 /// planner and the three-worker fragment path so a worker-side struct/null
