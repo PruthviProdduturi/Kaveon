@@ -13889,9 +13889,11 @@ async fn execute_distributed_top_n(
             "distributed TopN completed without a result schema".into()
         ));
     };
-    let Some(merged) = global_candidate else {
-        return Some(Err("distributed TopN completed without result rows".into()));
-    };
+    // Every worker can legitimately return zero rows after a selective
+    // predicate. Preserve the worker schema and return an empty result rather
+    // than turning an otherwise valid positive-limit query into a 500.
+    let merged = global_candidate
+        .unwrap_or_else(|| arrow::record_batch::RecordBatch::new_empty(schema.clone()));
     let total_elapsed_us = elapsed_us(started);
     task_metrics.sort_unstable_by_key(|task| task.partition_index);
     let batches = vec![merged];
