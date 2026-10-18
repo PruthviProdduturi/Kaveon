@@ -1091,7 +1091,7 @@ fn rewrite_columns(expr: &Expr, names: &HashMap<String, String>) -> Option<Expr>
         }
         Expr::Cast { expr, data_type } => Some(Expr::Cast {
             expr: Box::new(rewrite_columns(expr, names)?),
-            data_type: *data_type,
+            data_type: data_type.clone(),
         }),
         Expr::Case {
             operand,

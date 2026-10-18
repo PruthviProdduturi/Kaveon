@@ -120,7 +120,7 @@ pub fn expression_contains_column(expr: &Expr) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CastTarget {
     Boolean,
     Int8,
@@ -134,8 +134,19 @@ pub enum CastTarget {
     Float64,
     Utf8,
     Date32,
-    TimestampMicros { with_timezone: bool },
-    Decimal128 { precision: u8, scale: i8 },
+    TimestampMicros {
+        with_timezone: bool,
+    },
+    Decimal128 {
+        precision: u8,
+        scale: i8,
+    },
+    /// A recursively typed map target. This is primarily needed for typed
+    /// NULL map literals, where the source carries no Arrow type to infer.
+    Map {
+        key: Box<CastTarget>,
+        value: Box<CastTarget>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +194,20 @@ impl CastTarget {
             Self::Decimal128 { precision, scale } => {
                 arrow::datatypes::DataType::Decimal128(*precision, *scale)
             }
+            Self::Map { key, value } => arrow::datatypes::DataType::Map(
+                std::sync::Arc::new(arrow::datatypes::Field::new(
+                    "entries",
+                    arrow::datatypes::DataType::Struct(
+                        vec![
+                            arrow::datatypes::Field::new("key", key.to_arrow_type(), false),
+                            arrow::datatypes::Field::new("value", value.to_arrow_type(), true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
         }
     }
 }

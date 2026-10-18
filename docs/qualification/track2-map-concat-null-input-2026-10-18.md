@@ -4,8 +4,8 @@ Date: 2026-10-18
 
 ## Result
 
-The runtime already has a fail-closed NULL-row path in `MAP_CONCAT`, but the
-SQL surface cannot currently express the required typed NULL map input:
+Typed NULL map casts are now represented recursively in `CastTarget`, and the
+SQL surface accepts the required typed NULL map input:
 
 ```sql
 MAP_CONCAT(
@@ -14,13 +14,13 @@ MAP_CONCAT(
 )
 ```
 
-Planning fails with `unsupported CAST target type: MAP(VARCHAR, BIGINT)` before
-local or distributed execution. This is a typed complex-cast gap, not a
-runtime result claim. It remains open until `CastTarget` can preserve nested
-map key/value types and the evaluator can cast NULL values to that map type.
+The focused local/three-worker differential
+`distributed_map_concat_null_input_matches_local` verifies that a NULL map
+input propagates NULL through `MAP_CONCAT` and that the query memory pool drains
+after both execution paths.
 
 ## Boundary
 
-Do not mark NULL map concatenation as qualified. The next implementation must
-add a typed map cast, then compare local and three-worker results for NULL,
-empty, and non-empty maps with rightmost-key replacement.
+The current case covers a typed NULL map plus a non-empty map. Empty-map and
+rightmost-key replacement cases remain covered by the existing map differential
+corpus; broader nested-map casts remain outside this bounded change.

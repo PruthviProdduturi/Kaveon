@@ -3965,6 +3965,13 @@ fn cast_target_name(target: CastTarget) -> String {
             with_timezone: true,
         } => "TIMESTAMP_TZ".into(),
         CastTarget::Decimal128 { precision, scale } => format!("DECIMAL_{precision}_{scale}"),
+        CastTarget::Map { key, value } => {
+            format!(
+                "MAP({}, {})",
+                cast_target_name((*key).clone()),
+                cast_target_name((*value).clone())
+            )
+        }
     }
 }
 
@@ -4193,7 +4200,34 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
                 scale: s,
             })
         }
+        ast::DataType::Map(key, value) => Ok(CastTarget::Map {
+            key: Box::new(ast_data_type_to_cast_target(key)?),
+            value: Box::new(ast_data_type_to_cast_target(value)?),
+        }),
+        ast::DataType::Custom(name, args)
+            if name.to_string().eq_ignore_ascii_case("MAP") && args.len() == 2 =>
+        {
+            Ok(CastTarget::Map {
+                key: Box::new(custom_cast_target(&args[0])?),
+                value: Box::new(custom_cast_target(&args[1])?),
+            })
+        }
         other => Err(sql_err(format!("unsupported CAST target type: {other}"))),
+    }
+}
+
+fn custom_cast_target(name: &str) -> Result<CastTarget> {
+    match name.trim().to_ascii_uppercase().as_str() {
+        "BOOLEAN" | "BOOL" => Ok(CastTarget::Boolean),
+        "TINYINT" | "INT8" => Ok(CastTarget::Int8),
+        "SMALLINT" | "INT2" => Ok(CastTarget::Int16),
+        "INTEGER" | "INT" | "INT4" => Ok(CastTarget::Int32),
+        "BIGINT" | "INT8SIGNED" => Ok(CastTarget::Int64),
+        "REAL" | "FLOAT" | "DOUBLE" | "DOUBLE PRECISION" => Ok(CastTarget::Float64),
+        "VARCHAR" | "TEXT" | "STRING" => Ok(CastTarget::Utf8),
+        other => Err(sql_err(format!(
+            "unsupported MAP cast member type: {other}"
+        ))),
     }
 }
 

@@ -3917,6 +3917,13 @@ fn trino_expr_type(expression: &Expr) -> String {
             kaveon_core::CastTarget::Decimal128 { precision, scale } => {
                 return format!("decimal({precision},{scale})");
             }
+            kaveon_core::CastTarget::Map { key, value } => {
+                return format!(
+                    "map({},{})",
+                    trino_cast_target_type(key),
+                    trino_cast_target_type(value)
+                );
+            }
         }
         .to_owned(),
         Expr::Literal(value) => match value {
@@ -4034,6 +4041,35 @@ fn trino_expr_type(expression: &Expr) -> String {
         | Expr::InList { .. } => "boolean".to_owned(),
         Expr::Extract { .. } => "bigint".to_owned(),
         _ => "unknown".to_owned(),
+    }
+}
+
+fn trino_cast_target_type(target: &kaveon_core::CastTarget) -> String {
+    match target {
+        kaveon_core::CastTarget::Boolean => "boolean".into(),
+        kaveon_core::CastTarget::Int8 | kaveon_core::CastTarget::UInt8 => "tinyint".into(),
+        kaveon_core::CastTarget::Int16 | kaveon_core::CastTarget::UInt16 => "smallint".into(),
+        kaveon_core::CastTarget::Int32 | kaveon_core::CastTarget::UInt32 => "integer".into(),
+        kaveon_core::CastTarget::Int64 | kaveon_core::CastTarget::UInt64 => "bigint".into(),
+        kaveon_core::CastTarget::Float64 => "double".into(),
+        kaveon_core::CastTarget::Utf8 => "varchar".into(),
+        kaveon_core::CastTarget::Date32 => "date".into(),
+        kaveon_core::CastTarget::TimestampMicros { with_timezone } => if *with_timezone {
+            "timestamp with time zone"
+        } else {
+            "timestamp"
+        }
+        .into(),
+        kaveon_core::CastTarget::Decimal128 { precision, scale } => {
+            format!("decimal({precision},{scale})")
+        }
+        kaveon_core::CastTarget::Map { key, value } => {
+            format!(
+                "map({},{})",
+                trino_cast_target_type(key),
+                trino_cast_target_type(value)
+            )
+        }
     }
 }
 
