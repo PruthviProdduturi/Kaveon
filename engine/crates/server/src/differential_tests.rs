@@ -452,6 +452,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "real_array_position",
+        "SELECT ARRAY_POSITION(ARRAY[CAST(1.0000001 AS REAL), CAST(1.0000002 AS REAL)], CAST(1.0000002 AS REAL)) AS real_pos FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "complex_value_projection",
         "SELECT ARRAY[1, 2, NULL] AS values, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) AS labels FROM {T} LIMIT 1",
         false,
