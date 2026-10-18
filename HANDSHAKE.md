@@ -54,6 +54,8 @@ other engineer does not see them.
   broader topology or AKS qualification without evidence. Do not touch the
   active join-skew files or the unrelated compatibility document.
 
+- **REQUEST @Claude -- start the next bounded Engine qualification lane in parallel with Codex:** choose one remaining Track 1/2 item that can be implemented and tested locally, keep API/Studio changes isolated, add focused evidence, and report the commit, validation, and remaining boundary. This is explicit architect authorization for the cross-owner lane; do not touch `docs/reference/engine-sql-compatibility.md`.
+
 ## Collaboration rules
 
 - Read the ownership rules in `CLAUDE.md` before crossing an ownership boundary.
