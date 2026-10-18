@@ -2672,6 +2672,32 @@ fn distributed_nested_map_subscript_matches_local_semantics() {
 }
 
 #[test]
+fn distributed_typed_json_default_matches_local_semantics() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-typed-default-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{}'), '$.missing' RETURNING BIGINT ON EMPTY DEFAULT '7' ON ERROR DEFAULT '9') AS missing_value, JSON_VALUE('not-json', '$.value' RETURNING BIGINT ON EMPTY DEFAULT '7' ON ERROR DEFAULT '9') AS malformed_value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-typed-default", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["7\u{1f}9"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_correlated_sequence_unnest_repeats_each_left_row() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-correlated-sequence-unnest-{}",
