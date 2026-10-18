@@ -123,6 +123,8 @@ pub fn expression_contains_column(expr: &Expr) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CastTarget {
     Boolean,
+    Int8,
+    Int16,
     Int32,
     Int64,
     UInt8,
@@ -163,6 +165,8 @@ impl CastTarget {
     pub fn to_arrow_type(&self) -> arrow::datatypes::DataType {
         match self {
             Self::Boolean => arrow::datatypes::DataType::Boolean,
+            Self::Int8 => arrow::datatypes::DataType::Int8,
+            Self::Int16 => arrow::datatypes::DataType::Int16,
             Self::Int32 => arrow::datatypes::DataType::Int32,
             Self::Int64 => arrow::datatypes::DataType::Int64,
             Self::UInt8 => arrow::datatypes::DataType::UInt8,

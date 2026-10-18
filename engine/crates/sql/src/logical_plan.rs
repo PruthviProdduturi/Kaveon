@@ -3843,6 +3843,8 @@ fn null_safe_comparison(left: Expr, right: Expr, not_distinct: bool) -> Expr {
 fn cast_target_name(target: CastTarget) -> String {
     match target {
         CastTarget::Boolean => "BOOLEAN".into(),
+        CastTarget::Int8 => "INT8".into(),
+        CastTarget::Int16 => "INT16".into(),
         CastTarget::Int32 => "INT32".into(),
         CastTarget::Int64 => "INT64".into(),
         CastTarget::UInt8 => "UINT8".into(),
@@ -4023,6 +4025,8 @@ fn days_in_month(year: i64, month: i64) -> i64 {
 fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
     match dt {
         ast::DataType::Boolean => Ok(CastTarget::Boolean),
+        ast::DataType::TinyInt(_) => Ok(CastTarget::Int8),
+        ast::DataType::Int2(_) | ast::DataType::SmallInt(_) => Ok(CastTarget::Int16),
         ast::DataType::Int(_) | ast::DataType::Integer(_) | ast::DataType::Int4(_) => {
             Ok(CastTarget::Int32)
         }
