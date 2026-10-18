@@ -103,6 +103,23 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
         }
         Expr::Function { name, args } => {
             let output_name = format_function_name(name, args);
+            // Composite ROW dereferences are lowered to ROW_FIELD.  Probing
+            // the evaluator with an empty batch cannot infer the child type
+            // because the evaluator quite correctly returns a typed NULL
+            // array for the empty input.  Resolve the child from the source
+            // Struct type instead so every fragment, including an empty
+            // partition, publishes the same projection schema.
+            if name.eq_ignore_ascii_case("ROW_FIELD")
+                && args.len() == 2
+                && let (Some(DataType::Struct(fields)), Expr::Literal(ScalarValue::Utf8(field))) =
+                    (expression_data_type(&args[0], schema), &args[1])
+                && let Some(child) = fields.iter().find(|candidate| candidate.name() == field)
+            {
+                return Ok((
+                    Field::new(output_name, child.data_type().clone(), true),
+                    None,
+                ));
+            }
             // `evaluate` sees an empty batch while the projection schema is
             // built.  A ROW subscript has no rows from which to select its
             // constant field in that probe, so the evaluator correctly
@@ -160,6 +177,20 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
             .ok()
             .map(|index| schema.field(index).data_type().clone()),
         Expr::Alias { expr, .. } => expression_data_type(expr, schema),
+        Expr::Function { name, args }
+            if name.eq_ignore_ascii_case("ROW_FIELD") && args.len() == 2 =>
+        {
+            let DataType::Struct(fields) = expression_data_type(&args[0], schema)? else {
+                return None;
+            };
+            let Expr::Literal(ScalarValue::Utf8(field)) = &args[1] else {
+                return None;
+            };
+            fields
+                .iter()
+                .find(|candidate| candidate.name() == field)
+                .map(|candidate| candidate.data_type().clone())
+        }
         _ => None,
     }
 }

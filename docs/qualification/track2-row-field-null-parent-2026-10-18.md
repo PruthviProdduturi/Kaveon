@@ -7,6 +7,11 @@ even if the physical child array contains a value in that slot. Kaveon's
 evaluator now applies the parent row validity bitmap to the selected child
 column. Non-null rows continue to return the child without an extra copy.
 
+Projection planning also resolves the selected child type from the input
+STRUCT schema instead of probing the evaluator with an empty batch. This keeps
+the output schema identical when a distributed fragment has no rows, and
+prevents a valid ROW field from being published as Arrow `Null`.
+
 ## Validation
 
 From `engine/`:
@@ -18,6 +23,10 @@ cargo clippy -p kaveon-exec --lib -- -D warnings
 ```
 
 The focused test suite passes both the existing named-field dereference case
-and a nullable-parent case whose results are `[7, NULL]`. This is a local
-expression qualification; distributed and external-client wire qualification
-for nullable ROW dereference remains open.
+and a nullable-parent case whose results are `[7, NULL]`. The server
+differential test `distributed_row_subscript_matches_local_and_rejects_invalid_constant_index`
+also projects two explicit `ROW_FIELD` values through the local planner and
+the in-process three-worker fragment path, including an empty worker
+partition, and compares the typed results and NULL-parent propagation.
+External-client wire and cloud qualification for nullable ROW dereference
+remain open.

@@ -1992,7 +1992,7 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
-    let statement = "SELECT record[1] AS first, record[2] AS second FROM events";
+    let statement = "SELECT record[1] AS first, record[2] AS second, ROW_FIELD(record, 'field0') AS named_first, ROW_FIELD(record, 'field1') AS named_second FROM events";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-row-subscript", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
@@ -2014,7 +2014,14 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
         false,
     );
     assert_eq!(actual, expected);
-    assert_eq!(actual, vec!["11\u{1f}c", "7\u{1f}a", "NULL\u{1f}NULL"]);
+    assert_eq!(
+        actual,
+        vec![
+            "11\u{1f}c\u{1f}11\u{1f}c",
+            "7\u{1f}a\u{1f}7\u{1f}a",
+            "NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL",
+        ]
+    );
     assert_eq!(pool.snapshot().current_bytes, 0);
 
     let invalid = "SELECT record[3] FROM events";
