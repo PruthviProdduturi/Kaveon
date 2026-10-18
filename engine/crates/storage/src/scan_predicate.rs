@@ -289,12 +289,30 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
             | DataType::Time64(_)
             | DataType::Timestamp(_, _),
         ) => {
+            let fits = match data_type {
+                DataType::Int8 => i8::try_from(*value).is_ok(),
+                DataType::Int16 => i16::try_from(*value).is_ok(),
+                DataType::Int32 | DataType::Date32 => i32::try_from(*value).is_ok(),
+                DataType::UInt8 => u8::try_from(*value).is_ok(),
+                DataType::UInt16 => u16::try_from(*value).is_ok(),
+                DataType::UInt32 => u32::try_from(*value).is_ok(),
+                DataType::UInt64 => u64::try_from(*value).is_ok(),
+                DataType::Date64 | DataType::Time64(_) | DataType::Timestamp(_, _) => true,
+                DataType::Time32(_) => i32::try_from(*value).is_ok(),
+                _ => false,
+            };
+            if !fits {
+                return None;
+            }
             let literal = Int64Array::from(vec![*value]);
             arrow::compute::cast_with_options(
                 &literal,
                 data_type,
                 &arrow::compute::CastOptions {
-                    safe: false,
+                    // Runtime-filter values must never wrap into a narrower
+                    // or unsigned probe type. A value outside the target
+                    // range leaves pushdown to the exact executor path.
+                    safe: true,
                     ..Default::default()
                 },
             )
@@ -914,5 +932,33 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn narrow_integer_runtime_literals_reject_wrapping_values() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", DataType::UInt32, false),
+            Field::new("day", DataType::Date32, false),
+        ]));
+        let too_large = StoragePredicate::Compare {
+            column: "u".into(),
+            op: CompareOp::Eq,
+            value: ScalarValue::Int64(i64::from(u32::MAX) + 1),
+        };
+        assert!(CompiledPredicate::compile(&too_large, &schema).is_none());
+
+        let negative = StoragePredicate::Compare {
+            column: "u".into(),
+            op: CompareOp::Eq,
+            value: ScalarValue::Int64(-1),
+        };
+        assert!(CompiledPredicate::compile(&negative, &schema).is_none());
+
+        let date_overflow = StoragePredicate::Compare {
+            column: "day".into(),
+            op: CompareOp::Eq,
+            value: ScalarValue::Int64(i64::from(i32::MAX) + 1),
+        };
+        assert!(CompiledPredicate::compile(&date_overflow, &schema).is_none());
     }
 }
