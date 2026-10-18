@@ -3477,6 +3477,35 @@ fn distributed_correlated_scalar_aggregate_offset_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Nested map/ROW null-safe comparison must remain order-independent and
+/// two-valued when the same values arrive through distributed fragments.
+#[test]
+fn distributed_map_row_null_safe_comparison_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-map-row-null-safe-comparison-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT MAP(ARRAY['a', 'b'], ARRAY[10, CAST(NULL AS BIGINT)]) IS NOT DISTINCT FROM MAP(ARRAY['b', 'a'], ARRAY[CAST(NULL AS BIGINT), 10]) AS maps_same, ROW(1, CAST(NULL AS BIGINT)) IS NOT DISTINCT FROM ROW(1, CAST(NULL AS BIGINT)) AS rows_same, ROW(MAP(ARRAY['a'], ARRAY[CAST(NULL AS BIGINT)])) IS NOT DISTINCT FROM ROW(MAP(ARRAY['a'], ARRAY[CAST(NULL AS BIGINT)])) AS nested_same FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-row-null-safe-comparison", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["true\u{1f}true\u{1f}true"; 3]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn derived_values_join_using_matches_the_local_result() {
     let directory = std::env::temp_dir().join(format!(
