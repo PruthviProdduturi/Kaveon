@@ -957,12 +957,20 @@ mod query_journal {
                 let Ok(line) = serde_json::to_string(entry) else {
                     return;
                 };
-                if self.file.write_all(format!("{line}\n").as_bytes()).is_err()
-                    || self.file.flush().is_err()
-                    || self.file.sync_data().is_err()
+                // Compaction publishes a replacement inode. Reopen the
+                // current path while holding the interprocess lock so a
+                // coordinator that survived a failover cannot append to its
+                // stale pre-compaction file handle.
+                let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&self.path) else {
+                    return;
+                };
+                if file.write_all(format!("{line}\n").as_bytes()).is_err()
+                    || file.flush().is_err()
+                    || file.sync_data().is_err()
                 {
                     return;
                 }
+                self.file = file;
                 self.recent.push_back(line);
                 while self.recent.len() > QUERY_JOURNAL_LINES {
                     self.recent.pop_front();
@@ -15953,6 +15961,34 @@ mod tests {
                 .or_else(|| id.strip_prefix("replacement-"))
                 .is_some_and(|index| index.parse::<usize>().is_ok())
         }));
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A coordinator that remains alive across another coordinator's
+    /// compaction must append to the replacement inode, not its stale open
+    /// handle. This is the failover fence that keeps takeover records visible
+    /// after the next restart.
+    #[test]
+    fn a_surviving_coordinator_reopens_after_peer_compaction() {
+        use super::query_journal::Journal;
+
+        let directory = journal_directory("stale-handle");
+        let path = directory.join("query-history.jsonl");
+        let (left, _) = Journal::open(&path);
+        let mut left = left.expect("primary journal opens");
+        let (right, _) = Journal::open(&path);
+        let mut right = right.expect("replacement journal opens");
+
+        for index in 0..super::QUERY_JOURNAL_REWRITE_AFTER {
+            left.append(&journaled_query(&format!("primary-{index}"), "SELECT 1"));
+        }
+        let takeover = "replacement-after-compaction";
+        right.append(&journaled_query(takeover, "SELECT 2"));
+        drop(left);
+        drop(right);
+
+        let (_, restored) = Journal::open(&path);
+        assert!(restored.iter().any(|entry| entry.id == takeover));
         std::fs::remove_dir_all(&directory).ok();
     }
 
