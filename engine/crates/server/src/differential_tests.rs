@@ -578,6 +578,21 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_scalar_path_returning_boolean",
+        "SELECT JSON_VALUE(JSON_PARSE('{\"enabled\":true}'), '$.enabled' RETURNING BOOLEAN) AS enabled FROM {T} LIMIT 1",
+        false,
+    ),
+    (
+        "json_scalar_path_returning_varchar",
+        "SELECT JSON_VALUE(JSON_PARSE('{\"label\":\"ready\"}'), '$.label' RETURNING VARCHAR) AS label FROM {T} LIMIT 1",
+        false,
+    ),
+    (
+        "json_query_path_returning_varchar",
+        "SELECT JSON_QUERY(JSON_PARSE('{\"items\":[1,2]}'), '$.items' RETURNING VARCHAR) AS items FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_exists_path",
         "SELECT JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.x') AS present, JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.missing') AS absent FROM {T} LIMIT 1",
         false,
