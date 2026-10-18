@@ -190,6 +190,10 @@ struct BoundSemiJoin {
     left_key: Expr,
     right_key: Expr,
     residual: Option<Expr>,
+    /// Only an uncorrelated NOT IN needs a relation-wide NULL fact. In a
+    /// keyed correlated subquery, NULL keys cannot match the outer key and
+    /// must not poison unrelated outer rows.
+    null_aware: bool,
     correlations: Vec<Correlation>,
 }
 
@@ -767,7 +771,7 @@ impl Binder<'_> {
                 left_key,
                 right_key,
                 residual,
-                null_aware,
+                ..
             } => {
                 let join =
                     self.bind_semi_join(*left, *right, left_key, right_key, residual, true, outer)?;
@@ -778,7 +782,7 @@ impl Binder<'_> {
                         left_key: join.left_key,
                         right_key: join.right_key,
                         residual: join.residual,
-                        null_aware,
+                        null_aware: join.null_aware,
                     },
                     aggregate_input: None,
                     correlations: join.correlations,
@@ -1191,6 +1195,7 @@ impl Binder<'_> {
                 left_key,
                 right_key: Expr::Column(inner.clone()),
                 residual,
+                null_aware: false,
                 correlations: left.correlations,
             });
         }
@@ -1221,6 +1226,7 @@ impl Binder<'_> {
                 left_key,
                 right_key,
                 residual,
+                null_aware: anti,
                 correlations: left.correlations,
             });
         }
@@ -1241,12 +1247,21 @@ impl Binder<'_> {
                 &self.scope_of(&right.plan),
                 None,
             )?;
+            let right_plan = if anti {
+                LogicalPlan::Filter {
+                    input: Box::new(right.plan),
+                    predicate: Expr::IsNotNull(Box::new(Expr::Column(inner.clone()))),
+                }
+            } else {
+                right.plan
+            };
             return Ok(BoundSemiJoin {
                 left: Box::new(left.plan),
-                right: Box::new(right.plan),
+                right: Box::new(right_plan),
                 left_key,
                 right_key,
                 residual: None,
+                null_aware: false,
                 correlations: left.correlations,
             });
         }
@@ -1316,7 +1331,10 @@ impl Binder<'_> {
             .map(|predicate| self.bind_expr(predicate, &left_scope, None))
             .transpose()?;
         let mut subquery = right.plan;
-        if anti && !correlated_in {
+        // A NULL projected key cannot equal any outer correlation key. Drop
+        // it before the anti join; retaining it would make the partitioned
+        // operator treat an unrelated NULL as a global NOT IN poison value.
+        if anti {
             subquery = LogicalPlan::Filter {
                 input: Box::new(subquery),
                 predicate: Expr::IsNotNull(Box::new(key.clone())),
@@ -1340,6 +1358,7 @@ impl Binder<'_> {
             left_key,
             right_key,
             residual,
+            null_aware: false,
             correlations: left.correlations,
         })
     }
