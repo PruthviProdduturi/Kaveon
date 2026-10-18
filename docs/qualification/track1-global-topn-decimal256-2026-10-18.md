@@ -19,6 +19,17 @@ running 1 test
 test result: ok. 1 passed; 0 failed
 ```
 
-This is local executor evidence. The distributed global-order contract remains
-bounded by the coordinator merge and still needs deployed multi-worker
+The in-process distributed merge regression then keeps only each worker's
+local four candidates, merges the three worker outputs, and compares the
+result with a single-partition Arrow lexsort reference:
+
+```text
+cargo test -p kaveon-exec three_worker_global_decimal256_top_n_matches_single_partition_reference --quiet
+running 1 test
+.
+test result: ok. 1 passed; 0 failed
+```
+
+This qualifies exact local multi-worker merge behavior. The deployed global
+order contract remains bounded by the coordinator merge and still needs cloud
 qualification for a fully parallel ordered result stream.

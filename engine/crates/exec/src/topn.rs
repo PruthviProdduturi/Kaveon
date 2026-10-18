@@ -902,8 +902,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, Decimal128Array, Decimal256Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        StringArray, UInt8Array, UInt16Array, UInt32Array,
+        Array, ArrayRef, Decimal128Array, Decimal256Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array,
     };
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -1429,6 +1429,86 @@ mod tests {
                 .iter()
                 .map(|column| take(column.as_ref(), &indices, None).unwrap())
                 .collect(),
+        )
+        .unwrap();
+        assert_eq!(distributed, expected);
+    }
+
+    #[test]
+    fn three_worker_global_decimal256_top_n_matches_single_partition_reference() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "score",
+            DataType::Decimal256(40, 2),
+            true,
+        )]));
+        let decimal = |values: Vec<Option<&str>>| {
+            Arc::new(
+                Decimal256Array::from(
+                    values
+                        .into_iter()
+                        .map(|value| {
+                            value.map(|value| arrow::datatypes::i256::from_string(value).unwrap())
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .with_precision_and_scale(40, 2)
+                .unwrap(),
+            ) as ArrayRef
+        };
+        let workers = [
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![decimal(vec![
+                    Some("10000000000000000000000000000100"),
+                    Some("80000000000000000000000000000800"),
+                    None,
+                ])],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![decimal(vec![
+                    Some("10000000000000000000000000000200"),
+                    Some("90000000000000000000000000000900"),
+                    Some("-1"),
+                ])],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![decimal(vec![
+                    Some("10000000000000000000000000000300"),
+                    Some("70000000000000000000000000000700"),
+                    Some("10000000000000000000000000000100"),
+                ])],
+            )
+            .unwrap(),
+        ];
+        let ordering =
+            vec![SortExpr::new(Expr::Column("score".into()), false).with_nulls_first(false)];
+        let local_candidates = workers
+            .iter()
+            .map(|worker| merge_top_n(&schema, std::slice::from_ref(worker), &ordering, 4))
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .into_iter()
+            .map(Option::unwrap)
+            .collect::<Vec<_>>();
+        let distributed = merge_top_n(&schema, &local_candidates, &ordering, 4)
+            .unwrap()
+            .unwrap();
+        let complete = concat_batches(&schema, &workers).unwrap();
+        let columns = vec![SortColumn {
+            values: complete.column(0).clone(),
+            options: Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+        }];
+        let indices = lexsort_to_indices(&columns, Some(4)).unwrap();
+        let expected = RecordBatch::try_new(
+            schema.clone(),
+            vec![take(complete.column(0).as_ref(), &indices, None).unwrap()],
         )
         .unwrap();
         assert_eq!(distributed, expected);
