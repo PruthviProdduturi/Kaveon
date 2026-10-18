@@ -219,6 +219,7 @@ impl SpillManager {
             schema: Arc::clone(schema),
             inner: Arc::clone(&self.inner),
             path,
+            rows: 0,
         })
     }
 }
@@ -232,6 +233,7 @@ pub struct SpillRunWriter {
     schema: SchemaRef,
     inner: Arc<SpillInner>,
     path: PathBuf,
+    rows: u64,
 }
 
 impl SpillRunWriter {
@@ -251,6 +253,7 @@ impl SpillRunWriter {
             .write_us
             .fetch_add(elapsed_us(started), Ordering::AcqRel);
         written?;
+        self.rows = self.rows.saturating_add(batch.num_rows() as u64);
         Ok(())
     }
 
@@ -285,6 +288,7 @@ impl SpillRunWriter {
                 inner: Arc::clone(&self.inner),
                 path: std::mem::take(&mut self.path),
                 bytes,
+                rows: self.rows,
             }),
         })
     }
@@ -307,6 +311,7 @@ struct SpillRunInner {
     inner: Arc<SpillInner>,
     path: PathBuf,
     bytes: u64,
+    rows: u64,
 }
 
 /// A durable Arrow IPC run.
@@ -324,6 +329,14 @@ impl SpillRun {
     #[must_use]
     pub fn bytes(&self) -> u64 {
         self.inner.bytes
+    }
+
+    /// Number of rows encoded in this run, captured while it is written.
+    /// Keeping this alongside the run avoids reopening spill files merely to
+    /// diagnose partition skew.
+    #[must_use]
+    pub fn rows(&self) -> u64 {
+        self.inner.rows
     }
 
     pub fn read(&self) -> Result<Vec<RecordBatch>> {
