@@ -617,6 +617,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_distinct_nested_arrays",
+        "SELECT ARRAY_DISTINCT(ARRAY[ARRAY[1, 2], ARRAY[1, 2], ARRAY[2, 1]]) AS distinct_arrays FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
