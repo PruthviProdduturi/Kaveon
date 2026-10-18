@@ -269,6 +269,10 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
     use arrow::array::{
         BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int64Array,
     };
+    let data_type = match data_type {
+        DataType::Dictionary(_, values) => values.as_ref(),
+        other => other,
+    };
     Some(match (value, data_type) {
         (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
         // Narrower and unsigned integer columns, and day-number dates,
@@ -675,9 +679,12 @@ impl LateMaterialisation {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Int64Array, StringArray, StringDictionaryBuilder, Time64MicrosecondArray,
+        Date64Array, Int64Array, PrimitiveDictionaryBuilder, StringArray, StringDictionaryBuilder,
+        Time64MicrosecondArray,
     };
-    use arrow::datatypes::{Decimal128Type, Decimal256Type, Field, Schema, TimeUnit};
+    use arrow::datatypes::{
+        Decimal128Type, Decimal256Type, Field, Int32Type, Int64Type, Schema, TimeUnit,
+    };
 
     fn batch() -> RecordBatch {
         let mut dictionary = StringDictionaryBuilder::<Int32Type>::new();
@@ -761,6 +768,27 @@ mod tests {
         let finite = ScalarValue::Float64(2.5);
         assert!(comparison_literal(&finite, &DataType::Float32).is_some());
         assert!(comparison_literal(&finite, &DataType::Float64).is_some());
+    }
+
+    #[test]
+    fn dictionary_numeric_runtime_filter_uses_value_type() {
+        let mut dictionary = PrimitiveDictionaryBuilder::<Int32Type, Int64Type>::new();
+        dictionary.append(7).unwrap();
+        dictionary.append(11).unwrap();
+        dictionary.append(7).unwrap();
+        let batch = RecordBatch::try_from_iter([("id", Arc::new(dictionary.finish()) as ArrayRef)])
+            .unwrap();
+        let predicate = StoragePredicate::In {
+            column: "id".into(),
+            values: vec![ScalarValue::Int64(11)],
+        };
+        let compiled = CompiledPredicate::compile(&predicate, &batch.schema())
+            .expect("dictionary value types should compile");
+        let mask = compiled.selection(&batch).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(false)]
+        );
     }
 
     fn like(
