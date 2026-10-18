@@ -8,7 +8,8 @@ use arrow::{
     array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
     compute::{SortColumn, SortOptions, cast, concat_batches, lexsort_to_indices, take},
     datatypes::{
-        DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef, UInt64Type,
+        DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema, SchemaRef,
+        UInt64Type,
     },
 };
 use kaveon_core::{
@@ -539,6 +540,7 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
             DataType::Int32
                 | DataType::Int64
                 | DataType::UInt64
+                | DataType::Float32
                 | DataType::Float64
                 | DataType::Decimal128(_, _)
         ) {
@@ -663,6 +665,22 @@ fn compare_offset(col: &ArrayRef, row: usize, current: usize, offset: i128) -> R
                     .ok_or_else(|| error("decimal RANGE offset overflow"))?,
             )
         }
+        DataType::Float32 => {
+            let col = col.as_primitive::<Float32Type>();
+            let left = col.value(row) as f64;
+            let right = col.value(current) as f64 + offset as f64;
+            return Ok(if left.is_nan() {
+                if right.is_nan() {
+                    Ordering::Equal
+                } else {
+                    Ordering::Greater
+                }
+            } else if right.is_nan() {
+                Ordering::Less
+            } else {
+                left.partial_cmp(&right).unwrap()
+            });
+        }
         DataType::Float64 => {
             let col = col.as_primitive::<Float64Type>();
             let left = col.value(row);
@@ -770,13 +788,20 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{DictionaryArray, Int32Array, StringArray};
+    use arrow::array::{DictionaryArray, Float32Array, Int32Array, StringArray};
     use arrow::datatypes::Int32Type;
     use kaveon_core::predicate::ScalarValue;
     fn batch(values: Vec<Option<i64>>) -> RecordBatch {
         RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)])),
             vec![Arc::new(Int64Array::from(values))],
+        )
+        .unwrap()
+    }
+    fn float_batch(values: Vec<Option<f32>>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, true)])),
+            vec![Arc::new(Float32Array::from(values))],
         )
         .unwrap()
     }
@@ -1041,6 +1066,15 @@ mod tests {
             ints(expression("MIN", None), &input),
             vec![Some(9007199254740992); 4]
         );
+    }
+
+    #[test]
+    fn range_offsets_support_float32_ordering() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = float_batch(vec![Some(1.0), Some(1.5), Some(2.0), None]);
+        let expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
+        assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(3), Some(1)]);
     }
 
     #[test]

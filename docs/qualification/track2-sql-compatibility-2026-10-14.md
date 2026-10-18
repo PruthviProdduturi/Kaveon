@@ -700,6 +700,33 @@ coverage. Recursive CTEs, complete JSON path/coercion semantics, broader
 window modifiers, and the remaining distributed-window shapes stay open in
 the parity matrix.
 
+## Float32 RANGE-frame qualification — 2026-10-18
+
+Numeric `RANGE` frames now accept `FLOAT`/Arrow `Float32` ordering for bounded
+preceding and following offsets. The executor compares values in `f64` after
+lossless widening of the stored `f32` values, preserves the existing NaN
+ordering contract, and keeps NULL rows outside finite offset bounds while
+retaining peer semantics for the current row. This extends the already
+qualified integer, unsigned integer, decimal, and `DOUBLE` offset surface
+without changing the distributed window exchange contract.
+
+The focused regression uses `COUNT(*) OVER (ORDER BY value RANGE BETWEEN 1
+PRECEDING AND CURRENT ROW)` over `[1.0, 1.5, 2.0, NULL]` and returns exact
+counts `[1, 2, 3, 1]` in input order.
+
+Validation from the isolated Engine checkout:
+
+```text
+cargo fmt --all -- --check                         passed
+cargo test -p kaveon-exec --lib range_offsets_support_float32_ordering --quiet
+  1 passed, 0 failed
+cargo clippy -p kaveon-exec --lib -- -D warnings   passed
+```
+
+This is bounded numeric compatibility evidence; temporal offsets, arbitrary
+expressions as frame bounds, and the remaining distributed-window shapes stay
+open in the parity matrix.
+
 ## Bounded recursive CTE qualification — 2026-10-16
 
 The parser and logical planner now support one finite recursive shape by
