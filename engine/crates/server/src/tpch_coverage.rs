@@ -1525,6 +1525,7 @@ fn q21_is_an_anti_join_over_a_semi_join_each_with_a_residual() {
                 left_key,
                 right_key,
                 residual,
+                ..
             } => {
                 into.push((
                     matches!(plan, LogicalPlan::AntiJoin { .. }),

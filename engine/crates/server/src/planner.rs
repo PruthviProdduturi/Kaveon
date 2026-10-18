@@ -903,14 +903,37 @@ impl ExecutableFragmentBuilder<'_> {
                 left_key,
                 right_key,
                 residual,
+                ..
             } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
+                let null_aware = matches!(
+                    plan,
+                    LogicalPlan::AntiJoin {
+                        null_aware: true,
+                        ..
+                    }
+                );
                 let join_type = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
                     FragmentJoinType::Semi
                 } else {
                     FragmentJoinType::Anti
                 };
+                if null_aware {
+                    return self.attach_broadcast_join(
+                        left_stage,
+                        right_stage,
+                        JoinSpec {
+                            join_type,
+                            left_qualifier: None,
+                            right_qualifier: None,
+                            left_keys: vec![left_key.clone()],
+                            right_keys: vec![right_key.clone()],
+                            residual: residual.clone(),
+                            broadcast: true,
+                        },
+                    );
+                }
                 let (Some(left_column), Some(right_column)) = (
                     semijoin_key_column(left, left_key),
                     semijoin_key_column(right, right_key),
@@ -1808,6 +1831,18 @@ impl StageGraphBuilder {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let physical = physical_plan_tree(plan);
+                let null_aware = matches!(
+                    plan,
+                    LogicalPlan::AntiJoin {
+                        null_aware: true,
+                        ..
+                    }
+                );
+                if null_aware {
+                    self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
+                    self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
+                    return Ok(left_stage);
+                }
                 let (Some(left_column), Some(right_column)) = (
                     semijoin_key_column(left, left_key),
                     semijoin_key_column(right, right_key),
@@ -2694,6 +2729,7 @@ fn plan_query_with_predicate(
             left_key,
             right_key,
             residual,
+            ..
         } => {
             let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
             let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
