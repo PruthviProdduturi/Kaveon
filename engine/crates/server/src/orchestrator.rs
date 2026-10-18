@@ -1296,6 +1296,16 @@ mod tests {
         assert_eq!(first_loss.worker, "worker-b");
         assert_eq!(first_loss.reexecuted_stages, vec![0]);
         assert_eq!(orchestrator.live_workers().len(), 2);
+        let stale_consumer = first_consumers
+            .iter()
+            .find(|dispatch| dispatch.assignment.task_id.partition == 1)
+            .unwrap();
+        assert!(
+            orchestrator
+                .finish_task(&stale_consumer.assignment.task_id)
+                .is_err(),
+            "a completion from the superseded worker attempt must be rejected"
+        );
         run_stage(&mut orchestrator, 0);
 
         // The second loss removes the worker holding the rebuilt exchange.
