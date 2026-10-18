@@ -125,7 +125,10 @@ pub struct SplitScheduler {
     stage_id: StageId,
     pending: VecDeque<SplitDescriptor>,
     leased: BTreeMap<usize, LeasedTask>,
-    retries: VecDeque<(usize, u32)>,
+    /// Retries retain the exact split batch leased by the failed attempt.
+    /// Keeping it separate from `pending` prevents a retry from consuming
+    /// newly enumerated splits and changing the assignment mid-query.
+    retries: VecDeque<(usize, u32, Vec<SplitDescriptor>)>,
     next_partition: usize,
     input_exchanges: Vec<ExchangeId>,
     output_exchanges: Vec<ExchangeId>,
@@ -169,16 +172,22 @@ impl SplitScheduler {
         worker_id: impl Into<String>,
         split_limit: usize,
     ) -> Option<TaskAssignment> {
-        if split_limit == 0 || self.pending.is_empty() {
+        if split_limit == 0 || (self.pending.is_empty() && self.retries.is_empty()) {
             return None;
         }
-        let (partition, attempt) = self.retries.pop_front().unwrap_or_else(|| {
-            let partition = self.next_partition;
-            self.next_partition = self.next_partition.saturating_add(1);
-            (partition, 0)
-        });
-        let split_count = split_limit.min(self.pending.len());
-        let splits = self.pending.drain(..split_count).collect::<Vec<_>>();
+        let (partition, attempt, splits) =
+            if let Some((partition, attempt, splits)) = self.retries.pop_front() {
+                // A retry must replay the same deterministic storage assignment;
+                // it must not pick up work that was enumerated after the failed
+                // attempt.
+                (partition, attempt, splits)
+            } else {
+                let partition = self.next_partition;
+                self.next_partition = self.next_partition.saturating_add(1);
+                let split_count = split_limit.min(self.pending.len());
+                let splits = self.pending.drain(..split_count).collect::<Vec<_>>();
+                (partition, 0, splits)
+            };
         let task_id = TaskId {
             query_id: self.query_id.clone(),
             stage_id: self.stage_id,
@@ -229,11 +238,11 @@ impl SplitScheduler {
             .leased
             .remove(&task_id.partition)
             .expect("validated lease must remain present");
-        for split in lease.splits.into_iter().rev() {
-            self.pending.push_front(split);
-        }
-        self.retries
-            .push_back((task_id.partition, task_id.attempt.saturating_add(1)));
+        self.retries.push_back((
+            task_id.partition,
+            task_id.attempt.saturating_add(1),
+            lease.splits,
+        ));
         true
     }
 
@@ -271,7 +280,7 @@ impl SplitScheduler {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.pending.is_empty() && self.leased.is_empty()
+        self.pending.is_empty() && self.leased.is_empty() && self.retries.is_empty()
     }
 }
 
@@ -407,11 +416,43 @@ mod tests {
         let failed = scheduler.lease("worker-a", 1).unwrap();
 
         assert!(scheduler.requeue(&failed.task_id));
-        assert_eq!(scheduler.pending_split_count(), 2);
+        assert_eq!(scheduler.pending_split_count(), 1);
         let retry = scheduler.lease("worker-b", 1).unwrap();
         assert_eq!(retry.splits[0].id, SplitId("a".into()));
         assert_eq!(retry.task_id.partition, failed.task_id.partition);
         assert_eq!(retry.task_id.attempt, failed.task_id.attempt + 1);
+    }
+
+    #[test]
+    fn retry_replays_its_batch_before_newly_enumerated_splits() {
+        let mut scheduler =
+            super::SplitScheduler::new("query", StageId(3), vec![split("a"), split("b")]);
+        let failed = scheduler.lease("worker-a", 1).unwrap();
+        assert!(scheduler.requeue(&failed.task_id));
+
+        // A retry keeps the failed split even when the caller changes the
+        // requested batch size. The newly pending split remains untouched.
+        let retry = scheduler.lease("worker-b", 8).unwrap();
+        assert_eq!(
+            retry
+                .splits
+                .iter()
+                .map(|s| s.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["a"]
+        );
+        assert_eq!(scheduler.pending_split_count(), 1);
+        assert!(!scheduler.is_finished());
+
+        assert!(scheduler.complete(&retry.task_id));
+        let next = scheduler.lease("worker-a", 8).unwrap();
+        assert_eq!(
+            next.splits
+                .iter()
+                .map(|s| s.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
     }
 
     #[test]
