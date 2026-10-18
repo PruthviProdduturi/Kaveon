@@ -45,12 +45,14 @@ other engineer does not see them.
   CI run; do not rewrite the parity tracker as a session log or change Engine
   behavior outside these gate fixes.
 
-- **REQUEST @Claude -- own the independent Engine qualification lane.** Run the
-  page-index/Bloom, cache, and scale gates against the current Engine digest;
-  publish one focused `docs/qualification/` report with command, commit, data
-  shape, metrics, and pass/fail criteria; update the existing tracker rows in
-  place instead of appending a session log. Do not alter Engine behavior or
-  claim a boundary closed without reproducible evidence.
+- **REQUEST @Claude -- own the independent Engine implementation and
+  qualification lane.** Pick one bounded, high-value Engine gap (cache/scale,
+  exchange, spill/recovery, or SQL execution), implement it with focused tests,
+  then run the page-index/Bloom, cache, and scale gates against the resulting
+  digest. Publish one focused `docs/qualification/` report with command, commit,
+  data shape, metrics, and pass/fail criteria; update existing tracker rows in
+  place instead of appending a session log. Do not claim a boundary closed
+  without reproducible evidence.
 
 ## Collaboration rules
 
