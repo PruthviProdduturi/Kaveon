@@ -1482,6 +1482,12 @@ async fn finish_worker_query(
     if let Err(error) = state.lifecycle.cancellations.cancel(&query_id) {
         return lifecycle_error_response(error.to_string());
     }
+    if let Err(error) = state.exchange_store.finish_query(&query_id) {
+        return lifecycle_error_response(error.to_string());
+    }
+    if let Some(store) = &state.disk_exchange_store {
+        store.finish_query(&query_id);
+    }
     match state.lifecycle.finish_query(&query_id) {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => lifecycle_error_response(error.to_string()),
@@ -12731,6 +12737,7 @@ async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
     if let Some(store) = &state.disk_exchange_store {
         store.finish_query(query_id);
     }
+    let _ = state.exchange_store.finish_query(query_id);
     let _ = state.lifecycle.finish_query(query_id);
 }
 
@@ -20412,6 +20419,22 @@ mod tests {
         let state = Arc::new(catalog_test_state());
         let token = state.lifecycle.cancellations.token("query-orphan").unwrap();
         assert!(!token.is_cancelled());
+        let exchange = crate::exchange::ExchangeChunk {
+            identity: crate::exchange::ExchangeIdentity {
+                exchange_id: kaveon_core::ExchangeId("orphan-exchange".into()),
+                task_id: kaveon_core::TaskId {
+                    query_id: "query-orphan".into(),
+                    stage_id: kaveon_core::StageId(0),
+                    partition: 0,
+                    attempt: 0,
+                },
+                output_partition: 0,
+            },
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1, 2, 3].into(),
+        };
+        state.exchange_store.insert(exchange.clone()).unwrap();
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,
@@ -20428,6 +20451,11 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
         // The running task's token observes the cancel; the registry entry is gone.
         assert!(token.is_cancelled());
+        assert_eq!(state.exchange_store.buffered_bytes().unwrap(), 0);
+        assert_eq!(
+            state.exchange_store.insert(exchange),
+            Err(crate::exchange::ExchangeError::QueryFinished)
+        );
         let fresh = state.lifecycle.cancellations.token("query-orphan").unwrap();
         assert!(!fresh.is_cancelled());
     }

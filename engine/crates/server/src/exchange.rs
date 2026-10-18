@@ -15,6 +15,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use kaveon_core::{ExchangeId, TaskId};
 
+/// Retain terminal query identities long enough to reject uploads that were
+/// already in flight when cancellation reached the worker.  This mirrors the
+/// disk exchange store's terminal-query TTL and keeps the marker bounded.
+const FINISHED_QUERY_TTL: std::time::Duration = std::time::Duration::from_secs(900);
+const MAX_FINISHED_QUERIES: usize = 10_000;
+
 const WIRE_MAGIC: [u8; 4] = *b"KVEX";
 const WIRE_VERSION: u16 = 2;
 const FIXED_HEADER_BYTES: usize = 62;
@@ -183,6 +189,7 @@ impl Drop for DownloadPermit {
 struct ExchangeStoreState {
     chunks: HashMap<ExchangeIdentity, Vec<ExchangeChunk>>,
     buffered_bytes: usize,
+    finished: HashMap<String, std::time::Instant>,
 }
 
 #[derive(Debug)]
@@ -208,6 +215,14 @@ impl ExchangeStore {
             .state
             .write()
             .map_err(|_| ExchangeError::StorePoisoned)?;
+        let now = std::time::Instant::now();
+        state.finished.retain(|_, expires| *expires > now);
+        if state
+            .finished
+            .contains_key(&chunk.identity.task_id.query_id)
+        {
+            return Err(ExchangeError::QueryFinished);
+        }
         if !state.chunks.contains_key(&chunk.identity)
             && state.chunks.len() >= self.max_buffered_exchanges
         {
@@ -276,6 +291,43 @@ impl ExchangeStore {
             .checked_sub(released_bytes.ok_or(ExchangeError::StorePoisoned)?)
             .ok_or(ExchangeError::StorePoisoned)?;
         Ok(true)
+    }
+
+    /// End a query's exchange lifecycle atomically with respect to uploads.
+    /// Removing existing chunks releases their memory immediately; the
+    /// terminal marker rejects producer uploads that were already in flight
+    /// when cancellation reached this worker.
+    pub fn finish_query(&self, query_id: &str) -> ExchangeResult<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ExchangeError::StorePoisoned)?;
+        let now = std::time::Instant::now();
+        state.finished.retain(|_, expires| *expires > now);
+        let mut released_bytes = 0usize;
+        state.chunks.retain(|identity, chunks| {
+            if identity.task_id.query_id == query_id {
+                released_bytes = released_bytes.saturating_add(
+                    chunks
+                        .iter()
+                        .map(|chunk| chunk.payload.len())
+                        .sum::<usize>(),
+                );
+                false
+            } else {
+                true
+            }
+        });
+        state.buffered_bytes = state
+            .buffered_bytes
+            .checked_sub(released_bytes)
+            .ok_or(ExchangeError::StorePoisoned)?;
+        if state.finished.len() < MAX_FINISHED_QUERIES {
+            state
+                .finished
+                .insert(query_id.to_owned(), now + FINISHED_QUERY_TTL);
+        }
+        Ok(())
     }
 
     pub fn buffered_bytes(&self) -> ExchangeResult<usize> {
@@ -552,6 +604,7 @@ fn exchange_error_response(error: ExchangeError) -> Response {
         ExchangeError::Unauthorized => StatusCode::UNAUTHORIZED,
         ExchangeError::EmptyExpectedToken => StatusCode::SERVICE_UNAVAILABLE,
         ExchangeError::ExchangeNotFound => StatusCode::NOT_FOUND,
+        ExchangeError::QueryFinished => StatusCode::CONFLICT,
         ExchangeError::MissingChunks => StatusCode::CONFLICT,
         ExchangeError::StoreCapacityExceeded(_) => StatusCode::INSUFFICIENT_STORAGE,
         _ => StatusCode::BAD_REQUEST,
@@ -1182,6 +1235,7 @@ pub enum ExchangeError {
     StoreCapacityExceeded(ExchangeBound),
     ConflictingChunk,
     ExchangeNotFound,
+    QueryFinished,
     Transport(String),
     HttpStatus(u16),
 }
@@ -1230,6 +1284,9 @@ impl Display for ExchangeError {
                 write!(formatter, "exchange chunk conflicts with stored data")
             }
             Self::ExchangeNotFound => write!(formatter, "exchange was not found"),
+            Self::QueryFinished => {
+                write!(formatter, "query exchange lifecycle is already finished")
+            }
             Self::Transport(reason) => write!(formatter, "exchange transport error: {reason}"),
             Self::HttpStatus(status) => {
                 write!(formatter, "exchange endpoint returned HTTP {status}")
@@ -1642,6 +1699,43 @@ mod tests {
 
         assert_eq!(store.get(&first.identity).unwrap(), vec![first]);
         assert_eq!(store.get(&second.identity).unwrap(), vec![second]);
+    }
+
+    #[test]
+    fn finishing_query_releases_all_exchanges_and_rejects_late_uploads() {
+        let store = ExchangeStore::with_capacity(4, 32);
+        let first = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1, 2, 3].into(),
+        };
+        let mut second = first.clone();
+        second.identity.exchange_id = ExchangeId("exchange-10".into());
+        second.payload = vec![4, 5].into();
+        store.insert(first.clone()).unwrap();
+        store.insert(second.clone()).unwrap();
+        assert_eq!(store.buffered_bytes().unwrap(), 5);
+
+        // The query finalizer must remove every exchange for the query in one
+        // critical section. A producer completing concurrently after this
+        // point must be rejected instead of recreating an orphan chunk.
+        store.finish_query("query-42").unwrap();
+        assert_eq!(store.buffered_bytes().unwrap(), 0);
+        assert_eq!(
+            store.get(&first.identity),
+            Err(ExchangeError::ExchangeNotFound)
+        );
+        assert_eq!(
+            store.insert(first),
+            Err(ExchangeError::QueryFinished),
+            "late cancellation races must not repopulate a finished query"
+        );
+        assert_eq!(store.insert(second), Err(ExchangeError::QueryFinished));
+
+        // Repeated finalization is harmless and does not corrupt accounting.
+        store.finish_query("query-42").unwrap();
+        assert_eq!(store.buffered_bytes().unwrap(), 0);
     }
 
     #[test]
