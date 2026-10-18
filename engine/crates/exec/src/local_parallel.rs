@@ -902,8 +902,7 @@ impl ParallelPartials {
                             pressure.leave(index);
                         }
                         if let Err(err) = result {
-                            let _ = output.send(Err(err));
-                            stopped.store(true, Ordering::Release);
+                            report_worker_failure(err, &stopped, &output);
                         }
                     })
                     .map_err(|e| error(&format!("cannot spawn aggregate worker: {e}")))?,
@@ -1002,8 +1001,7 @@ impl ParallelPartials {
                         });
                         drop(senders);
                         if let Err(err) = result {
-                            let _ = output.send(Err(err));
-                            stopped.store(true, Ordering::Release);
+                            report_worker_failure(err, &stopped, &output);
                         }
                     })
                     .map_err(|e| error(&format!("cannot spawn source thread: {e}")))?,
@@ -1404,6 +1402,19 @@ fn catch_worker_failure(work: impl FnOnce() -> Result<()>) -> Result<()> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
         .unwrap_or_else(|_| Err(error("parallel aggregate worker panicked")))
 }
+
+/// Stop producers before reporting a worker failure. The report can wait for
+/// room in the bounded output channel; cancellation must already be visible to
+/// source and sibling workers while that report is in flight.
+fn report_worker_failure(
+    failure: KaveonError,
+    stopped: &AtomicBool,
+    output: &SyncSender<Result<QueuedBatch>>,
+) {
+    stopped.store(true, Ordering::Release);
+    let _ = output.send(Err(failure));
+}
+
 fn run_worker(
     source: Box<dyn BatchOperator>,
     operator: &ThreadOperator,
@@ -2386,6 +2397,26 @@ mod tests {
         });
         assert!(result.unwrap_err().to_string().contains("worker panicked"));
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn worker_failure_stops_producers_before_a_full_error_channel_is_reported() {
+        let (sender, receiver) = mpsc::sync_channel(0);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&stopped);
+        let reporter = thread::spawn(move || {
+            report_worker_failure(error("worker failed"), &signal, &sender);
+        });
+        while !stopped.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        assert!(
+            !reporter.is_finished(),
+            "the zero-capacity report is waiting"
+        );
+        let reported = receiver.recv().unwrap();
+        assert!(reported.is_err());
+        reporter.join().unwrap();
     }
 
     #[test]
