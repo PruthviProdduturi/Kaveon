@@ -152,11 +152,40 @@ pub fn normalize_sql(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len());
     let mut state = State::Outside;
     let mut pending_space = false;
-    for c in sql.trim().chars() {
+    let chars = sql.trim().chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        let c = chars[index];
         match state {
             State::Outside => {
+                if c == '-' && chars.get(index + 1) == Some(&'-') {
+                    // SQL comments are lexical whitespace. Keeping one
+                    // pending space prevents `SELECT/**/1` from becoming
+                    // the different token `select1` while allowing comments
+                    // to share a cache entry with ordinary whitespace.
+                    pending_space = true;
+                    index += 2;
+                    while index < chars.len() && chars[index] != '\n' {
+                        index += 1;
+                    }
+                    continue;
+                }
+                if c == '/' && chars.get(index + 1) == Some(&'*') {
+                    pending_space = true;
+                    index += 2;
+                    while index + 1 < chars.len()
+                        && !(chars[index] == '*' && chars[index + 1] == '/')
+                    {
+                        index += 1;
+                    }
+                    if index + 1 < chars.len() {
+                        index += 2;
+                    }
+                    continue;
+                }
                 if c.is_whitespace() {
                     pending_space = true;
+                    index += 1;
                     continue;
                 }
                 if pending_space {
@@ -190,6 +219,7 @@ pub fn normalize_sql(sql: &str) -> String {
                 out.push(c);
             }
         }
+        index += 1;
     }
     out
 }
@@ -502,6 +532,19 @@ mod tests {
             "case and whitespace outside quotes do not change the key"
         );
         assert_ne!(key("SELECT 'A' FROM t"), key("SELECT 'a' FROM t"));
+    }
+
+    #[test]
+    fn normalisation_treats_sql_comments_as_whitespace() {
+        assert_eq!(
+            normalize_sql("SELECT /* projection */ 1 -- source\n FROM t"),
+            normalize_sql("select 1 from t")
+        );
+        assert_eq!(
+            normalize_sql("SELECT 'a--b', \"a/*b\" FROM t"),
+            "select 'a--b', \"a/*b\" from t"
+        );
+        assert_eq!(normalize_sql("SELECT/**/1"), "select 1");
     }
 
     #[test]
