@@ -1759,6 +1759,30 @@ fn distributed_array_function_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Nested `ARRAY_REPEAT` must keep the inner `ARRAY<bigint>` boundaries when
+/// the scalar expression is evaluated inside the distributed leaf fragment.
+/// This catches the wire/planner path that local expression tests cannot see:
+/// each output row is itself an Arrow list, rather than a flattened sequence
+/// of integers.
+#[test]
+fn distributed_nested_array_repeat_preserves_inner_arrays() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-unnest-array-repeat-nested-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT value FROM UNNEST(ARRAY_REPEAT(ARRAY[1, 2], 2)) AS t(value) ORDER BY value";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-array-repeat-nested", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["[1, 2]", "[1, 2]"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_map_keys_unnest_matches_trino_rows() {
     let directory =
