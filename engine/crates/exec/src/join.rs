@@ -131,6 +131,26 @@ impl BuildKeyFilter {
                 .into());
         }
         if let (
+            JoinIndex::Decimal256 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let values = batch
+                .column(*left)
+                .as_primitive::<arrow::datatypes::Decimal256Type>();
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    values.is_valid(row)
+                        && (first_rows.contains_key(&values.value(row))
+                            || duplicate_rows.contains_key(&values.value(row)))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
             JoinIndex::Date32 {
                 first_rows,
                 duplicate_rows,
@@ -274,6 +294,10 @@ impl BuildKeyFilter {
                 .chain(duplicate_rows.keys())
                 .map(|value| i64::try_from(*value).ok().map(ScalarValue::Int64))
                 .collect::<Option<Vec<_>>>(),
+            // Decimal256 values are exact but are not representable by the
+            // storage predicate scalar ABI yet. Keep the typed batch filter;
+            // falling back here avoids lossy narrowing of a 256-bit key.
+            JoinIndex::Decimal256 { .. } => None,
             JoinIndex::Composite(entries) => {
                 let mut predicates = Vec::new();
                 for (key_index, (left, _)) in self.keys.iter().enumerate() {
@@ -1069,6 +1093,10 @@ enum JoinIndex {
         first_rows: AHashMap<u64, usize>,
         duplicate_rows: AHashMap<u64, Vec<usize>>,
     },
+    Decimal256 {
+        first_rows: AHashMap<arrow::datatypes::i256, usize>,
+        duplicate_rows: AHashMap<arrow::datatypes::i256, Vec<usize>>,
+    },
     Date32 {
         first_rows: AHashMap<i32, usize>,
         duplicate_rows: AHashMap<i32, Vec<usize>>,
@@ -1144,6 +1172,35 @@ impl JoinIndex {
                 }
             }
             return Ok(Self::UInt64 {
+                first_rows,
+                duplicate_rows,
+            });
+        }
+        if let [(.., index)] = keys
+            && matches!(right.column(*index).data_type(), DataType::Decimal256(_, _))
+        {
+            let values = right
+                .column(*index)
+                .as_primitive::<arrow::datatypes::Decimal256Type>();
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<arrow::datatypes::i256, Vec<usize>> = AHashMap::new();
+            for row in 0..values.len() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if values.is_valid(row) {
+                    let key = values.value(row);
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Decimal256 {
                 first_rows,
                 duplicate_rows,
             });
@@ -1293,6 +1350,27 @@ impl JoinIndex {
                 let values = left
                     .column(keys[0].0)
                     .as_primitive::<arrow::datatypes::UInt64Type>();
+                if values.is_null(row) {
+                    None
+                } else {
+                    let key = values.value(row);
+                    if duplicate_rows.is_empty() {
+                        first_rows.get(&key).map(std::slice::from_ref)
+                    } else {
+                        duplicate_rows
+                            .get(&key)
+                            .map(Vec::as_slice)
+                            .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                    }
+                }
+            }
+            Self::Decimal256 {
+                first_rows,
+                duplicate_rows,
+            } => {
+                let values = left
+                    .column(keys[0].0)
+                    .as_primitive::<arrow::datatypes::Decimal256Type>();
                 if values.is_null(row) {
                     None
                 } else {
@@ -1907,6 +1985,46 @@ mod tests {
         let result = concat_batches(join.schema(), &batches).unwrap();
         assert_eq!(result.num_rows(), 2);
         assert_eq!(result.column(0).null_count(), 0);
+    }
+
+    #[test]
+    fn decimal256_runtime_filter_uses_exact_typed_index_without_narrowing() {
+        let data_type = DataType::Decimal256(40, 2);
+        let schema = Arc::new(Schema::new(vec![Field::new("amount", data_type, true)]));
+        let decimal = |values: Vec<Option<i256>>| {
+            Arc::new(
+                Decimal256Array::from(values)
+                    .with_precision_and_scale(40, 2)
+                    .unwrap(),
+            ) as Arc<dyn arrow::array::Array>
+        };
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![decimal(vec![
+                Some(i256::from_i128(125)),
+                Some(i256::from_i128(400)),
+                Some(i256::from_i128(400)),
+            ])],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![decimal(vec![
+                Some(i256::from_i128(100)),
+                Some(i256::from_i128(125)),
+                Some(i256::from_i128(400)),
+                None,
+            ])],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        assert!(filter.storage_predicate(&schema).is_none());
+        let mask = filter.filter_batch(&probe).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(true), Some(false)]
+        );
     }
 
     #[test]
