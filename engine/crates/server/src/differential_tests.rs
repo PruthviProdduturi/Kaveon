@@ -612,6 +612,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_has_duplicates_text_and_unique",
+        "SELECT ARRAY_HAS_DUPLICATES(ARRAY['alpha', 'beta', 'alpha']) AS text_duplicate, ARRAY_HAS_DUPLICATES(ARRAY[1, 2, 3]) AS unique_values FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
