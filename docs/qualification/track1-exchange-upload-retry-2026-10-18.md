@@ -3,9 +3,10 @@
 ## Boundary
 
 Remote Arrow exchange uploads and fetches now retry a bounded set of transient
-worker failures. Each upload chunk is encoded once and may be sent up to three
-times with 25 ms and 50 ms backoff. Fetch requests use the same policy before
-the response body is consumed. Transport failures and HTTP 5xx responses are
+worker failures. Both the buffered upload path and the streaming output path
+use the same per-chunk policy: each chunk is encoded once and may be sent up
+to three times with 25 ms and 50 ms backoff. Fetch requests use the same policy
+before the response body is consumed. Transport failures and HTTP 5xx responses are
 retryable; 4xx responses remain terminal so authorization, cancellation, and
 protocol errors fail immediately. The retry is per chunk/request, so a
 completed chunk is not resent when a different chunk fails.
