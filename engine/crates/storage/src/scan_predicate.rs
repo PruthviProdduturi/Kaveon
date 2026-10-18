@@ -266,7 +266,7 @@ fn compare_column(
 /// the kernels cannot compare the two. A dictionary column compares through
 /// its dictionary: once per distinct value, then an index lookup per row.
 fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<ArrayRef> {
-    use arrow::array::{BooleanArray, Float64Array, Int64Array};
+    use arrow::array::{BooleanArray, Decimal128Array, Float64Array, Int64Array};
     Some(match (value, data_type) {
         (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
         // Narrower and unsigned integer columns, and day-number dates,
@@ -299,6 +299,18 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
         (ScalarValue::Float64(value), DataType::Float64) => {
             Arc::new(Float64Array::from(vec![*value]))
         }
+        // Build-side decimal keys use precision 38 in the hash index. Retag
+        // the one-value literal to the probe column's precision so Arrow's
+        // decimal comparison kernels receive matching metadata. Scale must
+        // agree: rescaling here would change an exact join key.
+        (
+            ScalarValue::Decimal128 { value, scale, .. },
+            DataType::Decimal128(precision, column_scale),
+        ) if scale == column_scale => Arc::new(
+            Decimal128Array::from(vec![*value])
+                .with_precision_and_scale(*precision, *column_scale)
+                .ok()?,
+        ),
         (ScalarValue::Bool(value), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*value])),
         (ScalarValue::Utf8(value), data_type) => return text_literal(value, data_type),
         _ => return None,
