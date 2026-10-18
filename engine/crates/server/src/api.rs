@@ -840,8 +840,10 @@ impl JournaledQuery {
 /// appended — so the file is bounded by the same limit the in-memory
 /// history is, and a restart pays one read of a few hundred lines.
 ///
-/// A line is written and flushed, never fsynced: a restarted or killed
-/// process keeps every line it wrote, a lost node may lose its last. The
+/// A line is written, flushed, and synced before it is considered appended: a
+/// restarted or killed process keeps every line the filesystem acknowledged,
+/// while a lost node may still lose its last write if the storage itself is
+/// unavailable. The
 /// platform's own `query_history` in KaveonDB is unaffected and remains
 /// durable in its own right; this is the Engine's log of the statements
 /// the Engine ran.
@@ -999,9 +1001,16 @@ mod query_journal {
                 .filter_map(|entry| serde_json::to_string(entry).ok())
                 .collect();
             let staged = self.path.with_extension("jsonl.rewriting");
-            if std::fs::write(&staged, lines_of(&recent).as_bytes()).is_err()
-                || std::fs::rename(&staged, &self.path).is_err()
-            {
+            if std::fs::write(&staged, lines_of(&recent).as_bytes()).is_err() {
+                let _ = std::fs::remove_file(&staged);
+                return;
+            }
+            let staged_synced = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&staged)
+                .and_then(|file| file.sync_data());
+            if staged_synced.is_err() || std::fs::rename(&staged, &self.path).is_err() {
                 let _ = std::fs::remove_file(&staged);
                 return;
             }
