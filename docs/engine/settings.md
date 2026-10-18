@@ -97,6 +97,7 @@ worker loss is not one).
 | `KAVEON_EXCHANGE_COMPRESSION` | none | disabled | `lz4`, `lz4_frame`, `1`, `true` | Enables LZ4-framed Arrow IPC for exchange payloads. This reduces transfer and spool volume on wide grouped states at the cost of CPU; leave unset for same-host low-latency profiles until qualified. | coordinator, worker | unset |
 | `KAVEON_USE_UTF8_VIEW` | none | unset | set to any value to enable | Reads Parquet string columns as Arrow `Utf8View` rather than `Utf8`. Presence is what counts, not the value. | worker, coordinator | not set |
 | `KAVEON_FRAGMENT_LISTING_MAX_FILES` | none | `10000` | files | The largest directory-table listing the coordinator carries inside the fragments (the pruned file set and per-task assignment, wire version 6); over it the fragment carries the listing's digest only and each task lists, prunes and verifies the digest itself. | coordinator | not set |
+| `KAVEON_DIFF_ONLY` | none | unset | differential-case name | Test-harness selector used by the server differential corpus to run one named case instead of the full sweep. It is intended for focused local qualification and is not a runtime execution setting. | test harness only | not set |
 | `KAVEON_PRODUCT_TRANSACTIONS_ENABLED` | `product_transactions.enabled` | `false` | boolean | Whether the coordinator opens the product transaction store (native catalog commits, DML). Coordinator only. | coordinator | chart value `productTransactions.enabled`; enabled on the live coordinator per the 2026-09-10 Codex response |
 | `KAVEON_PRODUCT_STORAGE_MODE` | `product_transactions.storage_mode` | `adls` | `adls` or `local` | Where the product store commits. | coordinator | `adls` |
 | `KAVEON_PRODUCT_ADLS_ACCOUNT` | `product_transactions.account` | empty (required when enabled with `adls`) | account name | The ADLS Gen2 account of the product store. | coordinator | the qualification account (`kvtesticmwwliihpppo` since the 2026-09-14 move to westus2; `kvtestegmf6oweugsno` was the eastus account), chart value `productTransactions.account` |
@@ -219,6 +220,16 @@ cache holds 512 MiB per process; the in-memory exchange buffer (when no
 node spools) holds 512 MiB and 1024 exchanges.
 
 ## CLI variables
+
+## Test harness variables
+
+These variables are consumed only by repository test binaries; the Engine
+runtime does not read them. They are for reproducing a focused qualification
+case and must not be set in a deployment.
+
+| Name | Default | What it sets |
+|---|---|---|
+| `KAVEON_DIFF_ONLY` | unset | The `kaveon-server` differential-test case name to run exclusively (for example, `correlated_scalar_ordered_offset_limit`). Unset runs the complete differential case list. |
 
 These are read by the `kaveon` client (`engine/crates/cli/src/args.rs`,
 `auth.rs`, `theme.rs`), not by the server; the
