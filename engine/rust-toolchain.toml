@@ -1,3 +1,11 @@
+# The image build's context is `engine/`, so the repository-root pin is not in
+# it: `engine/Dockerfile` starts from `cargo-chef:latest-rust-1.88` and would
+# otherwise compile the workspace on whatever that base happens to carry,
+# while CI compiles it on the pinned toolchain. That is how a build can pass
+# every gate and still fail in the registry -- `Atomic::try_update`, which the
+# clippy gate required, does not exist on every older toolchain.
+#
+# Same channel and profile as the repository root. The two must move together.
 [toolchain]
 channel = "1.98.1"
 components = ["clippy", "rustfmt"]
