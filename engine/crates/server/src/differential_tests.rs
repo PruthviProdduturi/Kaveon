@@ -726,6 +726,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "join_four_way_reorder",
+        "SELECT t.country, COUNT(*) AS n FROM {T} t JOIN {U} u ON u.user_id = t.user_id JOIN {U} v ON v.locale = u.locale JOIN {U} w ON w.user_id = v.user_id WHERE t.event_date = '2026-07-04' GROUP BY t.country ORDER BY n DESC, t.country LIMIT 5",
+        true,
+    ),
+    (
         "topn_by_key",
         "SELECT country, surface, SUM(actions) AS a FROM {T} WHERE event_date = '2026-07-31' GROUP BY country, surface ORDER BY country, surface LIMIT 8",
         true,
