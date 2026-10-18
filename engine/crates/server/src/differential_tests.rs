@@ -3575,6 +3575,35 @@ fn distributed_partitioned_window_dense_rank_ties_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// QUALIFY must filter a partitioned window after ranking, on the same
+/// worker-combined result that the local planner produces.
+#[test]
+fn distributed_partitioned_qualify_row_number_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-qualify-row-number-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country, user_id) AS rn FROM events WHERE event_date = '2026-07-04' QUALIFY rn <= 2 ORDER BY region, rn, country";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-window-qualify-row-number", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths() {
     let directory =
