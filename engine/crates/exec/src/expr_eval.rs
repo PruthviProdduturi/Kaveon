@@ -4209,6 +4209,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             .find(|data_type| **data_type != DataType::Null)
             .cloned()
             .unwrap_or(DataType::Null);
+        let has_integer = args.iter().any(|arg| {
+            matches!(
+                arg.data_type(),
+                DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+            )
+        });
+        let has_int64 = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
+        if has_int64 && has_integer {
+            data_type = DataType::Int64;
+        }
         if data_type == DataType::Int64
             && args.iter().any(|arg| arg.data_type() == &DataType::Float64)
         {
@@ -4226,6 +4243,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 && arg.data_type() != &DataType::Null
                 && !(data_type == DataType::Float64 && arg.data_type() == &DataType::Int64)
                 && !(data_type == DataType::LargeUtf8 && arg.data_type() == &DataType::Utf8)
+                && !(data_type == DataType::Int64
+                    && matches!(
+                        arg.data_type(),
+                        DataType::Int8
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::UInt8
+                            | DataType::UInt16
+                            | DataType::UInt32
+                            | DataType::UInt64
+                    ))
         }) {
             return Err(KaveonError::Execution(
                 "ARRAY elements must have one common type".into(),
@@ -4298,6 +4326,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 Ok(Arc::new(builder.finish()) as ArrayRef)
             }};
+        }
+        if data_type == DataType::Int64
+            && args.iter().any(|arg| arg.data_type() != &DataType::Int64)
+        {
+            let values = args
+                .iter()
+                .map(|arg| compute::cast(arg, &DataType::Int64))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut builder = ListBuilder::new(Int64Builder::new());
+            for row in 0..num_rows {
+                for value in &values {
+                    let value = value.as_primitive::<Int64Type>();
+                    builder
+                        .values()
+                        .append_option(value.is_valid(row).then(|| value.value(row)));
+                }
+                builder.append(true);
+            }
+            return Ok(Arc::new(builder.finish()) as ArrayRef);
         }
         return match data_type {
             DataType::Boolean => build_array!(
@@ -9732,7 +9779,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         "ARRAY" => {
             let string_array = args.iter().any(|arg| arg.data_type() == &DataType::Utf8);
             let boolean_array = args.iter().any(|arg| arg.data_type() == &DataType::Boolean);
-            let integer_array = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
+            // Trino promotes a mixed narrow/wide integer ARRAY to BIGINT.
+            // Keep the existing BIGINT path for homogeneous Int64 values,
+            // while also admitting integer columns produced by CAST(... AS
+            // INTEGER) and the other Arrow integer widths.
+            let integer_array = args.iter().any(|arg| {
+                matches!(
+                    arg.data_type(),
+                    DataType::Int8
+                        | DataType::Int16
+                        | DataType::Int32
+                        | DataType::Int64
+                        | DataType::UInt8
+                        | DataType::UInt16
+                        | DataType::UInt32
+                        | DataType::UInt64
+                )
+            });
             let float_array = args.iter().any(|arg| arg.data_type() == &DataType::Float64);
             let temporal_type = args.iter().find_map(|arg| match arg.data_type() {
                 DataType::Date32
@@ -9866,10 +9929,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 Ok(Arc::new(builder.finish()))
             } else if integer_array && !float_array {
-                if args
-                    .iter()
-                    .any(|arg| !matches!(arg.data_type(), DataType::Int64 | DataType::Null))
-                {
+                if args.iter().any(|arg| {
+                    !matches!(
+                        arg.data_type(),
+                        DataType::Int8
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::Int64
+                            | DataType::UInt8
+                            | DataType::UInt16
+                            | DataType::UInt32
+                            | DataType::UInt64
+                            | DataType::Null
+                    )
+                }) {
                     return Err(KaveonError::Execution(
                         "ARRAY elements must share a type".into(),
                     ));
@@ -14296,6 +14369,19 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("n"), Some("w")]
+        );
+    }
+
+    #[test]
+    fn array_constructor_promotes_mixed_integer_widths_to_bigint() {
+        let narrow = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let wide = Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[narrow, wide], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Int64);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
         );
     }
 
