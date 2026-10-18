@@ -321,8 +321,8 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
         (
             ScalarValue::Decimal128 { value, scale, .. },
             DataType::Decimal128(precision, column_scale),
-        ) if scale == column_scale => Arc::new(
-            Decimal128Array::from(vec![*value])
+        ) => Arc::new(
+            Decimal128Array::from(vec![rescale_decimal128(*value, *scale, *column_scale)?])
                 .with_precision_and_scale(*precision, *column_scale)
                 .ok()?,
         ),
@@ -333,15 +333,53 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
                 scale,
             },
             DataType::Decimal256(column_precision, column_scale),
-        ) if scale == column_scale => Arc::new(
-            Decimal256Array::from(vec![arrow::datatypes::i256::from_string(value)?])
-                .with_precision_and_scale(*column_precision, *column_scale)
-                .ok()?,
+        ) => Arc::new(
+            Decimal256Array::from(vec![rescale_decimal256(
+                arrow::datatypes::i256::from_string(value)?,
+                *scale,
+                *column_scale,
+            )?])
+            .with_precision_and_scale(*column_precision, *column_scale)
+            .ok()?,
         ),
         (ScalarValue::Bool(value), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*value])),
         (ScalarValue::Utf8(value), data_type) => return text_literal(value, data_type),
         _ => return None,
     })
+}
+
+/// Rescale an exact decimal literal for a probe column. Reducing scale is
+/// accepted only when discarded digits are zero; increasing scale is checked
+/// for overflow. Returning None deliberately leaves the runtime filter at the
+/// exact batch-level path when coercion would be lossy.
+fn rescale_decimal128(value: i128, from_scale: i8, to_scale: i8) -> Option<i128> {
+    let delta = i32::from(to_scale) - i32::from(from_scale);
+    if delta == 0 {
+        return Some(value);
+    }
+    if delta > 0 {
+        value.checked_mul(10_i128.checked_pow(delta as u32)?)
+    } else {
+        let divisor = 10_i128.checked_pow((-delta) as u32)?;
+        (value % divisor == 0).then(|| value / divisor)
+    }
+}
+
+fn rescale_decimal256(
+    value: arrow::datatypes::i256,
+    from_scale: i8,
+    to_scale: i8,
+) -> Option<arrow::datatypes::i256> {
+    let delta = i32::from(to_scale) - i32::from(from_scale);
+    if delta == 0 {
+        return Some(value);
+    }
+    if delta > 0 {
+        value.checked_mul(arrow::datatypes::i256::from_i128(10).checked_pow(delta as u32)?)
+    } else {
+        let divisor = arrow::datatypes::i256::from_i128(10).checked_pow((-delta) as u32)?;
+        (value % divisor == arrow::datatypes::i256::from_i128(0)).then(|| value / divisor)
+    }
 }
 
 /// A text literal as a one-element array of the column's text type, through
@@ -615,7 +653,7 @@ mod tests {
     use arrow::array::{
         Date64Array, Int64Array, StringArray, StringDictionaryBuilder, Time64MicrosecondArray,
     };
-    use arrow::datatypes::{Field, Schema, TimeUnit};
+    use arrow::datatypes::{Decimal128Type, Decimal256Type, Field, Schema, TimeUnit};
 
     fn batch() -> RecordBatch {
         let mut dictionary = StringDictionaryBuilder::<Int32Type>::new();
@@ -649,6 +687,44 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn decimal_runtime_filter_rescales_only_exact_values() {
+        assert_eq!(rescale_decimal128(1_250, 3, 2), Some(125));
+        assert_eq!(rescale_decimal128(125, 2, 3), Some(1_250));
+        assert_eq!(rescale_decimal128(1_251, 3, 2), None);
+
+        let literal = ScalarValue::Decimal128 {
+            value: 1_250,
+            precision: 38,
+            scale: 3,
+        };
+        let array = comparison_literal(&literal, &DataType::Decimal128(10, 2)).unwrap();
+        assert_eq!(array.data_type(), &DataType::Decimal128(10, 2));
+        assert_eq!(array.as_primitive::<Decimal128Type>().value(0), 125);
+    }
+
+    #[test]
+    fn decimal256_runtime_filter_rescales_without_narrowing() {
+        let value =
+            arrow::datatypes::i256::from_string("1250000000000000000000000000001250").unwrap();
+        let expected =
+            arrow::datatypes::i256::from_string("125000000000000000000000000000125").unwrap();
+        assert_eq!(rescale_decimal256(value, 3, 2), Some(expected));
+        assert_eq!(
+            rescale_decimal256(arrow::datatypes::i256::from_i128(1_251), 3, 2),
+            None
+        );
+
+        let literal = ScalarValue::Decimal256 {
+            value: "1250000000000000000000000000001250".to_owned(),
+            precision: 76,
+            scale: 3,
+        };
+        let array = comparison_literal(&literal, &DataType::Decimal256(40, 2)).unwrap();
+        assert_eq!(array.data_type(), &DataType::Decimal256(40, 2));
+        assert_eq!(array.as_primitive::<Decimal256Type>().value(0), expected);
     }
 
     fn like(
