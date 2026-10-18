@@ -754,9 +754,15 @@ fn scalar_to_ast_value(value: &ScalarValue) -> ast::Value {
 /// statement-wide counter that names scalar subquery columns, and whether
 /// a subquery may reference the enclosing query (only when the binder
 /// will resolve the reference).
+#[derive(Clone)]
+struct CteDefinition {
+    query: ast::Query,
+    columns: Vec<String>,
+}
+
 #[derive(Clone, Default)]
 struct Lowering {
-    ctes: HashMap<String, ast::Query>,
+    ctes: HashMap<String, CteDefinition>,
     scalars: Rc<Cell<usize>>,
     outer_references: bool,
     /// Plain distinct counts lower as sketches.
@@ -789,7 +795,18 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         }
         for cte in &with.cte_tables {
             let cte_name = cte.alias.name.value.to_lowercase();
-            context.ctes.insert(cte_name, *cte.query.clone());
+            context.ctes.insert(
+                cte_name,
+                CteDefinition {
+                    query: *cte.query.clone(),
+                    columns: cte
+                        .alias
+                        .columns
+                        .iter()
+                        .map(|column| column.name.value.clone())
+                        .collect(),
+                },
+            );
         }
     }
     let ctes = &context;
@@ -1440,18 +1457,70 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 let mut plan = query_to_plan(
                     &ast::Query {
                         with: None,
-                        body: cte_query.body.clone(),
-                        order_by: cte_query.order_by.clone(),
-                        limit: cte_query.limit.clone(),
-                        offset: cte_query.offset.clone(),
-                        ..cte_query.clone()
+                        body: cte_query.query.body.clone(),
+                        order_by: cte_query.query.order_by.clone(),
+                        limit: cte_query.query.limit.clone(),
+                        offset: cte_query.query.offset.clone(),
+                        ..cte_query.query.clone()
                     },
                     ctes,
                 )?;
-                if alias_name.is_some()
-                    && let LogicalPlan::Scan { ref mut alias, .. } = plan
+                if !cte_query.columns.is_empty()
+                    && let Some(columns) = plan_output_columns(&plan)
                 {
-                    *alias = alias_name.clone();
+                    if cte_query.columns.len() != columns.len() {
+                        return Err(sql_err("CTE alias column count does not match relation"));
+                    }
+                    plan = LogicalPlan::Project {
+                        input: Box::new(plan),
+                        columns: columns
+                            .into_iter()
+                            .zip(cte_query.columns.iter())
+                            .map(|(column, name)| Expr::Alias {
+                                expr: Box::new(Expr::Column(column)),
+                                name: name.clone(),
+                            })
+                            .collect(),
+                    };
+                }
+                if let Some(alias) = alias {
+                    if alias.columns.is_empty()
+                        && let LogicalPlan::Scan {
+                            alias: ref mut scan_alias,
+                            ..
+                        } = plan
+                    {
+                        *scan_alias = Some(alias.name.value.clone());
+                    } else if let Some(columns) = plan_output_columns(&plan) {
+                        let names = if alias.columns.is_empty() {
+                            columns
+                                .iter()
+                                .map(|column| {
+                                    column.rsplit('.').next().unwrap_or(column).to_owned()
+                                })
+                                .collect::<Vec<_>>()
+                        } else {
+                            alias
+                                .columns
+                                .iter()
+                                .map(|column| column.name.value.clone())
+                                .collect::<Vec<_>>()
+                        };
+                        if names.len() != columns.len() {
+                            return Err(sql_err("CTE alias column count does not match relation"));
+                        }
+                        plan = LogicalPlan::Project {
+                            input: Box::new(plan),
+                            columns: columns
+                                .into_iter()
+                                .zip(names)
+                                .map(|(column, name)| Expr::Alias {
+                                    expr: Box::new(Expr::Column(column)),
+                                    name: format!("{}.{}", alias.name.value, name),
+                                })
+                                .collect(),
+                        };
+                    }
                 }
                 Ok(plan)
             } else {
@@ -1740,6 +1809,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
 /// schema is not available during SQL lowering.
 fn plan_output_columns(plan: &LogicalPlan) -> Option<Vec<String>> {
     match plan {
+        LogicalPlan::Unnest { columns, .. } => Some(columns.clone()),
         LogicalPlan::Project { input, columns } => {
             if columns.iter().any(|column| matches!(column, Expr::Star)) {
                 return plan_output_columns(input);
@@ -1759,7 +1829,6 @@ fn plan_output_columns(plan: &LogicalPlan) -> Option<Vec<String>> {
         | LogicalPlan::Offset { input, .. }
         | LogicalPlan::Distinct { input }
         | LogicalPlan::Window { input, .. } => plan_output_columns(input),
-        LogicalPlan::Unnest { columns, .. } => Some(columns.clone()),
         _ => None,
     }
 }

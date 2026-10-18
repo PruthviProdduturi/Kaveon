@@ -2440,8 +2440,10 @@ fn distributed_correlated_not_in_residual_matches_local_semantics() {
 
 #[test]
 fn distributed_correlated_in_residual_matches_local_semantics() {
-    let directory =
-        std::env::temp_dir().join(format!("kaveon-correlated-in-residual-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-in-residual-{}",
+        uuid::Uuid::new_v4()
+    ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
     let statement = "SELECT l.id FROM (VALUES (1), (2), (3)) AS l(id) WHERE l.id IN (SELECT r.value FROM (VALUES (1, 1), (1, 2), (2, 1), (CAST(NULL AS BIGINT), 9)) AS r(value, score) WHERE r.value = l.id AND r.score > l.id) ORDER BY l.id";
@@ -2457,6 +2459,29 @@ fn distributed_correlated_in_residual_matches_local_semantics() {
         true,
     );
     assert_eq!(expected, vec!["1"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_cte_reuse_self_join_matches_local_semantics() {
+    let directory = std::env::temp_dir().join(format!("kaveon-cte-reuse-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "WITH base(id, label) AS (VALUES (1, 'a'), (2, 'b'), (3, 'c')) SELECT l.id, r.label FROM base l JOIN base r ON l.id = r.id WHERE l.id > 1 ORDER BY l.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-cte-reuse", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["2\u{1f}b", "3\u{1f}c"]);
     assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
