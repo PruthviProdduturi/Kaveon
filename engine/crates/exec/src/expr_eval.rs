@@ -5070,6 +5070,36 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 Ok(Arc::new(builder.finish()) as ArrayRef)
             }
+            DataType::Decimal128(precision, scale) => {
+                let elements = args[0].as_primitive::<arrow::datatypes::Decimal128Type>();
+                let values = Decimal128Builder::new()
+                    .with_precision_and_scale(*precision, *scale)
+                    .map_err(|error| KaveonError::Execution(error.to_string()))?;
+                let mut builder = ListBuilder::new(values);
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    if elements.is_null(row) {
+                        for _ in 0..count {
+                            builder.values().append_null();
+                        }
+                    } else {
+                        for _ in 0..count {
+                            builder.values().append_value(elements.value(row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
             DataType::Null => {
                 let mut builder = ListBuilder::new(NullBuilder::new());
                 for row in 0..num_rows {
@@ -14320,6 +14350,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("between 0 and 1000000"));
+    }
+
+    #[test]
+    fn array_repeat_preserves_decimal_precision_scale_and_nulls() {
+        let values = Arc::new(
+            Decimal128Array::from(vec![Some(1234), None, Some(-500)])
+                .with_precision_and_scale(8, 2)
+                .unwrap(),
+        ) as ArrayRef;
+        let counts = Arc::new(Int64Array::from(vec![2, 2, 0])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY_REPEAT", &[values, counts], 3).unwrap();
+        let repeated = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(repeated.value_type(), DataType::Decimal128(8, 2));
+        assert_eq!(
+            repeated
+                .value(0)
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .values(),
+            &[1234, 1234]
+        );
+        assert_eq!(repeated.value(1).null_count(), 2);
+        assert_eq!(repeated.value(2).len(), 0);
     }
 
     #[test]
