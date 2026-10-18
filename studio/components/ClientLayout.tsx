@@ -106,18 +106,19 @@ export function ClientLayout({ children }: ClientLayoutProps) {
     })();
   }, [isAuthenticated]);
 
-  // The two surfaces that need nothing from the cluster: the product page and
-  // the documentation. Both render whole with the API down, so they are left
-  // alone — interrupting someone reading the documentation to tell them a
-  // cluster they were not using is offline would be noise.
-  if (pathname === "/" || pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
+  // Documentation renders whole with the cluster offline and nobody reading it
+  // is waiting on the demo, so it is the one surface left quiet.
+  if (pathname === "/docs" || pathname?.startsWith("/docs/")) return <>{children}</>;
 
-  // Everything below depends on the API, sign-in included, so the notice sits
-  // above the auth gate rather than behind it. Behind it — where it was — the
-  // only people who could see a message about the service being unavailable
-  // were people who had already signed in, which needs the service to be
-  // available. It was unreachable by its own audience.
+  // Everywhere else carries the notice, the public landing page included --
+  // that is where "open Kaveon" begins, it needs nothing from the cluster, and
+  // it is reachable when the API is not. Keeping the notice inside the app
+  // shell instead made a one-line message depend on signing in, which depends
+  // on the API the message exists to report as down.
   const notice = <ServiceNotice />;
+
+  // The landing page renders standalone, with no app sidebar and no auth gate.
+  if (pathname === "/") return <>{notice}{children}</>;
 
   if (pathname === "/auth/microsoft" || pathname === "/login") {
     return <>{notice}{children}</>;

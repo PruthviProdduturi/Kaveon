@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react";
 import Link from "next/link";
 import { KaveonWordmark } from "./KaveonMark";
+import { OpenKaveon } from "./OpenKaveon";
 import styles from "./PublicHeader.module.css";
 
 type PublicHeaderProps = {
@@ -30,7 +31,7 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
         )}
         <Link href="/docs" className={`${styles.link} ${active === "docs" ? styles.active : ""}`} aria-current={active === "docs" ? "page" : undefined}>Docs</Link>
         <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className={`${styles.link} ${styles.github}`}>GitHub</a>
-        <Link href="/home" className={styles.launch}>Open Kaveon</Link>
+        <OpenKaveon className={styles.launch} />
       </nav>
     </header>
   );

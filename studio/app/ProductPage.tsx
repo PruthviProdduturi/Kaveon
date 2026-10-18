@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState, type MouseEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { OpenKaveon } from "../components/OpenKaveon";
 import { KaveonMark } from "../components/KaveonMark";
 import { PublicHeader } from "../components/PublicHeader";
 import { BenchmarkSection } from "../components/product/BenchmarkSection";
@@ -295,7 +296,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
           </div>
 
           <div className="about-hero-actions" style={{ display: "flex", justifyContent: "center", gap: 14, animation: "hero-cta-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 1.0s both" }}>
-            <Link href="/home" className="about-btn hero-cta-primary" style={{
+            <OpenKaveon withDate className="about-btn hero-cta-primary" style={{
               display: "inline-flex", alignItems: "center", gap: 10,
               padding: "18px 44px", borderRadius: 14,
               background: `linear-gradient(135deg, ${B}, #3b82f6)`,
@@ -305,7 +306,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               letterSpacing: "-0.01em",
             }}>
               Open Kaveon <span style={{ fontSize: 20 }}>&rarr;</span>
-            </Link>
+            </OpenKaveon>
             <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" style={{
               display: "inline-flex", alignItems: "center", gap: 10,
               padding: "18px 36px", borderRadius: 14,
@@ -1089,9 +1090,9 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               Ready to talk to your data?
             </h2>
             <p style={{ fontSize: 15, color: "#666", marginBottom: 36 }}>Open source &middot; Self-hosted &middot; MIT License</p>
-            <Link href="/home" className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}30`, transition: "all 0.2s" }}>
+            <OpenKaveon withDate className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}30`, transition: "all 0.2s" }}>
               Open Kaveon
-            </Link>
+            </OpenKaveon>
           </div>
         </Anim>
       </section>
@@ -1105,7 +1106,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
         <div style={{ display: "flex", gap: 24 }}>
           <Link href="/docs" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Documentation</Link>
           <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
-          <Link href="/home" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Open Kaveon</Link>
+          <OpenKaveon className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Open Kaveon</OpenKaveon>
         </div>
       </footer>
     </div>
