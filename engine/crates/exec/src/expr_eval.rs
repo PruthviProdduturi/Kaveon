@@ -11066,30 +11066,10 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
             // below, and leave the following path segment for the next
             // parser iteration.
             if let Some(quote @ ('\'' | '"')) = after_dot.chars().next() {
-                let mut key = String::new();
-                let mut escaped = false;
-                let mut close = None;
-                for (offset, character) in after_dot[quote.len_utf8()..].char_indices() {
-                    if escaped {
-                        key.push(character);
-                        escaped = false;
-                        continue;
-                    }
-                    if character == '\\' {
-                        escaped = true;
-                        continue;
-                    }
-                    if character == quote {
-                        let end = quote.len_utf8() + offset + character.len_utf8();
-                        if after_dot[end..].is_empty() || after_dot[end..].starts_with(['.', '[']) {
-                            close = Some(end);
-                            break;
-                        }
-                        return None;
-                    }
-                    key.push(character);
+                let (key, close) = parse_quoted_json_path_key(after_dot, quote)?;
+                if !after_dot[close..].is_empty() && !after_dot[close..].starts_with(['.', '[']) {
+                    return None;
                 }
-                let close = close?;
                 segments.push(Segment::Key(key));
                 remainder = &after_dot[close..];
                 continue;
@@ -11105,30 +11085,10 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
         }
         if let Some(after_open) = remainder.strip_prefix('[') {
             if let Some(quote @ ('\'' | '"')) = after_open.chars().next() {
-                let mut key = String::new();
-                let mut escaped = false;
-                let mut close = None;
-                for (offset, character) in after_open[quote.len_utf8()..].char_indices() {
-                    if escaped {
-                        key.push(character);
-                        escaped = false;
-                        continue;
-                    }
-                    if character == '\\' {
-                        escaped = true;
-                        continue;
-                    }
-                    if character == quote {
-                        let end = quote.len_utf8() + offset + character.len_utf8();
-                        if after_open[end..].starts_with(']') {
-                            close = Some(end);
-                            break;
-                        }
-                        return None;
-                    }
-                    key.push(character);
+                let (key, close) = parse_quoted_json_path_key(after_open, quote)?;
+                if !after_open[close..].starts_with(']') {
+                    return None;
                 }
-                let close = close?;
                 segments.push(Segment::Key(key));
                 remainder = &after_open[close + 1..];
                 continue;
@@ -11179,6 +11139,48 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     } else {
         Some(serde_json::Value::Array(values))
     }
+}
+
+/// Parse a quoted SQL/JSON path member and return its key plus the byte offset
+/// immediately after the closing quote. SQL/JSON uses backslash escapes in
+/// quoted member names; accepting JSON's short escapes and `\\uXXXX` keeps
+/// paths lossless for keys containing whitespace or non-ASCII characters while
+/// retaining the existing fail-closed behavior for malformed paths.
+fn parse_quoted_json_path_key(input: &str, quote: char) -> Option<(String, usize)> {
+    let mut key = String::new();
+    let start = quote.len_utf8();
+    let mut iter = input[start..].char_indices();
+    while let Some((offset, character)) = iter.next() {
+        if character == quote {
+            return Some((key, start + offset + character.len_utf8()));
+        }
+        if character != '\\' {
+            key.push(character);
+            continue;
+        }
+        let (_, escaped) = iter.next()?;
+        match escaped {
+            '"' => key.push('"'),
+            '\'' => key.push('\''),
+            '\\' => key.push('\\'),
+            '/' => key.push('/'),
+            'b' => key.push('\u{0008}'),
+            'f' => key.push('\u{000c}'),
+            'n' => key.push('\n'),
+            'r' => key.push('\r'),
+            't' => key.push('\t'),
+            'u' => {
+                let mut digits = String::with_capacity(4);
+                for _ in 0..4 {
+                    digits.push(iter.next()?.1);
+                }
+                let codepoint = u32::from_str_radix(&digits, 16).ok()?;
+                key.push(char::from_u32(codepoint)?);
+            }
+            other => key.push(other),
+        }
+    }
+    None
 }
 
 fn array_append_generic<L: OffsetSizeTrait>(
@@ -21545,6 +21547,43 @@ mod tests {
                 .as_string::<i32>()
                 .value(0),
             "10"
+        );
+    }
+
+    #[test]
+    fn evaluates_json_value_with_escaped_unicode_member_names() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![Some(
+                r#"{"line\n":{"value":11},"café":{"value":12}}"#,
+            )])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8(
+                    r#"$. "line\u000a".value"#.replace(" ", ""),
+                )),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "11");
+
+        let bracket = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8(r#"$['caf\u00e9'].value"#.into())),
+            ],
+        };
+        assert_eq!(
+            evaluate(&bracket, &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            "12"
         );
     }
 
