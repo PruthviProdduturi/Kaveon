@@ -7102,6 +7102,34 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         })
                         .collect::<Vec<_>>()
                 }
+                // Trino's REAL is Arrow Float32. Keep the comparison in the
+                // native element width rather than widening the list to
+                // DOUBLE: widening can change which value is selected for
+                // adjacent REAL values that round differently in Float64.
+                DataType::Float32 => {
+                    let needle = compute::cast(&args[1], &DataType::Float32)?;
+                    let needle = needle.as_primitive::<Float32Type>();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let values = values.as_primitive::<Float32Type>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }
                 DataType::Date32 => position_primitive!(Date32Type, DataType::Date32),
                 DataType::Date64 => position_primitive!(Date64Type, DataType::Date64),
                 DataType::Time32(TimeUnit::Second) => {
@@ -21248,6 +21276,40 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(0), Some(0)]
+        );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_real_lists_without_double_widening() {
+        let mut lists = ListBuilder::new(Float32Builder::new());
+        lists.values().append_value(1.0000001_f32);
+        lists.values().append_value(1.0000002_f32);
+        lists.append(true);
+        lists.values().append_value(1.0000001_f32);
+        lists.values().append_value(1.0000002_f32);
+        lists.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(lists.finish()) as ArrayRef),
+            (
+                "needle",
+                Arc::new(Float32Array::from(vec![1.0000002_f32, 1.0000001_f32])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![Expr::Column("items".into()), Expr::Column("needle".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1)]
         );
     }
 
