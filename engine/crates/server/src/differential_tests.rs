@@ -5872,3 +5872,31 @@ fn distributed_global_topn_fetch_with_ties_matches_local() {
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Decimal scalar ARRAY_REPEAT must preserve Arrow precision/scale through
+/// fragment serialization and match node-local evaluation.
+#[test]
+fn distributed_array_repeat_decimal_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-array-repeat-decimal-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT ARRAY_REPEAT(CAST(actions AS DECIMAL(8, 2)), 2) AS values FROM events LIMIT 4";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-array-repeat-decimal", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
