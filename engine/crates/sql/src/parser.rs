@@ -19,7 +19,8 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // for the syntax that explicitly supports it.
     let bracket_normalized = normalize_bracket_identifiers(sql);
     let json_clauses_normalized = normalize_json_null_clauses(&bracket_normalized)?;
-    let json_returning_normalized = normalize_json_returning(&json_clauses_normalized);
+    let json_unique_normalized = normalize_json_object_unique_keys(&json_clauses_normalized)?;
+    let json_returning_normalized = normalize_json_returning(&json_unique_normalized);
     let normalized = normalize_lateral_unnest(&json_returning_normalized);
     // Lower the one recursive shape that has a finite, deterministic
     // equivalent in the existing UNNEST/SEQUENCE execution path.  More
@@ -56,6 +57,138 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),
     }
+}
+
+/// Lower the bounded SQL/JSON `WITH UNIQUE KEYS` constructor clause.
+///
+/// The evaluator already rejects duplicate object keys deterministically.  The
+/// SQL/JSON clause therefore only needs to be removed before the dialect parser
+/// sees it; this preserves the existing fail-closed duplicate-key behavior while
+/// accepting Trino's explicit spelling. `WITHOUT UNIQUE KEYS` is deliberately
+/// rejected because silently selecting a duplicate-key winner would change the
+/// result depending on the JSON materializer.
+fn normalize_json_object_unique_keys(sql: &str) -> Result<String> {
+    let mut output = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    while cursor < sql.len() {
+        let Some((name_start, name, open)) = next_json_object_function(sql, cursor) else {
+            output.push_str(&sql[cursor..]);
+            break;
+        };
+        output.push_str(&sql[cursor..name_start]);
+        let Some(close) = matching_paren(sql, open) else {
+            output.push_str(&sql[name_start..]);
+            break;
+        };
+        let inner = normalize_json_object_unique_keys(&sql[open + 1..close])?;
+        let inner = strip_json_object_unique_keys(&inner)?;
+        output.push_str(&name);
+        output.push('(');
+        output.push_str(&inner);
+        output.push(')');
+        cursor = close + 1;
+    }
+    Ok(output)
+}
+
+fn next_json_object_function(sql: &str, start: usize) -> Option<(usize, String, usize)> {
+    let bytes = sql.as_bytes();
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'\'' || bytes[cursor] == b'"' {
+            cursor = quoted_sql_end(sql, cursor);
+            continue;
+        }
+        let name_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        if cursor == name_start {
+            cursor += 1;
+            continue;
+        }
+        let name = &sql[name_start..cursor];
+        if !name.eq_ignore_ascii_case("JSON_OBJECT")
+            || bytes
+                .get(name_start.wrapping_sub(1))
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        {
+            continue;
+        }
+        let mut open = cursor;
+        while open < bytes.len() && bytes[open].is_ascii_whitespace() {
+            open += 1;
+        }
+        if bytes.get(open) == Some(&b'(') {
+            return Some((name_start, name.to_owned(), open));
+        }
+    }
+    None
+}
+
+fn strip_json_object_unique_keys(inner: &str) -> Result<String> {
+    let bytes = inner.as_bytes();
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+    let mut depth = 0usize;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' | b'"' => cursor = quoted_sql_end(inner, cursor),
+            b'(' | b'[' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+            }
+            _ if depth == 0
+                && (json_is_sql_word_at(inner, cursor, "WITH")
+                    || json_is_sql_word_at(inner, cursor, "WITHOUT")) =>
+            {
+                let start = cursor;
+                let without = json_is_sql_word_at(inner, cursor, "WITHOUT");
+                cursor += if without {
+                    "WITHOUT".len()
+                } else {
+                    "WITH".len()
+                };
+                cursor = skip_sql_space(inner, cursor);
+                if !json_is_sql_word_at(inner, cursor, "UNIQUE") {
+                    return Err(KaveonError::Sql(
+                        "invalid JSON_OBJECT unique-key clause; expected UNIQUE KEYS".into(),
+                    ));
+                }
+                cursor += "UNIQUE".len();
+                cursor = skip_sql_space(inner, cursor);
+                if !json_is_sql_word_at(inner, cursor, "KEYS") {
+                    return Err(KaveonError::Sql(
+                        "invalid JSON_OBJECT unique-key clause; expected UNIQUE KEYS".into(),
+                    ));
+                }
+                cursor += "KEYS".len();
+                if without {
+                    return Err(KaveonError::Sql(
+                        "JSON_OBJECT WITHOUT UNIQUE KEYS is not supported; duplicate keys are rejected".into(),
+                    ));
+                }
+                if !ranges.is_empty() {
+                    return Err(KaveonError::Sql(
+                        "duplicate JSON_OBJECT WITH UNIQUE KEYS clause".into(),
+                    ));
+                }
+                ranges.push((start, cursor));
+            }
+            _ => cursor += 1,
+        }
+    }
+    let mut result = inner.to_owned();
+    for (start, end) in ranges.into_iter().rev() {
+        result.replace_range(start..end, "");
+    }
+    Ok(result)
 }
 
 /// Lower the narrow SQL/JSON `ON EMPTY NULL` and `ON ERROR NULL` clauses.
@@ -1396,6 +1529,33 @@ mod tests {
         )
         .expect_err("typed JSON DEFAULT remains outside the bounded surface");
         assert!(error.to_string().contains("RETURNING"));
+    }
+
+    #[test]
+    fn json_object_with_unique_keys_lowers_to_existing_duplicate_key_guard() {
+        let statements = parse_sql(
+            "SELECT JSON_OBJECT('answer' : 7, 'label' VALUE 'x' WITH UNIQUE KEYS) FROM t",
+        )
+        .expect("WITH UNIQUE KEYS should use the existing fail-closed object evaluator");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("JSON_OBJECT"), "{rendered}");
+        assert!(!rendered.contains("UNIQUE"), "{rendered}");
+    }
+
+    #[test]
+    fn json_object_without_unique_keys_remains_rejected() {
+        let error = parse_sql("SELECT JSON_OBJECT('a' : 1, 'a' : 2 WITHOUT UNIQUE KEYS) FROM t")
+            .expect_err("WITHOUT UNIQUE KEYS must not silently choose a duplicate-key winner");
+        assert!(error.to_string().contains("WITHOUT UNIQUE KEYS"));
+    }
+
+    #[test]
+    fn json_object_unique_key_rewrite_ignores_quoted_words_and_nested_objects() {
+        let sql = "SELECT JSON_OBJECT('note' : 'WITH UNIQUE KEYS', 'nested' : JSON_OBJECT('x' : 1 WITH UNIQUE KEYS) WITH UNIQUE KEYS) FROM t";
+        let normalized = normalize_json_object_unique_keys(sql).unwrap();
+        assert_eq!(normalized.matches("WITH UNIQUE KEYS").count(), 1);
+        assert!(normalized.contains("'WITH UNIQUE KEYS'"));
+        assert!(normalized.contains("JSON_OBJECT('x' : 1 )"));
     }
 
     #[test]

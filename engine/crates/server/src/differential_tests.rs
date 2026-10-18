@@ -492,6 +492,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_object_with_unique_keys",
+        "SELECT JSON_OBJECT('answer' : 7, 'label' VALUE 'x' WITH UNIQUE KEYS) AS constructed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_object_null_on_null",
         "SELECT JSON_OBJECT('answer' : NULL, 'label' : 'x' NULL ON NULL) AS constructed FROM {T} LIMIT 1",
         false,
