@@ -4323,6 +4323,115 @@ mod tests {
     }
 
     #[test]
+    fn a_spilled_partitioned_inner_join_preserves_residual_matches() {
+        use arrow::array::StringArray;
+        use kaveon_core::Expr;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, true),
+            Field::new("s", DataType::Utf8, true),
+        ]));
+        let rows = |count: i64, keys: i64, suppliers: i64| -> Box<dyn BatchOperator> {
+            let batches = (0..count)
+                .collect::<Vec<_>>()
+                .chunks(400)
+                .map(|chunk| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int64Array::from_iter(
+                                chunk
+                                    .iter()
+                                    .map(|value| (value % 97 != 96).then_some(value % keys)),
+                            )),
+                            Arc::new(StringArray::from_iter(
+                                chunk
+                                    .iter()
+                                    .map(|value| Some(format!("supplier-{}", value % suppliers))),
+                            )),
+                        ],
+                    )
+                    .unwrap()
+                })
+                .collect::<VecDeque<_>>();
+            Box::new(Input {
+                schema: Arc::clone(&schema),
+                batches,
+            })
+        };
+        let residual = Expr::BinaryOp {
+            left: Box::new(Expr::Column("s".into())),
+            op: kaveon_core::BinaryOp::Ne,
+            right: Box::new(Expr::Column("o_s".into())),
+        };
+        let rename = |source: Box<dyn BatchOperator>| -> Box<dyn BatchOperator> {
+            Box::new(
+                crate::project::ProjectOperator::new(
+                    source,
+                    vec![
+                        Expr::Alias {
+                            expr: Box::new(Expr::Column("k".into())),
+                            name: "o_k".into(),
+                        },
+                        Expr::Alias {
+                            expr: Box::new(Expr::Column("s".into())),
+                            name: "o_s".into(),
+                        },
+                    ],
+                )
+                .unwrap(),
+            )
+        };
+        let mut reference = HashJoin::try_new_qualified_with_residual(
+            rows(6_000, 1_200, 5),
+            rename(rows(4_000, 1_500, 3)),
+            JoinType::Inner,
+            vec![("k".into(), "o_k".into())],
+            None,
+            None,
+            Some(residual.clone()),
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("partition-inner-residual", 128 * 1024).unwrap();
+        let spill = spill();
+        let partitioned = PartitionedHashJoin::new(
+            rows(6_000, 1_200, 5),
+            rename(rows(4_000, 1_500, 3)),
+            JoinType::Inner,
+            vec![("k".into(), "o_k".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        let mut partitioned = partitioned.with_residual(Some(residual));
+        let collect_keys = |operator: &mut dyn BatchOperator| {
+            let mut rows = Vec::new();
+            while let Some(batch) = operator.next_batch().unwrap() {
+                let left = batch
+                    .column(0)
+                    .as_primitive::<arrow::datatypes::Int64Type>();
+                let right = batch
+                    .column(2)
+                    .as_primitive::<arrow::datatypes::Int64Type>();
+                rows.extend((0..batch.num_rows()).map(|i| {
+                    (
+                        (!left.is_null(i)).then(|| left.value(i)),
+                        (!right.is_null(i)).then(|| right.value(i)),
+                    )
+                }));
+            }
+            rows.sort();
+            rows
+        };
+        assert_eq!(collect_keys(&mut partitioned), collect_keys(&mut reference));
+        assert!(spill.snapshot().peak_bytes > 0, "did not spill");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn grouped_spill_succeeds_when_unpartitioned_state_exceeds_budget() {
         let values = (0..2000).map(Some).collect::<Vec<_>>();
         let pool = QueryMemoryPool::new("partition-aggregate", 64 * 1024).unwrap();
