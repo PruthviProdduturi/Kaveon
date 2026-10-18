@@ -578,7 +578,7 @@ pub async fn upload_chunks(
                     Ok(()) => return Ok(()),
                     Err(error)
                         if attempt < EXCHANGE_UPLOAD_ATTEMPTS
-                            && retryable_exchange_upload_error(&error) =>
+                            && retryable_exchange_request_error(&error) =>
                     {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             25 * (1 << (attempt - 1)),
@@ -597,7 +597,7 @@ pub async fn upload_chunks(
     Ok(())
 }
 
-fn retryable_exchange_upload_error(error: &ExchangeError) -> bool {
+fn retryable_exchange_request_error(error: &ExchangeError) -> bool {
     matches!(
         error,
         ExchangeError::Transport(_) | ExchangeError::HttpStatus(500..=599)
@@ -610,15 +610,35 @@ pub async fn fetch_payload(
     token: &str,
     identity: &ExchangeIdentity,
 ) -> ExchangeResult<crate::transport::ArrowPayload> {
-    let response = client
-        .get(exchange_url(worker_uri, identity))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|error| ExchangeError::Transport(error.to_string()))?;
-    if !response.status().is_success() {
-        return Err(ExchangeError::HttpStatus(response.status().as_u16()));
-    }
+    let url = exchange_url(worker_uri, identity);
+    let mut attempt = 0;
+    let response = loop {
+        attempt += 1;
+        let result = client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|error| ExchangeError::Transport(error.to_string()))
+            .and_then(|response| {
+                if response.status().is_success() {
+                    Ok(response)
+                } else {
+                    Err(ExchangeError::HttpStatus(response.status().as_u16()))
+                }
+            });
+        match result {
+            Ok(response) => break response,
+            Err(error)
+                if attempt < EXCHANGE_UPLOAD_ATTEMPTS
+                    && retryable_exchange_request_error(&error) =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(25 * (1 << (attempt - 1))))
+                    .await;
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let payload = crate::transport::receive_replayable(response)
         .await
         .map_err(ExchangeError::Transport)?;
@@ -1751,25 +1771,25 @@ mod tests {
 
     #[test]
     fn upload_retries_only_transient_remote_failures() {
-        assert!(retryable_exchange_upload_error(&ExchangeError::Transport(
+        assert!(retryable_exchange_request_error(&ExchangeError::Transport(
             "connection reset".into()
         )));
-        assert!(retryable_exchange_upload_error(&ExchangeError::HttpStatus(
-            503
-        )));
-        assert!(retryable_exchange_upload_error(&ExchangeError::HttpStatus(
-            500
-        )));
-        assert!(retryable_exchange_upload_error(&ExchangeError::HttpStatus(
-            599
-        )));
-        assert!(!retryable_exchange_upload_error(
+        assert!(retryable_exchange_request_error(
+            &ExchangeError::HttpStatus(503)
+        ));
+        assert!(retryable_exchange_request_error(
+            &ExchangeError::HttpStatus(500)
+        ));
+        assert!(retryable_exchange_request_error(
+            &ExchangeError::HttpStatus(599)
+        ));
+        assert!(!retryable_exchange_request_error(
             &ExchangeError::HttpStatus(404)
         ));
-        assert!(!retryable_exchange_upload_error(
+        assert!(!retryable_exchange_request_error(
             &ExchangeError::HttpStatus(409)
         ));
-        assert!(!retryable_exchange_upload_error(
+        assert!(!retryable_exchange_request_error(
             &ExchangeError::Unauthorized
         ));
     }
