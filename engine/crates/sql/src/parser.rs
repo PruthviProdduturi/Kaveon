@@ -402,7 +402,7 @@ fn normalize_json_returning(sql: &str) -> String {
             output.push('(');
             output.push_str(arguments.trim_end());
             output.push_str(") AS ");
-            output.push_str(data_type);
+            output.push_str(&data_type);
             output.push(')');
         } else {
             output.push_str(&name);
@@ -499,7 +499,7 @@ fn quoted_sql_end(sql: &str, quote: usize) -> usize {
     bytes.len()
 }
 
-fn split_json_returning(inner: &str) -> Option<(&str, &'static str)> {
+fn split_json_returning(inner: &str) -> Option<(&str, String)> {
     let bytes = inner.as_bytes();
     let mut depth = 0usize;
     let mut cursor = 0usize;
@@ -518,15 +518,12 @@ fn split_json_returning(inner: &str) -> Option<(&str, &'static str)> {
                 let arguments = &inner[..cursor];
                 let type_start = cursor + "RETURNING".len();
                 let type_name = inner[type_start..].trim();
-                let data_type = match type_name.to_ascii_uppercase().as_str() {
-                    "BIGINT" => "BIGINT",
-                    "INTEGER" => "INTEGER",
-                    "DOUBLE" => "DOUBLE",
-                    "REAL" => "REAL",
-                    "BOOLEAN" => "BOOLEAN",
-                    "VARCHAR" => "VARCHAR",
-                    "JSON" => "JSON",
-                    _ => return None,
+                let upper_type = type_name.to_ascii_uppercase();
+                let data_type = match upper_type.as_str() {
+                    "BIGINT" | "INTEGER" | "DOUBLE" | "REAL" | "BOOLEAN" | "VARCHAR" | "JSON" => {
+                        upper_type
+                    }
+                    _ => parse_json_decimal_type(type_name)?,
                 };
                 return (!arguments.trim().is_empty()).then_some((arguments, data_type));
             }
@@ -534,6 +531,25 @@ fn split_json_returning(inner: &str) -> Option<(&str, &'static str)> {
         }
     }
     None
+}
+
+/// Return a canonical, bounded Decimal128 type for a SQL/JSON RETURNING clause.
+///
+/// Decimal coercion is routed through the regular CAST evaluator, so accepting
+/// only precision/scale pairs representable by Arrow Decimal128 keeps this
+/// rewrite exact and avoids silently changing wider Trino decimal semantics.
+fn parse_json_decimal_type(type_name: &str) -> Option<String> {
+    let trimmed = type_name.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    let rest = upper.strip_prefix("DECIMAL")?.trim();
+    let rest = rest.strip_prefix('(')?.strip_suffix(')')?;
+    let (precision, scale) = rest.split_once(',')?;
+    let precision = precision.trim().parse::<u8>().ok()?;
+    let scale = scale.trim().parse::<u8>().ok()?;
+    if !(1..=38).contains(&precision) || scale > precision {
+        return None;
+    }
+    Some(format!("DECIMAL({precision}, {scale})"))
 }
 
 fn json_is_sql_word_at(sql: &str, offset: usize, word: &str) -> bool {
@@ -1455,6 +1471,21 @@ mod tests {
     }
 
     #[test]
+    fn json_returning_decimal_lowers_to_a_bounded_decimal128_cast() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(JSON_PARSE('{\"amount\":12.34}'), '$.amount' RETURNING DECIMAL(10, 2)) FROM t",
+        )
+        .expect("bounded decimal JSON RETURNING form should parse");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains(
+                "CAST(JSON_VALUE(JSON_PARSE('{\"amount\":12.34}'), '$.amount') AS DECIMAL(10,2))"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn json_returning_rewrite_preserves_nested_calls_and_literals() {
         let sql = "SELECT JSON_VALUE(JSON_PARSE('{\"label\":\"RETURNING BIGINT\"}'), '$.label' RETURNING VARCHAR) FROM t WHERE note = 'JSON_VALUE(x RETURNING BIGINT)'";
         let normalized = normalize_json_returning(sql);
@@ -1576,8 +1607,11 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_json_returning_type_remains_rejected() {
-        let sql = "SELECT JSON_VALUE(payload, '$.count' RETURNING DECIMAL(10, 2)) FROM t";
+    fn unsupported_json_returning_decimal_bounds_remain_rejected() {
+        let sql = "SELECT JSON_VALUE(payload, '$.count' RETURNING DECIMAL(39, 2)) FROM t";
+        assert!(parse_sql(sql).is_err());
+
+        let sql = "SELECT JSON_VALUE(payload, '$.count' RETURNING DECIMAL(10, 11)) FROM t";
         assert!(parse_sql(sql).is_err());
     }
 
