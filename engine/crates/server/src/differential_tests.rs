@@ -32,8 +32,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, DictionaryArray, Int32Array, Int64Array, StringArray,
-    StringDictionaryBuilder, StructArray, TimestampMicrosecondArray,
+    Array, ArrayRef, Date32Array, DictionaryArray, Float32Array, Float64Array, Int32Array,
+    Int64Array, StringArray, StringDictionaryBuilder, StructArray, TimestampMicrosecondArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -4256,6 +4256,96 @@ fn distributed_dictionary_numeric_join_key_matches_local() {
     assert_eq!(actual.len(), 2);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_float_join_keys_match_local() {
+    fn run(value_type: DataType, left_values: ArrayRef, right_values: ArrayRef, label: &str) {
+        let directory = std::env::temp_dir().join(format!(
+            "kaveon-dictionary-float-join-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: PathBuf::from(&directory),
+            },
+        )
+        .with_schema("events");
+        let schema = Arc::new(Schema::new(vec![Field::new("key", value_type, true)]));
+        let left_key = left_values;
+        let right_key = right_values;
+        let left = RecordBatch::try_new(Arc::clone(&schema), vec![left_key]).unwrap();
+        let right = RecordBatch::try_new(schema, vec![right_key]).unwrap();
+        catalog
+            .register_table(
+                "events",
+                TableMeta {
+                    name: "left".into(),
+                    ..write(&directory, "left.parquet", &left)
+                },
+            )
+            .unwrap();
+        catalog
+            .register_table(
+                "events",
+                TableMeta {
+                    name: "right".into(),
+                    ..write(&directory, "right.parquet", &right)
+                },
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "events");
+        manager.register_catalog(Box::new(catalog));
+        let statement = "SELECT l.key FROM left l JOIN right r USING (key) ORDER BY l.key";
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-float-join", 32 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+            true,
+        );
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    run(
+        DataType::Float32,
+        Arc::new(Float32Array::from(vec![
+            Some(-0.0),
+            Some(f32::NAN),
+            Some(1.5),
+            None,
+        ])),
+        Arc::new(Float32Array::from(vec![
+            Some(0.0),
+            Some(f32::NAN),
+            Some(2.5),
+            None,
+        ])),
+        "f32",
+    );
+    run(
+        DataType::Float64,
+        Arc::new(Float64Array::from(vec![
+            Some(-0.0),
+            Some(f64::NAN),
+            Some(1.5),
+            None,
+        ])),
+        Arc::new(Float64Array::from(vec![
+            Some(0.0),
+            Some(f64::NAN),
+            Some(2.5),
+            None,
+        ])),
+        "f64",
+    );
 }
 
 /// Runtime filtering must preserve Float32 identity. Values above the
