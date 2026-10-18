@@ -14385,6 +14385,9 @@ fn compare_json_scalars(
     if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
         return Ok(left.cmp(right));
     }
+    if let (Some(left), Some(right)) = (left.as_bool(), right.as_bool()) {
+        return Ok(left.cmp(&right));
+    }
     Err("aggregate values have incompatible scalar types".into())
 }
 
@@ -21591,6 +21594,72 @@ mod tests {
                 vec![serde_json::json!("east"), serde_json::json!(5)],
                 vec![serde_json::json!("west"), serde_json::json!(4)],
             ]
+        );
+    }
+
+    #[test]
+    fn merges_boolean_min_max_partials() {
+        let partials = vec![
+            TaskResponse {
+                columns: vec![
+                    ColumnInfo {
+                        name: "region".into(),
+                        data_type: "Utf8".into(),
+                    },
+                    ColumnInfo {
+                        name: "minimum".into(),
+                        data_type: "Boolean".into(),
+                    },
+                    ColumnInfo {
+                        name: "maximum".into(),
+                        data_type: "Boolean".into(),
+                    },
+                ],
+                data: vec![vec![
+                    serde_json::json!("east"),
+                    serde_json::json!(true),
+                    serde_json::json!(false),
+                ]],
+                elapsed_us: 1,
+            },
+            TaskResponse {
+                columns: vec![
+                    ColumnInfo {
+                        name: "region".into(),
+                        data_type: "Utf8".into(),
+                    },
+                    ColumnInfo {
+                        name: "minimum".into(),
+                        data_type: "Boolean".into(),
+                    },
+                    ColumnInfo {
+                        name: "maximum".into(),
+                        data_type: "Boolean".into(),
+                    },
+                ],
+                data: vec![vec![
+                    serde_json::json!("east"),
+                    serde_json::json!(false),
+                    serde_json::json!(true),
+                ]],
+                elapsed_us: 1,
+            },
+        ];
+        let merged = merge_partial_aggregates(
+            partials,
+            1,
+            &[MergeOperation::Min, MergeOperation::Max],
+            2,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.data,
+            vec![vec![
+                serde_json::json!("east"),
+                serde_json::json!(false),
+                serde_json::json!(true),
+            ]]
         );
     }
 
