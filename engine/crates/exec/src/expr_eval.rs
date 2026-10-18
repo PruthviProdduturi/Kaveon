@@ -4349,7 +4349,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         {
             let values = args
                 .iter()
-                .map(|arg| compute::cast(arg, &DataType::Int64))
+                .map(|arg| {
+                    if let Some(values) = arg.as_any().downcast_ref::<UInt64Array>() {
+                        if values.iter().flatten().any(|value| value > i64::MAX as u64) {
+                            return Err(arrow::error::ArrowError::ComputeError(
+                                "UINT64 value is outside BIGINT range".into(),
+                            ));
+                        }
+                    }
+                    compute::cast(arg, &DataType::Int64)
+                })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             let mut builder = ListBuilder::new(Int64Builder::new());
             for row in 0..num_rows {
@@ -10003,7 +10012,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 let values = args
                     .iter()
-                    .map(|arg| compute::cast(arg, &DataType::Int64))
+                    .map(|arg| {
+                        if let Some(values) = arg.as_any().downcast_ref::<UInt64Array>() {
+                            if values.iter().flatten().any(|value| value > i64::MAX as u64) {
+                                return Err(arrow::error::ArrowError::ComputeError(
+                                    "UINT64 value is outside BIGINT range".into(),
+                                ));
+                            }
+                        }
+                        compute::cast(arg, &DataType::Int64)
+                    })
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 let mut builder = ListBuilder::new(Int64Builder::new());
                 for row in 0..num_rows {
@@ -14509,6 +14527,18 @@ mod tests {
         assert_eq!(
             arrays.value(0).as_primitive::<Float64Type>().values(),
             &[1.25, 2.5]
+        );
+    }
+
+    #[test]
+    fn array_constructor_rejects_uint64_outside_bigint_range() {
+        let unsigned = Arc::new(UInt64Array::from(vec![Some(u64::MAX)])) as ArrayRef;
+        let signed = Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef;
+        let error = eval_scalar_function("ARRAY", &[unsigned, signed], 1).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("UINT64 value is outside BIGINT range")
         );
     }
 
