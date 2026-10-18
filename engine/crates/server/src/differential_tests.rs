@@ -2558,6 +2558,65 @@ fn distributed_json_value_default_on_empty_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A typed JSON scalar string must use the same VARCHAR coercion on the local
+/// evaluator and every worker fragment. This closes the prepared JSON
+/// RETURNING VARCHAR boundary without relying on a runtime row from storage.
+#[test]
+fn distributed_json_value_returning_varchar_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-value-returning-varchar-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"label\":\"ready\"}'), '$.label' RETURNING VARCHAR) AS label FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-value-returning-varchar", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["ready", "ready", "ready"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Typed JSON boolean extraction must preserve true/false values and JSON null
+/// across the local evaluator and three-worker execution.
+#[test]
+fn distributed_json_value_returning_boolean_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-value-returning-boolean-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"enabled\":true}'), '$.enabled' RETURNING BOOLEAN) AS enabled, JSON_VALUE(JSON_PARSE('{\"enabled\":false}'), '$.enabled' RETURNING BOOLEAN) AS disabled, JSON_VALUE(JSON_PARSE('{\"enabled\":null}'), '$.enabled' RETURNING BOOLEAN) AS missing FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-value-returning-boolean", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["true\u{1f}false\u{1f}NULL"; 3]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A partitioned value window with IGNORE NULLS must skip null predecessors
 /// identically in local execution and in the three-worker fragment path.
 #[test]
