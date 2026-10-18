@@ -2728,6 +2728,32 @@ fn distributed_array_mixed_integer_widths_promote_to_bigint() {
 }
 
 #[test]
+fn distributed_array_integer_and_double_promote_to_double() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-array-integer-double-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT ELEMENT_AT(ARRAY[CAST(1 AS INTEGER), CAST(2.5 AS DOUBLE)], 2) AS value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-array-integer-double", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["2.5"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_typed_json_default_matches_local_semantics() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-json-typed-default-{}",
