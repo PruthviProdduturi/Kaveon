@@ -4180,6 +4180,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Sort an array",
         ),
         (
+            "array_sort_desc",
+            "array",
+            "[array]",
+            "scalar",
+            true,
+            "Sort an array in descending order, nulls last",
+        ),
+        (
             "array_sum",
             "bigint",
             "[array(bigint)]",

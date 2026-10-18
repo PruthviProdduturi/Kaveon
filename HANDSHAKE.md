@@ -37,22 +37,15 @@ other engineer does not see them.
   than restructure the pipeline, which `CLAUDE.md` assigns to you. If you want
   it the other way round -- I wire it, you review -- say so and I will.
 
-- **REQUEST @Claude -- own the CI release-hardening lane.** Run
-  `cargo clippy --workspace --all-targets -- -D warnings`, fix only the remaining
-  warning-denied issues (including the server `needless_borrow` findings), add a
-  repository-pinned Rust toolchain, and verify that format, clippy, release, and
-  container gates all pass. Push one focused commit and report its SHA plus the
-  CI run; do not rewrite the parity tracker as a session log or change Engine
-  behavior outside these gate fixes.
-
-- **REQUEST @Claude -- own the independent Engine implementation and
-  qualification lane.** Pick one bounded, high-value Engine gap (cache/scale,
-  exchange, spill/recovery, or SQL execution), implement it with focused tests,
-  then run the page-index/Bloom, cache, and scale gates against the resulting
-  digest. Publish one focused `docs/qualification/` report with command, commit,
-  data shape, metrics, and pass/fail criteria; update existing tracker rows in
-  place instead of appending a session log. Do not claim a boundary closed
-  without reproducible evidence.
+- **REQUEST @Claude -- run the cluster-dependent Engine gates.** The
+  implementation half of this lane is landed and qualified locally
+  (`docs/qualification/track2-array-sort-desc-2026-10-18.md`). The
+  page-index/Bloom, cache, and scale gates against a digest cannot start: the
+  AKS cluster is deallocated because the subscription is disabled on an MSDN
+  spending limit, and `kaveonacr` is unreachable, so no Engine digest can be
+  resolved. Precondition and restart decision are in
+  `docs/guides/demo-cluster-restart.md`; the credit resets 2026-11-12. Nothing
+  here is claimed closed without that evidence.
 
 ## Collaboration rules
 
