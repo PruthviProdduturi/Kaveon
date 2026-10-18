@@ -538,6 +538,7 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
         if !matches!(
             cols[0].data_type(),
             DataType::Int32
+                | DataType::UInt32
                 | DataType::Int64
                 | DataType::UInt64
                 | DataType::Float32
@@ -635,6 +636,13 @@ fn compare_offset(col: &ArrayRef, row: usize, current: usize, offset: i128) -> R
         DataType::Int32 => (
             col.as_primitive::<Int32Type>().value(row) as i128,
             col.as_primitive::<Int32Type>().value(current) as i128,
+            offset,
+        ),
+        DataType::UInt32 => (
+            col.as_primitive::<arrow::datatypes::UInt32Type>()
+                .value(row) as i128,
+            col.as_primitive::<arrow::datatypes::UInt32Type>()
+                .value(current) as i128,
             offset,
         ),
         DataType::Int64 => (
@@ -788,7 +796,7 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{DictionaryArray, Float32Array, Int32Array, StringArray};
+    use arrow::array::{DictionaryArray, Float32Array, Int32Array, StringArray, UInt32Array};
     use arrow::datatypes::Int32Type;
     use kaveon_core::predicate::ScalarValue;
     fn batch(values: Vec<Option<i64>>) -> RecordBatch {
@@ -802,6 +810,13 @@ mod tests {
         RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, true)])),
             vec![Arc::new(Float32Array::from(values))],
+        )
+        .unwrap()
+    }
+    fn uint32_batch(values: Vec<Option<u32>>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::UInt32, true)])),
+            vec![Arc::new(UInt32Array::from(values))],
         )
         .unwrap()
     }
@@ -1075,6 +1090,15 @@ mod tests {
         let input = float_batch(vec![Some(1.0), Some(1.5), Some(2.0), None]);
         let expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
         assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(3), Some(1)]);
+    }
+
+    #[test]
+    fn range_offsets_support_uint32_ordering() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = uint32_batch(vec![Some(1), Some(2), Some(3), None]);
+        let expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
+        assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(2), Some(1)]);
     }
 
     #[test]
