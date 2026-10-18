@@ -415,6 +415,28 @@ impl ResultCache {
         dropped
     }
 
+    /// Removes entries that have exceeded the TTL without requiring a lookup.
+    /// The coordinator calls this from periodic housekeeping so cold expired
+    /// results do not occupy the byte budget indefinitely.
+    pub(crate) fn cleanup_expired(&self) {
+        if !self.enabled() {
+            return;
+        }
+        let now = Instant::now();
+        let mut inner = self.lock();
+        let expired = inner
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.inserted + self.ttl <= now)
+            .map(|(key, _)| Arc::clone(key))
+            .collect::<Vec<_>>();
+        for key in &expired {
+            Self::remove(&mut inner, key);
+        }
+        self.expirations
+            .fetch_add(expired.len() as u64, Ordering::Relaxed);
+    }
+
     pub fn stats(&self) -> ResultCacheStats {
         let inner = self.lock();
         ResultCacheStats {
@@ -609,6 +631,18 @@ mod tests {
         assert_eq!(stats.expirations, 1);
         assert_eq!(stats.entries, 0);
         assert_eq!(stats.bytes, 0);
+    }
+
+    #[test]
+    fn housekeeping_releases_expired_entries_without_a_lookup() {
+        let cache = ResultCache::new(1 << 20, Duration::from_millis(20));
+        assert!(cache.insert(key("SELECT 1"), &columns(), &rows(1, 1), 1, "q"));
+        std::thread::sleep(Duration::from_millis(40));
+        cache.cleanup_expired();
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 0);
+        assert_eq!(stats.bytes, 0);
+        assert_eq!(stats.expirations, 1);
     }
 
     #[test]

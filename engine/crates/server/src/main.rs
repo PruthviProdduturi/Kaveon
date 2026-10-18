@@ -349,6 +349,7 @@ async fn main() {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             cleanup_state.results.cleanup();
+            cleanup_state.result_cache.cleanup_expired();
             if let Some(store) = &cleanup_state.disk_exchange_store {
                 store.cleanup();
             }
