@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
+use ahash::AHashSet;
 use arrow::array::{ArrayRef, Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -2982,9 +2984,9 @@ mod tests {
                 grouped_aggregate_states_to_typed_batch(
                     &[GroupedAggregateState {
                         group_keys: vec![],
-                        states: vec![AggregateState::CountDistinct(
-                            std::collections::HashSet::from([AggregateValue::Int64(value)]),
-                        )],
+                        states: vec![AggregateState::CountDistinct(AHashSet::from([
+                            AggregateValue::Int64(value),
+                        ]))],
                     }],
                     &[],
                 )

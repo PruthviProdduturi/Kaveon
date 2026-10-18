@@ -17,6 +17,7 @@ kaveon-optim = { path = "../optim" }
 kaveon-sql = { path = "../sql" }
 kaveon-storage = { path = "../storage" }
 arrow = { workspace = true }
+ahash = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
