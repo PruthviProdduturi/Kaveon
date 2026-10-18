@@ -1576,6 +1576,17 @@ mod tests {
     }
 
     #[test]
+    fn json_path_mode_prefixes_remain_in_path_literals() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, 'lax $.x'), JSON_QUERY(payload, 'strict $.items') FROM t",
+        )
+        .expect("SQL/JSON path mode prefixes should parse as path text");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("'lax $.x'"), "{rendered}");
+        assert!(rendered.contains("'strict $.items'"), "{rendered}");
+    }
+
+    #[test]
     fn json_object_with_unique_keys_lowers_to_existing_duplicate_key_guard() {
         let statements = parse_sql(
             "SELECT JSON_OBJECT('answer' : 7, 'label' VALUE 'x' WITH UNIQUE KEYS) FROM t",
