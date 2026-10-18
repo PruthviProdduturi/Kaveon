@@ -3506,6 +3506,35 @@ fn distributed_map_row_null_safe_comparison_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Lexicographic ROW ordering must recurse through nested ROW fields and
+/// preserve three-valued NULL propagation on every distributed fragment.
+#[test]
+fn distributed_nested_row_ordered_comparison_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-nested-row-ordered-comparison-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT ROW(ROW(1, 2), 3) < ROW(ROW(1, 3), 3) AS nested_less, ROW(ROW(2, CAST(NULL AS BIGINT)), 0) > ROW(ROW(1, 99), 0) AS nested_later, ROW(ROW(1, CAST(NULL AS BIGINT)), 3) < ROW(ROW(1, 3), 3) AS nested_unknown FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-nested-row-ordered-comparison", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["true\u{1f}true\u{1f}NULL"; 3]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn derived_values_join_using_matches_the_local_result() {
     let directory = std::env::temp_dir().join(format!(
