@@ -39,7 +39,7 @@ const MAX_ADAPTIVE_BATCHES: usize = 64;
 /// are removed because they cannot match SQL equality joins.
 struct RuntimeJoinFilter {
     source: Box<dyn BatchOperator>,
-    filter: BuildKeyFilter,
+    filter: Option<BuildKeyFilter>,
     schema: SchemaRef,
 }
 
@@ -48,7 +48,16 @@ impl RuntimeJoinFilter {
         let schema = source.schema().clone();
         Self {
             source,
-            filter,
+            filter: Some(filter),
+            schema,
+        }
+    }
+
+    fn empty(source: Box<dyn BatchOperator>) -> Self {
+        let schema = source.schema().clone();
+        Self {
+            source,
+            filter: None,
             schema,
         }
     }
@@ -60,8 +69,11 @@ impl BatchOperator for RuntimeJoinFilter {
     }
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(filter) = &self.filter else {
+            return Ok(None);
+        };
         while let Some(batch) = self.source.next_batch()? {
-            let mask: BooleanArray = self.filter.filter_batch(&batch)?;
+            let mask: BooleanArray = filter.filter_batch(&batch)?;
             let filtered = compute::filter_record_batch(&batch, &mask)?;
             if filtered.num_rows() > 0 {
                 return Ok(Some(filtered));
@@ -1988,6 +2000,12 @@ impl PartitionedHashJoin {
         {
             return Ok(left);
         }
+        if built.is_empty() {
+            // Inner and semi joins against an empty build are empty. Avoid
+            // opening or decoding the probe side in this common runtime-filter
+            // case; the result is exact, including SQL NULL-key semantics.
+            return Ok(Box::new(RuntimeJoinFilter::empty(left)));
+        }
         let Some(filter) = BuildKeyFilter::from_built(built, &self.key_indices) else {
             return Ok(left);
         };
@@ -3293,6 +3311,17 @@ mod tests {
             vec![Some(2), Some(4)]
         );
         assert!(operator.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn empty_build_runtime_filter_short_circuits_probe() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, true),
+        ]));
+        let probe = input(vec![Some(1), Some(2), None], 3);
+        let mut operator = RuntimeJoinFilter::empty(probe);
+        assert!(operator.next_batch().unwrap().is_none());
+        assert_eq!(operator.schema(), &schema);
     }
 
     #[test]
