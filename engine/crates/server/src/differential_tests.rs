@@ -32,8 +32,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, DictionaryArray, Float32Array, Float64Array, Int32Array,
-    Int64Array, StringArray, StringDictionaryBuilder, StructArray, TimestampMicrosecondArray,
+    Array, ArrayRef, Date32Array, Date64Array, DictionaryArray, Float32Array, Float64Array,
+    Int32Array, Int64Array, StringArray, StringDictionaryBuilder, StructArray,
+    Time32MillisecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampSecondArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -4345,6 +4346,132 @@ fn distributed_float_join_keys_match_local() {
             None,
         ])),
         "f64",
+    );
+}
+
+#[test]
+fn distributed_temporal_join_keys_match_local() {
+    fn run(value_type: DataType, left_values: ArrayRef, right_values: ArrayRef, label: &str) {
+        let directory = std::env::temp_dir().join(format!(
+            "kaveon-temporal-join-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: PathBuf::from(&directory),
+            },
+        )
+        .with_schema("events");
+        let schema = Arc::new(Schema::new(vec![Field::new("key", value_type, true)]));
+        let left = RecordBatch::try_new(Arc::clone(&schema), vec![left_values]).unwrap();
+        let right = RecordBatch::try_new(schema, vec![right_values]).unwrap();
+        catalog
+            .register_table(
+                "events",
+                TableMeta {
+                    name: "left".into(),
+                    ..write(&directory, "left.parquet", &left)
+                },
+            )
+            .unwrap();
+        catalog
+            .register_table(
+                "events",
+                TableMeta {
+                    name: "right".into(),
+                    ..write(&directory, "right.parquet", &right)
+                },
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "events");
+        manager.register_catalog(Box::new(catalog));
+        let statement = "SELECT l.key FROM left l JOIN right r USING (key) ORDER BY l.key";
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-temporal-join", 32 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+            true,
+        );
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    run(
+        DataType::Date32,
+        Arc::new(Date32Array::from(vec![
+            Some(i32::MIN),
+            Some(i32::MAX),
+            None,
+        ])),
+        Arc::new(Date32Array::from(vec![
+            Some(i32::MIN),
+            Some(i32::MAX),
+            None,
+        ])),
+        "date32",
+    );
+    run(
+        DataType::Date64,
+        Arc::new(Date64Array::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None,
+        ])),
+        Arc::new(Date64Array::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None,
+        ])),
+        "date64",
+    );
+    run(
+        DataType::Time32(arrow::datatypes::TimeUnit::Millisecond),
+        Arc::new(Time32MillisecondArray::from(vec![
+            Some(i32::MIN),
+            Some(i32::MAX),
+            None,
+        ])),
+        Arc::new(Time32MillisecondArray::from(vec![
+            Some(i32::MIN),
+            Some(i32::MAX),
+            None,
+        ])),
+        "time32",
+    );
+    run(
+        DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+        Arc::new(Time64NanosecondArray::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None,
+        ])),
+        Arc::new(Time64NanosecondArray::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None,
+        ])),
+        "time64",
+    );
+    run(
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Second, None),
+        Arc::new(TimestampSecondArray::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None,
+        ])),
+        Arc::new(TimestampSecondArray::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            None,
+        ])),
+        "timestamp",
     );
 }
 

@@ -1847,6 +1847,72 @@ fn row_key(
                         _ => unreachable!("dictionary value type was checked above"),
                     }
                 }
+                DataType::Dictionary(key_type, value_type)
+                    if key_type.as_ref() == &DataType::Int32
+                        && matches!(
+                            value_type.as_ref(),
+                            DataType::Date32
+                                | DataType::Date64
+                                | DataType::Time32(_)
+                                | DataType::Time64(_)
+                                | DataType::Timestamp(_, _)
+                        ) =>
+                {
+                    let dictionary = column
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int32Type>>()
+                        .expect("dictionary key type must match schema");
+                    let dictionary_index = dictionary.keys().value(row) as usize;
+                    let values = dictionary.values();
+                    if values.is_null(dictionary_index) {
+                        return Ok(None);
+                    }
+                    match value_type.as_ref() {
+                        DataType::Date32 => Key::Int32(
+                            values
+                                .as_primitive::<arrow::datatypes::Date32Type>()
+                                .value(dictionary_index),
+                        ),
+                        DataType::Date64 => Key::Int64(
+                            values
+                                .as_primitive::<arrow::datatypes::Date64Type>()
+                                .value(dictionary_index),
+                        ),
+                        DataType::Time32(unit) => Key::Int32(match unit {
+                            TimeUnit::Second => values
+                                .as_primitive::<arrow::datatypes::Time32SecondType>()
+                                .value(dictionary_index),
+                            TimeUnit::Millisecond => values
+                                .as_primitive::<arrow::datatypes::Time32MillisecondType>()
+                                .value(dictionary_index),
+                            _ => return Err(exec_err("unsupported TIME32 unit")),
+                        }),
+                        DataType::Time64(unit) => Key::Int64(match unit {
+                            TimeUnit::Microsecond => values
+                                .as_primitive::<arrow::datatypes::Time64MicrosecondType>()
+                                .value(dictionary_index),
+                            TimeUnit::Nanosecond => values
+                                .as_primitive::<arrow::datatypes::Time64NanosecondType>()
+                                .value(dictionary_index),
+                            _ => return Err(exec_err("unsupported TIME64 unit")),
+                        }),
+                        DataType::Timestamp(unit, _) => Key::Int64(match unit {
+                            TimeUnit::Second => values
+                                .as_primitive::<arrow::datatypes::TimestampSecondType>()
+                                .value(dictionary_index),
+                            TimeUnit::Millisecond => values
+                                .as_primitive::<arrow::datatypes::TimestampMillisecondType>()
+                                .value(dictionary_index),
+                            TimeUnit::Microsecond => values
+                                .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                                .value(dictionary_index),
+                            TimeUnit::Nanosecond => values
+                                .as_primitive::<arrow::datatypes::TimestampNanosecondType>()
+                                .value(dictionary_index),
+                        }),
+                        _ => unreachable!("dictionary value type was checked above"),
+                    }
+                }
                 data_type => {
                     return Err(exec_err(format!("unsupported join key type {data_type}")));
                 }
@@ -1863,9 +1929,10 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Decimal128Array, Decimal256Array, Int8Array, Int16Array, Int32Array,
-        Int64Array, LargeStringArray, StringArray, Time32MillisecondArray,
-        TimestampMillisecondArray, UInt8Array, UInt16Array,
+        Date32Array, Date64Array, Decimal128Array, Decimal256Array, Int8Array, Int16Array,
+        Int32Array, Int64Array, LargeStringArray, StringArray, Time32MillisecondArray,
+        Time64NanosecondArray, TimestampMillisecondArray, TimestampSecondArray, UInt8Array,
+        UInt16Array,
     };
     use arrow::datatypes::i256;
     use std::collections::VecDeque;
@@ -2275,6 +2342,102 @@ mod tests {
                 None,
             ])),
             DataType::Float64,
+        );
+    }
+
+    #[test]
+    fn dictionary_temporal_join_keys_preserve_units_extrema_and_nulls() {
+        fn check(left_values: ArrayRef, right_values: ArrayRef, value_type: DataType) {
+            let dictionary_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type));
+            let schema = Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+            let left_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), Some(2)]),
+                left_values,
+            )
+            .unwrap();
+            let right_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(1), Some(0), Some(2)]),
+                right_values,
+            )
+            .unwrap();
+            let left = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left_key)]).unwrap();
+            let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+            let mut join = HashJoin::try_new(
+                Box::new(Input::new(left)),
+                Box::new(Input::new(right)),
+                JoinType::Inner,
+                vec![("key".into(), "key".into())],
+            )
+            .unwrap();
+            let batches = kaveon_core::collect_batches(&mut join).unwrap();
+            assert_eq!(
+                concat_batches(join.schema(), &batches).unwrap().num_rows(),
+                2
+            );
+        }
+        check(
+            Arc::new(Date32Array::from(vec![
+                Some(i32::MIN),
+                Some(i32::MAX),
+                None,
+            ])),
+            Arc::new(Date32Array::from(vec![
+                Some(i32::MIN),
+                Some(i32::MAX),
+                None,
+            ])),
+            DataType::Date32,
+        );
+        check(
+            Arc::new(Date64Array::from(vec![
+                Some(i64::MIN),
+                Some(i64::MAX),
+                None,
+            ])),
+            Arc::new(Date64Array::from(vec![
+                Some(i64::MIN),
+                Some(i64::MAX),
+                None,
+            ])),
+            DataType::Date64,
+        );
+        check(
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(i32::MIN),
+                Some(i32::MAX),
+                None,
+            ])),
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(i32::MIN),
+                Some(i32::MAX),
+                None,
+            ])),
+            DataType::Time32(TimeUnit::Millisecond),
+        );
+        check(
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(i64::MIN),
+                Some(i64::MAX),
+                None,
+            ])),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(i64::MIN),
+                Some(i64::MAX),
+                None,
+            ])),
+            DataType::Time64(TimeUnit::Nanosecond),
+        );
+        check(
+            Arc::new(
+                TimestampSecondArray::from(vec![Some(i64::MIN), Some(i64::MAX), None])
+                    .with_timezone("UTC"),
+            ),
+            Arc::new(
+                TimestampSecondArray::from(vec![Some(i64::MIN), Some(i64::MAX), None])
+                    .with_timezone("UTC"),
+            ),
+            DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
         );
     }
 
