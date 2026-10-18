@@ -197,8 +197,9 @@ fn strip_json_object_unique_keys(inner: &str) -> Result<String> {
 /// non-scalar JSON_VALUE result, and malformed JSON.  Removing these explicit
 /// NULL clauses therefore preserves the existing behavior while accepting the
 /// useful bounded Trino spelling. Literal DEFAULT actions are lowered to a
-/// four-argument evaluator function; arbitrary default expressions and typed
-/// RETURNING combinations remain rejected explicitly.
+/// four-argument evaluator function; arbitrary default expressions remain
+/// rejected explicitly. Typed RETURNING combinations are lowered through the
+/// default evaluator and the regular CAST path.
 fn normalize_json_null_clauses(sql: &str) -> Result<String> {
     let mut output = String::with_capacity(sql.len());
     let mut cursor = 0;
@@ -214,21 +215,24 @@ fn normalize_json_null_clauses(sql: &str) -> Result<String> {
         };
         let inner = normalize_json_null_clauses(&sql[open + 1..close])?;
         let (inner, strict, defaults) = strip_json_null_clauses(&inner)?;
+        let typed_default = defaults.as_ref().and_then(|_| split_json_returning(&inner));
         let function_name = if defaults.is_some() {
-            if split_json_returning(&inner).is_some() {
-                return Err(KaveonError::Sql(
-                    "JSON DEFAULT clauses with RETURNING are not supported yet".into(),
-                ));
-            }
             format!("{name}_DEFAULT")
         } else if strict {
             format!("{name}_STRICT")
         } else {
             name
         };
-        output.push_str(&function_name);
-        output.push('(');
-        output.push_str(&inner);
+        if let Some((arguments, _)) = typed_default.as_ref() {
+            output.push_str("CAST(");
+            output.push_str(&function_name);
+            output.push('(');
+            output.push_str(arguments.trim_end());
+        } else {
+            output.push_str(&function_name);
+            output.push('(');
+            output.push_str(&inner);
+        }
         if let Some((empty_default, error_default)) = defaults {
             output.push_str(", ");
             output.push_str(empty_default.as_deref().unwrap_or("NULL"));
@@ -236,6 +240,11 @@ fn normalize_json_null_clauses(sql: &str) -> Result<String> {
             output.push_str(error_default.as_deref().unwrap_or("NULL"));
         }
         output.push(')');
+        if let Some((_, data_type)) = typed_default {
+            output.push_str(" AS ");
+            output.push_str(&data_type);
+            output.push(')');
+        }
         cursor = close + 1;
     }
     Ok(output)
@@ -1553,12 +1562,17 @@ mod tests {
     }
 
     #[test]
-    fn json_default_with_returning_remains_rejected() {
-        let error = parse_sql(
+    fn json_default_with_returning_lowers_through_cast() {
+        let statements = parse_sql(
             "SELECT JSON_VALUE(payload, '$.missing' RETURNING BIGINT ON EMPTY DEFAULT '0') FROM t",
         )
-        .expect_err("typed JSON DEFAULT remains outside the bounded surface");
-        assert!(error.to_string().contains("RETURNING"));
+        .expect("typed JSON DEFAULT should lower through the existing cast path");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered
+                .contains("CAST(JSON_VALUE_DEFAULT(payload, '$.missing', '0', NULL) AS BIGINT)"),
+            "{rendered}"
+        );
     }
 
     #[test]
