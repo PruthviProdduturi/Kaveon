@@ -1485,6 +1485,55 @@ mod tests {
     }
 
     #[test]
+    fn global_top_n_candidate_merge_is_incremental_and_exact() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let workers = [
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![11, 4, 8])),
+                    Arc::new(StringArray::from(vec!["a", "b", "c"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![10, 9, 1])),
+                    Arc::new(StringArray::from(vec!["d", "e", "f"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![12, 7, 6])),
+                    Arc::new(StringArray::from(vec!["g", "h", "i"])),
+                ],
+            )
+            .unwrap(),
+        ];
+        let ordering = vec![SortExpr::new(Expr::Column("score".into()), false)];
+        let mut incremental = None;
+        for worker in &workers {
+            let mut inputs = Vec::new();
+            if let Some(candidate) = incremental.take() {
+                inputs.push(candidate);
+            }
+            inputs.push(worker.clone());
+            incremental = merge_top_n(&schema, &inputs, &ordering, 4).unwrap();
+        }
+        let incremental = incremental.unwrap();
+        let all = merge_top_n(&schema, &workers, &ordering, 4)
+            .unwrap()
+            .unwrap();
+        assert_eq!(incremental, all);
+    }
+
+    #[test]
     fn three_worker_global_decimal256_top_n_matches_single_partition_reference() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "score",
