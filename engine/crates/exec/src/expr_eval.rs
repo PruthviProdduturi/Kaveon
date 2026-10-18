@@ -4224,10 +4224,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         });
         let has_int64 = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
         let has_float32 = args.iter().any(|arg| arg.data_type() == &DataType::Float32);
+        let has_decimal = args
+            .iter()
+            .any(|arg| matches!(arg.data_type(), DataType::Decimal128(_, _)));
         if has_int64 && has_integer {
             data_type = DataType::Int64;
         }
-        if has_integer
+        if (has_integer || has_decimal)
             && (has_float32 || args.iter().any(|arg| arg.data_type() == &DataType::Float64))
         {
             data_type = DataType::Float64;
@@ -4254,6 +4257,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             | DataType::UInt32
                             | DataType::UInt64
                             | DataType::Float32
+                            | DataType::Decimal128(_, _)
                     ))
                 && !(data_type == DataType::LargeUtf8 && arg.data_type() == &DataType::Utf8)
                 && !(data_type == DataType::Int64
@@ -9828,7 +9832,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         | DataType::UInt64
                 )
             });
-            let float_array = args.iter().any(|arg| arg.data_type() == &DataType::Float64);
+            let float_array = args
+                .iter()
+                .any(|arg| matches!(arg.data_type(), DataType::Float32 | DataType::Float64));
             let temporal_type = args.iter().find_map(|arg| match arg.data_type() {
                 DataType::Date32
                 | DataType::Date64
@@ -9885,6 +9891,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     _ => unreachable!("temporal type was filtered above"),
                 }
+            } else if decimal_type.is_some() && float_array {
+                let values = args
+                    .iter()
+                    .map(|arg| compute::cast(arg, &DataType::Float64))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut builder = ListBuilder::new(Float64Builder::new());
+                for row in 0..num_rows {
+                    for value in &values {
+                        let value = value.as_primitive::<Float64Type>();
+                        builder
+                            .values()
+                            .append_option(value.is_valid(row).then(|| value.value(row)));
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
             } else if let Some((precision, scale)) = decimal_type {
                 if args.iter().any(|arg| {
                     !matches!(arg.data_type(), DataType::Decimal128(p, s) if *p == precision && *s == scale)
@@ -14453,6 +14475,23 @@ mod tests {
         assert_eq!(
             arrays.value(0).as_primitive::<Int64Type>().values(),
             &[1, 2]
+        );
+    }
+
+    #[test]
+    fn array_constructor_promotes_decimal_and_real_to_double() {
+        let decimal = Arc::new(
+            Decimal128Array::from(vec![Some(125_i128)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        ) as ArrayRef;
+        let real = Arc::new(Float32Array::from(vec![Some(2.5)])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[decimal, real], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Float64);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Float64Type>().values(),
+            &[1.25, 2.5]
         );
     }
 
