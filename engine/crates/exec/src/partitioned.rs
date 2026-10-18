@@ -1108,6 +1108,14 @@ impl FlushingPartialAggregate {
         self
     }
 
+    /// Coalesce pass-through partials into bounded batches. The caller uses
+    /// this only for measured high-cardinality shapes; keeping it explicit
+    /// also makes the memory contract testable without process-wide settings.
+    pub fn with_coalesce_rows(mut self, rows: usize) -> Self {
+        self.coalesce_rows = (rows >= 2).then_some(rows);
+        self
+    }
+
     /// What the partial is doing with its rows now.
     pub fn mode(&self) -> PartialMode {
         self.mode
@@ -1231,10 +1239,16 @@ impl FlushingPartialAggregate {
             return self.passthrough_batch(remaining);
         };
         let mut batches = Vec::new();
+        let mut reservations = Vec::new();
         let mut rows = 0usize;
         while let PartialMode::PassThrough { remaining } = self.mode {
             match self.passthrough_batch(remaining)? {
                 Some(batch) if batch.num_rows() > 0 => {
+                    // Pass-through batches are retained until concat completes,
+                    // so account their encoded arrays while several are held.
+                    // The returned batch is accounted by the downstream
+                    // exchange/output queue after this temporary guard drops.
+                    reservations.push(self.memory.reserve(batch.get_array_memory_size() as u64)?);
                     rows = rows.saturating_add(batch.num_rows());
                     batches.push(batch);
                     if rows >= target {
@@ -1248,7 +1262,11 @@ impl FlushingPartialAggregate {
         match batches.len() {
             0 => Ok(None),
             1 => Ok(batches.pop()),
-            _ => Ok(Some(concat_batches(&self.schema, &batches)?)),
+            _ => {
+                let output = concat_batches(&self.schema, &batches)?;
+                drop(reservations);
+                Ok(Some(output))
+            }
         }
     }
 
@@ -3316,7 +3334,8 @@ mod tests {
             ],
             pool.operator("partial").unwrap(),
         )
-        .unwrap();
+        .unwrap()
+        .with_coalesce_rows(16);
         let (groups, total, _) = merged_partial(&mut aggregate);
         assert_eq!((groups, total), (300_000, 300_000));
         let passed = aggregate.passthrough_rows();
