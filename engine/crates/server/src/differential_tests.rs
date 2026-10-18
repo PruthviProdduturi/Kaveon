@@ -3477,6 +3477,34 @@ fn distributed_correlated_scalar_aggregate_offset_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_correlated_scalar_union_limit_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-scalar-union-limit-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT e.user_id, (SELECT value FROM (SELECT i.actions AS value FROM events i WHERE i.user_id = e.user_id UNION ALL SELECT i.actions + 10 AS value FROM events i WHERE i.user_id = e.user_id) AS candidates ORDER BY value LIMIT 1) AS first_value FROM events e ORDER BY e.user_id LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-correlated-scalar-union-limit", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 12);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Nested map/ROW null-safe comparison must remain order-independent and
 /// two-valued when the same values arrive through distributed fragments.
 #[test]

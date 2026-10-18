@@ -480,15 +480,74 @@ impl Binder<'_> {
                 })
             }
             LogicalPlan::Union { inputs, all } => {
-                let inputs = inputs
+                let mut bound_inputs: Vec<Bound> = inputs
                     .into_iter()
-                    .map(|input| {
-                        let input = self.bind(input, outer)?;
-                        uncorrelated(&input, "UNION")?;
-                        Ok(input.plan)
-                    })
+                    .map(|input| self.bind(input, outer))
                     .collect::<Result<_>>()?;
-                Ok(Bound::plain(LogicalPlan::Union { inputs, all }))
+                // A UNION's output schema is taken from its first branch. A
+                // correlated branch allocates its carried key name while it
+                // binds, so equivalent keys in later branches would
+                // otherwise be exposed under different names (and either
+                // fail projection binding or become separate join keys).
+                // Normalize each branch to one canonical key per enclosing
+                // column before constructing the UNION.
+                let mut correlations = Vec::new();
+                for input in &bound_inputs {
+                    for correlation in &input.correlations {
+                        let already_present =
+                            correlations
+                                .iter()
+                                .any(|existing| match (existing, correlation) {
+                                    (
+                                        Correlation::Key {
+                                            outer: existing_outer,
+                                            depth: existing_depth,
+                                            ..
+                                        },
+                                        Correlation::Key {
+                                            outer: current_outer,
+                                            depth: current_depth,
+                                            ..
+                                        },
+                                    ) => {
+                                        *existing_outer == *current_outer
+                                            && *existing_depth == *current_depth
+                                    }
+                                    _ => false,
+                                });
+                        if !already_present {
+                            correlations.push(correlation.clone());
+                        }
+                    }
+                }
+                for input in &mut bound_inputs {
+                    let mut renames = Vec::new();
+                    for correlation in &mut input.correlations {
+                        if let Correlation::Key {
+                            inner,
+                            outer: correlation_outer,
+                            depth: correlation_depth,
+                        } = correlation
+                            && let Some(Correlation::Key { inner: canonical, .. }) = correlations.iter().find(|candidate| {
+                                matches!(candidate, Correlation::Key { outer, depth, .. } if *outer == *correlation_outer && *depth == *correlation_depth)
+                            })
+                        {
+                            if *inner != *canonical {
+                                renames.push((inner.clone(), canonical.clone()));
+                            }
+                            *inner = canonical.to_owned();
+                        }
+                    }
+                    for (from, to) in renames {
+                        input.plan = rename_plan_column(input.plan.clone(), &from, &to);
+                    }
+                }
+                let inputs = bound_inputs.into_iter().map(|input| input.plan).collect();
+                Ok(Bound {
+                    plan: LogicalPlan::Union { inputs, all },
+                    aggregate_input: None,
+                    correlations,
+                })
             }
             LogicalPlan::Intersect { left, right, all } => {
                 let left = self.bind(*left, outer)?;
@@ -587,7 +646,7 @@ impl Binder<'_> {
                     if let Some((mut plan, offset, limit, order_by)) =
                         peel_scalar_paging(right.plan.clone())
                     {
-                        if offset > 0 && limit == 1 {
+                        if limit == 1 {
                             // Equality correlations are required only by the
                             // per-key ROW_NUMBER rewrite below. Ordinary
                             // residual LATERAL joins do not use that rewrite
@@ -670,12 +729,14 @@ impl Binder<'_> {
                             };
                         } else {
                             return Err(KaveonError::Sql(
-                                "correlated paging supports only OFFSET n LIMIT 1".into(),
+                                "correlated paging supports only LIMIT 1 or OFFSET n LIMIT 1"
+                                    .into(),
                             ));
                         }
                     } else if contains_paging(&right.plan) {
                         return Err(KaveonError::Sql(
-                            "correlated paging supports only scalar OFFSET n LIMIT 1".into(),
+                            "correlated paging supports only scalar LIMIT 1 or OFFSET n LIMIT 1"
+                                .into(),
                         ));
                     }
                 }
@@ -1948,7 +2009,7 @@ fn rename_column(expr: Expr, from: &str, to: &str) -> Expr {
         Expr::Column(_) | Expr::Literal(_) | Expr::Star => expr,
         Expr::Alias { expr, name } => Expr::Alias {
             expr: rename(expr),
-            name,
+            name: if name == from { to.to_owned() } else { name },
         },
         Expr::Not(expr) => Expr::Not(rename(expr)),
         Expr::IsNull(expr) => Expr::IsNull(rename(expr)),
@@ -2046,6 +2107,113 @@ fn rename_column(expr: Expr, from: &str, to: &str) -> Expr {
             negated,
         },
     }
+}
+
+/// Rename a carried correlation through every expression-bearing node in a
+/// plan. Correlation aliases are physical output columns, so changing only
+/// references is insufficient: the defining projection aliases must move
+/// with them as well.
+fn rename_plan_column(mut plan: LogicalPlan, from: &str, to: &str) -> LogicalPlan {
+    match &mut plan {
+        LogicalPlan::Scan { columns, .. } => {
+            if let Some(columns) = columns {
+                for column in columns {
+                    if column == from {
+                        *column = to.to_owned();
+                    }
+                }
+            }
+        }
+        LogicalPlan::Unnest { expressions, .. } => {
+            for expression in expressions {
+                *expression = rename_column(expression.clone(), from, to);
+            }
+        }
+        LogicalPlan::Join {
+            left,
+            right,
+            condition,
+            ..
+        } => {
+            **left = rename_plan_column((**left).clone(), from, to);
+            **right = rename_plan_column((**right).clone(), from, to);
+            if let Some(condition) = condition {
+                *condition = rename_column(condition.clone(), from, to);
+            }
+        }
+        LogicalPlan::Filter { input, predicate } => {
+            **input = rename_plan_column((**input).clone(), from, to);
+            *predicate = rename_column(predicate.clone(), from, to);
+        }
+        LogicalPlan::Project { input, columns } => {
+            **input = rename_plan_column((**input).clone(), from, to);
+            for column in columns {
+                *column = rename_column(column.clone(), from, to);
+            }
+        }
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => {
+            **input = rename_plan_column((**input).clone(), from, to);
+            for expression in group_by {
+                *expression = rename_column(expression.clone(), from, to);
+            }
+            for aggregate in aggregates {
+                *aggregate.argument_mut() = rename_column(aggregate.argument().clone(), from, to);
+            }
+        }
+        LogicalPlan::Sort { input, order_by } => {
+            **input = rename_plan_column((**input).clone(), from, to);
+            for (expression, _, _) in order_by {
+                *expression = rename_column(expression.clone(), from, to);
+            }
+        }
+        LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input } => {
+            **input = rename_plan_column((**input).clone(), from, to);
+        }
+        LogicalPlan::Union { .. } | LogicalPlan::Intersect { .. } | LogicalPlan::Except { .. } => {
+            for input in plan.inputs_mut() {
+                *input = rename_plan_column(input.clone(), from, to);
+            }
+        }
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => {
+            **input = rename_plan_column((**input).clone(), from, to);
+            for expression in window_exprs {
+                *expression = rename_column(expression.clone(), from, to);
+            }
+        }
+        LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+            residual,
+        }
+        | LogicalPlan::AntiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+            residual,
+            ..
+        } => {
+            **left = rename_plan_column((**left).clone(), from, to);
+            **right = rename_plan_column((**right).clone(), from, to);
+            *left_key = rename_column(left_key.clone(), from, to);
+            *right_key = rename_column(right_key.clone(), from, to);
+            if let Some(residual) = residual {
+                *residual = rename_column(residual.clone(), from, to);
+            }
+        }
+    }
+    plan
 }
 
 /// The column references of `expr` outside aggregate function arguments.
@@ -2206,7 +2374,7 @@ fn peel_scalar_paging(plan: LogicalPlan) -> Option<ScalarPagingPlan> {
     let mut limit = None;
     let mut order = None;
     let plan = peel(plan, &mut offset, &mut limit, &mut order)?;
-    Some((plan, offset?, limit?, order.unwrap_or_default()))
+    Some((plan, offset.unwrap_or(0), limit?, order.unwrap_or_default()))
 }
 
 fn contains_paging(plan: &LogicalPlan) -> bool {
