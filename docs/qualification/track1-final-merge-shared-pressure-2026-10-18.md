@@ -1,4 +1,6 @@
-# Track 1 final-merge shared-pressure qualification — 2026-10-18
+# Track 1 final-merge shared-pressure candidate â€” 2026-10-18
+
+Status: **candidate; qualification remains open**.
 
 ## Boundary
 
@@ -6,16 +8,14 @@ Threaded final merges share one query memory budget with their partial aggregato
 
 ## Change
 
-`HybridFinalMerge` now records the query limit and, only for threaded merges with a pressure responder and an available spill device, spills its live grouped table after the account crosses half the budget. Serial merges retain refusal-driven spilling. Existing reservations, spill accounting, and cleanup remain in force.
+The integration branch is evaluating a `HybridFinalMerge` policy that records the query limit and, for threaded merges with a pressure responder and an available spill device, can spill its live grouped table before sibling refusals exhaust the query budget. Serial merges retain refusal-driven spilling. Existing reservations, spill accounting, and cleanup remain in force.
 
 ## Evidence
 
-From the isolated integration worktree after commit `8042fdf8`:
+The earlier isolated candidate at `8042fdf8` passed the three focused merge cases, but that commit is not an ancestor of the current integration branch. The current branch has additional threshold, prepayment, and downstream-tail handling changes, so those results cannot be attributed to the current source until the full focused suite is rerun.
 
-- `cargo test -p kaveon-server a_distributed_grouped_aggregate_under_spill_matches_the_local_result -- --nocapture` — 1 passed.
-- `cargo test -p kaveon-server parallel_final_with_a_top_n_tail_matches_the_serial_merge_and_spills_on_refusal -- --nocapture` — 1 passed.
-- `cargo test -p kaveon-server hybrid_final_aggregate_keeps_typed_null_keys_through_a_spill_and_bounds_merge_memory -- --nocapture` — 1 passed.
-- `cargo test -p kaveon-server fragment_exec::tests -- --nocapture` — 21 passed, 0 failed.
-- `cargo test -p kaveon-exec final_merge -- --nocapture` — 7 passed, 1 ignored.
+- The aggregate-under-spill case passes on the current branch.
+- The TopN-tail case is currently red under the current branch's downstream cleanup/pressure configuration and must pass before this behavior is qualified.
+- Typed-null spill, the complete `fragment_exec::tests` subset, and the `kaveon-exec final_merge` suite must be rerun against the final source.
 
-This qualifies the shared-pressure behavior for the current local test topology. Distributed object-store and deployed endurance qualification remain separate gates.
+This note records an active qualification boundary for the current local test topology. It does not qualify the behavior. Distributed object-store and deployed endurance qualification remain separate gates.
