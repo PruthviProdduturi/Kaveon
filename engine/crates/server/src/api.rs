@@ -21411,6 +21411,32 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_rejects_snapshot_drift_during_recovery() {
+        let config = crate::config::ServerConfig::default();
+        let mut cluster = crate::cluster::ClusterState::new(&config);
+        let mut worker = cluster.this_node.clone();
+        worker.role = crate::cluster::NodeRole::Worker;
+        worker.catalog_snapshot_id = Some("snapshot-required".into());
+        worker.node_id = "survivor".into();
+        cluster.register_worker(worker.clone());
+        worker.node_id = "drifting".into();
+        cluster.register_worker(worker);
+
+        // A worker that converges to a new snapshot during a query cannot be
+        // used as a replacement for the statement's pinned snapshot.
+        cluster
+            .workers
+            .get_mut("drifting")
+            .unwrap()
+            .catalog_snapshot_id = Some("snapshot-new".into());
+        let error =
+            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap_err();
+        assert!(error.starts_with("INSUFFICIENT_COMPATIBLE_WORKERS:"));
+        assert_eq!(cluster.compatible_workers("snapshot-required").len(), 1);
+        assert_eq!(cluster.compatible_workers("snapshot-new").len(), 1);
+    }
+
+    #[test]
     fn aggregates_only_complete_worker_reader_counters() {
         let task = |scan| super::TaskTelemetry {
             task_id: "task".into(),
