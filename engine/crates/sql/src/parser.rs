@@ -943,7 +943,17 @@ fn normalize_bracket_identifiers(sql: &str) -> String {
                 .next()
                 .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
                 && chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric());
-            if identifier {
+            // `ARRAY[NULL]` is a list literal, not a bracketed identifier.
+            // Identifier-shaped list elements (especially `NULL`) must stay
+            // in the AST so the binder can infer the list type from context.
+            // Keep the existing bracket-identifier normalization everywhere
+            // else, including `[year]` and `table.[year]`.
+            let preceded_by_array = sql[..i]
+                .trim_end()
+                .rsplit_once(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .map(|(_, word)| word.eq_ignore_ascii_case("ARRAY"))
+                .unwrap_or_else(|| sql[..i].trim_end().eq_ignore_ascii_case("ARRAY"));
+            if identifier && !preceded_by_array {
                 out.push_str(&sql[copied..i]);
                 out.push('"');
                 out.push_str(inner);
@@ -1398,11 +1408,22 @@ mod tests {
             normalize_bracket_identifiers("SELECT ARRAY[1, 2] FROM t"),
             "SELECT ARRAY[1, 2] FROM t"
         );
+        assert_eq!(
+            normalize_bracket_identifiers("SELECT ARRAY[NULL] FROM t"),
+            "SELECT ARRAY[NULL] FROM t"
+        );
         // A bracket inside a string literal is data, not an identifier.
         assert_eq!(
             normalize_bracket_identifiers("SELECT '[year]' FROM t"),
             "SELECT '[year]' FROM t"
         );
+    }
+
+    #[test]
+    fn null_array_literals_remain_array_expressions() {
+        let statements = parse_sql("SELECT ARRAY[NULL], ARRAY[1, NULL] FROM t").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].to_string().contains("ARRAY[NULL]"));
     }
 
     /// Both together: a rewrite in the same statement as non-ASCII text, which
