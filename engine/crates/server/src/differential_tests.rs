@@ -602,6 +602,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_array_contains_decimal_and_null",
+        "SELECT JSON_ARRAY_CONTAINS(JSON_PARSE('[1.25, 2.50, null]'), CAST(2.50 AS DECIMAL(10, 2))) AS decimal_present, JSON_ARRAY_CONTAINS(JSON_PARSE('[1, null, 3]'), NULL) AS null_needle FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_comparison",
         "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
         false,
