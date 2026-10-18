@@ -4,6 +4,7 @@ use axum::body::Body;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
@@ -171,7 +172,19 @@ impl DiskExchangeStore {
             quota: self.quota.clone(),
             _directory: self.directory.clone(),
         });
-        if let Err(error) = fs::write(&file.path, encoded) {
+        let write_result = (|| -> std::io::Result<()> {
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .truncate(true)
+                .open(&file.path)?;
+            output.write_all(&encoded)?;
+            // Do not publish a chunk in the in-memory index until its bytes
+            // are durable. A coordinator restart can then safely reclaim or
+            // replay every indexed chunk without exposing a short write.
+            output.sync_data()
+        })();
+        if let Err(error) = write_result {
             drop(file);
             return Err(error.to_string());
         }
