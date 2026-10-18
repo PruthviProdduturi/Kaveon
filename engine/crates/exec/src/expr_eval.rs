@@ -11441,13 +11441,16 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     // error behavior, so the path mode only needs to be removed before the
     // structural extractor sees the `$` root marker.
     let path = path.trim();
-    let path = if path.len() >= 4 && path[..4].eq_ignore_ascii_case("lax ") {
-        &path[4..]
-    } else if path.len() >= 7 && path[..7].eq_ignore_ascii_case("strict ") {
-        &path[7..]
-    } else {
-        path
-    };
+    let path = ["lax", "strict"]
+        .into_iter()
+        .find_map(|mode| {
+            let rest = path.get(mode.len()..)?;
+            rest.chars()
+                .next()
+                .filter(|character| character.is_whitespace())
+                .map(|_| rest.trim_start())
+        })
+        .unwrap_or(path);
     enum Segment {
         Key(String),
         Index(usize),
