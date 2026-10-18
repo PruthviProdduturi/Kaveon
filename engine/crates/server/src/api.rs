@@ -3950,6 +3950,14 @@ fn trino_expr_type(expression: &Expr) -> String {
                 .to_owned();
             format!("map({key_type},{value_type})")
         }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ROW") => {
+            let fields = args
+                .iter()
+                .map(trino_expr_type)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("row({fields})")
+        }
         Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_FORMAT") => {
             "varchar".to_owned()
         }
@@ -23342,6 +23350,24 @@ mod streamed_root_tests {
             vec![
                 ("ids".to_owned(), "array(bigint)".to_owned(), true),
                 ("flags".to_owned(), "map(varchar,bigint)".to_owned(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn trino_describe_output_infers_row_metadata() {
+        let metadata =
+            trino_output_metadata("SELECT ROW(1, 'ready') AS state, ROW(2, 3.5) AS measurements")
+                .expect("row expression metadata");
+        assert_eq!(
+            metadata,
+            vec![
+                ("state".to_owned(), "row(bigint,varchar)".to_owned(), true),
+                (
+                    "measurements".to_owned(),
+                    "row(bigint,decimal(2,1))".to_owned(),
+                    true,
+                ),
             ]
         );
     }
