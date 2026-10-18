@@ -19,9 +19,9 @@ workload and distributed-runtime evidence named by each tracker row.
 
 ## Latest validated source
 
-The join-reorder corpus extension in
-`c9143519cf4368e3e003a4b9521b8b18388f60a8` passed the complete Engine release
-workflow `39106853477` on 2026-10-18:
+The five-way join-reorder corpus extension in
+`e1777e504e7e09c57dbbf1856088cd21227bf63c` passed the complete Engine release
+workflow `39109416024` on 2026-10-18:
 
 | Gate | Result |
 | --- | --- |
@@ -31,9 +31,9 @@ workflow `39106853477` on 2026-10-18:
 | macOS ARM64 release build and CLI workflow | success |
 | Dev release publication | success |
 
-This validates the source and release artifacts for the four-way join-reorder
-differential corpus. It does not change the remaining distributed qualification
-boundaries in the parity tracker.
+This validates the source and release artifacts for the four-way and five-way
+join-reorder differential corpus. It does not change the remaining distributed
+qualification boundaries in the parity tracker.
 
 The current source also passes the focused Trino compatibility suite:
 
