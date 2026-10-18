@@ -412,6 +412,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "date_sub_trino_units",
+        "SELECT DATE_SUB('day', 2, DATE '2026-01-01') AS minus_days, DATE_SUB('month', 1, DATE '2026-03-31') AS minus_month FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "date_trunc_and_format",
         "SELECT DATE_TRUNC('month', TIMESTAMP '2026-02-17 12:34:56.789') AS month_start, DATE_TRUNC('hour', TIMESTAMP '2026-02-17 12:34:56.789') AS hour_start, DATE_FORMAT(TIMESTAMP '2026-02-17 12:34:56.789', '%Y-%m-%d %H:%i:%s') AS formatted FROM {T} LIMIT 1",
         false,
