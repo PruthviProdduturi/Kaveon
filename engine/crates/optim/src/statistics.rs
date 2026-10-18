@@ -149,7 +149,7 @@ pub fn optimize_with_statistics(
             let swap = if join_type == JoinType::Inner {
                 left_relation.clone().zip(right_relation.clone()).and_then(
                     |(left_estimate, right_estimate)| {
-                        if left_estimate.rows >= right_estimate.rows
+                        if !left_build_is_cheaper(&left_estimate, &right_estimate)
                             || left_estimate.alias == right_estimate.alias
                         {
                             return None;
@@ -293,6 +293,19 @@ pub fn optimize_with_statistics(
         },
         scan @ LogicalPlan::Scan { .. } => scan,
         unnest @ LogicalPlan::Unnest { .. } => unnest,
+    }
+}
+
+/// Prefer the relation with the smaller known serialized footprint when both
+/// sides expose byte statistics. Fall back to row counts when bytes are
+/// unavailable on either side; mixing a known byte value with an unknown one
+/// would make the comparison appear more precise than it is.
+fn left_build_is_cheaper(left: &Estimate, right: &Estimate) -> bool {
+    match (left.bytes, right.bytes) {
+        (Some(left_bytes), Some(right_bytes)) if left_bytes != right_bytes => {
+            left_bytes < right_bytes
+        }
+        _ => left.rows < right.rows,
     }
 }
 
@@ -806,6 +819,32 @@ mod tests {
     }
 
     #[test]
+    fn chooses_the_narrower_inner_build_when_row_counts_disagree() {
+        let plan = sql_to_logical_plan("SELECT * FROM small s JOIN big b ON s.id=b.id").unwrap();
+        let optimized = optimize_with_statistics(plan, &mut |table| {
+            Some(RelationStatistics::exact_with_bytes(
+                if table == "small" { 10 } else { 10_000 },
+                vec!["id".into(), "value".into()],
+                if table == "small" {
+                    512 * 1024 * 1024
+                } else {
+                    8 * 1024 * 1024
+                },
+            ))
+        });
+        let LogicalPlan::Join {
+            right,
+            distribution,
+            ..
+        } = optimized
+        else {
+            panic!("join missing: {optimized:?}")
+        };
+        assert!(matches!(*right, LogicalPlan::Scan { ref table, .. } if table == "big"));
+        assert_eq!(distribution, JoinDistribution::Partitioned);
+    }
+
+    #[test]
     fn preserves_using_join_metadata_when_statistics_do_not_reorder() {
         let plan = sql_to_logical_plan("SELECT * FROM left_table l JOIN right_table r USING (id)")
             .unwrap();
@@ -978,7 +1017,10 @@ mod tests {
                 },
             ))
         });
-        let LogicalPlan::Join { distribution, .. } = optimized else {
+        let LogicalPlan::Project { input, .. } = optimized else {
+            panic!("reordered join projection missing")
+        };
+        let LogicalPlan::Join { distribution, .. } = *input else {
             panic!("join missing")
         };
         assert_eq!(distribution, JoinDistribution::Partitioned);
