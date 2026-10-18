@@ -1,7 +1,7 @@
 # Track 2 SQL compatibility qualification — nested `ARRAY_REPEAT`
 
 **Scope:** bounded `ARRAY_REPEAT` support for `ARRAY<bigint>` values in the
-local expression evaluator.
+local evaluator and distributed fragment path.
 
 The evaluator now repeats each non-null inner list as an independent nested
 array, preserves null inner lists as null elements, preserves a null repeat
@@ -16,11 +16,16 @@ From `engine/`:
 ```powershell
 cargo fmt --all -- --check
 cargo test -p kaveon-exec --lib array_repeat --quiet
+cargo test -p kaveon-server --bin kaveon-server distributed_nested_array_repeat_preserves_inner_arrays -- --nocapture
 ```
 
-The focused test suite passed 3 tests, including primitive values, large UTF-8
-values, and nested integer arrays with null and zero-count rows. The new test
-checks repeated inner values, null inner-list preservation, and empty output.
+The focused evaluator suite passed 3 tests, including primitive values, large
+UTF-8 values, and nested integer arrays with null and zero-count rows. The
+server differential test passed through the three-worker fragment path and
+verified that `UNNEST(ARRAY_REPEAT(ARRAY[1, 2], 2))` returns two independent
+`ARRAY<bigint>` rows (`[1, 2]`, `[1, 2]`) without flattening or changing the
+nested type.
 
-This is a local semantic qualification only. Distributed and external-client
-wire qualification for nested `ARRAY_REPEAT` remains open.
+This qualifies the bounded local and in-process distributed fragment paths.
+External-client wire qualification, arbitrary nested element types, and larger
+cloud/AKS qualification remain open.
