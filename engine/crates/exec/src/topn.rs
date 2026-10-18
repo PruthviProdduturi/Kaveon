@@ -1515,6 +1515,76 @@ mod tests {
     }
 
     #[test]
+    fn three_worker_global_uint64_top_n_preserves_extrema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::UInt64, true),
+            Field::new("id", DataType::Utf8, false),
+        ]));
+        let workers = [
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(UInt64Array::from(vec![Some(u64::MAX), Some(1), None])),
+                    Arc::new(StringArray::from(vec!["max", "one", "null-a"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(UInt64Array::from(vec![Some(u64::MAX - 1), Some(0), None])),
+                    Arc::new(StringArray::from(vec!["near-max", "zero", "null-b"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(UInt64Array::from(vec![Some(42), Some(2), Some(3)])),
+                    Arc::new(StringArray::from(vec!["forty-two", "two", "three"])),
+                ],
+            )
+            .unwrap(),
+        ];
+        let ordering =
+            vec![SortExpr::new(Expr::Column("score".into()), false).with_nulls_first(false)];
+        let local_candidates = workers
+            .iter()
+            .map(|worker| merge_top_n(&schema, std::slice::from_ref(worker), &ordering, 5))
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .into_iter()
+            .map(Option::unwrap)
+            .collect::<Vec<_>>();
+        let distributed = merge_top_n(&schema, &local_candidates, &ordering, 5)
+            .unwrap()
+            .unwrap();
+
+        let complete = concat_batches(&schema, &workers).unwrap();
+        let indices = lexsort_to_indices(
+            &[SortColumn {
+                values: complete.column(0).clone(),
+                options: Some(SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                }),
+            }],
+            Some(5),
+        )
+        .unwrap();
+        let expected = RecordBatch::try_new(
+            schema,
+            complete
+                .columns()
+                .iter()
+                .map(|column| take(column.as_ref(), &indices, None).unwrap())
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(distributed, expected);
+    }
+
+    #[test]
     fn merges_sorted_integer_batches_with_k_way_heads() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("score", DataType::Int64, false),
