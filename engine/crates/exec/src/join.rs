@@ -1787,8 +1787,14 @@ fn row_key(
                         && matches!(
                             value_type.as_ref(),
                             DataType::Boolean
+                                | DataType::Int8
+                                | DataType::Int16
                                 | DataType::Int32
+                                | DataType::Int64
+                                | DataType::UInt8
+                                | DataType::UInt16
                                 | DataType::UInt32
+                                | DataType::UInt64
                                 | DataType::Float32
                                 | DataType::Float64
                                 | DataType::Decimal128(_, _)
@@ -1817,10 +1823,40 @@ fn row_key(
                                 .as_primitive::<arrow::datatypes::Int32Type>()
                                 .value(dictionary_index),
                         ),
+                        DataType::Int8 => Key::Int32(
+                            values
+                                .as_primitive::<arrow::datatypes::Int8Type>()
+                                .value(dictionary_index) as i32,
+                        ),
+                        DataType::Int16 => Key::Int32(
+                            values
+                                .as_primitive::<arrow::datatypes::Int16Type>()
+                                .value(dictionary_index) as i32,
+                        ),
+                        DataType::Int64 => Key::Int64(
+                            values
+                                .as_primitive::<arrow::datatypes::Int64Type>()
+                                .value(dictionary_index),
+                        ),
+                        DataType::UInt8 => Key::UInt64(
+                            values
+                                .as_primitive::<arrow::datatypes::UInt8Type>()
+                                .value(dictionary_index) as u64,
+                        ),
+                        DataType::UInt16 => Key::UInt64(
+                            values
+                                .as_primitive::<arrow::datatypes::UInt16Type>()
+                                .value(dictionary_index) as u64,
+                        ),
                         DataType::UInt32 => Key::UInt64(
                             values
                                 .as_primitive::<arrow::datatypes::UInt32Type>()
                                 .value(dictionary_index) as u64,
+                        ),
+                        DataType::UInt64 => Key::UInt64(
+                            values
+                                .as_primitive::<arrow::datatypes::UInt64Type>()
+                                .value(dictionary_index),
                         ),
                         DataType::Float32 => {
                             let value = values
@@ -2293,6 +2329,85 @@ mod tests {
             Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
             Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
             DataType::Boolean,
+        );
+    }
+
+    #[test]
+    fn dictionary_integer_join_keys_widen_losslessly() {
+        fn check(left_values: ArrayRef, right_values: ArrayRef, value_type: DataType) {
+            let dictionary_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type));
+            let schema = Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+            let left_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), Some(2)]),
+                left_values,
+            )
+            .unwrap();
+            let right_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(1), Some(0), Some(2)]),
+                right_values,
+            )
+            .unwrap();
+            let left = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left_key)]).unwrap();
+            let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+            let mut join = HashJoin::try_new(
+                Box::new(Input::new(left)),
+                Box::new(Input::new(right)),
+                JoinType::Inner,
+                vec![("key".into(), "key".into())],
+            )
+            .unwrap();
+            let batches = kaveon_core::collect_batches(&mut join).unwrap();
+            assert_eq!(
+                concat_batches(join.schema(), &batches).unwrap().num_rows(),
+                2
+            );
+        }
+        check(
+            Arc::new(Int8Array::from(vec![Some(i8::MIN), Some(i8::MAX), None])),
+            Arc::new(Int8Array::from(vec![Some(i8::MIN), Some(i8::MAX), None])),
+            DataType::Int8,
+        );
+        check(
+            Arc::new(Int16Array::from(vec![Some(i16::MIN), Some(i16::MAX), None])),
+            Arc::new(Int16Array::from(vec![Some(i16::MIN), Some(i16::MAX), None])),
+            DataType::Int16,
+        );
+        check(
+            Arc::new(Int64Array::from(vec![Some(i64::MIN), Some(i64::MAX), None])),
+            Arc::new(Int64Array::from(vec![Some(i64::MIN), Some(i64::MAX), None])),
+            DataType::Int64,
+        );
+        check(
+            Arc::new(UInt8Array::from(vec![Some(u8::MIN), Some(u8::MAX), None])),
+            Arc::new(UInt8Array::from(vec![Some(u8::MIN), Some(u8::MAX), None])),
+            DataType::UInt8,
+        );
+        check(
+            Arc::new(UInt16Array::from(vec![
+                Some(u16::MIN),
+                Some(u16::MAX),
+                None,
+            ])),
+            Arc::new(UInt16Array::from(vec![
+                Some(u16::MIN),
+                Some(u16::MAX),
+                None,
+            ])),
+            DataType::UInt16,
+        );
+        check(
+            Arc::new(UInt64Array::from(vec![
+                Some(u64::MIN),
+                Some(u64::MAX),
+                None,
+            ])),
+            Arc::new(UInt64Array::from(vec![
+                Some(u64::MIN),
+                Some(u64::MAX),
+                None,
+            ])),
+            DataType::UInt64,
         );
     }
 
