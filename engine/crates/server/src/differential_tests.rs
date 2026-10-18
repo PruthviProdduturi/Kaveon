@@ -2263,6 +2263,35 @@ fn distributed_json_value_default_on_empty_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A partitioned value window with IGNORE NULLS must skip null predecessors
+/// identically in local execution and in the three-worker fragment path.
+#[test]
+fn distributed_partitioned_lag_ignore_nulls_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-partitioned-lag-ignore-nulls-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, user_id, actions, LAG(industry) IGNORE NULLS OVER (PARTITION BY country ORDER BY actions, industry NULLS LAST, user_id) AS previous_industry FROM events WHERE event_date = '2026-07-04' ORDER BY country, actions, industry NULLS LAST, user_id LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-partitioned-lag-ignore-nulls", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 12);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A NULL in a NOT IN subquery makes every non-matching probe UNKNOWN. Keep
 /// this three-valued rule identical through the local planner and fragments,
 /// including a NULL probe row.
