@@ -305,7 +305,8 @@ fn plan_with_predicate(
             right,
             left_key,
             right_key,
-            residual, ..
+            residual,
+            ..
         } => {
             let operator = SemiJoinOperator::new(
                 plan_to_operator(left, catalog)?,
