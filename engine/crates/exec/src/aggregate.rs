@@ -6956,6 +6956,53 @@ mod tests {
     }
 
     #[test]
+    fn grouped_count_distinct_exchange_unions_duplicates_nulls_and_empty_partitions() {
+        let mut first = AggregateState::new(&AggExpr::new(AggFunc::Count, "country").distinct());
+        first
+            .update_distinct(AggregateValue::Utf8("Japan".into()))
+            .unwrap();
+        first
+            .update_distinct(AggregateValue::Utf8("Brazil".into()))
+            .unwrap();
+        first.update_distinct(AggregateValue::Null).unwrap();
+
+        let mut second = AggregateState::new(&AggExpr::new(AggFunc::Count, "country").distinct());
+        second
+            .update_distinct(AggregateValue::Utf8("Brazil".into()))
+            .unwrap();
+        second
+            .update_distinct(AggregateValue::Utf8("Kenya".into()))
+            .unwrap();
+
+        let mut partials = [first, second]
+            .into_iter()
+            .map(|state| GroupedAggregateState {
+                group_keys: vec![AggregateValue::Utf8("all".into())],
+                states: vec![state],
+            })
+            .map(|group| {
+                let encoded = encode_grouped_aggregate_states(&[group]).unwrap();
+                decode_grouped_aggregate_states(&encoded).unwrap().remove(0)
+            })
+            .collect::<Vec<_>>();
+
+        // A third worker with no matching rows contributes an empty exchange
+        // payload; the merge must still produce the same exact result.
+        let empty_partition =
+            decode_grouped_aggregate_states(&encode_grouped_aggregate_states(&[]).unwrap())
+                .unwrap();
+        partials.extend(empty_partition);
+
+        let merged = merge_grouped_aggregate_states(partials).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
+        let result = finalized
+            .iter()
+            .find(|group| group.group_keys == vec![AggregateValue::Utf8("all".into())])
+            .unwrap();
+        assert_eq!(result.values, vec![FinalAggregateValue::Count(3)]);
+    }
+
+    #[test]
     fn grouped_state_rejects_incompatible_accumulator_layouts() {
         let groups = vec![
             GroupedAggregateState {
