@@ -365,6 +365,13 @@ fn relation(
         });
         return Some(estimate);
     }
+    // DISTINCT can only reduce cardinality and preserves the projected row width.
+    // Retain the input upper bound so a bounded distinct build can still use
+    // a safe broadcast join decision.
+    if let LogicalPlan::Distinct { input } = plan {
+        return relation(input, stats);
+    }
+
     // A projection that only forwards or renames columns preserves the
     // relation's cardinality and storage footprint. Keep the exact source
     // estimate visible through that wrapper so a subquery does not disable a
@@ -834,6 +841,19 @@ mod tests {
     fn keeps_exact_stats_through_a_sorted_subquery() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM big b JOIN (SELECT id, value FROM small ORDER BY id) s ON b.id=s.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut stats);
+        let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join missing: {optimized:?}")
+        };
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn keeps_upper_bound_through_a_distinct_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM big b JOIN (SELECT DISTINCT id FROM small) s ON b.id=s.id",
         )
         .unwrap();
         let optimized = optimize_with_statistics(plan, &mut stats);
