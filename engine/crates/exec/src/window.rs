@@ -128,20 +128,54 @@ impl BatchOperator for WindowOperator {
             // expensive lexsort permutation for that exact layout; each
             // expression still evaluates its own frame and output values.
             let mut sorted_cache = HashMap::<String, Arc<Vec<usize>>>::new();
-            for expr in &self.expressions {
-                let sort_key = window_sort_key(expr);
-                let sorted = if let Some(sorted) = sorted_cache.get(&sort_key) {
-                    Arc::clone(sorted)
-                } else {
-                    let sorted = Arc::new(window_sort_indices(expr, &batch)?);
-                    sorted_cache.insert(sort_key, Arc::clone(&sorted));
-                    sorted
-                };
-                columns.push(evaluate_window_with_sorted(
-                    expr,
-                    &batch,
-                    Some(sorted.as_ref()),
-                )?);
+            let sorted_expressions = self
+                .expressions
+                .iter()
+                .map(|expr| {
+                    let sort_key = window_sort_key(expr);
+                    let sorted = if let Some(sorted) = sorted_cache.get(&sort_key) {
+                        Arc::clone(sorted)
+                    } else {
+                        let sorted = Arc::new(window_sort_indices(expr, &batch)?);
+                        sorted_cache.insert(sort_key, Arc::clone(&sorted));
+                        sorted
+                    };
+                    Ok((expr, sorted))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let evaluated = if sorted_expressions.len() > 1 {
+                // A global/unpartitioned window still needs one shared sort, but
+                // independent expressions can evaluate their frames concurrently.
+                // Keep the result vector in declaration order so output schemas and
+                // deterministic serialization remain unchanged.
+                std::thread::scope(|scope| {
+                    sorted_expressions
+                        .iter()
+                        .map(|(expr, sorted)| {
+                            scope.spawn(|| {
+                                crate::expr_eval::with_expression_memory(
+                                    expression_memory.as_ref(),
+                                    || evaluate_window_with_sorted(expr, &batch, Some(sorted)),
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|worker| {
+                            worker
+                                .join()
+                                .map_err(|_| error("window expression worker panicked"))?
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })?
+            } else {
+                sorted_expressions
+                    .iter()
+                    .map(|(expr, sorted)| evaluate_window_with_sorted(expr, &batch, Some(sorted)))
+                    .collect::<Result<Vec<_>>>()?
+            };
+            for output in evaluated {
+                columns.push(output);
             }
             Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?))
         })
