@@ -7093,6 +7093,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             let result = match list.value_type() {
+                DataType::Int32 => position_primitive!(Int32Type, DataType::Int32),
                 DataType::Int64 => {
                     let needle = compute::cast(&args[1], &DataType::Int64)?;
                     let needle = needle.as_primitive::<Int64Type>();
@@ -21366,6 +21367,40 @@ mod tests {
             (
                 "needle",
                 Arc::new(Float32Array::from(vec![1.0000002_f32, 1.0000001_f32])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![Expr::Column("items".into()), Expr::Column("needle".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1)]
+        );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_integer_lists() {
+        let mut lists = ListBuilder::new(PrimitiveBuilder::<Int32Type>::new());
+        lists.values().append_value(7);
+        lists.values().append_value(11);
+        lists.append(true);
+        lists.values().append_value(7);
+        lists.values().append_null();
+        lists.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(lists.finish()) as ArrayRef),
+            (
+                "needle",
+                Arc::new(Int32Array::from(vec![11, 7])) as ArrayRef,
             ),
         ])
         .unwrap();
