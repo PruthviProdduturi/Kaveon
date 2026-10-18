@@ -2031,6 +2031,31 @@ fn distributed_row_array_unnest_expands_struct_columns() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// JSON_ARRAY_LENGTH returns the array cardinality and NULL for valid
+/// non-array JSON values.  Keep the object and JSON-null cases on the
+/// distributed path so worker-side JSON parsing cannot silently diverge from
+/// the scalar evaluator semantics.
+#[test]
+fn distributed_json_array_length_non_arrays_are_null() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-array-length-non-arrays-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_ARRAY_LENGTH(JSON_PARSE('[1, 2, 3]')) AS array_length, JSON_ARRAY_LENGTH(JSON_PARSE('{\"a\":1}')) AS object_length, JSON_ARRAY_LENGTH(JSON_PARSE('null')) AS json_null_length FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-array-length-non-arrays", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["3\u{1f}NULL\u{1f}NULL"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// ROW subscripts are one-based and preserve a NULL parent row as NULL for
 /// every selected field.  Run the same typed struct column through the local
 /// planner and the three-worker fragment path so a worker-side struct/null
