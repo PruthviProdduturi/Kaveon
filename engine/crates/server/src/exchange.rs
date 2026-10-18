@@ -327,11 +327,24 @@ impl ExchangeStore {
             .buffered_bytes
             .checked_sub(released_bytes)
             .ok_or(ExchangeError::StorePoisoned)?;
-        if state.finished.len() < MAX_FINISHED_QUERIES {
-            state
+        if state.finished.len() >= MAX_FINISHED_QUERIES && !state.finished.contains_key(query_id) {
+            // Keep the terminal fence for the newest query even when the
+            // bounded marker map is full. Evicting the oldest expiry is safe:
+            // markers are only needed for the TTL window, and silently
+            // dropping the new marker would let a late upload recreate an
+            // exchange for the query that was just finalized.
+            if let Some((oldest_query, _)) = state
                 .finished
-                .insert(query_id.to_owned(), now + FINISHED_QUERY_TTL);
+                .iter()
+                .min_by_key(|(_, expires)| *expires)
+                .map(|(query, expires)| (query.clone(), *expires))
+            {
+                state.finished.remove(&oldest_query);
+            }
         }
+        state
+            .finished
+            .insert(query_id.to_owned(), now + FINISHED_QUERY_TTL);
         Ok(())
     }
 
@@ -1765,6 +1778,52 @@ mod tests {
         // Repeated finalization is harmless and does not corrupt accounting.
         store.finish_query("query-42").unwrap();
         assert_eq!(store.buffered_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn finished_query_fence_keeps_newest_marker_when_bounded_map_is_full() {
+        let store = ExchangeStore::with_capacity(1, 32);
+        for index in 0..=MAX_FINISHED_QUERIES {
+            store.finish_query(&format!("query-{index}")).unwrap();
+        }
+
+        let newest = ExchangeChunk {
+            identity: ExchangeIdentity {
+                task_id: TaskId {
+                    query_id: format!("query-{MAX_FINISHED_QUERIES}"),
+                    stage_id: kaveon_core::StageId(0),
+                    partition: 0,
+                    attempt: 0,
+                },
+                exchange_id: ExchangeId("exchange-0".into()),
+                output_partition: 0,
+            },
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1].into(),
+        };
+        assert_eq!(
+            store.insert(newest),
+            Err(ExchangeError::QueryFinished),
+            "the newest cancellation must retain its late-upload fence"
+        );
+
+        let evicted = ExchangeChunk {
+            identity: ExchangeIdentity {
+                task_id: TaskId {
+                    query_id: "query-0".into(),
+                    stage_id: kaveon_core::StageId(0),
+                    partition: 0,
+                    attempt: 0,
+                },
+                exchange_id: ExchangeId("exchange-0".into()),
+                output_partition: 0,
+            },
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![1].into(),
+        };
+        assert!(store.insert(evicted).is_ok());
     }
 
     #[test]
