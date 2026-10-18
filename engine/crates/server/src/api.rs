@@ -14377,6 +14377,12 @@ fn compare_json_scalars(
     left: &serde_json::Value,
     right: &serde_json::Value,
 ) -> Result<std::cmp::Ordering, String> {
+    if let (Some(left), Some(right)) = (left.as_i64(), right.as_i64()) {
+        return Ok(left.cmp(&right));
+    }
+    if let (Some(left), Some(right)) = (left.as_u64(), right.as_u64()) {
+        return Ok(left.cmp(&right));
+    }
     if let (Some(left), Some(right)) = (left.as_f64(), right.as_f64()) {
         return left
             .partial_cmp(&right)
@@ -21659,6 +21665,61 @@ mod tests {
                 serde_json::json!("east"),
                 serde_json::json!(false),
                 serde_json::json!(true),
+            ]]
+        );
+    }
+
+    #[test]
+    fn merges_uint64_extrema_without_float_rounding() {
+        let columns = vec![
+            ColumnInfo {
+                name: "region".into(),
+                data_type: "Utf8".into(),
+            },
+            ColumnInfo {
+                name: "minimum".into(),
+                data_type: "UInt64".into(),
+            },
+            ColumnInfo {
+                name: "maximum".into(),
+                data_type: "UInt64".into(),
+            },
+        ];
+        let partials = [
+            (
+                18_446_744_073_709_551_614_u64,
+                18_446_744_073_709_551_615_u64,
+            ),
+            (
+                18_446_744_073_709_551_613_u64,
+                18_446_744_073_709_551_614_u64,
+            ),
+        ]
+        .into_iter()
+        .map(|(minimum, maximum)| TaskResponse {
+            columns: columns.clone(),
+            data: vec![vec![
+                serde_json::json!("east"),
+                serde_json::json!(minimum),
+                serde_json::json!(maximum),
+            ]],
+            elapsed_us: 1,
+        })
+        .collect();
+        let merged = merge_partial_aggregates(
+            partials,
+            1,
+            &[MergeOperation::Min, MergeOperation::Max],
+            2,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.data,
+            vec![vec![
+                serde_json::json!("east"),
+                serde_json::json!(18_446_744_073_709_551_613_u64),
+                serde_json::json!(18_446_744_073_709_551_615_u64),
             ]]
         );
     }
