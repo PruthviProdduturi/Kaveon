@@ -29,6 +29,7 @@ const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV_PRIME: u64 = 1_099_511_628_211;
 const BEARER_PREFIX: &str = "Bearer ";
 const EXCHANGE_COMPRESSION_ENV: &str = "KAVEON_EXCHANGE_COMPRESSION";
+const EXCHANGE_UPLOAD_ATTEMPTS: usize = 3;
 // One exchange partition's payload: 1 GiB in 4 MiB chunks. A partial
 // aggregate over tens of millions of groups needs the room; the producer
 // encodes and uploads one partition at a time.
@@ -554,21 +555,39 @@ pub async fn upload_chunks(
         let url = url.clone();
         let token = token.to_owned();
         pending.push(async move {
-            // Each chunk encodes when its upload starts, so at most
-            // IN_FLIGHT copies exist at once.
-            let body = chunk.encode(limits)?;
-            let response = client
-                .post(url)
-                .bearer_auth(token)
-                .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
-                .body(body)
-                .send()
-                .await
-                .map_err(|error| ExchangeError::Transport(error.to_string()))?;
-            if !response.status().is_success() {
-                return Err(ExchangeError::HttpStatus(response.status().as_u16()));
+            let body = Bytes::from(chunk.encode(limits)?);
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                let result = client
+                    .post(&url)
+                    .bearer_auth(&token)
+                    .header(header::CONTENT_TYPE.as_str(), EXCHANGE_MEDIA_TYPE)
+                    .body(body.clone())
+                    .send()
+                    .await
+                    .map_err(|error| ExchangeError::Transport(error.to_string()))
+                    .and_then(|response| {
+                        if response.status().is_success() {
+                            Ok(())
+                        } else {
+                            Err(ExchangeError::HttpStatus(response.status().as_u16()))
+                        }
+                    });
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(error)
+                        if attempt < EXCHANGE_UPLOAD_ATTEMPTS
+                            && retryable_exchange_upload_error(&error) =>
+                    {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            25 * (1 << (attempt - 1)),
+                        ))
+                        .await;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            Ok::<(), ExchangeError>(())
         });
     }
     let mut uploads = futures::stream::iter(pending).buffer_unordered(IN_FLIGHT);
@@ -576,6 +595,13 @@ pub async fn upload_chunks(
         result?;
     }
     Ok(())
+}
+
+fn retryable_exchange_upload_error(error: &ExchangeError) -> bool {
+    matches!(
+        error,
+        ExchangeError::Transport(_) | ExchangeError::HttpStatus(500..=599)
+    )
 }
 
 pub async fn fetch_payload(
@@ -1721,6 +1747,77 @@ mod tests {
             Err(ExchangeError::InvalidChunkIndex)
         );
         assert_eq!(store.buffered_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn upload_retries_only_transient_remote_failures() {
+        assert!(retryable_exchange_upload_error(&ExchangeError::Transport(
+            "connection reset".into()
+        )));
+        assert!(retryable_exchange_upload_error(&ExchangeError::HttpStatus(
+            503
+        )));
+        assert!(retryable_exchange_upload_error(&ExchangeError::HttpStatus(
+            500
+        )));
+        assert!(retryable_exchange_upload_error(&ExchangeError::HttpStatus(
+            599
+        )));
+        assert!(!retryable_exchange_upload_error(
+            &ExchangeError::HttpStatus(404)
+        ));
+        assert!(!retryable_exchange_upload_error(
+            &ExchangeError::HttpStatus(409)
+        ));
+        assert!(!retryable_exchange_upload_error(
+            &ExchangeError::Unauthorized
+        ));
+    }
+
+    #[tokio::test]
+    async fn upload_retries_a_transient_worker_response() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/v1/internal/exchange",
+                post(
+                    |State(attempts): State<Arc<AtomicUsize>>, _body: Bytes| async move {
+                        let attempt = attempts.fetch_add(1, Ordering::AcqRel);
+                        if attempt < 2 {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        } else {
+                            StatusCode::ACCEPTED
+                        }
+                    },
+                ),
+            )
+            .with_state(Arc::clone(&attempts));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown, shutdown_signal) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_signal.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        let result = upload_chunks(
+            &reqwest::Client::new(),
+            &format!("http://{address}"),
+            "token",
+            &[chunk_for(identity())],
+            limits(),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(attempts.load(Ordering::Acquire), 3);
+        let _ = shutdown.send(());
+        server.await.unwrap();
     }
 
     #[test]
