@@ -356,14 +356,17 @@ impl SpillRun {
         let file = File::open(&self.inner.path)?;
         Ok(SpillRunReader {
             reader: StreamReader::try_new(file, None)?,
-            inner: Arc::clone(&self.inner.inner),
+            // Keep the run itself alive while a reader is open. Otherwise a
+            // caller dropping its SpillRun handle during streaming would
+            // remove the file underneath this reader and release its bytes.
+            inner: Arc::clone(&self.inner),
         })
     }
 }
 
 pub struct SpillRunReader {
     reader: StreamReader<File>,
-    inner: Arc<SpillInner>,
+    inner: Arc<SpillRunInner>,
 }
 
 impl Iterator for SpillRunReader {
@@ -376,6 +379,7 @@ impl Iterator for SpillRunReader {
             .next()
             .map(|batch| batch.map_err(KaveonError::from));
         self.inner
+            .inner
             .read_us
             .fetch_add(elapsed_us(started), Ordering::AcqRel);
         batch
@@ -636,6 +640,27 @@ mod tests {
         assert!(reader.next().is_none());
         drop(reader);
         drop(run);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn streaming_reader_keeps_run_alive_after_owner_drops() {
+        let root = test_root("reader-owner-drop");
+        let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
+        let input = batch();
+        let run = manager
+            .write_run(&input.schema(), std::slice::from_ref(&input))
+            .unwrap();
+        let path = run.path().to_owned();
+        let mut reader = run.reader().unwrap();
+        drop(run);
+
+        assert!(path.exists(), "reader must retain the spill file");
+        assert_eq!(reader.next().unwrap().unwrap(), input);
+        assert!(reader.next().is_none());
+        drop(reader);
+        assert!(!path.exists());
+        assert_eq!(manager.snapshot().current_bytes, 0);
         let _ = fs::remove_dir_all(root);
     }
 
