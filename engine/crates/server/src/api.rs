@@ -21540,20 +21540,31 @@ mod tests {
         worker.node_id = "matching".into();
         worker.catalog_snapshot_id = Some("snapshot-required".into());
         cluster.register_worker(worker.clone());
+        worker.node_id = "matching-2".into();
+        cluster.register_worker(worker.clone());
         worker.node_id = "stale".into();
         worker.catalog_snapshot_id = Some("snapshot-old".into());
         cluster.register_worker(worker);
 
         let compatible =
             super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap();
-        assert_eq!(compatible.len(), 1);
-        assert_eq!(compatible[0].node_id, "live");
+        assert_eq!(compatible.len(), 2);
+        assert!(compatible.iter().any(|worker| worker.node_id == "matching"));
+        assert!(
+            compatible
+                .iter()
+                .any(|worker| worker.node_id == "matching-2")
+        );
 
         cluster.workers.remove("stale");
         let compatible =
             super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap();
-        assert_eq!(compatible.len(), 1);
-        assert_eq!(compatible[0].node_id, "matching");
+        assert_eq!(compatible.len(), 2);
+        assert!(
+            compatible
+                .iter()
+                .all(|worker| { worker.node_id == "matching" || worker.node_id == "matching-2" })
+        );
     }
 
     #[test]
