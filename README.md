@@ -26,17 +26,19 @@ Kaveon combines a columnar analytical engine, deterministic data intelligence, a
 
 | Pillar | Responsibility | Current state |
 |---|---|---|
-| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; direct local Parquet and Delta reads, SQL, CLI, and HTTP server | Alpha |
+| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; Parquet, Delta and Iceberg reads from local and ADLS storage, SQL, CLI, HTTP server, and a distributed coordinator/worker runtime | Alpha, and the hosted deployment's only data and control plane |
 | **Kaveon DLM** | Deterministic dataset context compilation and natural-language-to-SQL routing without an LLM | Integrated in the Python API |
 | **Kaveon Studio** | Next.js analytics experience for questions, SQL, datasets, charts, and dashboards | Live preview |
 
-The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg from local storage, ADLS Gen2, and S3 without an import step. Today, the Rust Engine reads local Parquet and local Delta tables with a complete JSON commit history. Delta checkpoints, cloud object stores, and Iceberg remain target capabilities.
+The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg without an import step. The Engine reads Parquet and Delta from local storage and from ADLS Gen2, with checkpoint-aware Delta snapshots and an Iceberg metadata reader; S3 is registerable as a catalog storage type. The hosted deployment runs entirely this way — a billion-row Delta table on ADLS, read distributed across three workers, with no warehouse underneath it.
+
+The control plane runs on the Engine too. Datasets, charts, dashboards, saved queries, favourites and query history are product records committed through the Engine's transaction API to object storage, not rows in a relational database. PostgreSQL has been retired from the deployment.
 
 ## Why Kaveon
 
 - **One intelligence surface.** Ask a question, inspect the generated SQL, explore the result, and publish a dashboard without changing products.
 - **Deterministic by design.** The DLM compiles dataset metadata and value context, then follows inspectable rules rather than probabilistic token generation.
-- **Data stays yours.** Kaveon queries registered databases today and is being built to read customer-owned lakehouse storage directly.
+- **Data stays yours.** Kaveon reads customer-owned lakehouse storage directly — Parquet, Delta and Iceberg on local disk or ADLS Gen2 — and can also query registered databases. There is no import step and no copy held in a Kaveon-owned warehouse.
 - **Engine and platform modes.** Run the Rust Engine as a standalone analytical database, or pair it with DLM and Studio for the full experience.
 - **Honest maturity.** Implemented, experimental, and target capabilities are separated in [STATUS.md](STATUS.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -135,17 +137,20 @@ The public demo runs with the demo posture on: the platform is read-only below t
 
 | Data system | Current path | State |
 |---|---|---|
-| Local Parquet | Kaveon Engine direct read | Alpha |
-| Local Delta Lake | Kaveon Engine JSON-log snapshot and multi-file read | Alpha |
+| Local Parquet | Kaveon Engine direct read | Implemented |
+| Local Delta Lake | Kaveon Engine snapshot read, checkpoint-aware | Implemented |
+| Parquet and Delta on ADLS Gen2 | Kaveon Engine direct read | Implemented, in production use |
+| Iceberg | Kaveon Engine metadata and snapshot reader | Implemented |
+| S3 | Registerable catalog storage type | Registerable; not exercised in the hosted deployment |
 | Microsoft Fabric SQL / Azure SQL | Studio + API connector | Available |
-| PostgreSQL | Studio + API connector | Available |
 | MySQL | API connector; not exposed in Studio's source-type picker | Available through API |
 | StarRocks | Studio + API connector (MySQL protocol) | Available |
+| PostgreSQL | Studio + API connector | Available as a source; retired as Kaveon's own store |
 | Trino | No executable driver | Planned |
-| ADLS Gen2 / S3 | Kaveon Engine direct read | Planned |
-| Delta Lake on ADLS Gen2 / S3; Iceberg | Kaveon Engine table-format reader | Planned |
 
-Each current platform query targets one selected data source; cross-source federated execution is not implemented.
+Each platform query targets one selected data source; cross-source federated execution is not implemented.
+
+The Engine remains **alpha** as a database: the SQL surface is incomplete against Trino, and the qualification evidence under [`docs/qualification/`](docs/qualification/) is the authority on what has actually been measured rather than this table.
 
 ## Repository map
 
