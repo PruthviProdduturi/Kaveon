@@ -211,6 +211,11 @@ impl Default for ExchangeStore {
 
 impl ExchangeStore {
     pub fn insert(&self, chunk: ExchangeChunk) -> ExchangeResult<()> {
+        // HTTP uploads are decoded with these limits before reaching the
+        // store, but internal callers can construct chunks directly. Apply
+        // the same envelope limits here so every insertion path has the
+        // identical payload and chunk-count bounds.
+        chunk.validate(ExchangeLimits::default())?;
         let mut state = self
             .state
             .write()
@@ -1679,6 +1684,30 @@ mod tests {
         );
         assert!(store.remove(&identity()).unwrap());
         assert_eq!(store.get(&identity()), Err(ExchangeError::ExchangeNotFound));
+    }
+
+    #[test]
+    fn store_rejects_chunks_that_bypass_wire_decode_limits() {
+        let store = ExchangeStore::default();
+        let oversized = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: vec![0; DEFAULT_MAX_CHUNK_BYTES + 1].into(),
+        };
+        assert_eq!(store.insert(oversized), Err(ExchangeError::ChunkTooLarge));
+
+        let invalid_index = ExchangeChunk {
+            identity: identity(),
+            chunk_index: DEFAULT_MAX_CHUNKS,
+            chunk_count: 0,
+            payload: vec![1].into(),
+        };
+        assert_eq!(
+            store.insert(invalid_index),
+            Err(ExchangeError::InvalidChunkIndex)
+        );
+        assert_eq!(store.buffered_bytes().unwrap(), 0);
     }
 
     #[test]
