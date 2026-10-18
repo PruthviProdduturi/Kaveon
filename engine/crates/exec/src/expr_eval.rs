@@ -1939,6 +1939,27 @@ fn arrays_overlap_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(rows))
 }
 
+fn arrays_overlap_large_utf8(left: &LargeListArray, right: &LargeListArray) -> Result<ArrayRef> {
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+        ));
+    }
+    let rows = (0..left.len())
+        .map(|row| {
+            if left.is_null(row) || right.is_null(row) {
+                None
+            } else {
+                large_string_arrays_overlap(
+                    left.value(row).as_string::<i64>(),
+                    right.value(row).as_string::<i64>(),
+                )
+            }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(rows))
+}
+
 fn array_join_text<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     delimiter: &ArrayRef,
@@ -10968,20 +10989,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     DataType::Boolean => arrays_overlap_boolean(left, right),
                     DataType::Utf8 => arrays_overlap_utf8(left, right),
-                    DataType::LargeUtf8 => {
-                        let result = (0..left.len())
-                            .map(|row| {
-                                if left.is_null(row) || right.is_null(row) {
-                                    return None;
-                                }
-                                large_string_arrays_overlap(
-                                    left.value(row).as_string::<i64>(),
-                                    right.value(row).as_string::<i64>(),
-                                )
-                            })
-                            .collect::<BooleanArray>();
-                        Ok(Arc::new(result))
-                    }
+                    DataType::LargeUtf8 => arrays_overlap_large_utf8(left, right),
                     other => Err(KaveonError::Execution(format!(
                         "ARRAYS_OVERLAP does not support list element type {other}"
                     ))),
@@ -17703,6 +17711,28 @@ mod tests {
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 6);
         let average = eval_scalar_function("ARRAY_AVERAGE", &[extrema()], 1).unwrap();
         assert_eq!(average.as_primitive::<Float64Type>().value(0), 14.0 / 3.0);
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_large_utf8_lists() {
+        let mut left = LargeListBuilder::new(LargeStringBuilder::new());
+        left.values().append_value("alpha");
+        left.values().append_null();
+        left.append(true);
+        let mut right = LargeListBuilder::new(LargeStringBuilder::new());
+        right.values().append_value("omega");
+        right.values().append_value("alpha");
+        right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(left.finish()) as ArrayRef,
+                Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(result.as_boolean().value(0));
     }
 
     #[test]
