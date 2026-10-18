@@ -13884,6 +13884,12 @@ fn top_n_merge_contract(plan: &LogicalPlan) -> Option<(Vec<SortExpr>, usize)> {
     let LogicalPlan::Limit { input, count } = plan else {
         return None;
     };
+    // LIMIT 0 has an empty result schema but no candidate batch to merge. Let
+    // the ordinary execution path produce the empty result instead of
+    // dispatching every worker and failing with "without result rows".
+    if *count == 0 {
+        return None;
+    }
     let LogicalPlan::Sort {
         input: sort_input,
         order_by,
@@ -21802,6 +21808,16 @@ mod tests {
         assert_eq!(ordering.len(), 2);
         assert_eq!(limit, 5);
         assert!(top_n_merge_contract(&no_limit).is_none());
+    }
+
+    #[test]
+    fn does_not_dispatch_a_zero_limit_to_the_global_top_n_merge() {
+        let zero_limit = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region, total FROM orders ORDER BY total DESC LIMIT 0",
+        )
+        .unwrap();
+
+        assert!(top_n_merge_contract(&zero_limit).is_none());
     }
 
     #[test]
