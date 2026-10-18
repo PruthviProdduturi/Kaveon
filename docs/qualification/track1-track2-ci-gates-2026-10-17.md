@@ -34,3 +34,10 @@ workflow `39106853477` on 2026-10-18:
 This validates the source and release artifacts for the four-way join-reorder
 differential corpus. It does not change the remaining distributed qualification
 boundaries in the parity tracker.
+
+The current source also passes the focused Trino compatibility suite:
+
+```text
+cargo test -p kaveon-server trino_ --quiet
+29 passed; 0 failed; 401 filtered out; finished in 0.28s
+```
