@@ -13,8 +13,9 @@ exchange cleanup.
 
 The deterministic three-worker orchestrator gate starts a consumer, removes
 its worker, submits the old attempt's completion, and asserts that completion
-is rejected. It then replays the producer stage and completes the replacement
-consumer on the surviving worker. The existing sequential-loss assertions
+is rejected. It repeats that sequence after a second worker loss, proving that
+both superseded attempts remain fenced. It then replays the producer stage and
+completes the replacement consumer on the surviving worker. The assertions
 also verify the final survivor and retry budget.
 
 ```text
