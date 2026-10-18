@@ -69,6 +69,14 @@ pub struct FinalMergeSpill {
     /// Of the tables, those written for a source thread's refusal rather
     /// than this merge's own.
     pub on_pressure: u64,
+    /// Final-merge partitions that were recursively repartitioned after a
+    /// memory refusal.  A non-zero value is an explicit skew signal: the
+    /// input was valid, but one hash bucket did not fit the bounded merge.
+    pub repartitioned_partitions: u64,
+    /// Deepest recursive repartition level reached by this merge.  The
+    /// runtime caps this at `FINAL_REPARTITION_MAX_LEVEL` and fails closed
+    /// after the cap rather than retrying indefinitely.
+    pub max_repartition_level: u8,
 }
 
 pub struct HybridFinalMerge {
@@ -265,6 +273,10 @@ impl HybridFinalMerge {
                 Err(KaveonError::MemoryLimit(_message))
                     if self.spill.is_some() && level < FINAL_REPARTITION_MAX_LEVEL =>
                 {
+                    self.spilled.repartitioned_partitions =
+                        self.spilled.repartitioned_partitions.saturating_add(1);
+                    self.spilled.max_repartition_level =
+                        self.spilled.max_repartition_level.max(level + 1);
                     // Release the failed merger before repartitioning.  The
                     // child runs are then merged one at a time, each with a
                     // bounded working set.
@@ -746,7 +758,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use kaveon_core::{BatchOperator, KaveonError, QueryMemoryPool, Result};
 
-    use super::HybridFinalMerge;
+    use super::{FINAL_REPARTITION_MAX_LEVEL, HybridFinalMerge};
     use crate::aggregate::{
         AggregateState, AggregateValue, GroupedAggregateState,
         grouped_aggregate_states_to_typed_batch,
@@ -1322,15 +1334,28 @@ mod tests {
         let pool = QueryMemoryPool::new("skew", 6 << 20).unwrap();
         let spill = SpillManager::new(spill_root("skew"), 1 << 30).unwrap();
         // One sub-partition: everything spilled comes back at once.
-        let mut merged =
-            hybrid_final(batches(&batches_all), &pool, Some((spill.clone(), 1))).unwrap();
-        let error = totals(&mut *merged).unwrap_err();
+        let mut merge = HybridFinalMerge::new(
+            batches(&batches_all),
+            pool.operator("final").unwrap(),
+            Some((spill.clone(), 1)),
+        )
+        .unwrap();
+        let error = match merge.next_groups() {
+            Err(error) => error,
+            Ok(_) => panic!("skewed final partition unexpectedly fit"),
+        };
         assert!(
             matches!(&error, KaveonError::MemoryLimit(message) if message.contains("sub-partition 1 of 1")),
             "{error}"
         );
-        assert!(merged.next_batch().unwrap().is_none());
-        drop(merged);
+        let skew = merge.spilled();
+        assert!(skew.repartitioned_partitions > 0, "{skew:?}");
+        assert!(
+            skew.max_repartition_level <= FINAL_REPARTITION_MAX_LEVEL,
+            "{skew:?}"
+        );
+        assert!(skew.max_repartition_level >= 1, "{skew:?}");
+        drop(merge);
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
     }
