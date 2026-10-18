@@ -530,7 +530,7 @@ fn split_json_returning(inner: &str) -> Option<(&str, String)> {
                 let upper_type = type_name.to_ascii_uppercase();
                 let data_type = match upper_type.as_str() {
                     "TINYINT" | "SMALLINT" | "BIGINT" | "INTEGER" | "DOUBLE" | "REAL"
-                    | "BOOLEAN" | "VARCHAR" | "JSON" => upper_type,
+                    | "BOOLEAN" | "VARCHAR" | "DATE" | "TIMESTAMP" | "JSON" => upper_type,
                     _ => parse_json_decimal_type(type_name)?,
                 };
                 return (!arguments.trim().is_empty()).then_some((arguments, data_type));
@@ -1608,6 +1608,17 @@ mod tests {
             rendered.contains(
                 "CAST(JSON_QUERY_DEFAULT('not-json', '$.missing', NULL, '{\"fallback\":2}') AS JSON)"
             ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn json_value_date_returning_lowers_through_cast() {
+        let statements = parse_sql("SELECT JSON_VALUE(payload, '$.day' RETURNING DATE) FROM t")
+            .expect("JSON_VALUE DATE RETURNING should use the existing cast path");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("CAST(JSON_VALUE(payload, '$.day') AS DATE)"),
             "{rendered}"
         );
     }
