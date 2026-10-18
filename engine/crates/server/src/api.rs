@@ -6066,6 +6066,7 @@ async fn run_statement(
             &context.schema,
             &context.catalog_snapshot_id,
             &access_scope.cache_key(),
+            &crate::result_cache::parameter_digest(&req.parameters, &req.named_parameters),
             &planning_source_pins.delta_versions,
             context.time_zone.as_deref(),
         )

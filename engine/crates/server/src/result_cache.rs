@@ -19,6 +19,7 @@
 use crate::api::ColumnInfo;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
@@ -41,18 +42,27 @@ pub struct ResultCacheKey {
     /// between principals (or between role changes for one principal), even
     /// when the SQL and lake snapshot are identical.
     pub authorization_scope: String,
+    /// A digest of positional and named bound parameters. Parameters are
+    /// part of the result even when the SQL text is unchanged; keeping only
+    /// the statement here would let `WHERE id = $1` reuse another value's
+    /// rows.
+    pub parameter_digest: String,
     /// Source location to Delta version, as the planner pinned them.
     pub delta_versions: BTreeMap<String, u64>,
     pub time_zone: Option<String>,
 }
 
 impl ResultCacheKey {
+    // The key intentionally spells out each independent result determinant;
+    // grouping them into an opaque options struct would make omissions easier.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sql: &str,
         catalog: &str,
         schema: &str,
         catalog_snapshot_id: &str,
         authorization_scope: &str,
+        parameter_digest: &str,
         delta_versions: &BTreeMap<String, u64>,
         time_zone: Option<&str>,
     ) -> Self {
@@ -62,10 +72,70 @@ impl ResultCacheKey {
             schema: schema.to_owned(),
             catalog_snapshot_id: catalog_snapshot_id.to_owned(),
             authorization_scope: authorization_scope.to_owned(),
+            parameter_digest: parameter_digest.to_owned(),
             delta_versions: delta_versions.clone(),
             time_zone: time_zone.map(str::to_owned),
         }
     }
+}
+
+/// Returns a stable, non-reversible identity for bound parameters. Named
+/// parameter object order is ignored, while positional and nested array order
+/// remains significant. The values themselves never enter cache keys,
+/// telemetry, or query records.
+pub fn parameter_digest(
+    positional: &[Value],
+    named: &std::collections::HashMap<String, Value>,
+) -> String {
+    fn append(digest: &mut Sha256, value: &Value) {
+        match value {
+            Value::Null => digest.update(b"null"),
+            Value::Bool(value) => digest.update(if *value { b"bool:1" } else { b"bool:0" }),
+            Value::Number(value) => {
+                digest.update(b"number:");
+                digest.update(value.to_string().as_bytes());
+            }
+            Value::String(value) => {
+                digest.update(b"string:");
+                digest.update((value.len() as u64).to_be_bytes());
+                digest.update(value.as_bytes());
+            }
+            Value::Array(values) => {
+                digest.update(b"array:");
+                digest.update((values.len() as u64).to_be_bytes());
+                for value in values {
+                    append(digest, value);
+                }
+            }
+            Value::Object(values) => {
+                digest.update(b"object:");
+                let mut keys = values.keys().collect::<Vec<_>>();
+                keys.sort_unstable();
+                digest.update((keys.len() as u64).to_be_bytes());
+                for key in keys {
+                    digest.update((key.len() as u64).to_be_bytes());
+                    digest.update(key.as_bytes());
+                    append(digest, &values[key]);
+                }
+            }
+        }
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(b"kaveon-result-parameters-v1");
+    digest.update((positional.len() as u64).to_be_bytes());
+    for value in positional {
+        append(&mut digest, value);
+    }
+    let mut names = named.keys().collect::<Vec<_>>();
+    names.sort_unstable();
+    digest.update((names.len() as u64).to_be_bytes());
+    for name in names {
+        digest.update((name.len() as u64).to_be_bytes());
+        digest.update(name.as_bytes());
+        append(&mut digest, &named[name]);
+    }
+    format!("sha256:{:x}", digest.finalize())
 }
 
 /// The statement text as the key sees it. Whitespace runs outside quotes
@@ -397,6 +467,7 @@ mod tests {
             "sales",
             "snapshot-1",
             "analyst:alice",
+            "parameters:none",
             &BTreeMap::new(),
             None,
         )
@@ -446,12 +517,15 @@ mod tests {
         other_zone.time_zone = Some("UTC".into());
         let mut other_principal = base.clone();
         other_principal.authorization_scope = "analyst:bob".into();
+        let mut other_parameters = base.clone();
+        other_parameters.parameter_digest = "parameters:other".into();
         for other in [
             other_schema,
             other_snapshot,
             other_version,
             other_zone,
             other_principal,
+            other_parameters,
         ] {
             assert_ne!(base, other);
         }
@@ -569,5 +643,50 @@ mod tests {
         assert_eq!(stats.entries, 1);
         assert_eq!(stats.bytes, result_bytes(&columns(), &rows(1, 1)));
         assert_eq!(cache.get(&key("SELECT 1")).unwrap().query_id, "q2");
+    }
+
+    #[test]
+    fn parameter_digest_is_value_sensitive_but_named_order_independent() {
+        let positional_a = vec![serde_json::json!(7), serde_json::json!(["x", "y"])];
+        let positional_b = vec![serde_json::json!(8), serde_json::json!(["x", "y"])];
+        let named_a = std::collections::HashMap::from([
+            ("region".to_owned(), serde_json::json!("west")),
+            ("active".to_owned(), serde_json::json!(true)),
+        ]);
+        let named_b = std::collections::HashMap::from([
+            ("active".to_owned(), serde_json::json!(true)),
+            ("region".to_owned(), serde_json::json!("west")),
+        ]);
+        assert_eq!(
+            parameter_digest(&positional_a, &named_a),
+            parameter_digest(&positional_a, &named_b)
+        );
+        assert_ne!(
+            parameter_digest(&positional_a, &named_a),
+            parameter_digest(&positional_b, &named_a)
+        );
+    }
+
+    #[test]
+    fn parameterized_statements_never_reuse_another_binding() {
+        let cache = ResultCache::new(1 << 20, Duration::from_secs(60));
+        let named = std::collections::HashMap::new();
+        let first = parameter_digest(&[serde_json::json!(7)], &named);
+        let second = parameter_digest(&[serde_json::json!(8)], &named);
+        let mut first_key = key("SELECT * FROM events WHERE id = $1");
+        first_key.parameter_digest = first;
+        let mut second_key = first_key.clone();
+        second_key.parameter_digest = second;
+
+        assert!(cache.insert(
+            first_key,
+            &columns(),
+            &[vec![serde_json::json!(7)]],
+            1,
+            "q1"
+        ));
+        assert!(cache.get(&second_key).is_none());
+        assert_eq!(cache.stats().hits, 0);
+        assert_eq!(cache.stats().misses, 1);
     }
 }
