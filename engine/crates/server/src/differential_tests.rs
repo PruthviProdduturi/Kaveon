@@ -3588,6 +3588,36 @@ fn derived_values_join_using_matches_the_local_result() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Runtime filtering must preserve Float32 identity. Values above the
+/// Float32 integer precision boundary are intentionally used so a filter that
+/// widens or narrows through an imprecise host representation cannot admit or
+/// discard a probe row differently from the exact join.
+#[test]
+fn distributed_float32_join_runtime_filter_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-float32-runtime-filter-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT l.key, r.label FROM (VALUES (CAST(16777216 AS REAL)), (CAST(16777217 AS REAL)), (CAST(16777218 AS REAL))) AS l(key) JOIN (VALUES (CAST(16777216 AS REAL), 'first'), (CAST(16777218 AS REAL), 'second')) AS r(key, label) ON l.key = r.key ORDER BY l.key, r.label";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-float32-runtime-filter", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// FULL JOIN USING must keep SQL NULL keys non-matching and preserve the
 /// merged key/coalescing shape across distributed fragments.
 #[test]

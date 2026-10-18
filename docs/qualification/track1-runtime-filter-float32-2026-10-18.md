@@ -1,11 +1,31 @@
-# Track 1 Float32 runtime-filter qualification
+# Track 1 Float32 runtime dynamic filtering — 2026-10-18
 
-Kaveon now compiles an exact `Float64` build-side runtime-filter value into an Arrow `Float32` literal when the value is exactly representable by `f32`. Values that would round during narrowing are left out of storage pushdown, preserving correctness rather than changing the join key. The local Parquet reader applies the filter before decoding the first batch.
+## Boundary
+
+Join key extraction now preserves `REAL`/Arrow `Float32` identity in the
+runtime filter path, including canonical `-0.0` and NaN handling. Previously
+Float32 keys fell through the generic key path as unsupported, preventing the
+partitioned join's build-side filter from being applied. The exact join index
+and the runtime filter now use the same Float32 bit representation, so values
+near the 24-bit precision boundary cannot be widened and compared incorrectly.
 
 ## Evidence
 
-- Test: `cargo test -p kaveon-storage applies_float32_runtime_filter_without_rounding --quiet`
-- The fixture contains four `Float32` rows in two row groups and the runtime filter selects exactly `2.25`.
-- The result contains only the matching row, proving the filter is evaluated with the column's physical type.
+The focused executor regression verifies absent keys are rejected while values
+above the Float32 integer precision boundary retain exact Float32 semantics:
 
-This qualifies the local Parquet Float32 equality path. It does not qualify Float32 runtime filtering across every object-store reader or deployed cloud image, and it does not add Decimal256 or scale conversion.
+```text
+cargo test -p kaveon-exec runtime_join_filter -- --nocapture
+```
+
+The three-worker local/distributed differential uses `REAL` join keys and
+compares the complete ordered result:
+
+```text
+cargo test -p kaveon-server distributed_float32_join_runtime_filter -- --nocapture
+```
+
+Both focused gates pass locally.
+
+This covers Float32 runtime filtering only. Broader adaptive filter exchange
+and cloud object-store qualification remain open.
