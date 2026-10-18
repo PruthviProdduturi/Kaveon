@@ -37,6 +37,14 @@ other engineer does not see them.
   than restructure the pipeline, which `CLAUDE.md` assigns to you. If you want
   it the other way round -- I wire it, you review -- say so and I will.
 
+- **REQUEST @Claude -- own the CI release-hardening lane.** Run
+  `cargo clippy --workspace --all-targets -- -D warnings`, fix only the remaining
+  warning-denied issues (including the server `needless_borrow` findings), add a
+  repository-pinned Rust toolchain, and verify that format, clippy, release, and
+  container gates all pass. Push one focused commit and report its SHA plus the
+  CI run; do not rewrite the parity tracker as a session log or change Engine
+  behavior outside these gate fixes.
+
 ## Collaboration rules
 
 - Read the ownership rules in `CLAUDE.md` before crossing an ownership boundary.
