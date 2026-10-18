@@ -25,8 +25,9 @@ cargo clippy -p kaveon-exec --lib -- -D warnings
 The focused test suite passes both the existing named-field dereference case
 and a nullable-parent case whose results are `[7, NULL]`. The server
 differential test `distributed_row_subscript_matches_local_and_rejects_invalid_constant_index`
-also projects two explicit `ROW_FIELD` values through the local planner and
-the in-process three-worker fragment path, including an empty worker
-partition, and compares the typed results and NULL-parent propagation.
+also projects two direct and one nested explicit `ROW_FIELD` value through
+the local planner and the in-process three-worker fragment path, including an
+empty worker partition plus independent outer and nested NULL validity, and
+compares the typed results and NULL-parent propagation.
 External-client wire and cloud qualification for nullable ROW dereference
 remain open.

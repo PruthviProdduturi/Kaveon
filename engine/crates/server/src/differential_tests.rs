@@ -1985,11 +1985,21 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
         vec![
             Field::new("field0", DataType::Int64, true),
             Field::new("field1", DataType::Utf8, true),
+            Field::new(
+                "nested",
+                DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+                true,
+            ),
         ]
         .into(),
         vec![
             Arc::new(Int64Array::from(vec![Some(7), Some(9), Some(11)])) as ArrayRef,
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])) as ArrayRef,
+            Arc::new(StructArray::new(
+                vec![Field::new("value", DataType::Int64, true)].into(),
+                vec![Arc::new(Int64Array::from(vec![Some(21), Some(22), Some(23)])) as ArrayRef],
+                Some(arrow::buffer::NullBuffer::from(vec![true, true, false])),
+            )) as ArrayRef,
         ],
         Some(arrow::buffer::NullBuffer::from(vec![true, false, true])),
     );
@@ -2015,7 +2025,7 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
-    let statement = "SELECT record[1] AS first, record[2] AS second, ROW_FIELD(record, 'field0') AS named_first, ROW_FIELD(record, 'field1') AS named_second FROM events";
+    let statement = "SELECT record[1] AS first, record[2] AS second, ROW_FIELD(record, 'field0') AS named_first, ROW_FIELD(record, 'field1') AS named_second, ROW_FIELD(ROW_FIELD(record, 'nested'), 'value') AS nested_value FROM events";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-row-subscript", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
@@ -2040,20 +2050,20 @@ fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() 
     assert_eq!(
         actual,
         vec![
-            "11\u{1f}c\u{1f}11\u{1f}c",
-            "7\u{1f}a\u{1f}7\u{1f}a",
-            "NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL",
+            "11\u{1f}c\u{1f}11\u{1f}c\u{1f}NULL",
+            "7\u{1f}a\u{1f}7\u{1f}a\u{1f}21",
+            "NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL\u{1f}NULL",
         ]
     );
     assert_eq!(pool.snapshot().current_bytes, 0);
 
-    let invalid = "SELECT record[3] FROM events";
+    let invalid = "SELECT record[4] FROM events";
     let invalid_plan = bound_plan(invalid, &manager);
     let error = execute_distributed(invalid, &invalid_plan, &manager, 3, &pool)
         .expect_err("an out-of-range constant ROW index must fail closed")
         .to_string();
     assert!(
-        error.contains("ROW subscript index 3 is out of bounds"),
+        error.contains("ROW subscript index 4 is out of bounds"),
         "{error}"
     );
     assert_eq!(pool.snapshot().current_bytes, 0);
