@@ -1760,6 +1760,23 @@ impl ColumnarGroups {
         {
             return self.push_single_int64_count(&key_columns[0], rows);
         }
+        if key_columns.len() == 1
+            && value_columns.len() == 1
+            && value_columns[0].is_some()
+            && matches!(
+                self.keys.first(),
+                Some(KeyColumn::Integer {
+                    data_type: DataType::Int64,
+                    ..
+                })
+            )
+            && matches!(
+                self.accumulators.first(),
+                Some(AccColumn::IntegerSum { .. })
+            )
+        {
+            return self.push_single_int64_sum(&key_columns[0], value_columns[0], rows);
+        }
         let mut new_bytes = 0u64;
         let stride = self.stride();
         self.packed.clear();
@@ -1915,6 +1932,75 @@ impl ColumnarGroups {
                 }
             };
             if !is_new && let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
+                counts[slot as usize] += 1;
+            }
+        }
+        Ok((created, 0))
+    }
+
+    /// Fused one-Int64-key SUM(Int64) update. Null input values retain the
+    /// aggregate identity and do not increment its non-null count.
+    fn push_single_int64_sum(
+        &mut self,
+        key_array: &ArrayRef,
+        value_array: Option<&ArrayRef>,
+        rows: usize,
+    ) -> Result<(usize, u64)> {
+        let key_values = key_array
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| exec_err("Int64 sum fast path received another key type"))?;
+        let value_array =
+            value_array.ok_or_else(|| exec_err("sum fast path is missing a value"))?;
+        let sum_values = value_array
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| exec_err("Int64 sum fast path received another value type"))?;
+        let mut created = 0usize;
+        for row in 0..rows {
+            let key_null = key_values.is_null(row);
+            let word = if key_null {
+                0
+            } else {
+                key_values.value(row) as u64
+            };
+            let packed = [word, u64::from(key_null)];
+            let hash = packed_hash(&packed);
+            if self.index.is_full() {
+                let keys = &self.keys;
+                self.index.grow(self.uses_large_integer_growth(), |slot| {
+                    slot_hash(keys, slot as usize)
+                });
+            }
+            let keys = &self.keys;
+            let slot = match self
+                .index
+                .probe(hash, |slot| key_matches(keys, slot as usize, &packed))
+            {
+                Probe::Found(slot) => slot,
+                Probe::Vacant(bucket) => {
+                    let slot = u32::try_from(self.len)
+                        .map_err(|_| exec_err("too many groups for one task"))?;
+                    if let Some(KeyColumn::Integer { values, nulls, .. }) = self.keys.first_mut() {
+                        values.push(if key_null { 0 } else { key_values.value(row) });
+                        nulls.push(key_null);
+                    }
+                    if let Some(AccColumn::IntegerSum { sums, counts }) =
+                        self.accumulators.first_mut()
+                    {
+                        sums.push(0);
+                        counts.push(0);
+                    }
+                    self.index.occupy(bucket, hash, slot);
+                    self.len += 1;
+                    created += 1;
+                    slot
+                }
+            };
+            if sum_values.is_valid(row)
+                && let Some(AccColumn::IntegerSum { sums, counts }) = self.accumulators.first_mut()
+            {
+                sums[slot as usize] += i128::from(sum_values.value(row));
                 counts[slot as usize] += 1;
             }
         }
@@ -3255,5 +3341,45 @@ mod tests {
         assert!(result.contains(&(vec![GroupKey::Int64(4)], vec![AggregateState::Count(2)])));
         assert!(result.contains(&(vec![GroupKey::Int64(9)], vec![AggregateState::Count(1)])));
         assert!(result.contains(&(vec![GroupKey::Null], vec![AggregateState::Count(2)])));
+    }
+
+    #[test]
+    fn fused_int64_sum_path_preserves_null_values_and_duplicate_groups() {
+        let mut groups = ColumnarGroups::new(
+            &[DataType::Int64],
+            &[AggregateState::IntegerSum { sum: 0, count: 0 }],
+        )
+        .unwrap();
+        let keys: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(4),
+            None,
+            Some(4),
+            Some(9),
+            None,
+        ]));
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(10),
+            Some(99),
+            None,
+            Some(-3),
+            None,
+        ]));
+        let (created, encoded_bytes) = groups.push_batch(&[keys], &[Some(&values)], 5).unwrap();
+        assert_eq!(created, 3);
+        assert_eq!(encoded_bytes, 0);
+        let mut result = groups.into_groups();
+        result.sort_by_key(|(keys, _)| format!("{keys:?}"));
+        assert!(result.contains(&(
+            vec![GroupKey::Int64(4)],
+            vec![AggregateState::IntegerSum { sum: 10, count: 1 }]
+        )));
+        assert!(result.contains(&(
+            vec![GroupKey::Int64(9)],
+            vec![AggregateState::IntegerSum { sum: -3, count: 1 }]
+        )));
+        assert!(result.contains(&(
+            vec![GroupKey::Null],
+            vec![AggregateState::IntegerSum { sum: 99, count: 1 }]
+        )));
     }
 }
