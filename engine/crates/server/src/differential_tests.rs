@@ -4828,6 +4828,28 @@ fn distributed_array_first_last_match_local_for_empty_and_null_literals() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_map_concat_null_input_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-map-concat-null-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT MAP_CONCAT(CAST(NULL AS MAP(VARCHAR, BIGINT)), MAP(ARRAY['a'], ARRAY[1])) AS merged FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-concat-null", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    assert_eq!(expected, vec!["NULL"]);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Runtime filtering must preserve Float32 identity. Values above the
 /// Float32 integer precision boundary are intentionally used so a filter that
 /// widens or narrows through an imprecise host representation cannot admit or

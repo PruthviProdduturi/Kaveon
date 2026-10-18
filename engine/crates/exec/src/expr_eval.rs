@@ -193,7 +193,7 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             list,
             negated,
         } => eval_in_list(expr, list, *negated, batch),
-        Expr::Cast { expr, data_type } => eval_cast(expr, *data_type, batch),
+        Expr::Cast { expr, data_type } => eval_cast(expr, data_type.clone(), batch),
         Expr::Function { name, args } => {
             if let Some(result) = eval_function_through_dictionary(name, args, batch)? {
                 return Ok(result);
