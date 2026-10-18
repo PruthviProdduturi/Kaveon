@@ -506,7 +506,7 @@ impl HybridFinalMerge {
             );
         }
         if self.merger_memory.is_none() {
-            let prepaid = if self.spill.is_some() {
+            let prepaid = if self.spill.is_some() && self.pressure.is_some() {
                 (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
             } else {
                 0
@@ -545,7 +545,7 @@ impl HybridFinalMerge {
     /// retrying preserve the same exact semantics as `push`.
     fn push_selected(&mut self, batch: &RecordBatch, selected: &[u32]) -> Result<()> {
         if self.merger_memory.is_none() {
-            let prepaid = if self.spill.is_some() {
+            let prepaid = if self.spill.is_some() && self.pressure.is_some() {
                 (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
             } else {
                 0
