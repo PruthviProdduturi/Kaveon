@@ -529,8 +529,18 @@ fn split_json_returning(inner: &str) -> Option<(&str, String)> {
                 let type_name = inner[type_start..].trim();
                 let upper_type = type_name.to_ascii_uppercase();
                 let data_type = match upper_type.as_str() {
-                    "TINYINT" | "SMALLINT" | "BIGINT" | "INTEGER" | "DOUBLE" | "REAL"
-                    | "BOOLEAN" | "VARCHAR" | "DATE" | "TIMESTAMP" | "JSON" => upper_type,
+                    "TINYINT"
+                    | "SMALLINT"
+                    | "BIGINT"
+                    | "INTEGER"
+                    | "DOUBLE"
+                    | "REAL"
+                    | "BOOLEAN"
+                    | "VARCHAR"
+                    | "DATE"
+                    | "TIMESTAMP"
+                    | "TIMESTAMP WITH TIME ZONE"
+                    | "JSON" => upper_type,
                     _ => parse_json_decimal_type(type_name)?,
                 };
                 return (!arguments.trim().is_empty()).then_some((arguments, data_type));
@@ -1631,6 +1641,19 @@ mod tests {
         let rendered = statements[0].to_string();
         assert!(
             rendered.contains("CAST(JSON_VALUE(payload, '$.created') AS TIMESTAMP)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn json_value_timestamp_with_timezone_returning_lowers_through_cast() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.created' RETURNING TIMESTAMP WITH TIME ZONE) FROM t",
+        )
+        .expect("JSON_VALUE TIMESTAMP WITH TIME ZONE should use the existing cast path");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("CAST(JSON_VALUE(payload, '$.created') AS TIMESTAMP WITH TIME ZONE)"),
             "{rendered}"
         );
     }

@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, Date32Array, Int64Array, StringArray, StringDictionaryBuilder, StructArray,
+    TimestampMicrosecondArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -2847,6 +2848,40 @@ fn distributed_json_value_timestamp_returning_matches_local_semantics() {
     );
     assert_eq!(expected, vec!["2024-01-02T03:04:05"]);
     assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_json_value_timestamp_with_timezone_returning_matches_local_semantics() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-timestamp-tz-returning-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"created\":\"2024-01-02 03:04:05+02:00\"}'), '$.created' RETURNING TIMESTAMP WITH TIME ZONE) AS created_value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-timestamp-tz-returning", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected_batches = drain(local.operator.as_mut());
+    drop(local);
+    let actual_batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement} distributed: {error}"));
+    let expected = expected_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .expect("local JSON_VALUE timestamp-with-time-zone result");
+    let actual = actual_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .expect("distributed JSON_VALUE timestamp-with-time-zone result");
+    assert_eq!(expected.data_type(), actual.data_type());
+    assert_eq!(expected.value(0), 1_704_157_445_000_000);
+    assert_eq!(actual.value(0), expected.value(0));
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
