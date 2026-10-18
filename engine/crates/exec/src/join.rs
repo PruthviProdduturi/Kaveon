@@ -380,6 +380,13 @@ impl BuildKeyFilter {
                                 precision: 38,
                                 scale: *scale,
                             },
+                            Key::Float32(bits) => {
+                                let value = f32::from_bits(*bits);
+                                if !value.is_finite() {
+                                    continue;
+                                }
+                                ScalarValue::Float64(f64::from(value))
+                            }
                             Key::Float64(bits) => {
                                 let value = f64::from_bits(*bits);
                                 if !value.is_finite() {
@@ -1141,6 +1148,7 @@ enum Key {
     UInt64(u64),
     Decimal(i128, i8),
     Decimal256(arrow::datatypes::i256, i8),
+    Float32(u32),
     Float64(u64),
     Utf8(String),
 }
@@ -1696,6 +1704,18 @@ fn row_key(
                         .value(row),
                     *scale,
                 ),
+                DataType::Float32 => {
+                    let value = column
+                        .as_primitive::<arrow::datatypes::Float32Type>()
+                        .value(row);
+                    Key::Float32(if value == 0.0 {
+                        0
+                    } else if value.is_nan() {
+                        f32::NAN.to_bits()
+                    } else {
+                        value.to_bits()
+                    })
+                }
                 DataType::Float64 => {
                     let value = column
                         .as_primitive::<arrow::datatypes::Float64Type>()

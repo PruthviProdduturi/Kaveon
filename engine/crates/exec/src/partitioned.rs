@@ -3737,6 +3737,57 @@ mod tests {
     }
 
     #[test]
+    fn runtime_join_filter_accepts_float32_keys_without_float_precision_loss() {
+        use arrow::array::Float32Array;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Float32,
+            true,
+        )]));
+        let build = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Float32Array::from(vec![
+                Some(16_777_216.0),
+                Some(16_777_218.0),
+            ]))],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Float32Array::from(vec![
+                Some(16_777_216.0),
+                Some(16_777_217.0),
+                Some(16_777_218.0),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let mut operator = RuntimeJoinFilter::new(
+            Box::new(Input {
+                schema,
+                batches: VecDeque::from([probe]),
+            }),
+            filter,
+        );
+        let batch = operator.next_batch().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap()
+                .values()
+                .as_ref(),
+            &[16_777_216.0, 16_777_218.0]
+        );
+        assert!(operator.next_batch().unwrap().is_none());
+    }
+
+    #[test]
     fn runtime_join_filter_uses_typed_unsigned_and_date_indexes() {
         use arrow::array::{Date32Array, UInt64Array};
 
