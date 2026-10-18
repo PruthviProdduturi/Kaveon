@@ -16,3 +16,21 @@ stack. CI completed the web/API checks and secret scan.
 These gates validate the pushed source and build artifacts. They do not close
 the capability boundaries in the parity tracker; those still require the
 workload and distributed-runtime evidence named by each tracker row.
+
+## Latest validated source
+
+The join-reorder corpus extension in
+`c9143519cf4368e3e003a4b9521b8b18388f60a8` passed the complete Engine release
+workflow `39106853477` on 2026-10-18:
+
+| Gate | Result |
+| --- | --- |
+| Format, workspace Clippy, full workspace tests | success |
+| Linux x86_64 release build and CLI workflow | success |
+| Windows x86_64 release build and CLI workflow | success |
+| macOS ARM64 release build and CLI workflow | success |
+| Dev release publication | success |
+
+This validates the source and release artifacts for the four-way join-reorder
+differential corpus. It does not change the remaining distributed qualification
+boundaries in the parity tracker.
