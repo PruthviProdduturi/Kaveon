@@ -1558,6 +1558,7 @@ pub const MAX_JOIN_SPILL_DEPTH: u32 = 3;
 // depth cap remains the fail-closed guard for that case.
 const JOIN_SKEW_SPLIT_RATIO: u128 = 4;
 const JOIN_SKEW_SPLIT_MIN_ROWS: u64 = 4_096;
+const JOIN_SKEW_SPLIT_MIN_BYTES: u64 = 4 * 1024 * 1024;
 
 const JOIN_SPILL_METRICS_RESOURCE: &str = "kaveon.exec.join-spill-metrics.v1";
 
@@ -1669,7 +1670,8 @@ fn spill_salt(depth: u32) -> u64 {
 /// is intentionally excluded because it is either a single hot key or a
 /// small-domain hash collision; repartitioning it cannot be assumed to help.
 fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
-    let mut total = 0_u64;
+    let mut total_rows = 0_u64;
+    let mut total_bytes = 0_u64;
     let mut non_empty = 0_u64;
     let mut largest = None;
     for (index, partition) in partitions.iter().enumerate() {
@@ -1680,20 +1682,32 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
         if rows == 0 {
             continue;
         }
+        let bytes = partition
+            .iter()
+            .map(SpillRun::bytes)
+            .fold(0_u64, u64::saturating_add);
         non_empty = non_empty.saturating_add(1);
-        total = total.saturating_add(rows);
-        if largest.is_none_or(|(_, current)| rows > current) {
-            largest = Some((index, rows));
+        total_rows = total_rows.saturating_add(rows);
+        total_bytes = total_bytes.saturating_add(bytes);
+        if largest.is_none_or(|(_, current_rows, _)| rows > current_rows) {
+            largest = Some((index, rows, bytes));
         }
     }
-    let (index, largest) = largest?;
-    if non_empty < 2 || total < JOIN_SKEW_SPLIT_MIN_ROWS {
+    let (index, largest_rows, largest_bytes) = largest?;
+    if non_empty < 2 {
         return None;
     }
-    // largest / (total / non_empty) >= ratio, written without a lossy
-    // integer mean and evaluated in u128 to avoid overflow.
-    (u128::from(largest) * u128::from(non_empty) >= u128::from(total) * JOIN_SKEW_SPLIT_RATIO)
-        .then_some(index)
+    // A partition may be hot by encoded bytes even when its row count is
+    // ordinary (for example, a wide string key). Split when either exact
+    // row or byte counts show a four-times mean imbalance, with independent
+    // minimums to keep tiny inputs on the established path.
+    let rows_skewed = total_rows >= JOIN_SKEW_SPLIT_MIN_ROWS
+        && u128::from(largest_rows) * u128::from(non_empty)
+            >= u128::from(total_rows) * JOIN_SKEW_SPLIT_RATIO;
+    let bytes_skewed = total_bytes >= JOIN_SKEW_SPLIT_MIN_BYTES
+        && u128::from(largest_bytes) * u128::from(non_empty)
+            >= u128::from(total_bytes) * JOIN_SKEW_SPLIT_RATIO;
+    (rows_skewed || bytes_skewed).then_some(index)
 }
 
 /// The level a refused build partitions to: the first for a whole
@@ -2819,6 +2833,47 @@ mod tests {
         assert_eq!(skewed_partition_index(&small), None);
         drop(skewed);
         drop(small);
+        assert_eq!(disk.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn skew_policy_splits_a_wide_partition_by_encoded_bytes() {
+        let disk = spill();
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, true)]));
+        let run = |rows: usize, width: usize| {
+            let values = (0..rows)
+                .map(|row| {
+                    // Use deterministic, low-compressibility payloads so the
+                    // assertion measures encoded bytes rather than a repeated
+                    // literal being collapsed by the spill codec.
+                    let mut state = row as u64 + 0x9e37_79b9_7f4a_7c15;
+                    let payload = (0..width)
+                        .map(|_| {
+                            state = state
+                                .wrapping_mul(6_364_136_223_846_793_005)
+                                .wrapping_add(1_442_695_040_888_963_407);
+                            (b'!' + ((state >> 32) % 94) as u8) as char
+                        })
+                        .collect::<String>();
+                    Some(format!("{row:08}-{payload}"))
+                })
+                .collect::<Vec<_>>();
+            disk.write_run(
+                &schema,
+                &[RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(values))],
+                )
+                .unwrap()],
+            )
+            .unwrap()
+        };
+        let wide = vec![run(512, 10_000)];
+        let partitions = std::iter::once(wide)
+            .chain((0..7).map(|_| vec![run(512, 1)]))
+            .collect::<Vec<_>>();
+        assert_eq!(skewed_partition_index(&partitions), Some(0));
+        drop(partitions);
         assert_eq!(disk.snapshot().current_bytes, 0);
     }
 
