@@ -511,7 +511,7 @@ pub(crate) fn storage_error(failure: impl std::fmt::Display) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::{
-        array::Int64Array,
+        array::{Float64Array, Int64Array},
         datatypes::{DataType, Field, Schema},
     };
     use object_store::memory::InMemory;
@@ -624,6 +624,56 @@ mod tests {
             );
         }
         assert_eq!(seen, vec![2, 4]);
+    }
+
+    #[test]
+    fn object_runtime_filter_preserves_float64_values_before_decode() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "score",
+            DataType::Float64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Float64Array::from(vec![
+                1.5_f64, 2.25_f64, 3.5_f64, 4.75_f64,
+            ]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("table/float64-runtime-filter.parquet");
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store.put(&path, bytes.into()))
+            .unwrap();
+
+        let mut source = ObjectParquetReader::new(store, path)
+            .with_columns(vec!["score".into()])
+            .with_late_materialisation(LateMaterialisation::Always)
+            .read_blocking()
+            .unwrap();
+        assert!(
+            source
+                .apply_runtime_filter("score", &[kaveon_core::ScalarValue::Float64(2.25_f64)])
+                .unwrap()
+        );
+        let mut seen = Vec::new();
+        while let Some(batch) = source.next_batch().unwrap() {
+            seen.extend(
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .iter()
+                    .flatten(),
+            );
+        }
+        assert_eq!(seen, vec![2.25_f64]);
     }
 
     /// The row filter over an object store: a LIKE over a text column
