@@ -877,8 +877,19 @@ pub struct StreamingOutput {
 }
 
 /// The IPC writer's sink: bytes accumulate here between chunk cuts.
-#[derive(Default)]
 struct ChunkBuffer(Vec<u8>);
+
+impl Default for ChunkBuffer {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl ChunkBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+}
 
 /// Exchange compression is deliberately opt-in while it is being qualified:
 /// on a same-host deployment LZ4 can cost more CPU than it saves in transport
@@ -920,7 +931,7 @@ impl StreamingOutput {
         limits.validate()?;
         identity.validate()?;
         let writer = StreamWriter::try_new_with_options(
-            ChunkBuffer::default(),
+            ChunkBuffer::with_capacity(limits.max_chunk_bytes),
             schema,
             exchange_writer_options()?,
         )
@@ -1716,6 +1727,20 @@ mod tests {
         let (_, payload) = assemble_chunks(vec![second, first], limits()).unwrap();
         assert_eq!(payload, b"leftright");
         assert_eq!(payload.capacity(), payload.len());
+    }
+
+    #[test]
+    fn streaming_exchange_buffer_starts_at_one_chunk_capacity() {
+        let limits = limits();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let output = StreamingOutput::new(identity(), &schema, sender, limits).unwrap();
+        let writer = output.writer.as_ref().unwrap();
+        assert!(writer.get_ref().0.capacity() >= limits.max_chunk_bytes);
     }
 
     #[test]
