@@ -24,7 +24,7 @@ use kaveon_storage::{
     AdlsParquetReader, DeltaTableReader, DirectoryListing, ObjectDeltaReader,
     ObjectDirectoryReader, ObjectParquetReader, ParquetReader, ScanPartition,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// What planning pinned for one query, keyed by resolved source URI: the
@@ -1466,11 +1466,7 @@ fn window_partition_columns(window_exprs: &[Expr]) -> Option<Vec<String>> {
         let Expr::WindowFunction { partition_by, .. } = expression else {
             return None;
         };
-        let columns = partition_by
-            .iter()
-            .map(expression_column)
-            .collect::<Result<Vec<_>>>()
-            .ok()?;
+        let columns = partition_columns_for_window(partition_by)?;
         if columns.is_empty() {
             return None;
         }
@@ -1490,6 +1486,37 @@ fn window_partition_columns(window_exprs: &[Expr]) -> Option<Vec<String>> {
         }
     }
     shared
+}
+
+/// Resolve window partition keys to the names available at the exchange
+/// boundary.  Qualified names are normally safe to unqualify, but two
+/// different relation qualifiers with the same leaf name are not: reducing
+/// `left.id, right.id` to one `id` would make the hash exchange silently
+/// ignore one of the keys.  Keep that shape on the conservative final-window
+/// path until the exchange can carry qualified output identities.
+fn partition_columns_for_window(partition_by: &[Expr]) -> Option<Vec<String>> {
+    let mut qualifiers = HashMap::<String, BTreeSet<String>>::new();
+    let mut columns = Vec::with_capacity(partition_by.len());
+    for expression in partition_by {
+        let original = match expression {
+            Expr::Column(column) => column,
+            _ => return None,
+        };
+        let column = expression_column(expression).ok()?;
+        if let Some((qualifier, _)) = original.rsplit_once('.') {
+            qualifiers
+                .entry(column.clone())
+                .or_default()
+                .insert(qualifier.to_owned());
+        }
+        columns.push(column);
+    }
+    if qualifiers.values().any(|sources| sources.len() > 1) {
+        return None;
+    }
+    columns.sort();
+    columns.dedup();
+    Some(columns)
 }
 
 struct StageGraphBuilder {
@@ -4878,6 +4905,28 @@ mod tests {
         assert_eq!(
             window_partition_columns(&[expr]),
             Some(vec!["category".into()])
+        );
+    }
+
+    #[test]
+    fn keeps_qualified_leaf_collisions_on_single_final_stage() {
+        let expr = |columns: &[&str]| kaveon_core::Expr::WindowFunction {
+            name: "ROW_NUMBER".into(),
+            args: vec![],
+            partition_by: columns
+                .iter()
+                .map(|column| kaveon_core::Expr::Column((*column).into()))
+                .collect(),
+            order_by: vec![],
+            frame: None,
+        };
+
+        // HashPartitioner receives output column names, so reducing these
+        // two distinct join-side keys to one bare `id` would silently drop a
+        // partition key and produce incorrect window boundaries.
+        assert_eq!(
+            window_partition_columns(&[expr(&["left.id", "right.id"])]),
+            None
         );
     }
 
