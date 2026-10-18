@@ -414,7 +414,15 @@ impl Binder<'_> {
             }
             LogicalPlan::Limit { input, count } => {
                 let input = self.bind(*input, outer)?;
-                uncorrelated(&input, "LIMIT")?;
+                // A scalar correlated OFFSET ... LIMIT 1 is decorrelated in
+                // the enclosing Join by ranking rows per equality key. Keep
+                // the bounded limit's correlations alive long enough for
+                // that rewrite; every other correlated paging shape is
+                // rejected by the Join path below rather than executing a
+                // globally-scoped limit by accident.
+                if !input.correlations.is_empty() && count != 1 {
+                    uncorrelated(&input, "LIMIT")?;
+                }
                 Ok(Bound {
                     plan: LogicalPlan::Limit {
                         input: Box::new(input.plan),
@@ -432,7 +440,6 @@ impl Binder<'_> {
                 if count == 0 {
                     return Ok(input);
                 }
-                uncorrelated(&input, "OFFSET")?;
                 Ok(Bound {
                     plan: LogicalPlan::Offset {
                         input: Box::new(input.plan),
@@ -572,6 +579,98 @@ impl Binder<'_> {
                     .partition(|correlation| correlation.depth() == outer.len());
                 let mut correlations = left.correlations;
                 correlations.extend(deeper);
+                if !lateral.is_empty() {
+                    let key_names = lateral
+                        .iter()
+                        .map(|correlation| match correlation {
+                            Correlation::Key { inner, .. } => Ok(inner.clone()),
+                            Correlation::Residual { .. } => Err(KaveonError::Sql(
+                                "a positive correlated scalar OFFSET requires equality correlations only; OFFSET inside a correlated subquery is not supported for residual predicates"
+                                    .into(),
+                            )),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    if let Some((mut plan, offset, limit, order_by)) =
+                        peel_scalar_paging(right.plan.clone())
+                    {
+                        if offset > 0 && limit == 1 {
+                            // The scalar projection hides the sort keys. Carry
+                            // each key through that projection before the
+                            // per-key window evaluates it; otherwise the
+                            // window would try to resolve the original inner
+                            // qualifier against only the scalar output.
+                            let mut window_order = Vec::with_capacity(order_by.len());
+                            if let LogicalPlan::Project { columns, .. } = &mut plan {
+                                for (expression, ascending, nulls_first) in order_by {
+                                    let name = self.fresh_name();
+                                    columns.push(Expr::Alias {
+                                        expr: Box::new(expression),
+                                        name: name.clone(),
+                                    });
+                                    window_order.push((Expr::Column(name), ascending, nulls_first));
+                                }
+                            } else if !order_by.is_empty() {
+                                return Err(KaveonError::Sql(
+                                    "correlated scalar OFFSET requires a projected order key"
+                                        .into(),
+                                ));
+                            }
+                            let rank = Expr::WindowFunction {
+                                name: "ROW_NUMBER".into(),
+                                args: Vec::new(),
+                                partition_by: key_names
+                                    .iter()
+                                    .map(|name| Expr::Column(name.clone()))
+                                    .collect(),
+                                order_by: window_order,
+                                frame: None,
+                            };
+                            let upper = i64::try_from(offset)
+                                .ok()
+                                .and_then(|value| value.checked_add(1))
+                                .ok_or_else(|| {
+                                    KaveonError::Sql("correlated scalar OFFSET is too large".into())
+                                })?;
+                            let rank_filter = Expr::And(
+                                Box::new(Expr::BinaryOp {
+                                    left: Box::new(rank.clone()),
+                                    op: BinaryOp::Gt,
+                                    right: Box::new(Expr::Literal(
+                                        kaveon_core::ScalarValue::Int64(
+                                            i64::try_from(offset).map_err(|_| {
+                                                KaveonError::Sql(
+                                                    "correlated scalar OFFSET is too large".into(),
+                                                )
+                                            })?,
+                                        ),
+                                    )),
+                                }),
+                                Box::new(Expr::BinaryOp {
+                                    left: Box::new(rank.clone()),
+                                    op: BinaryOp::Le,
+                                    right: Box::new(Expr::Literal(
+                                        kaveon_core::ScalarValue::Int64(upper),
+                                    )),
+                                }),
+                            );
+                            right.plan = LogicalPlan::Filter {
+                                input: Box::new(LogicalPlan::Window {
+                                    input: Box::new(plan),
+                                    window_exprs: vec![rank.clone()],
+                                }),
+                                predicate: rank_filter,
+                            };
+                        } else {
+                            return Err(KaveonError::Sql(
+                                "correlated paging supports only OFFSET n LIMIT 1".into(),
+                            ));
+                        }
+                    } else if contains_paging(&right.plan) {
+                        return Err(KaveonError::Sql(
+                            "correlated paging supports only scalar OFFSET n LIMIT 1".into(),
+                        ));
+                    }
+                }
                 // A correlated COUNT needs to retain an outer row when its
                 // grouped build side has no matching key. The aggregate
                 // emits no group for that key, so use a left join and turn
@@ -2035,6 +2134,61 @@ fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
     }
 }
 
+/// Peel the single bounded paging chain used by a scalar subquery while
+/// retaining its projection and sort. The returned plan has no LIMIT/OFFSET
+/// or Sort nodes; the caller applies the ordering through a per-key window.
+/// Refusing duplicate paging/order nodes keeps this rewrite from changing a
+/// nested derived relation's semantics.
+type ScalarPagingPlan = (LogicalPlan, usize, usize, Vec<(Expr, bool, bool)>);
+
+fn peel_scalar_paging(plan: LogicalPlan) -> Option<ScalarPagingPlan> {
+    fn peel(
+        plan: LogicalPlan,
+        offset: &mut Option<usize>,
+        limit: &mut Option<usize>,
+        order: &mut Option<Vec<(Expr, bool, bool)>>,
+    ) -> Option<LogicalPlan> {
+        match plan {
+            LogicalPlan::Limit { input, count } => {
+                if limit.replace(count).is_some() {
+                    return None;
+                }
+                Some(peel(*input, offset, limit, order)?)
+            }
+            LogicalPlan::Offset { input, count } => {
+                if offset.replace(count).is_some() {
+                    return None;
+                }
+                Some(peel(*input, offset, limit, order)?)
+            }
+            LogicalPlan::Sort { input, order_by } => {
+                if order.replace(order_by).is_some() {
+                    return None;
+                }
+                Some(peel(*input, offset, limit, order)?)
+            }
+            LogicalPlan::Project { input, columns } => Some(LogicalPlan::Project {
+                input: Box::new(peel(*input, offset, limit, order)?),
+                columns,
+            }),
+            other => Some(other),
+        }
+    }
+
+    let mut offset = None;
+    let mut limit = None;
+    let mut order = None;
+    let plan = peel(plan, &mut offset, &mut limit, &mut order)?;
+    Some((plan, offset?, limit?, order.unwrap_or_default()))
+}
+
+fn contains_paging(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Limit { .. } | LogicalPlan::Offset { .. } => true,
+        _ => plan.inputs().into_iter().any(contains_paging),
+    }
+}
+
 fn strip_exists_noop_paging(plan: LogicalPlan) -> LogicalPlan {
     match plan {
         LogicalPlan::Limit { input, count } if count > 0 => *input,
@@ -2993,6 +3147,19 @@ mod tests {
                 .contains("OFFSET inside a correlated subquery is not supported"),
             "unexpected diagnostic: {error}"
         );
+    }
+
+    #[test]
+    fn correlated_scalar_offset_with_equality_uses_per_key_row_number() {
+        let plan = bound(
+            "SELECT e.o_orderkey FROM orders e WHERE e.o_orderdate > (SELECT i.o_orderdate FROM orders i WHERE i.o_custkey = e.o_custkey ORDER BY i.o_orderdate OFFSET 1 LIMIT 1)",
+        );
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("WindowFunction"), "{debug}");
+        assert!(debug.contains("ROW_NUMBER"), "{debug}");
+        assert!(debug.contains("o_custkey"), "{debug}");
+        assert!(!debug.contains("Offset"), "paging must be per-key: {debug}");
+        assert!(!debug.contains("Limit"), "paging must be per-key: {debug}");
     }
 
     #[test]

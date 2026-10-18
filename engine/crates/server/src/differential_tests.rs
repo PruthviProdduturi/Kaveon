@@ -971,6 +971,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "correlated_scalar_ordered_offset_limit",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.actions > (SELECT i.actions FROM {T} i WHERE i.user_id = e.user_id ORDER BY i.actions OFFSET 1 LIMIT 1)",
+        false,
+    ),
+    (
         "correlated_in_residual",
         "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > e.actions)",
         false,
@@ -2548,7 +2553,14 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         .map(|(name, template, ordered)| (*name, *template, *ordered, 0.0))
         .chain(APPROXIMATE_CASES.iter().copied())
         .collect::<Vec<_>>();
+    let only_case = std::env::var("KAVEON_DIFF_ONLY").ok();
     for (name, template, ordered, tolerance) in &cases {
+        if only_case
+            .as_deref()
+            .is_some_and(|selected| selected != *name)
+        {
+            continue;
+        }
         let statement = |table: &str| template.replace("{T}", table).replace("{U}", "users");
         let dictionary = local(&statement("events_dictionary"), *ordered);
         let plain = local(&statement("events_plain"), *ordered);
