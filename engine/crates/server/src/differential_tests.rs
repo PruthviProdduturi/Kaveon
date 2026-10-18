@@ -2199,6 +2199,36 @@ fn distributed_json_array_contains_non_array_is_false() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A NULL in a NOT IN subquery makes every non-matching probe UNKNOWN. Keep
+/// this three-valued rule identical through the local planner and fragments,
+/// including a NULL probe row.
+#[test]
+fn distributed_not_in_null_subquery_matches_trino_three_valued_semantics() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-not-in-null-subquery-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.id FROM (VALUES (1), (2), (NULL)) AS x(id) WHERE x.id NOT IN (SELECT y.id FROM (VALUES (2), (NULL)) AS y(id)) ORDER BY x.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-not-in-null-subquery", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert!(actual.is_empty(), "NULL subquery member must block NOT IN");
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// ROW subscripts are one-based and preserve a NULL parent row as NULL for
 /// every selected field.  Run the same typed struct column through the local
 /// planner and the three-worker fragment path so a worker-side struct/null

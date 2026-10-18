@@ -1870,14 +1870,22 @@ impl StageGraphBuilder {
                         partition_count: self.exchange_partition_count,
                     },
                 );
-                self.add_exchange(
-                    right_stage,
-                    target,
+                // SQL NOT IN is null-aware: a NULL anywhere in the build
+                // input makes every non-matching probe UNKNOWN. Hashing the
+                // build side would send that NULL to one task only, allowing
+                // other tasks to incorrectly emit non-matches. Broadcast the
+                // build for anti joins so every task observes the complete
+                // three-valued input. Semi joins retain the distributed hash
+                // path.
+                let right_partitioning = if matches!(plan, LogicalPlan::AntiJoin { .. }) {
+                    Partitioning::Broadcast
+                } else {
                     Partitioning::Hash {
                         columns: vec![right_column],
                         partition_count: self.exchange_partition_count,
-                    },
-                );
+                    }
+                };
+                self.add_exchange(right_stage, target, right_partitioning);
                 Ok(target)
             }
         }
