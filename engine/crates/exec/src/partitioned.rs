@@ -1686,9 +1686,7 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
             largest = Some((index, rows));
         }
     }
-    let Some((index, largest)) = largest else {
-        return None;
-    };
+    let (index, largest) = largest?;
     if non_empty < 2 || total < JOIN_SKEW_SPLIT_MIN_ROWS {
         return None;
     }
@@ -2843,15 +2841,14 @@ mod tests {
         let keys = buckets
             .iter()
             .enumerate()
-            .filter_map(|(index, bucket)| {
-                (!bucket.is_empty()).then(|| {
-                    let values = bucket
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap();
-                    (index, values.value(0), values.len())
-                })
+            .filter(|(_, bucket)| bucket.num_rows() > 0)
+            .map(|(index, bucket)| {
+                let values = bucket
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                (index, values.value(0), values.len())
             })
             .collect::<Vec<_>>();
         assert!(keys.len() >= 8, "not enough hash buckets: {keys:?}");
@@ -2869,10 +2866,10 @@ mod tests {
         assert_eq!(hot_keys.len(), 32);
         let mut rows = Vec::new();
         for key in hot_keys {
-            rows.extend(std::iter::repeat(Some(key)).take(512));
+            rows.extend(std::iter::repeat_n(Some(key), 512));
         }
         for (_, key, _) in keys.iter().skip(1).take(7) {
-            rows.extend(std::iter::repeat(Some(*key)).take(512));
+            rows.extend(std::iter::repeat_n(Some(*key), 512));
         }
 
         let pool = QueryMemoryPool::new("skew-split", 64 * 1024 * 1024).unwrap();
