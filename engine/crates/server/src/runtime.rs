@@ -602,6 +602,76 @@ mod tests {
     }
 
     #[test]
+    fn cancel_running_multi_stage_graph_queues_each_exchange_once() {
+        let graph = StageGraph {
+            query_id: "query-chain".into(),
+            root_stage: StageId(2),
+            stages: vec![fragment(0, 1), fragment(1, 1), fragment(2, 1)],
+            exchanges: vec![
+                ExchangeDescriptor {
+                    id: ExchangeId("exchange-0-1".into()),
+                    source_stage: StageId(0),
+                    target_stage: StageId(1),
+                    partitioning: Partitioning::Single,
+                },
+                ExchangeDescriptor {
+                    id: ExchangeId("exchange-1-2".into()),
+                    source_stage: StageId(1),
+                    target_stage: StageId(2),
+                    partitioning: Partitioning::Single,
+                },
+            ],
+        };
+        let assignments = (0..3)
+            .map(|stage| TaskAssignment {
+                task_id: TaskId {
+                    query_id: "query-chain".into(),
+                    stage_id: StageId(stage),
+                    partition: 0,
+                    attempt: 0,
+                },
+                worker_id: "worker-0".into(),
+                splits: vec![SplitDescriptor {
+                    id: SplitId(format!("split-{stage}")),
+                    source_uri: "file:///data.parquet".into(),
+                    properties: BTreeMap::new(),
+                }],
+                input_exchanges: match stage {
+                    1 => vec![ExchangeId("exchange-0-1".into())],
+                    2 => vec![ExchangeId("exchange-1-2".into())],
+                    _ => Vec::new(),
+                },
+                output_exchanges: match stage {
+                    0 => vec![ExchangeId("exchange-0-1".into())],
+                    1 => vec![ExchangeId("exchange-1-2".into())],
+                    _ => Vec::new(),
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut runtime = StageRuntime::new(graph, assignments).unwrap();
+        let source = runtime.ready_tasks().remove(0);
+        runtime.start_task(&source.task_id).unwrap();
+
+        runtime.cancel();
+
+        assert!(runtime.is_terminal());
+        assert_eq!(
+            runtime.drain_cleanup_intents(),
+            vec![
+                ExchangeCleanupIntent {
+                    exchange_id: ExchangeId("exchange-0-1".into())
+                },
+                ExchangeCleanupIntent {
+                    exchange_id: ExchangeId("exchange-1-2".into())
+                },
+            ]
+        );
+        // A repeated cancellation must not re-enqueue either exchange.
+        runtime.cancel();
+        assert!(runtime.drain_cleanup_intents().is_empty());
+    }
+
+    #[test]
     fn completing_consumer_emits_cleanup_once() {
         let mut runtime = StageRuntime::new(graph(), assignments()).unwrap();
         for task in runtime.ready_tasks() {
