@@ -1,6 +1,6 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, Expr, KaveonError, Result, ScalarValue};
+use kaveon_core::{BatchOperator, Expr, KaveonError, Result, ScalarValue, StoragePredicate};
 use std::sync::Arc;
 
 use crate::expr_eval::evaluate;
@@ -43,6 +43,18 @@ impl BatchOperator for ProjectOperator {
         &self.output_schema
     }
 
+    fn apply_runtime_predicate(&mut self, predicate: &StoragePredicate) -> Result<bool> {
+        // A runtime join predicate can cross a projection only when every
+        // referenced output column is a direct source column (possibly with
+        // an alias). Rewriting only that identity subset keeps computed
+        // projections exact while allowing storage pruning through common
+        // SELECT key AS alias shapes.
+        let Some(predicate) = self.rewrite_runtime_predicate(predicate) else {
+            return Ok(false);
+        };
+        self.source.apply_runtime_predicate(&predicate)
+    }
+
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         let Some(batch) = self.source.next_batch()? else {
             return Ok(None);
@@ -71,6 +83,74 @@ impl BatchOperator for ProjectOperator {
 
         let projected = RecordBatch::try_new(self.output_schema.clone(), columns)?;
         Ok(Some(projected))
+    }
+}
+
+impl ProjectOperator {
+    fn source_column_for_output(&self, output: &str) -> Option<String> {
+        self.output_schema
+            .fields()
+            .iter()
+            .zip(&self.exprs)
+            .find(|(field, _)| field.name() == output)
+            .and_then(|(_, expr)| match unaliased(expr) {
+                Expr::Column(column) => Some(column.clone()),
+                _ => None,
+            })
+    }
+
+    fn rewrite_runtime_predicate(&self, predicate: &StoragePredicate) -> Option<StoragePredicate> {
+        let column = |name: &str| self.source_column_for_output(name);
+        Some(match predicate {
+            StoragePredicate::Compare {
+                column: name,
+                op,
+                value,
+            } => StoragePredicate::Compare {
+                column: column(name)?,
+                op: *op,
+                value: value.clone(),
+            },
+            StoragePredicate::IsNull { column: name } => StoragePredicate::IsNull {
+                column: column(name)?,
+            },
+            StoragePredicate::IsNotNull { column: name } => StoragePredicate::IsNotNull {
+                column: column(name)?,
+            },
+            StoragePredicate::In {
+                column: name,
+                values,
+            } => StoragePredicate::In {
+                column: column(name)?,
+                values: values.clone(),
+            },
+            StoragePredicate::Like {
+                column: name,
+                pattern,
+                negated,
+                case_insensitive,
+            } => StoragePredicate::Like {
+                column: column(name)?,
+                pattern: pattern.clone(),
+                negated: *negated,
+                case_insensitive: *case_insensitive,
+            },
+            StoragePredicate::And(children) => StoragePredicate::And(
+                children
+                    .iter()
+                    .map(|child| self.rewrite_runtime_predicate(child))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            StoragePredicate::Or(children) => StoragePredicate::Or(
+                children
+                    .iter()
+                    .map(|child| self.rewrite_runtime_predicate(child))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            StoragePredicate::Not(child) => {
+                StoragePredicate::Not(Box::new(self.rewrite_runtime_predicate(child)?))
+            }
+        })
     }
 }
 
@@ -357,5 +437,41 @@ mod tests {
         .err()
         .expect("ambiguous");
         assert!(error.to_string().contains("n_name"), "{error}");
+    }
+
+    #[test]
+    fn runtime_predicate_rewrites_through_identity_alias_only() {
+        let project = ProjectOperator::new(
+            joined(),
+            vec![Expr::Alias {
+                expr: Box::new(Expr::Column("orders.o_custkey".into())),
+                name: "customer_key".into(),
+            }],
+        )
+        .unwrap();
+        let predicate = StoragePredicate::In {
+            column: "customer_key".into(),
+            values: vec![ScalarValue::Int64(2)],
+        };
+        assert_eq!(
+            project.rewrite_runtime_predicate(&predicate),
+            Some(StoragePredicate::In {
+                column: "orders.o_custkey".into(),
+                values: vec![ScalarValue::Int64(2)],
+            })
+        );
+        let computed = Expr::Function {
+            name: "abs".into(),
+            args: vec![Expr::Column("orders.o_custkey".into())],
+        };
+        let project = ProjectOperator::new(
+            joined(),
+            vec![Expr::Alias {
+                expr: Box::new(computed),
+                name: "customer_key".into(),
+            }],
+        )
+        .unwrap();
+        assert!(project.rewrite_runtime_predicate(&predicate).is_none());
     }
 }
