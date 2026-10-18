@@ -4595,6 +4595,49 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }};
         }
         return match args[0].data_type() {
+            DataType::List(field) if field.data_type() == &DataType::Int64 => {
+                // Keep the nested-array case explicit until the generic Arrow
+                // builder path can preserve every nested type.  This covers
+                // the common Trino ARRAY<bigint> form without silently
+                // coercing or flattening the inner list.
+                let elements = args[0]
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "ARRAY_REPEAT requires a regular LIST for nested values".into(),
+                        )
+                    })?;
+                let mut builder = ListBuilder::new(ListBuilder::new(Int64Builder::new()));
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    if elements.is_null(row) {
+                        for _ in 0..count {
+                            builder.values().append(false);
+                        }
+                    } else {
+                        let inner = elements.value(row);
+                        let inner = inner.as_primitive::<Int64Type>();
+                        for _ in 0..count {
+                            for value in inner.iter() {
+                                builder.values().values().append_option(value);
+                            }
+                            builder.values().append(true);
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
             DataType::Boolean => repeat_primitive!(
                 BooleanArray,
                 BooleanBuilder::new(),
@@ -13529,6 +13572,40 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("between 0 and 1000000"));
+    }
+
+    #[test]
+    fn array_repeat_preserves_nested_integer_arrays() {
+        let mut nested = ListBuilder::new(Int64Builder::new());
+        nested.values().append_value(1);
+        nested.values().append_value(2);
+        nested.append(true);
+        nested.append(false);
+        nested.values().append_value(3);
+        nested.append(true);
+        let values = Arc::new(nested.finish()) as ArrayRef;
+        let counts = Arc::new(Int64Array::from(vec![2, 2, 0])) as ArrayRef;
+
+        let result = eval_scalar_function("ARRAY_REPEAT", &[values, counts], 3).unwrap();
+        let repeated = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(
+            repeated.value_type(),
+            DataType::List(Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Int64,
+                true,
+            )))
+        );
+        let first_value = repeated.value(0);
+        let first = first_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(first.value(1).as_primitive::<Int64Type>().values(), &[1, 2]);
+        let null_value = repeated.value(1);
+        let nulls = null_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(nulls.len(), 2);
+        assert_eq!(nulls.null_count(), 2);
+        assert_eq!(repeated.value(2).len(), 0);
     }
 
     #[test]
