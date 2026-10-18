@@ -21404,9 +21404,7 @@ mod tests {
             name: "JSON_VALUE".into(),
             args: vec![
                 Expr::Column("document".into()),
-                Expr::Literal(ScalarValue::Utf8(
-                    r#"$. "a.b".value"#.replace(" ", "").into(),
-                )),
+                Expr::Literal(ScalarValue::Utf8(r#"$. "a.b".value"#.replace(" ", ""))),
             ],
         };
         let result = evaluate(&expr, &batch).unwrap();
@@ -21418,9 +21416,7 @@ mod tests {
             name: "JSON_VALUE".into(),
             args: vec![
                 Expr::Column("document".into()),
-                Expr::Literal(ScalarValue::Utf8(
-                    r#"$. "a\"b".value"#.replace(" ", "").into(),
-                )),
+                Expr::Literal(ScalarValue::Utf8(r#"$. "a\"b".value"#.replace(" ", ""))),
             ],
         };
         assert_eq!(
