@@ -2233,6 +2233,35 @@ fn distributed_json_query_array_range_returning_json_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Literal DEFAULT actions on an empty JSON path must retain the same
+/// row-wise value through local planning and distributed fragments.
+#[test]
+fn distributed_json_value_default_on_empty_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-value-default-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"x\":7}'), '$.missing' ON EMPTY DEFAULT 'fallback') AS value FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-value-default", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["fallback", "fallback", "fallback"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A NULL in a NOT IN subquery makes every non-matching probe UNKNOWN. Keep
 /// this three-valued rule identical through the local planner and fragments,
 /// including a NULL probe row.
