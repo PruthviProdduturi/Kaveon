@@ -5907,10 +5907,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .into();
             Ok(Arc::new(result))
         }
-        "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" | "JSON_QUERY" | "JSON_VALUE" => {
+        "JSON_EXTRACT"
+        | "JSON_EXTRACT_SCALAR"
+        | "JSON_QUERY"
+        | "JSON_VALUE"
+        | "JSON_QUERY_STRICT"
+        | "JSON_VALUE_STRICT" => {
             check_arity(name, args, 2)?;
             let documents = &args[0];
             let paths = &args[1];
+            let strict = upper.ends_with("_STRICT");
             let result: StringArray = (0..num_rows)
                 .map(|row| {
                     let (Some(document), Some(path)) =
@@ -5918,18 +5924,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     else {
                         return Ok(None);
                     };
-                    Ok(if upper == "JSON_EXTRACT" {
-                        json_extract(document, path)
+                    if strict {
+                        let value = json_extract_value(document, path).ok_or_else(|| {
+                            KaveonError::Execution(format!(
+                                "JSON {upper} clause requested ERROR at row {row}"
+                            ))
+                        })?;
+                        let extracted = if upper == "JSON_QUERY_STRICT" {
+                            match value {
+                                serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                                    json_extract(document, path).ok_or_else(|| {
+                                        KaveonError::Execution(format!(
+                                            "JSON {upper} clause requested ERROR at row {row}"
+                                        ))
+                                    })?
+                                }
+                                _ => {
+                                    return Err(KaveonError::Execution(format!(
+                                        "JSON {upper} clause requested ERROR at row {row}"
+                                    )));
+                                }
+                            }
+                        } else {
+                            json_extract_scalar(document, path).ok_or_else(|| {
+                                KaveonError::Execution(format!(
+                                    "JSON {upper} clause requested ERROR at row {row}"
+                                ))
+                            })?
+                        };
+                        Ok(Some(extracted))
+                    } else if upper == "JSON_EXTRACT" {
+                        Ok(json_extract(document, path))
                     } else if upper == "JSON_QUERY" {
-                        match json_extract_value(document, path) {
+                        Ok(match json_extract_value(document, path) {
                             Some(serde_json::Value::Array(_) | serde_json::Value::Object(_)) => {
                                 json_extract(document, path)
                             }
                             _ => None,
-                        }
+                        })
                     } else {
-                        json_extract_scalar(document, path)
-                    })
+                        Ok(json_extract_scalar(document, path))
+                    }
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -21504,6 +21539,41 @@ mod tests {
         };
         let quoted_result = evaluate(&quoted, &quoted_batch).unwrap();
         assert_eq!(quoted_result.as_string::<i32>().value(0), "42");
+    }
+
+    #[test]
+    fn strict_json_error_clauses_fail_on_empty_results() {
+        let valid = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![Some(r#"{"customer":{"id":42}}"#)])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![Some("$.customer.id")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let value = Expr::Function {
+            name: "JSON_VALUE_STRICT".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let value_result = evaluate(&value, &valid).unwrap();
+        assert_eq!(value_result.as_string::<i32>().value(0), "42");
+
+        let missing = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![Some(r#"{"customer":{}}"#)])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![Some("$.customer.id")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let error = evaluate(&value, &missing).expect_err("strict JSON_VALUE must fail on empty");
+        assert!(error.to_string().contains("requested ERROR"), "{error}");
     }
 
     #[test]
