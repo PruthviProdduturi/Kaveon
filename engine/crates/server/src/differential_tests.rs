@@ -1946,6 +1946,28 @@ fn distributed_map_entries_unnest_supports_row_field_access() {
 }
 
 #[test]
+fn distributed_map_from_entries_rejects_duplicate_keys() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-map-from-entries-duplicate-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT MAP_FROM_ENTRIES(ARRAY[ROW('a', 1), ROW('a', 2)]) FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-from-entries-duplicate", 16 << 20).unwrap();
+    let error = execute_distributed(statement, &plan, &manager, 3, &pool).unwrap_err();
+    assert!(
+        error.to_string().contains("duplicate")
+            || error.to_string().contains("Duplicate")
+            || error.to_string().contains("MAP_FROM_ENTRIES"),
+        "unexpected duplicate-key error: {error}"
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_map_entries_unnest_preserves_ordinality() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-unnest-map-entries-ordinality-{}",
