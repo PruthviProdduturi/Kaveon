@@ -4898,6 +4898,34 @@ mod tests {
     }
 
     #[test]
+    fn shares_partition_exchange_when_window_orderings_differ() {
+        let graph = graph(
+            "SELECT region, actions, country, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC) AS by_actions, SUM(actions) OVER (PARTITION BY region ORDER BY country ASC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS by_country FROM orders",
+        );
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.exchanges.len(), 1);
+        assert_eq!(
+            graph.exchanges[0].partitioning,
+            Partitioning::Hash {
+                columns: vec!["region".into()],
+                partition_count: 4,
+            }
+        );
+        let root = &graph.stages[graph.root_stage.0 as usize];
+        assert_eq!(root.task_count, 4);
+        assert!(
+            root.plan.operator == "PartitionedWindow"
+                || root
+                    .plan
+                    .children
+                    .iter()
+                    .any(|child| child.operator == "PartitionedWindow"),
+            "same partition keys should share one distributed exchange: {:?}",
+            root.plan
+        );
+    }
+
+    #[test]
     fn keeps_mixed_window_partitions_on_single_final_stage() {
         let expr = |column: &str| kaveon_core::Expr::WindowFunction {
             name: "ROW_NUMBER".into(),
