@@ -62,6 +62,10 @@ impl BuiltSide {
 pub(crate) struct BuildKeyFilter {
     index: JoinIndex,
     keys: Vec<(usize, usize)>,
+    /// Per-column supersets for a composite build key. These let the probe
+    /// side reject rows that cannot possibly match before constructing the
+    /// complete tuple. The exact tuple index remains the final authority.
+    composite_components: Option<Vec<AHashSet<Key>>>,
 }
 
 impl BuildKeyFilter {
@@ -70,9 +74,27 @@ impl BuildKeyFilter {
         // the bounded path is for the common small-build/large-probe case.
         (built.right.num_rows() <= 100_000)
             .then(|| {
-                built.index.as_ref().map(|index| Self {
-                    index: index.clone(),
-                    keys: keys.to_vec(),
+                built.index.as_ref().map(|index| {
+                    let composite_components = match index {
+                        JoinIndex::Composite(entries) => {
+                            let mut components =
+                                (0..keys.len()).map(|_| AHashSet::new()).collect::<Vec<_>>();
+                            for tuple in entries.keys() {
+                                for (component, value) in tuple.iter().enumerate() {
+                                    if let Some(values) = components.get_mut(component) {
+                                        values.insert(value.clone());
+                                    }
+                                }
+                            }
+                            Some(components)
+                        }
+                        _ => None,
+                    };
+                    Self {
+                        index: index.clone(),
+                        keys: keys.to_vec(),
+                        composite_components,
+                    }
                 })
             })
             .flatten()
@@ -251,6 +273,27 @@ impl BuildKeyFilter {
                 }
                 _ => Err(exec_err("runtime filter key type changed after planning")),
             };
+        }
+        if let (JoinIndex::Composite(_), Some(component_sets)) =
+            (&self.index, &self.composite_components)
+        {
+            return (0..batch.num_rows())
+                .map(|row| {
+                    for (component, key_pair) in self.keys.iter().enumerate() {
+                        let Some(key) = row_key(batch, row, std::slice::from_ref(key_pair), true)?
+                        else {
+                            return Ok(false);
+                        };
+                        if !component_sets[component].contains(&key[0]) {
+                            return Ok(false);
+                        }
+                    }
+                    // Component sets are only a safe superset filter. Keep
+                    // the tuple lookup to reject cross-product combinations.
+                    self.matches(batch, row)
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(Into::into);
         }
         (0..batch.num_rows())
             .map(|row| self.matches(batch, row))
@@ -2561,5 +2604,60 @@ mod tests {
         assert_eq!(texts.len(), 2);
         assert!(texts.contains(&ScalarValue::Utf8("x".into())));
         assert!(texts.contains(&ScalarValue::Utf8("y".into())));
+    }
+
+    #[test]
+    fn composite_runtime_filter_prefilters_components_but_keeps_tuple_exactness() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("left_a", DataType::Int32, true),
+            Field::new("left_b", DataType::Utf8, true),
+        ]));
+        let build_schema = Arc::new(Schema::new(vec![
+            Field::new("right_a", DataType::Int32, true),
+            Field::new("right_b", DataType::Utf8, true),
+        ]));
+        let build = RecordBatch::try_new(
+            build_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(arrow::array::StringArray::from(vec![Some("x"), Some("y")])),
+            ],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![
+                    Some(1),
+                    Some(1),
+                    Some(3),
+                    None,
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    Some("x"),
+                    Some("y"),
+                    Some("z"),
+                    Some("x"),
+                ])),
+            ],
+        )
+        .unwrap();
+        let built = BuiltSide::build(
+            &build_schema,
+            &[build],
+            &[(0, 0), (1, 1)],
+            JoinType::Inner,
+            None,
+        )
+        .unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0), (1, 1)]).unwrap();
+        assert_eq!(
+            filter
+                .filter_batch(&probe)
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(false), Some(false)]
+        );
     }
 }
