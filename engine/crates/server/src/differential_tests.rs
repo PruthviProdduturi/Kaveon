@@ -477,6 +477,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "uint64_array_position",
+        "SELECT ARRAY_POSITION(ARRAY[CAST(7 AS UINT64), CAST(18446744073709551615 AS UINT64)], CAST(18446744073709551615 AS UINT64)) AS uint64_pos FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "uint8_array_position",
         "SELECT ARRAY_POSITION(ARRAY[CAST(7 AS UINT8), CAST(255 AS UINT8)], CAST(255 AS UINT8)) AS uint8_pos FROM {T} LIMIT 1",
         false,
