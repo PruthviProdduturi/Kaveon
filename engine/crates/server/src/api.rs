@@ -14634,7 +14634,19 @@ fn record_stage_task(
         }
     };
     let stage = &mut stages[index];
-    stage.tasks.push(task);
+    // A partition can report more than one completion while a query is
+    // running (for example, a retry can finish after an earlier attempt was
+    // already published). Keep one telemetry row per partition so the live
+    // record and its scan totals remain idempotent.
+    if let Some(existing) = stage
+        .tasks
+        .iter_mut()
+        .find(|existing| existing.partition_index == task.partition_index)
+    {
+        *existing = task;
+    } else {
+        stage.tasks.push(task);
+    }
     stage
         .tasks
         .sort_unstable_by_key(|task| task.partition_index);
@@ -21460,6 +21472,36 @@ mod tests {
         assert_eq!(scans[0].rows_emitted, 75);
         assert_eq!(record.scans[0].rows_emitted, scans[0].rows_emitted);
         assert_eq!(record.scans[0].rows_selected, scans[0].rows_selected);
+    }
+
+    #[test]
+    fn retrying_a_partition_replaces_its_telemetry_row() {
+        let task = |rows_emitted: u64| super::TaskTelemetry {
+            task_id: format!("attempt-{rows_emitted}"),
+            node_id: "worker".into(),
+            partition_index: 0,
+            elapsed_us: 1,
+            output_rows: rows_emitted as usize,
+            output_batches: 1,
+            output_bytes: rows_emitted as usize,
+            execution: None,
+            scan: Some(super::TaskScanMetrics {
+                rows_emitted,
+                rows_selected: rows_emitted,
+                ..Default::default()
+            }),
+        };
+        let mut stages = Vec::new();
+
+        super::record_stage_task(&mut stages, 2, 1, 5, task(10));
+        super::record_stage_task(&mut stages, 2, 1, 8, task(7));
+
+        assert_eq!(stages[0].completed_tasks, 1);
+        assert_eq!(stages[0].tasks.len(), 1);
+        assert_eq!(stages[0].tasks[0].task_id, "attempt-7");
+        let (scans, complete) = super::distributed_scan_telemetry(&stages);
+        assert!(complete);
+        assert_eq!(scans[0].rows_emitted, 7);
     }
 
     #[test]
