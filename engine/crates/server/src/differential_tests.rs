@@ -1981,6 +1981,27 @@ fn distributed_nested_array_repeat_preserves_inner_arrays() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Trino's REPEAT overload accepts ARRAY values in addition to VARCHAR. Keep
+/// this alias on the distributed path so it cannot regress to string-only
+/// evaluation or flatten nested list boundaries.
+#[test]
+fn distributed_repeat_array_alias_preserves_inner_arrays() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-repeat-array-alias-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT value FROM UNNEST(REPEAT(ARRAY[1, 2], 2)) AS t(value) ORDER BY value";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-repeat-array-alias", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["[1, 2]", "[1, 2]"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A bounded recursive CTE written with UNION (rather than UNION ALL) should
 /// retain its recursive integer sequence through the distributed planner.
 #[test]
