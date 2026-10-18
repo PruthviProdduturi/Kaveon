@@ -1791,6 +1791,8 @@ fn row_key(
                                 | DataType::UInt32
                                 | DataType::Float32
                                 | DataType::Float64
+                                | DataType::Decimal128(_, _)
+                                | DataType::Decimal256(_, _)
                         ) =>
                 {
                     let dictionary = column
@@ -1844,6 +1846,18 @@ fn row_key(
                                 value.to_bits()
                             })
                         }
+                        DataType::Decimal128(_, scale) => Key::Decimal(
+                            values
+                                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                                .value(dictionary_index),
+                            *scale,
+                        ),
+                        DataType::Decimal256(_, scale) => Key::Decimal256(
+                            values
+                                .as_primitive::<arrow::datatypes::Decimal256Type>()
+                                .value(dictionary_index),
+                            *scale,
+                        ),
                         _ => unreachable!("dictionary value type was checked above"),
                     }
                 }
@@ -2438,6 +2452,65 @@ mod tests {
                     .with_timezone("UTC"),
             ),
             DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+        );
+    }
+
+    #[test]
+    fn dictionary_decimal_join_keys_preserve_scale_extrema_and_nulls() {
+        fn check(left_values: ArrayRef, right_values: ArrayRef, value_type: DataType) {
+            let dictionary_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type));
+            let schema = Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+            let left_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), Some(2)]),
+                left_values,
+            )
+            .unwrap();
+            let right_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(1), Some(0), Some(2)]),
+                right_values,
+            )
+            .unwrap();
+            let left = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left_key)]).unwrap();
+            let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+            let mut join = HashJoin::try_new(
+                Box::new(Input::new(left)),
+                Box::new(Input::new(right)),
+                JoinType::Inner,
+                vec![("key".into(), "key".into())],
+            )
+            .unwrap();
+            let batches = kaveon_core::collect_batches(&mut join).unwrap();
+            assert_eq!(
+                concat_batches(join.schema(), &batches).unwrap().num_rows(),
+                2
+            );
+        }
+        check(
+            Arc::new(
+                Decimal128Array::from(vec![Some(i128::MIN), Some(i128::MAX), None])
+                    .with_precision_and_scale(38, 2)
+                    .unwrap(),
+            ),
+            Arc::new(
+                Decimal128Array::from(vec![Some(i128::MIN), Some(i128::MAX), None])
+                    .with_precision_and_scale(38, 2)
+                    .unwrap(),
+            ),
+            DataType::Decimal128(38, 2),
+        );
+        check(
+            Arc::new(
+                Decimal256Array::from(vec![Some(i256::MIN), Some(i256::MAX), None])
+                    .with_precision_and_scale(76, 3)
+                    .unwrap(),
+            ),
+            Arc::new(
+                Decimal256Array::from(vec![Some(i256::MIN), Some(i256::MAX), None])
+                    .with_precision_and_scale(76, 3)
+                    .unwrap(),
+            ),
+            DataType::Decimal256(76, 3),
         );
     }
 

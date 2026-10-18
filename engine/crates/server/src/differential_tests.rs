@@ -32,9 +32,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Date64Array, DictionaryArray, Float32Array, Float64Array,
-    Int32Array, Int64Array, StringArray, StringDictionaryBuilder, StructArray,
-    Time32MillisecondArray, Time64NanosecondArray, TimestampMicrosecondArray, TimestampSecondArray,
+    Array, ArrayRef, Date32Array, Date64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+    Float32Array, Float64Array, Int32Array, Int64Array, StringArray, StringDictionaryBuilder,
+    StructArray, Time32MillisecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampSecondArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -4472,6 +4473,98 @@ fn distributed_temporal_join_keys_match_local() {
             None,
         ])),
         "timestamp",
+    );
+}
+
+#[test]
+fn distributed_decimal_join_keys_match_local() {
+    fn run(value_type: DataType, left_values: ArrayRef, right_values: ArrayRef, label: &str) {
+        let directory = std::env::temp_dir().join(format!(
+            "kaveon-decimal-join-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: PathBuf::from(&directory),
+            },
+        )
+        .with_schema("events");
+        let schema = Arc::new(Schema::new(vec![Field::new("key", value_type, true)]));
+        let left = RecordBatch::try_new(Arc::clone(&schema), vec![left_values]).unwrap();
+        let right = RecordBatch::try_new(schema, vec![right_values]).unwrap();
+        catalog
+            .register_table(
+                "events",
+                TableMeta {
+                    name: "left".into(),
+                    ..write(&directory, "left.parquet", &left)
+                },
+            )
+            .unwrap();
+        catalog
+            .register_table(
+                "events",
+                TableMeta {
+                    name: "right".into(),
+                    ..write(&directory, "right.parquet", &right)
+                },
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "events");
+        manager.register_catalog(Box::new(catalog));
+        let statement = "SELECT l.key FROM left l JOIN right r USING (key) ORDER BY l.key";
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-decimal-join", 32 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+            true,
+        );
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    run(
+        DataType::Decimal128(38, 2),
+        Arc::new(
+            Decimal128Array::from(vec![Some(i128::MIN), Some(i128::MAX), None])
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+        ),
+        Arc::new(
+            Decimal128Array::from(vec![Some(i128::MIN), Some(i128::MAX), None])
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+        ),
+        "decimal128",
+    );
+    run(
+        DataType::Decimal256(76, 3),
+        Arc::new(
+            Decimal256Array::from(vec![
+                Some(arrow::datatypes::i256::MIN),
+                Some(arrow::datatypes::i256::MAX),
+                None,
+            ])
+            .with_precision_and_scale(76, 3)
+            .unwrap(),
+        ),
+        Arc::new(
+            Decimal256Array::from(vec![
+                Some(arrow::datatypes::i256::MIN),
+                Some(arrow::datatypes::i256::MAX),
+                None,
+            ])
+            .with_precision_and_scale(76, 3)
+            .unwrap(),
+        ),
+        "decimal256",
     );
 }
 
