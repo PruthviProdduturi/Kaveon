@@ -2072,6 +2072,40 @@ fn distributed_correlated_map_keys_unnest_with_ordinality() {
 }
 
 #[test]
+fn distributed_correlated_map_entries_unnest_with_ordinality() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-unnest-map-entries-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.id, u.key, u.value, u.ord FROM (VALUES (1), (3)) AS x(id) CROSS JOIN LATERAL UNNEST(MAP_ENTRIES(MAP(ARRAY[x.id, x.id + 10], ARRAY[100, 200]))) WITH ORDINALITY AS u(key, value, ord) ORDER BY x.id, u.ord";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-correlated-unnest-map-entries", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        vec![
+            "1\u{1f}1\u{1f}100\u{1f}1",
+            "1\u{1f}11\u{1f}200\u{1f}2",
+            "3\u{1f}3\u{1f}100\u{1f}1",
+            "3\u{1f}13\u{1f}200\u{1f}2",
+        ]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_array_histogram_unnest_matches_trino_rows() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-unnest-array-histogram-{}",
