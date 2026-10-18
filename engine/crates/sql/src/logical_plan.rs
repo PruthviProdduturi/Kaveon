@@ -1454,17 +1454,11 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .get(&table_name.to_lowercase())
                 .or_else(|| ctes.ctes.get(&lookup))
             {
-                let mut plan = query_to_plan(
-                    &ast::Query {
-                        with: None,
-                        body: cte_query.query.body.clone(),
-                        order_by: cte_query.query.order_by.clone(),
-                        limit: cte_query.query.limit.clone(),
-                        offset: cte_query.query.offset.clone(),
-                        ..cte_query.query.clone()
-                    },
-                    ctes,
-                )?;
+                // Preserve a nested WITH clause in the CTE body.  Rebuilding
+                // the query with `with: None` made an otherwise valid nested
+                // CTE resolve as a physical table instead of its local
+                // definition.
+                let mut plan = query_to_plan(&cte_query.query, ctes)?;
                 if !cte_query.columns.is_empty()
                     && let Some(columns) = plan_output_columns(&plan)
                 {
