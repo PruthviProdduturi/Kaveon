@@ -134,6 +134,7 @@ impl BuildKeyFilter {
             JoinIndex::Decimal256 {
                 first_rows,
                 duplicate_rows,
+                ..
             },
             [(left, _)],
         ) = (&self.index, self.keys.as_slice())
@@ -294,10 +295,21 @@ impl BuildKeyFilter {
                 .chain(duplicate_rows.keys())
                 .map(|value| i64::try_from(*value).ok().map(ScalarValue::Int64))
                 .collect::<Option<Vec<_>>>(),
-            // Decimal256 values are exact but are not representable by the
-            // storage predicate scalar ABI yet. Keep the typed batch filter;
-            // falling back here avoids lossy narrowing of a 256-bit key.
-            JoinIndex::Decimal256 { .. } => None,
+            JoinIndex::Decimal256 {
+                first_rows,
+                duplicate_rows,
+                scale,
+            } => Some(
+                first_rows
+                    .keys()
+                    .chain(duplicate_rows.keys())
+                    .map(|value| ScalarValue::Decimal256 {
+                        value: value.to_string(),
+                        precision: 76,
+                        scale: *scale,
+                    })
+                    .collect(),
+            ),
             JoinIndex::Composite(entries) => {
                 let mut predicates = Vec::new();
                 for (key_index, (left, _)) in self.keys.iter().enumerate() {
@@ -328,7 +340,11 @@ impl BuildKeyFilter {
                                 ScalarValue::Float64(value)
                             }
                             Key::Utf8(value) => ScalarValue::Utf8(value.clone()),
-                            Key::Decimal256(_, _) => continue,
+                            Key::Decimal256(value, scale) => ScalarValue::Decimal256 {
+                                value: value.to_string(),
+                                precision: 76,
+                                scale: *scale,
+                            },
                         };
                         values.push(value);
                     }
@@ -1096,6 +1112,7 @@ enum JoinIndex {
     Decimal256 {
         first_rows: AHashMap<arrow::datatypes::i256, usize>,
         duplicate_rows: AHashMap<arrow::datatypes::i256, Vec<usize>>,
+        scale: i8,
     },
     Date32 {
         first_rows: AHashMap<i32, usize>,
@@ -1200,9 +1217,14 @@ impl JoinIndex {
                     }
                 }
             }
+            let scale = match right.column(*index).data_type() {
+                DataType::Decimal256(_, scale) => *scale,
+                _ => unreachable!("Decimal256 index branch has a non-decimal column"),
+            };
             return Ok(Self::Decimal256 {
                 first_rows,
                 duplicate_rows,
+                scale,
             });
         }
         if let [(.., index)] = keys
@@ -1367,6 +1389,7 @@ impl JoinIndex {
             Self::Decimal256 {
                 first_rows,
                 duplicate_rows,
+                ..
             } => {
                 let values = left
                     .column(keys[0].0)
@@ -2019,7 +2042,10 @@ mod tests {
         .unwrap();
         let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
         let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
-        assert!(filter.storage_predicate(&schema).is_none());
+        let predicate = filter
+            .storage_predicate(&schema)
+            .expect("Decimal256 keys should reach storage pushdown losslessly");
+        assert!(matches!(predicate, StoragePredicate::In { values, .. } if values.len() >= 2));
         let mask = filter.filter_batch(&probe).unwrap();
         assert_eq!(
             mask.iter().collect::<Vec<_>>(),

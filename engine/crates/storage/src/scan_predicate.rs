@@ -266,7 +266,9 @@ fn compare_column(
 /// the kernels cannot compare the two. A dictionary column compares through
 /// its dictionary: once per distinct value, then an index lookup per row.
 fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<ArrayRef> {
-    use arrow::array::{BooleanArray, Decimal128Array, Float32Array, Float64Array, Int64Array};
+    use arrow::array::{
+        BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int64Array,
+    };
     Some(match (value, data_type) {
         (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
         // Narrower and unsigned integer columns, and day-number dates,
@@ -322,6 +324,18 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
         ) if scale == column_scale => Arc::new(
             Decimal128Array::from(vec![*value])
                 .with_precision_and_scale(*precision, *column_scale)
+                .ok()?,
+        ),
+        (
+            ScalarValue::Decimal256 {
+                value,
+                precision: _precision,
+                scale,
+            },
+            DataType::Decimal256(column_precision, column_scale),
+        ) if scale == column_scale => Arc::new(
+            Decimal256Array::from(vec![arrow::datatypes::i256::from_string(value)?])
+                .with_precision_and_scale(*column_precision, *column_scale)
                 .ok()?,
         ),
         (ScalarValue::Bool(value), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*value])),

@@ -33,6 +33,14 @@ pub enum ScalarValue {
         precision: u8,
         scale: i8,
     },
+    /// A decimal whose unscaled value does not fit in i128.  The value is
+    /// carried as base-10 text across the storage predicate ABI so runtime
+    /// filters remain lossless when they cross the server boundary.
+    Decimal256 {
+        value: String,
+        precision: u8,
+        scale: i8,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +95,9 @@ impl ScalarValue {
             Self::Decimal128 {
                 precision, scale, ..
             } => DataType::Decimal128(*precision, *scale),
+            Self::Decimal256 {
+                precision, scale, ..
+            } => DataType::Decimal256(*precision, *scale),
         }
     }
 }

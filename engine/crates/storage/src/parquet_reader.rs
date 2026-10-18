@@ -1328,6 +1328,18 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
             ScalarValue::Decimal128 { scale, value, .. },
             DataType::Decimal128(precision, column_scale),
         ) => scale == column_scale && decimal_fits_precision(*value, *precision),
+        (
+            ScalarValue::Decimal256 {
+                value,
+                precision: _,
+                scale,
+            },
+            DataType::Decimal256(column_precision, column_scale),
+        ) => {
+            scale == column_scale
+                && arrow::datatypes::i256::from_string(value).is_some()
+                && decimal256_fits_precision(value, *column_precision)
+        }
         (ScalarValue::Utf8(_), DataType::Utf8 | DataType::LargeUtf8) => true,
         _ => false,
     }
@@ -1335,6 +1347,13 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
 
 fn decimal_fits_precision(value: i128, precision: u8) -> bool {
     value.unsigned_abs().to_string().len() <= usize::from(precision)
+}
+
+fn decimal256_fits_precision(value: &str, precision: u8) -> bool {
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && digits.trim_start_matches('0').len() <= usize::from(precision)
 }
 
 fn scalar_cmp(left: &ScalarValue, right: &ScalarValue) -> Option<Ordering> {
@@ -1386,8 +1405,8 @@ fn parquet_error(error: parquet::errors::ParquetError) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, Date64Array, Decimal128Array, Float32Array, Int32Array, StringArray,
-        Time64MicrosecondArray, TimestampMicrosecondArray,
+        ArrayRef, Date64Array, Decimal128Array, Decimal256Array, Float32Array, Int32Array,
+        StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
     };
     use arrow::datatypes::{Field, Schema, TimeUnit};
     use parquet::arrow::ArrowWriter;
@@ -1565,6 +1584,40 @@ mod tests {
             .write(&batch)
             .expect("Decimal batch must be writable");
         writer.close().expect("Decimal writer must close");
+        file
+    }
+
+    fn decimal256_fixture() -> TestFile {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-decimal256-runtime-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "amount",
+            DataType::Decimal256(40, 2),
+            false,
+        )]));
+        let amounts = Decimal256Array::from(vec![
+            arrow::datatypes::i256::from_i128(125),
+            arrow::datatypes::i256::from_i128(230),
+            arrow::datatypes::i256::from_i128(400),
+            arrow::datatypes::i256::from_i128(999),
+        ])
+        .with_precision_and_scale(40, 2)
+        .expect("decimal256 fixture metadata must be valid");
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(amounts) as ArrayRef])
+            .expect("decimal256 batch must be valid");
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let output = File::create(&file.0).expect("Decimal256 file must be creatable");
+        let mut writer = ArrowWriter::try_new(output, schema, Some(properties))
+            .expect("Decimal256 writer must be valid");
+        writer
+            .write(&batch)
+            .expect("Decimal256 batch must be writable");
+        writer.close().expect("Decimal256 writer must close");
         file
     }
 
@@ -1898,6 +1951,51 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![125, 400]);
+    }
+
+    #[test]
+    fn applies_decimal256_runtime_filter_without_narrowing() {
+        let file = decimal256_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["amount".to_owned()])
+            .read()
+            .expect("Decimal256 source must open");
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "amount",
+                    &[
+                        ScalarValue::Decimal256 {
+                            value: "125".to_owned(),
+                            precision: 76,
+                            scale: 2,
+                        },
+                        ScalarValue::Decimal256 {
+                            value: "400".to_owned(),
+                            precision: 76,
+                            scale: 2,
+                        },
+                    ],
+                )
+                .expect("Decimal256 runtime filter must be accepted")
+        );
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("Decimal256 runtime-filtered parquet must decode");
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Decimal256Array>()
+                    .expect("Decimal256 output")
+                    .iter()
+                    .flatten()
+                    .map(|value| value.to_string())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec!["125".to_owned(), "400".to_owned()]);
     }
 
     #[test]
