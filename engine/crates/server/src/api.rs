@@ -22147,6 +22147,20 @@ mod tests {
     }
 
     #[test]
+    fn keeps_exact_count_distinct_out_of_json_scalar_merge_shortcut() {
+        let distinct = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT region, COUNT(DISTINCT user_id) FROM orders GROUP BY region",
+        )
+        .unwrap();
+
+        // The shortcut receives finalized JSON scalar rows from each worker.
+        // Adding those counts would double-count values that occur in more
+        // than one worker, so exact distinct remains on the stateful exchange
+        // path until this contract carries the distinct set itself.
+        assert!(aggregate_merge_contract(&distinct).is_none());
+    }
+
+    #[test]
     fn distributes_top_n_over_partitionable_scan_inputs() {
         let supported = kaveon_sql::logical_plan::sql_to_logical_plan(
             "SELECT region, total FROM orders WHERE total > 10 ORDER BY total DESC, region ASC LIMIT 5",
