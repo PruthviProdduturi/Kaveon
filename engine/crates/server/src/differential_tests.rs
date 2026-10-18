@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Int64Array, StringArray, StringDictionaryBuilder,
+    Array, ArrayRef, Date32Array, Int64Array, StringArray, StringDictionaryBuilder, StructArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -1938,6 +1938,88 @@ fn distributed_row_array_unnest_expands_struct_columns() {
     assert_eq!(
         canonical_rows(&batches, true),
         vec!["1\u{1f}a", "NULL\u{1f}NULL"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// ROW subscripts are one-based and preserve a NULL parent row as NULL for
+/// every selected field.  Run the same typed struct column through the local
+/// planner and the three-worker fragment path so a worker-side struct/null
+/// handling regression cannot hide behind the scalar evaluator tests.
+#[test]
+fn distributed_row_subscript_matches_local_and_rejects_invalid_constant_index() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-row-subscript-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+
+    let record = StructArray::new(
+        vec![
+            Field::new("field0", DataType::Int64, true),
+            Field::new("field1", DataType::Utf8, true),
+        ]
+        .into(),
+        vec![
+            Arc::new(Int64Array::from(vec![Some(7), Some(9), Some(11)])) as ArrayRef,
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])) as ArrayRef,
+        ],
+        Some(arrow::buffer::NullBuffer::from(vec![true, false, true])),
+    );
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "record",
+            record.data_type().clone(),
+            true,
+        )])),
+        vec![Arc::new(record)],
+    )
+    .unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: PathBuf::from(&directory),
+        },
+    )
+    .with_schema("events");
+    catalog
+        .register_table("events", write(&directory, "events.parquet", &batch))
+        .unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+
+    let statement = "SELECT record[1] AS first, record[2] AS second FROM events";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-row-subscript", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let mut local_batches = Vec::new();
+    while let Some(batch) = local
+        .operator
+        .next_batch()
+        .unwrap_or_else(|error| panic!("{statement} local execution: {error}"))
+    {
+        local_batches.push(batch);
+    }
+    let expected = canonical_rows(&local_batches, false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["11\u{1f}c", "7\u{1f}a", "NULL\u{1f}NULL"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let invalid = "SELECT record[3] FROM events";
+    let invalid_plan = bound_plan(invalid, &manager);
+    let error = execute_distributed(invalid, &invalid_plan, &manager, 3, &pool)
+        .expect_err("an out-of-range constant ROW index must fail closed")
+        .to_string();
+    assert!(
+        error.contains("ROW subscript index 3 is out of bounds"),
+        "{error}"
     );
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
