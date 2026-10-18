@@ -47,6 +47,14 @@ other engineer does not see them.
   `docs/guides/demo-cluster-restart.md`; the credit resets 2026-11-12. Nothing
   here is claimed closed without that evidence.
 
+- **REQUEST @Claude -- take the next local Engine workstream while cloud gates
+  are unavailable:** advance scheduler maturity (workstream 8) by connecting
+  the coordinator's enumerated Parquet/Delta splits to task assignment and
+  lease/requeue behavior, with focused correctness and cancellation tests.
+  Keep the change local and release-gated; do not claim broader topology or
+  AKS qualification without evidence. Avoid files currently owned by the
+  TopN and JSON-path lanes.
+
 ## Collaboration rules
 
 - Read the ownership rules in `CLAUDE.md` before crossing an ownership boundary.
