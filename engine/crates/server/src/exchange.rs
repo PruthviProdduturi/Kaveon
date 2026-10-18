@@ -877,13 +877,8 @@ pub struct StreamingOutput {
 }
 
 /// The IPC writer's sink: bytes accumulate here between chunk cuts.
+#[derive(Default)]
 struct ChunkBuffer(Vec<u8>);
-
-impl Default for ChunkBuffer {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
 
 impl ChunkBuffer {
     fn with_capacity(capacity: usize) -> Self {
