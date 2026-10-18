@@ -11379,19 +11379,42 @@ async fn cancel_query(
         cluster.remove_stale_workers();
         cluster.workers.values().cloned().collect::<Vec<_>>()
     };
-    let client = state.internal_http_client.clone();
+    cancel_workers(
+        &state.internal_http_client,
+        &workers,
+        &query_id,
+        state.config.exchange_token.as_deref(),
+    )
+    .await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Propagate cancellation to every worker concurrently. A slow or unreachable
+/// worker must not delay cancellation of the other workers, because each
+/// worker may still own exchange/spill state for the same query.
+async fn cancel_workers(
+    client: &reqwest::Client,
+    workers: &[NodeInfo],
+    query_id: &str,
+    exchange_token: Option<&str>,
+) {
+    let mut requests = tokio::task::JoinSet::new();
     for worker in workers {
+        let client = client.clone();
         let url = format!(
             "{}/v1/query/{query_id}",
             worker.address.trim_end_matches('/')
         );
-        let mut request = client.delete(url);
-        if let Some(token) = &state.config.exchange_token {
-            request = request.bearer_auth(token);
-        }
-        let _ = request.send().await;
+        let token = exchange_token.map(str::to_owned);
+        requests.spawn(async move {
+            let mut request = client.delete(url);
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            let _ = request.send().await;
+        });
     }
-    StatusCode::NO_CONTENT.into_response()
+    while requests.join_next().await.is_some() {}
 }
 
 // --- Cluster / Node ---
@@ -15562,6 +15585,69 @@ mod tests {
             peak.load(std::sync::atomic::Ordering::SeqCst),
             super::MAX_CONCURRENT_EXCHANGE_RELEASES as u64
         );
+    }
+
+    #[tokio::test]
+    async fn cancellation_reaches_all_workers_concurrently() {
+        use std::sync::atomic::AtomicUsize;
+
+        let arrivals = Arc::new(AtomicUsize::new(0));
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let app = axum::Router::new().route(
+            "/v1/query/{query_id}",
+            axum::routing::delete({
+                let arrivals = arrivals.clone();
+                let reached = reached.clone();
+                move || {
+                    let arrivals = arrivals.clone();
+                    let reached = reached.clone();
+                    async move {
+                        let count = arrivals.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        if count == 2 {
+                            reached.notify_waiters();
+                        } else {
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(1),
+                                reached.notified(),
+                            )
+                            .await
+                            .unwrap();
+                        }
+                        StatusCode::NO_CONTENT
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let workers = (0..2)
+            .map(|index| crate::cluster::NodeInfo {
+                node_id: format!("worker-{index}"),
+                role: crate::cluster::NodeRole::Worker,
+                address: address.clone(),
+                environment: "test".into(),
+                version: "test".into(),
+                uptime_secs: 0,
+                last_heartbeat: 0,
+                memory_rss_bytes: 0,
+                memory_allocated_bytes: 0,
+                memory_limit_bytes: None,
+                catalog_snapshot_id: None,
+                result_cache: None,
+                admission: None,
+                resource_groups: None,
+            })
+            .collect::<Vec<_>>();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            super::cancel_workers(&reqwest::Client::new(), &workers, "cancel-me", None),
+        )
+        .await
+        .expect("cancellation must not serialize behind one worker");
+        assert_eq!(arrivals.load(std::sync::atomic::Ordering::SeqCst), 2);
+        server.abort();
     }
 
     #[tokio::test]
