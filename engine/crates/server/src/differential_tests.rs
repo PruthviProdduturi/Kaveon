@@ -1921,6 +1921,29 @@ fn distributed_recursive_cte_union_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A bounded descending recursive CTE must preserve the UNION ALL recursion
+/// direction and stop at its strict lower bound on every worker.
+#[test]
+fn distributed_recursive_cte_descending_union_all_matches_trino_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-recursive-cte-descending-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "WITH RECURSIVE countdown(n) AS (SELECT 5 UNION ALL SELECT n - 1 FROM countdown WHERE n > 1) SELECT n FROM countdown ORDER BY n";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-recursive-cte-descending", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["1", "2", "3", "4", "5"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_map_keys_unnest_matches_trino_rows() {
     let directory =
