@@ -2458,7 +2458,10 @@ mod tests {
         grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
-        array::{Array, AsArray, Int64Array, LargeStringArray, StringArray, UInt64Array},
+        array::{
+            Array, AsArray, Int64Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
+            UInt64Array,
+        },
         datatypes::{DataType, Field, Schema},
     };
     use kaveon_core::{MemoryAdmissionController, QueryMemoryPool};
@@ -3463,6 +3466,19 @@ mod tests {
                     as Arc<dyn arrow::array::Array>,
                 Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(4), None]))
                     as Arc<dyn arrow::array::Array>,
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(2_000_000),
+                    Some(4_000_000),
+                    Some(4_000_000),
+                ])) as Arc<dyn arrow::array::Array>,
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(1_000_000),
+                    Some(2_000_000),
+                    Some(4_000_000),
+                    None,
+                ])) as Arc<dyn arrow::array::Array>,
             ),
         ] {
             let data_type = build.data_type().clone();
