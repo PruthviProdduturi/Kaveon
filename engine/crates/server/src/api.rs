@@ -13538,6 +13538,7 @@ fn spawn_exchange_cleanup(
 }
 
 const MAX_CONCURRENT_EXCHANGE_RELEASES: usize = 16;
+const EXCHANGE_RELEASE_ATTEMPTS: usize = 3;
 
 async fn run_bounded_exchange_releases<F>(releases: Vec<F>)
 where
@@ -13557,10 +13558,41 @@ async fn release_exchange_locations(
     let releases = locations
         .into_iter()
         .map(|(worker_uri, identity)| async move {
-            let _ = crate::exchange::release_exchange(client, &worker_uri, token, &identity).await;
+            let _ = release_exchange_with_retry(client, &worker_uri, token, &identity).await;
         })
         .collect();
     run_bounded_exchange_releases(releases).await;
+}
+
+async fn release_exchange_with_retry(
+    client: &reqwest::Client,
+    worker_uri: &str,
+    token: &str,
+    identity: &crate::exchange::ExchangeIdentity,
+) -> crate::exchange::ExchangeResult<()> {
+    let mut delay = std::time::Duration::from_millis(25);
+    for attempt in 0..EXCHANGE_RELEASE_ATTEMPTS {
+        match crate::exchange::release_exchange(client, worker_uri, token, identity).await {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt + 1 < EXCHANGE_RELEASE_ATTEMPTS
+                    && retryable_exchange_release_error(&error) =>
+            {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("exchange release attempts is positive")
+}
+
+fn retryable_exchange_release_error(error: &crate::exchange::ExchangeError) -> bool {
+    matches!(
+        error,
+        crate::exchange::ExchangeError::Transport(_)
+            | crate::exchange::ExchangeError::HttpStatus(500..=599)
+    )
 }
 
 async fn execute_distributed_top_n(
@@ -15412,6 +15444,22 @@ mod tests {
         // coordinator to dispatch the next ready stage immediately.
         assert_eq!(cleanups.len(), 1);
         while cleanups.join_next().await.is_some() {}
+    }
+
+    #[test]
+    fn exchange_cleanup_retries_only_transient_release_failures() {
+        assert!(super::retryable_exchange_release_error(
+            &crate::exchange::ExchangeError::Transport("worker unavailable".into())
+        ));
+        assert!(super::retryable_exchange_release_error(
+            &crate::exchange::ExchangeError::HttpStatus(503)
+        ));
+        assert!(!super::retryable_exchange_release_error(
+            &crate::exchange::ExchangeError::HttpStatus(404)
+        ));
+        assert!(!super::retryable_exchange_release_error(
+            &crate::exchange::ExchangeError::Unauthorized
+        ));
     }
 
     #[tokio::test]
