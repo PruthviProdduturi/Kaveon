@@ -16,7 +16,8 @@ SELECT ROW(1, 'ready') AS state FROM numbers LIMIT 1
 ```
 
 The response is HTTP 200 and contains `row(bigint,varchar)` in the standard
-`DESCRIBE OUTPUT` data row.
+`DESCRIBE OUTPUT` data row. The regression also checks the standard Trino
+metadata columns and the `typeSignature.rawType` value for the type column.
 
 ## Boundary
 
