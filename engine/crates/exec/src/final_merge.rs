@@ -457,7 +457,7 @@ impl HybridFinalMerge {
                     && self.memory.snapshot().current_bytes > self.spill_threshold
                 {
                     let merger = self.merger.take().expect("checked above");
-                    self.spill_table(merger)?;
+                    self.spill_table_without_compaction(merger)?;
                 }
             }
         }
@@ -578,7 +578,23 @@ impl HybridFinalMerge {
     /// per sub-partition they hash to, in chunks the budget admits beside
     /// the table; the table is gone when this returns, and a source
     /// thread waiting for memory is told so.
-    fn spill_table(&mut self, mut merger: IncrementalAggregateMerger) -> Result<()> {
+    fn spill_table(&mut self, merger: IncrementalAggregateMerger) -> Result<()> {
+        self.spill_table_with_compaction(merger, true)
+    }
+
+    /// Proactive pressure relief deliberately avoids compaction. Several
+    /// final workers can spill together, and immediately starting a second
+    /// memory hungry operation defeats the relief and changes the spill
+    /// protocol into an unbounded compaction loop.
+    fn spill_table_without_compaction(&mut self, merger: IncrementalAggregateMerger) -> Result<()> {
+        self.spill_table_with_compaction(merger, false)
+    }
+
+    fn spill_table_with_compaction(
+        &mut self,
+        mut merger: IncrementalAggregateMerger,
+        compact: bool,
+    ) -> Result<()> {
         let (spill, count) = self.spill.clone().expect("spilling needs a spill");
         merger.release_growth();
         let (merged, reservations) = merger.finish_groups()?;
@@ -692,18 +708,20 @@ impl HybridFinalMerge {
                 // is deliberately propagated only when it leaves the input
                 // runs intact; callers can still fail closed with the same
                 // exact data rather than silently dropping a run.
-                match crate::partitioned::compact_spill_runs(
-                    &mut self.runs[partition],
-                    &self.schema,
-                    &self.memory,
-                    &spill,
-                ) {
-                    Ok(()) | Err(KaveonError::MemoryLimit(_)) => {
-                        // Compaction is an optimization.  If the query is
-                        // already at its memory ceiling, retain the original
-                        // runs and let the bounded final reader process them.
+                if compact {
+                    match crate::partitioned::compact_spill_runs(
+                        &mut self.runs[partition],
+                        &self.schema,
+                        &self.memory,
+                        &spill,
+                    ) {
+                        Ok(()) | Err(KaveonError::MemoryLimit(_)) => {
+                            // Compaction is an optimization.  If the query is
+                            // already at its memory ceiling, retain the original
+                            // runs and let the bounded final reader process them.
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
                 }
             }
         }
