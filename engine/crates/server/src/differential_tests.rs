@@ -4807,6 +4807,27 @@ fn distributed_array_has_duplicates_nested_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_array_first_last_match_local_for_empty_arrays() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-array-first-last-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT ARRAY_FIRST(ARRAY[4, 5]) AS first_value, ARRAY_LAST(ARRAY[4, 5]) AS last_value, ARRAY_FIRST(ARRAY_SLICE(ARRAY[4, 5], 1, 0, 1)) AS empty_first, ARRAY_LAST(ARRAY_SLICE(ARRAY[4, 5], 1, 0, 1)) AS empty_last FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-array-first-last", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Runtime filtering must preserve Float32 identity. Values above the
 /// Float32 integer precision boundary are intentionally used so a filter that
 /// widens or narrows through an imprecise host representation cannot admit or
