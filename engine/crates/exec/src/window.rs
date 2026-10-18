@@ -181,6 +181,15 @@ fn peers(cols: &[ArrayRef], left: usize, right: usize) -> Result<bool> {
     Ok(true)
 }
 
+fn peers_with_comparators<F>(comparators: &[F], left: usize, right: usize) -> bool
+where
+    F: Fn(usize, usize) -> Ordering,
+{
+    comparators
+        .iter()
+        .all(|comparator| comparator(left, right) == Ordering::Equal)
+}
+
 fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
     let Expr::WindowFunction {
         name,
@@ -199,6 +208,20 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         .unwrap_or(&name)
         .to_owned();
     let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
+    let partition_comparators = partition_cols
+        .iter()
+        .map(|column| {
+            arrow::array::make_comparator(
+                column.as_ref(),
+                column.as_ref(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            )
+            .map_err(|failure| error(failure.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let order_cols = normalize_dictionary_columns(columns(
         &order_by
             .iter()
@@ -243,7 +266,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             crate::expr_eval::check_expression_cancelled()?;
         }
         if let Some(last) = partitions.last_mut()
-            && peers(&partition_cols, last[0], row)?
+            && peers_with_comparators(&partition_comparators, last[0], row)
         {
             last.push(row);
         } else {
