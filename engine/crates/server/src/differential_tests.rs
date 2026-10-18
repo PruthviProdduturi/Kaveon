@@ -387,6 +387,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "nested_row_lexicographic_ordering",
+        "SELECT ROW(ROW(1, 2), 3) < ROW(ROW(1, 3), 3) AS nested_less, ROW(ROW(2, NULL), 0) > ROW(ROW(1, 99), 0) AS nested_later, ROW(ROW(1, NULL), 3) < ROW(ROW(1, 3), 3) AS nested_unknown FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "date_array_functions",
         "SELECT CARDINALITY(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS card, ARRAY_POSITION(ARRAY[DATE '2026-01-01', DATE '2026-02-01'], DATE '2026-02-01') AS pos, ARRAY_REVERSE(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS reversed, ARRAY_DISTINCT(ARRAY[DATE '2026-01-01', DATE '2026-01-01']) AS distinct_dates FROM {T} LIMIT 1",
         false,
