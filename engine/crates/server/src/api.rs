@@ -23878,6 +23878,16 @@ mod streamed_root_tests {
     }
 
     #[test]
+    fn trino_describe_output_infers_typed_null_map_metadata() {
+        let metadata = trino_output_metadata("SELECT CAST(NULL AS MAP(VARCHAR, BIGINT)) AS merged")
+            .expect("typed NULL map metadata");
+        assert_eq!(
+            metadata,
+            vec![("merged".to_owned(), "map(varchar,bigint)".to_owned(), true,)]
+        );
+    }
+
+    #[test]
     fn trino_describe_output_infers_row_metadata() {
         let metadata =
             trino_output_metadata("SELECT ROW(1, 'ready') AS state, ROW(2, 3.5) AS measurements")
