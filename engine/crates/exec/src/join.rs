@@ -1,5 +1,7 @@
 use ahash::{AHashMap, AHashSet};
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt32Array, UInt64Array,
+};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -1636,6 +1638,13 @@ fn row_key(
                         .as_primitive::<arrow::datatypes::Int32Type>()
                         .value(row),
                 ),
+                // Keep UInt32 distinct from signed keys while reusing the
+                // existing lossless UInt64 hash representation.
+                DataType::UInt32 => Key::UInt64(
+                    column
+                        .as_primitive::<arrow::datatypes::UInt32Type>()
+                        .value(row) as u64,
+                ),
                 // Arrow Date32 is an i32 day number.  It has the same SQL
                 // equality/hash semantics as an integer key, while the
                 // schema check above still prevents Date32 from joining an
@@ -1963,6 +1972,47 @@ mod tests {
         let result = concat_batches(join.schema(), &batches).unwrap();
         assert_eq!(result.num_rows(), 2);
         assert_eq!(result.column(0).null_count(), 0);
+    }
+
+    #[test]
+    fn uint32_join_keys_match_without_signed_narrowing() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::UInt32, true),
+            Field::new("side", DataType::Utf8, false),
+        ]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![Some(1), Some(u32::MAX), None])),
+                Arc::new(StringArray::from(vec!["left", "max", "null"])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(UInt32Array::from(vec![Some(u32::MAX), Some(2), None])),
+                Arc::new(StringArray::from(vec!["max", "other", "null"])),
+            ],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("key".into(), "key".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        let result = concat_batches(join.schema(), &batches).unwrap();
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(
+            result
+                .column(0)
+                .as_primitive::<arrow::datatypes::UInt32Type>()
+                .value(0),
+            u32::MAX
+        );
     }
 
     #[test]
