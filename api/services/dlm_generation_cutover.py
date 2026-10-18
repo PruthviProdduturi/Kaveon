@@ -79,7 +79,15 @@ def publish(payload: dict, actor: str, role: str = "Viewer") -> dict:
     if not owner or (owner != actor and role != "Admin"):
         raise RuntimeError("Only the dataset owner or an Admin can publish its DLM generation")
 
-    definition_document = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
+    # The shape the context is compiled against, so a later read can tell a
+    # dataset that changed meaning from one that was merely written to. The
+    # revision stays on the record: it is what a definition written before
+    # this is matched on, and it is useful evidence either way.
+    definition_document = {
+        "dataset_id": dataset_id,
+        "dataset_revision": dataset_revision,
+        "dataset_shape_sha256": dlm_compiled_artifact.dataset_shape_key(dataset["document"]),
+    }
     definition = product_store.read("dlm_definition", dataset_id, owner, "Admin")
     mutations = []
     if definition is None:
