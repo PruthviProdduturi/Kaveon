@@ -1746,6 +1746,20 @@ impl ColumnarGroups {
         {
             return self.push_single_text_count(&key_columns[0], rows);
         }
+        if key_columns.len() == 1
+            && value_columns.len() == 1
+            && value_columns[0].is_none()
+            && matches!(self.accumulators.first(), Some(AccColumn::Count(_)))
+            && matches!(
+                self.keys.first(),
+                Some(KeyColumn::Integer {
+                    data_type: DataType::Int64,
+                    ..
+                })
+            )
+        {
+            return self.push_single_int64_count(&key_columns[0], rows);
+        }
         let mut new_bytes = 0u64;
         let stride = self.stride();
         self.packed.clear();
@@ -1850,6 +1864,61 @@ impl ColumnarGroups {
                 _ => 0,
             },
         ))
+    }
+
+    /// Fused one-Int64-key COUNT(*) update. This keeps the common numeric
+    /// count shape on the same single-pass path as the text-key variant.
+    fn push_single_int64_count(&mut self, array: &ArrayRef, rows: usize) -> Result<(usize, u64)> {
+        let array_values = array
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| exec_err("Int64 count fast path received another key type"))?;
+        let mut created = 0usize;
+        for row in 0..rows {
+            let null = array_values.is_null(row);
+            let word = if null {
+                0
+            } else {
+                array_values.value(row) as u64
+            };
+            let packed = [word, u64::from(null)];
+            let hash = packed_hash(&packed);
+            if self.index.is_full() {
+                let keys = &self.keys;
+                self.index.grow(self.uses_large_integer_growth(), |slot| {
+                    slot_hash(keys, slot as usize)
+                });
+            }
+            if let Some(&ahead) = self.hashes.get(row + PREFETCH_DISTANCE) {
+                self.index.prefetch(ahead);
+            }
+            let keys = &self.keys;
+            let (slot, is_new) = match self
+                .index
+                .probe(hash, |slot| key_matches(keys, slot as usize, &packed))
+            {
+                Probe::Found(slot) => (slot, false),
+                Probe::Vacant(bucket) => {
+                    let slot = u32::try_from(self.len)
+                        .map_err(|_| exec_err("too many groups for one task"))?;
+                    if let Some(KeyColumn::Integer { values, nulls, .. }) = self.keys.first_mut() {
+                        values.push(if null { 0 } else { array_values.value(row) });
+                        nulls.push(null);
+                    }
+                    if let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
+                        counts.push(1);
+                    }
+                    self.index.occupy(bucket, hash, slot);
+                    self.len += 1;
+                    created += 1;
+                    (slot, true)
+                }
+            };
+            if !is_new && let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
+                counts[slot as usize] += 1;
+            }
+        }
+        Ok((created, 0))
     }
 
     /// Hash every packed row, then find or create its group: `slots` holds
@@ -3165,5 +3234,26 @@ mod tests {
         // A hostile or malformed batch length must not wrap the admission
         // calculation and bypass the growth reservation.
         assert!(groups.growth_bytes(usize::MAX) > 0);
+    }
+
+    #[test]
+    fn fused_int64_count_path_preserves_nulls_and_duplicate_groups() {
+        let mut groups =
+            ColumnarGroups::new(&[DataType::Int64], &[AggregateState::Count(0)]).unwrap();
+        let keys: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(4),
+            None,
+            Some(4),
+            Some(9),
+            None,
+        ]));
+        let (created, encoded_bytes) = groups.push_batch(&[keys], &[None], 5).unwrap();
+        assert_eq!(created, 3);
+        assert_eq!(encoded_bytes, 0);
+        let mut result = groups.into_groups();
+        result.sort_by_key(|(keys, _)| format!("{keys:?}"));
+        assert!(result.contains(&(vec![GroupKey::Int64(4)], vec![AggregateState::Count(2)])));
+        assert!(result.contains(&(vec![GroupKey::Int64(9)], vec![AggregateState::Count(1)])));
+        assert!(result.contains(&(vec![GroupKey::Null], vec![AggregateState::Count(2)])));
     }
 }
