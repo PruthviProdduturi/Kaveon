@@ -321,8 +321,11 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
         (ScalarValue::Float64(value), DataType::Float32) => {
             // Runtime-filter values are represented as f64 at the engine
             // boundary. Narrow only when the value is exactly representable
-            // as an Arrow Float32; otherwise declining pushdown is safer than
-            // rounding a value into a different key.
+            // as an Arrow Float32; non-finite values and lossy rounding stay
+            // on the exact executor path.
+            if !value.is_finite() {
+                return None;
+            }
             let narrowed = *value as f32;
             if f64::from(narrowed) != *value {
                 return None;
@@ -330,6 +333,9 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
             Arc::new(Float32Array::from(vec![narrowed]))
         }
         (ScalarValue::Float64(value), DataType::Float64) => {
+            if !value.is_finite() {
+                return None;
+            }
             Arc::new(Float64Array::from(vec![*value]))
         }
         // Build-side decimal keys use precision 38 in the hash index. Retag
@@ -743,6 +749,18 @@ mod tests {
         let array = comparison_literal(&literal, &DataType::Decimal256(40, 2)).unwrap();
         assert_eq!(array.data_type(), &DataType::Decimal256(40, 2));
         assert_eq!(array.as_primitive::<Decimal256Type>().value(0), expected);
+    }
+
+    #[test]
+    fn non_finite_float_runtime_literals_fail_closed() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let literal = ScalarValue::Float64(value);
+            assert!(comparison_literal(&literal, &DataType::Float32).is_none());
+            assert!(comparison_literal(&literal, &DataType::Float64).is_none());
+        }
+        let finite = ScalarValue::Float64(2.5);
+        assert!(comparison_literal(&finite, &DataType::Float32).is_some());
+        assert!(comparison_literal(&finite, &DataType::Float64).is_some());
     }
 
     fn like(
