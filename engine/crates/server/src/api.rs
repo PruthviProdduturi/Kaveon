@@ -505,6 +505,10 @@ struct TaskExecutionMetrics {
     join_spill_min_partition_rows: u64,
     #[serde(default)]
     join_spill_max_partition_rows: u64,
+    /// Maximum observed non-empty spill partition divided by the mean
+    /// non-empty partition. `None` means no non-empty partition was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    join_spill_skew_ratio: Option<f64>,
 }
 
 #[derive(Default)]
@@ -2775,6 +2779,12 @@ async fn execute_fragment_task(
     metrics.join_spill_non_empty_partitions = join_spill.non_empty_partitions;
     metrics.join_spill_min_partition_rows = join_spill.min_partition_rows;
     metrics.join_spill_max_partition_rows = join_spill.max_partition_rows;
+    metrics.join_spill_skew_ratio =
+        (join_spill.non_empty_partitions > 0 && join_spill.total_partition_rows > 0).then(|| {
+            let mean =
+                join_spill.total_partition_rows as f64 / join_spill.non_empty_partitions as f64;
+            join_spill.max_partition_rows as f64 / mean
+        });
     Ok((
         execution.result_schema,
         execution.result_batches,
