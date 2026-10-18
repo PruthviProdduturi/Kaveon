@@ -4810,10 +4810,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         } else {
             field.value(0)
         };
-        return row
+        let child = row
             .column_by_name(field)
             .cloned()
-            .ok_or_else(|| KaveonError::Execution(format!("ROW_FIELD '{field}' not found")));
+            .ok_or_else(|| KaveonError::Execution(format!("ROW_FIELD '{field}' not found")))?;
+        // A dereference of a NULL ROW is NULL, even when Arrow's child
+        // column still contains a physical value in that slot.  This is
+        // common for nested Parquet structs and must be applied before the
+        // child reaches comparisons or projections.
+        if row.null_count() == 0 {
+            return Ok(child);
+        }
+        let valid = compute::is_not_null(row)?;
+        let nulls = arrow::array::new_null_array(child.data_type(), child.len());
+        return Ok(arrow::compute::kernels::zip::zip(&valid, &child, &nulls)?);
     }
     if upper == "ROW" {
         let fields = args
@@ -13415,6 +13425,39 @@ mod tests {
         assert_eq!(
             value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(7), Some(9)]
+        );
+    }
+
+    #[test]
+    fn row_field_propagates_null_parent_rows() {
+        let fields = vec![arrow::datatypes::Field::new(
+            "field0",
+            DataType::Int64,
+            true,
+        )];
+        let row = StructArray::new(
+            fields.into(),
+            vec![Arc::new(Int64Array::from(vec![Some(7), Some(9)])) as ArrayRef],
+            Some(arrow::buffer::NullBuffer::from(vec![true, false])),
+        );
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("row", row.data_type().clone(), true),
+        ]));
+        let input = RecordBatch::try_new(schema, vec![Arc::new(row)]).unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ROW_FIELD".into(),
+                args: vec![
+                    Expr::Column("row".into()),
+                    Expr::Literal(ScalarValue::Utf8("field0".into())),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(7), None]
         );
     }
 
