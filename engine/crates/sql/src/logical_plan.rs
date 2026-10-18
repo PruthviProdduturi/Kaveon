@@ -4243,19 +4243,25 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         name = "JSON_ARRAY_ABSENT_ON_NULL".into();
     }
 
-    // Trino exposes calendar arithmetic as DATE_ADD(unit, amount, value).
+    // Trino exposes calendar arithmetic as DATE_ADD/DATE_SUB(unit, amount,
+    // value). Keep the unit validation in the SQL layer, then reuse the typed
+    // vectorized date operators used by interval arithmetic.
     // Keep the unit validation in the SQL layer, then reuse the typed
     // vectorized date operators used by interval arithmetic.  The amount is
     // intentionally left as an expression so column-driven offsets retain
     // their per-row semantics.
-    if name == "DATE_ADD" {
+    if name == "DATE_ADD" || name == "DATE_SUB" {
+        let function_name = name.as_str();
+        let subtract = name == "DATE_SUB";
         let [unit, amount, value] = args.as_slice() else {
-            return Err(sql_err(
-                "DATE_ADD requires a unit, amount, and date or timestamp",
-            ));
+            return Err(sql_err(format!(
+                "{function_name} requires a unit, amount, and date or timestamp"
+            )));
         };
         let Expr::Literal(ScalarValue::Utf8(unit)) = unit else {
-            return Err(sql_err("DATE_ADD unit must be a string literal"));
+            return Err(sql_err(format!(
+                "{function_name} unit must be a string literal"
+            )));
         };
         let unit = unit.to_ascii_lowercase();
         let (operator, multiplier) = match unit.as_str() {
@@ -4269,22 +4275,35 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "second" => ("DATE_ADD_SECONDS", 1),
             "millisecond" => ("DATE_ADD_MILLISECONDS", 1),
             other => {
-                return Err(sql_err(format!("DATE_ADD does not support unit '{other}'")));
+                return Err(sql_err(format!(
+                    "{function_name} does not support unit '{other}'"
+                )));
             }
         };
-        let amount = if multiplier == 1 {
+        let amount = if multiplier == 1 && !subtract {
             amount.clone()
         } else if let Expr::Literal(ScalarValue::Int64(value)) = amount {
             Expr::Literal(ScalarValue::Int64(
                 value
                     .checked_mul(multiplier)
-                    .ok_or_else(|| sql_err("DATE_ADD amount overflows INT64"))?,
+                    .and_then(|value| {
+                        if subtract {
+                            value.checked_neg()
+                        } else {
+                            Some(value)
+                        }
+                    })
+                    .ok_or_else(|| sql_err(format!("{function_name} amount overflows INT64")))?,
             ))
         } else {
             Expr::BinaryOp {
                 left: Box::new(amount.clone()),
                 op: BinaryOp::Multiply,
-                right: Box::new(Expr::Literal(ScalarValue::Int64(multiplier))),
+                right: Box::new(Expr::Literal(ScalarValue::Int64(if subtract {
+                    -multiplier
+                } else {
+                    multiplier
+                }))),
             }
         };
         if let (
@@ -4293,9 +4312,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         ) = (value, &amount)
         {
             return Ok(Expr::Literal(ScalarValue::Int64(match operator {
-                "DATE_ADD_DAYS" => days
-                    .checked_add(*offset)
-                    .ok_or_else(|| sql_err("DATE_ADD day offset overflows INT64"))?,
+                "DATE_ADD_DAYS" => days.checked_add(*offset).ok_or_else(|| {
+                    sql_err(format!("{function_name} day offset overflows INT64"))
+                })?,
                 "DATE_ADD_MONTHS" => add_months(*days, *offset),
                 _ => {
                     return Err(sql_err(
@@ -5610,6 +5629,25 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{millis:?}").contains("DATE_ADD_MILLISECONDS"));
+    }
+
+    #[test]
+    fn date_sub_lowers_to_negative_typed_offsets() {
+        let plan = sql_to_logical_plan(
+            "SELECT DATE_SUB('week', 2, DATE '2026-01-15'), DATE_SUB('month', 1, DATE '2026-03-31'), DATE_SUB('hour', 3, TIMESTAMP '2026-01-01 00:00:00') FROM t",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("DATE_ADD_SECONDS"), "{debug}");
+        assert!(debug.contains("Literal(Int64(20454))"), "{debug}");
+        assert!(debug.contains("Literal(Int64(20512))"), "{debug}");
+        assert!(debug.contains("Literal(Int64(-10800))"), "{debug}");
+        let error = sql_to_logical_plan(
+            "SELECT DATE_SUB('week', 1327620987836253668, DATE '2026-01-01') FROM t",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("DATE_SUB amount overflows INT64"), "{error}");
     }
 
     #[test]
