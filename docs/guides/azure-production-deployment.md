@@ -111,6 +111,22 @@ product overview and the whole documentation site stay available while the
 cluster is stopped. What stops is everything that reads data: SQL Lab, the
 catalog, charts, dashboards and chat.
 
+### One hostname
+
+`KAVEON_CANONICAL_HOST` (e.g. `kaveon.io`) redirects every `*.vercel.app`
+alias to it permanently. Vercel mints a production alias on every push --
+`kaveon-<hash>-prodduturi-labs.vercel.app` -- and each one is public and
+indexable, so left alone the product accumulates hundreds of addresses, none
+of them the brand.
+
+Unset by default, and deliberately so: arming it before the canonical host
+actually serves would redirect every working address to a dead one. Set it
+once the apex resolves to Vercel, not before.
+
+It is a config redirect rather than middleware because redirects run first
+and therefore cover `/`, `/docs` and `/login`, which the auth matcher
+excludes and which are exactly the public pages that need a canonical host.
+
 ## Manual operator check
 
 ```powershell
