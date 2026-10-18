@@ -1319,6 +1319,8 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
             | DataType::UInt64
             | DataType::Date32
             | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
             | DataType::Timestamp(_, _),
         ) => true,
         (ScalarValue::Float64(_), DataType::Float32 | DataType::Float64) => true,
@@ -1385,7 +1387,7 @@ mod tests {
     use super::*;
     use arrow::array::{
         ArrayRef, Date64Array, Decimal128Array, Float32Array, Int32Array, StringArray,
-        TimestampMicrosecondArray,
+        Time64MicrosecondArray, TimestampMicrosecondArray,
     };
     use arrow::datatypes::{Field, Schema, TimeUnit};
     use parquet::arrow::ArrowWriter;
@@ -1502,6 +1504,38 @@ mod tests {
             .write(&batch)
             .expect("Timestamp batch must be writable");
         writer.close().expect("Timestamp writer must close");
+        file
+    }
+
+    fn time64_fixture() -> TestFile {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-time64-runtime-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "at",
+            DataType::Time64(TimeUnit::Microsecond),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Time64MicrosecondArray::from(vec![
+                3_600_000_000,
+                43_200_000_000,
+                64_800_000_000,
+                82_800_000_000,
+            ])) as ArrayRef],
+        )
+        .expect("Time64 batch must be valid");
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let output = File::create(&file.0).expect("Time64 file must be creatable");
+        let mut writer = ArrowWriter::try_new(output, schema, Some(properties))
+            .expect("Time64 writer must be valid");
+        writer.write(&batch).expect("Time64 batch must be writable");
+        writer.close().expect("Time64 writer must close");
         file
     }
 
@@ -1722,6 +1756,14 @@ mod tests {
     }
 
     #[test]
+    fn runtime_filter_accepts_time64_columns() {
+        assert!(scalar_matches_data_type(
+            &ScalarValue::Int64(43_200_000_000),
+            &DataType::Time64(TimeUnit::Microsecond),
+        ));
+    }
+
+    #[test]
     fn applies_date64_runtime_filter_before_parquet_decode() {
         let file = date64_fixture();
         let mut source = ParquetReader::new(&file.0)
@@ -1779,6 +1821,36 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![1_706_745_600_000_000]);
+    }
+
+    #[test]
+    fn applies_time64_runtime_filter_before_parquet_decode() {
+        let file = time64_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["at".to_owned()])
+            .read()
+            .expect("Time64 source must open");
+        assert!(
+            source
+                .apply_runtime_filter("at", &[ScalarValue::Int64(43_200_000_000)])
+                .expect("Time64 runtime filter must be accepted")
+        );
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("Time64 runtime-filtered parquet must decode");
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Time64MicrosecondArray>()
+                    .expect("Time64 output")
+                    .iter()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![43_200_000_000]);
     }
 
     #[test]
