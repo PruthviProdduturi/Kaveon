@@ -562,6 +562,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_scalar_path_returning_decimal",
+        "SELECT JSON_VALUE(JSON_PARSE('{\"amount\":12.34}'), '$.amount' RETURNING DECIMAL(10, 2)) AS value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_exists_path",
         "SELECT JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.x') AS present, JSON_EXISTS(JSON_PARSE('{\"x\":7}'), '$.missing') AS absent FROM {T} LIMIT 1",
         false,
