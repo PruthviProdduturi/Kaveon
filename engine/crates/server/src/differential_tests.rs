@@ -3447,6 +3447,36 @@ fn distributed_correlated_exists_offset_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// OFFSET on an ungrouped correlated scalar aggregate produces the scalar
+/// subquery's NULL row in Trino; keep that lowering identical on workers.
+#[test]
+fn distributed_correlated_scalar_aggregate_offset_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-scalar-aggregate-offset-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT t.user_id, (SELECT SUM(i.actions) FROM events i WHERE i.user_id = t.user_id OFFSET 1) AS delayed_total FROM events t ORDER BY t.user_id, t.actions LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-correlated-scalar-aggregate-offset", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert!(actual.iter().all(|row| row.ends_with('\u{1f}')));
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn derived_values_join_using_matches_the_local_result() {
     let directory = std::env::temp_dir().join(format!(
