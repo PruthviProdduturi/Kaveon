@@ -1551,6 +1551,10 @@ pub struct JoinSpillSnapshot {
     /// diagnostic facts only; no execution decision is based on them.
     pub min_partition_rows: u64,
     pub max_partition_rows: u64,
+    /// Total rows across non-empty spill partitions. This is retained so
+    /// callers can compute a bounded max-to-mean skew signal without reading
+    /// spill files again.
+    pub total_partition_rows: u64,
 }
 
 #[derive(Default)]
@@ -1561,6 +1565,7 @@ pub struct JoinSpillMetrics {
     non_empty_partitions: AtomicU64,
     min_partition_rows: AtomicU64,
     max_partition_rows: AtomicU64,
+    total_partition_rows: AtomicU64,
 }
 
 impl JoinSpillMetrics {
@@ -1573,6 +1578,7 @@ impl JoinSpillMetrics {
             non_empty_partitions: self.non_empty_partitions.load(Ordering::Acquire),
             min_partition_rows: self.min_partition_rows.load(Ordering::Acquire),
             max_partition_rows: self.max_partition_rows.load(Ordering::Acquire),
+            total_partition_rows: self.total_partition_rows.load(Ordering::Acquire),
         }
     }
 
@@ -1598,6 +1604,7 @@ impl JoinSpillMetrics {
                 continue;
             }
             self.non_empty_partitions.fetch_add(1, Ordering::Relaxed);
+            self.total_partition_rows.fetch_add(rows, Ordering::Relaxed);
             let _ = self.min_partition_rows.fetch_update(
                 Ordering::Relaxed,
                 Ordering::Relaxed,
@@ -3837,6 +3844,10 @@ mod tests {
         assert_eq!(
             metrics.non_empty_partitions,
             u64::from(MAX_JOIN_SPILL_DEPTH + 1) * 2
+        );
+        assert_eq!(
+            metrics.total_partition_rows,
+            metrics.non_empty_partitions * 800
         );
         assert!(join.next_batch().unwrap().is_none());
         assert_eq!(pool.snapshot().current_bytes, 0);
