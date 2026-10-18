@@ -14383,6 +14383,20 @@ fn compare_json_scalars(
     if let (Some(left), Some(right)) = (left.as_u64(), right.as_u64()) {
         return Ok(left.cmp(&right));
     }
+    if let (Some(left), Some(right)) = (left.as_i64(), right.as_u64()) {
+        return Ok(if left < 0 {
+            std::cmp::Ordering::Less
+        } else {
+            (left as u64).cmp(&right)
+        });
+    }
+    if let (Some(left), Some(right)) = (left.as_u64(), right.as_i64()) {
+        return Ok(if right < 0 {
+            std::cmp::Ordering::Greater
+        } else {
+            left.cmp(&(right as u64))
+        });
+    }
     if let (Some(left), Some(right)) = (left.as_f64(), right.as_f64()) {
         return left
             .partial_cmp(&right)
@@ -21720,6 +21734,60 @@ mod tests {
                 serde_json::json!("east"),
                 serde_json::json!(18_446_744_073_709_551_613_u64),
                 serde_json::json!(18_446_744_073_709_551_615_u64),
+            ]]
+        );
+    }
+
+    #[test]
+    fn merges_mixed_signed_unsigned_extrema_without_float_rounding() {
+        let columns = vec![
+            ColumnInfo {
+                name: "region".into(),
+                data_type: "Utf8".into(),
+            },
+            ColumnInfo {
+                name: "minimum".into(),
+                data_type: "Integer".into(),
+            },
+            ColumnInfo {
+                name: "maximum".into(),
+                data_type: "Bigint".into(),
+            },
+        ];
+        let partials = vec![
+            TaskResponse {
+                columns: columns.clone(),
+                data: vec![vec![
+                    serde_json::json!("east"),
+                    serde_json::json!(9_223_372_036_854_775_000_i64),
+                    serde_json::json!(9_223_372_036_854_775_800_u64),
+                ]],
+                elapsed_us: 1,
+            },
+            TaskResponse {
+                columns,
+                data: vec![vec![
+                    serde_json::json!("east"),
+                    serde_json::json!(9_223_372_036_854_775_100_u64),
+                    serde_json::json!(9_223_372_036_854_775_700_i64),
+                ]],
+                elapsed_us: 1,
+            },
+        ];
+        let merged = merge_partial_aggregates(
+            partials,
+            1,
+            &[MergeOperation::Min, MergeOperation::Max],
+            2,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.data,
+            vec![vec![
+                serde_json::json!("east"),
+                serde_json::json!(9_223_372_036_854_775_000_i64),
+                serde_json::json!(9_223_372_036_854_775_800_u64),
             ]]
         );
     }
