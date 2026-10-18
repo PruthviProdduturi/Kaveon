@@ -262,11 +262,24 @@ impl BufferedPrefix {
     }
 
     fn replay(self) -> Box<dyn BatchOperator> {
+        // The prefix was retained only for the speculative in-memory trial.
+        // Repartitioning is about to reserve its own bounded buffers, so do
+        // not carry those trial guards into the replay source.  Keeping both
+        // reservations makes a failed trial pay twice for the same input and
+        // can reject a spill path even though the input itself fits.
+        let Self {
+            schema,
+            batches,
+            tail,
+            guards,
+            ..
+        } = self;
+        drop(guards);
         Box::new(ReplayInput {
-            schema: self.schema,
-            batches: self.batches.into(),
-            tail: self.tail,
-            guards: self.guards.into(),
+            schema,
+            batches: batches.into(),
+            tail,
+            guards: VecDeque::new(),
             active_guard: None,
         })
     }
@@ -4348,6 +4361,9 @@ mod tests {
         );
         assert!(pool.snapshot().current_bytes <= 512 * 1024);
         let mut replay = prefix.replay();
+        // Replaying after the speculative prefix is refused must release the
+        // prefix guards before partition writers reserve their own buffers.
+        assert_eq!(pool.snapshot().current_bytes, 0);
         let mut values = Vec::new();
         while let Some(batch) = replay.next_batch().unwrap() {
             values.extend(
