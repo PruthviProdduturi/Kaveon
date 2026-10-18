@@ -207,6 +207,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "distinct_bracketed_numeric_identifier",
+        "SELECT DISTINCT [actions] FROM {T} ORDER BY [actions] LIMIT 5",
+        true,
+    ),
+    (
         "order_by_dict_desc",
         "SELECT country, region FROM {T} WHERE surface = 'Export' AND event_date = '2026-07-20' ORDER BY country DESC, region LIMIT 5",
         true,
