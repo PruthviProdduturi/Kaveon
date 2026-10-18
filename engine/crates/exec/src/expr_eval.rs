@@ -14444,6 +14444,19 @@ mod tests {
     }
 
     #[test]
+    fn array_constructor_promotes_uint32_and_bigint_to_bigint() {
+        let unsigned = Arc::new(UInt32Array::from(vec![Some(1)])) as ArrayRef;
+        let signed = Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[unsigned, signed], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Int64);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
+        );
+    }
+
+    #[test]
     fn array_set_operations_deduplicate_and_match_nulls() {
         let batch =
             RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
