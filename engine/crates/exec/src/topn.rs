@@ -239,6 +239,15 @@ pub fn merge_top_n(
         return Ok(Some(result));
     }
 
+    // Multi-key integer ordering can also retain bounded row references
+    // without concatenating every payload column. Unsupported expressions
+    // retain the generic Arrow path below.
+    if sort_exprs.len() > 1
+        && let Some(result) = try_integer_multi_batch_top_n(schema, &non_empty, sort_exprs, limit)?
+    {
+        return Ok(Some(result));
+    }
+
     // Worker TopN operators also emit sorted batches for strings, dates,
     // decimals, and multi-key orderings.  Merge those heads without
     // concatenating the payload columns at the coordinator.  The integer
@@ -610,7 +619,105 @@ fn try_integer_batch_top_n(
         references
     };
 
-    let mut selected = Vec::with_capacity(references.len());
+    Ok(Some(take_batch_references(schema, batches, &references)?))
+}
+
+/// Uses a bounded k-way merge when every ordering expression is a non-null
+/// integer and each input batch is already sorted. Distributed workers emit
+/// exactly this shape for local TopN results, so the coordinator can avoid
+/// concatenating all payload columns before selecting the final rows.
+///
+/// Nullable keys, unsupported types, and unsorted input deliberately return
+/// `None`; the caller then keeps Arrow's complete lexicographic path.
+fn try_integer_multi_batch_top_n(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    sort_exprs: &[SortExpr],
+    limit: usize,
+) -> Result<Option<RecordBatch>> {
+    let mut keys = Vec::with_capacity(batches.len());
+    for batch in batches {
+        let mut batch_keys: Vec<Vec<i128>> = Vec::with_capacity(sort_exprs.len());
+        for sort_expr in sort_exprs {
+            let values = evaluate(&sort_expr.expr, batch)?;
+            if values.null_count() != 0 {
+                return Ok(None);
+            }
+            let values = if let Some(values) = values.as_any().downcast_ref::<Int64Array>() {
+                values
+                    .iter()
+                    .map(|value| value.expect("non-null key") as i128)
+                    .collect()
+            } else if let Some(values) = values.as_any().downcast_ref::<UInt64Array>() {
+                values
+                    .iter()
+                    .map(|value| value.expect("non-null key") as i128)
+                    .collect()
+            } else {
+                return Ok(None);
+            };
+            batch_keys.push(values);
+        }
+        keys.push(batch_keys);
+    }
+
+    let compare = |left: (usize, usize), right: (usize, usize)| {
+        for (column, sort_expr) in sort_exprs.iter().enumerate() {
+            let ordering = keys[left.0][column][left.1].cmp(&keys[right.0][column][right.1]);
+            if ordering != std::cmp::Ordering::Equal {
+                return if sort_expr.ascending {
+                    ordering
+                } else {
+                    ordering.reverse()
+                };
+            }
+        }
+        std::cmp::Ordering::Equal
+    };
+    let batches_are_sorted = keys.iter().enumerate().all(|(batch, columns)| {
+        let rows = columns.first().map_or(0, Vec::len);
+        (0..rows.saturating_sub(1))
+            .all(|row| compare((batch, row), (batch, row + 1)) != std::cmp::Ordering::Greater)
+    });
+    if !batches_are_sorted {
+        return Ok(None);
+    }
+
+    let mut cursors = vec![0usize; keys.len()];
+    let mut references = Vec::with_capacity(
+        limit.min(
+            keys.iter()
+                .map(|columns| columns.first().map_or(0, Vec::len))
+                .sum(),
+        ),
+    );
+    while references.len() < limit {
+        let next = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(batch, columns)| {
+                let row = cursors[batch];
+                (columns.first().is_some_and(|values| row < values.len())).then_some((batch, row))
+            })
+            .min_by(|left, right| compare(*left, *right));
+        let Some(next) = next else { break };
+        cursors[next.0] += 1;
+        references.push(next);
+    }
+    Ok(Some(take_batch_references(schema, batches, &references)?))
+}
+
+fn take_batch_references(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    references: &[(usize, usize)],
+) -> Result<RecordBatch> {
+    if references.is_empty() {
+        return Err(KaveonError::Execution(
+            "TopN merge selected no rows from non-empty input".into(),
+        ));
+    }
+    let mut selected = Vec::new();
     let mut offsets = vec![0u32; batches.len()];
     let mut positions = HashMap::with_capacity(references.len());
     let mut selected_rows = 0u32;
@@ -648,7 +755,7 @@ fn try_integer_batch_top_n(
         .iter()
         .map(|column| take(column.as_ref(), &order, None))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
+    Ok(RecordBatch::try_new(schema.clone(), columns)?)
 }
 
 // Common integer ORDER BY keys can compare typed values directly. Other types
@@ -912,7 +1019,7 @@ mod tests {
 
     use arrow::array::{
         Array, ArrayRef, Decimal128Array, Decimal256Array, Int8Array, Int16Array, Int32Array,
-        Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array,
+        Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     };
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -1808,6 +1915,56 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("a"), Some("b"), Some("c")]
+        );
+    }
+
+    #[test]
+    fn merges_sorted_multi_integer_batches_with_k_way_heads() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("id", DataType::Utf8, false),
+        ]));
+        let worker_a = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![9, 7, 7])),
+                Arc::new(UInt64Array::from(vec![1, 9, 12])),
+                Arc::new(StringArray::from(vec!["a9", "a7-low", "a7-high"])),
+            ],
+        )
+        .unwrap();
+        let worker_b = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![8, 7, 6])),
+                Arc::new(UInt64Array::from(vec![3, 4, 2])),
+                Arc::new(StringArray::from(vec!["b8", "b7", "b6"])),
+            ],
+        )
+        .unwrap();
+        let ordering = vec![
+            SortExpr::new(Expr::Column("score".into()), false),
+            SortExpr::new(Expr::Column("sequence".into()), true),
+        ];
+        let result = merge_top_n(&schema, &[worker_a, worker_b], &ordering, 5)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some("a9"),
+                Some("b8"),
+                Some("b7"),
+                Some("a7-low"),
+                Some("a7-high")
+            ]
         );
     }
 
