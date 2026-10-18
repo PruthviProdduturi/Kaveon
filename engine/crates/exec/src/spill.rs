@@ -275,6 +275,11 @@ impl SpillRunWriter {
             writer.finish()?;
             let mut output = writer.into_inner()?;
             output.flush()?;
+            // Make the complete stream durable before publishing its final
+            // name. A successful rename alone only protects readers from a
+            // partial stream; it does not protect the bytes from a process or
+            // node failure immediately after publication.
+            output.output.get_ref().sync_data()?;
             // Publish the run atomically only after the complete Arrow stream
             // is flushed. A process crash can leave a partial marker behind,
             // but never a path that readers could mistake for a finished run.
