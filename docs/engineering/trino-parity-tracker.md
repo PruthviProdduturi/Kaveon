@@ -6,6 +6,9 @@ Implementation history lives in Git; reproducible measurements live under
 `docs/qualification/`. A row is **Qualified** only when its stated acceptance
 evidence passes against exact-result references.
 
+The latest source/build gate record is retained in
+`docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
+
 ## Status vocabulary
 
 - **Qualified** — the declared acceptance test passes and its evidence is retained.
