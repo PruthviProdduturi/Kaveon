@@ -3853,6 +3853,54 @@ fn distributed_correlated_scalar_union_limit_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// An empty build side must publish an empty runtime filter to every worker;
+/// the probe must short-circuit without producing rows or retaining memory.
+#[test]
+fn distributed_empty_build_runtime_filter_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-empty-build-runtime-filter-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: PathBuf::from(&directory),
+        },
+    )
+    .with_schema("events");
+    let events_meta = write(&directory, "events.parquet", &batch(&events(), true));
+    catalog.register_table("events", events_meta).unwrap();
+    let empty_schema = Arc::new(Schema::new(vec![Field::new(
+        "user_id",
+        DataType::Int64,
+        true,
+    )]));
+    let empty = RecordBatch::new_empty(empty_schema);
+    let empty_meta = write(&directory, "empty.parquet", &empty);
+    catalog.register_table("events", empty_meta).unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+
+    let statement = "SELECT e.user_id, b.user_id FROM events e JOIN empty b ON e.user_id = b.user_id ORDER BY e.user_id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-empty-build-runtime-filter", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert!(expected.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Nested map/ROW null-safe comparison must remain order-independent and
 /// two-valued when the same values arrive through distributed fragments.
 #[test]
