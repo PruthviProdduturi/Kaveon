@@ -80,3 +80,4 @@ under `docs/qualification/`. Passing focused tests alone does not qualify a
 three-worker, cloud, or broad federated claim.
 
 <!-- JSON typed coercion evidence: docs/qualification/distributed-json-typed-varchar-2026-10-18.md -->
+<!-- Correlated lateral ordered LIMIT evidence: docs/qualification/distributed-correlated-lateral-ordered-limit-2026-10-18.md -->
