@@ -3390,6 +3390,34 @@ fn correlated_residual_left_lateral_join_using_matches_the_local_result() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A correlated LEFT LATERAL join with an explicit ON predicate must retain
+/// unmatched outer rows and match the local null-extension semantics across
+/// distributed fragments.
+#[test]
+fn correlated_left_lateral_join_on_matches_local_null_extension() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-left-lateral-on-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT u.user_id, o.actions FROM (VALUES (1), (9999)) AS u(user_id) LEFT JOIN LATERAL (SELECT events.user_id, events.actions FROM events WHERE events.user_id = u.user_id AND events.actions > u.user_id) AS o ON o.user_id = u.user_id ORDER BY u.user_id, o.actions";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-left-lateral-on", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert!(actual.iter().any(|row| row.starts_with("9999\u{1f}NULL")));
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn derived_values_join_using_matches_the_local_result() {
     let directory = std::env::temp_dir().join(format!(
