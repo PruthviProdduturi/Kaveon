@@ -428,16 +428,31 @@ fn relation(
             .map_or(1.0, |table| filter_selectivity(predicate, table)),
         None => 1.0,
     };
-    let rows = (stats.rows as f64 * selectivity).round() as u64;
+    let rows = scaled_upper_bound(stats.rows, selectivity);
     let bytes = stats
         .bytes()
-        .map(|bytes| (bytes as f64 * selectivity).round() as u64);
+        .map(|bytes| scaled_upper_bound(bytes, selectivity));
     Some(Estimate {
         rows,
         bytes,
         alias,
         columns: columns.clone().unwrap_or(stats.columns),
     })
+}
+
+/// Scale a source statistic without understating a non-empty filtered
+/// relation. Rounding a small estimate down to zero can incorrectly make a
+/// build look free and trigger an unsafe broadcast decision.
+fn scaled_upper_bound(value: u64, selectivity: f64) -> u64 {
+    if value == 0 || selectivity <= 0.0 {
+        return 0;
+    }
+    let scaled = value as f64 * selectivity;
+    if !scaled.is_finite() || scaled >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        scaled.ceil() as u64
+    }
 }
 
 /// The fraction of a table's rows a filter keeps, from the table's
@@ -864,6 +879,14 @@ mod tests {
             alias: "t".into(),
             columns: vec![],
         }
+    }
+
+    #[test]
+    fn filtered_estimates_never_round_a_nonempty_relation_to_zero() {
+        assert_eq!(scaled_upper_bound(1, 0.001), 1);
+        assert_eq!(scaled_upper_bound(10, 0.101), 2);
+        assert_eq!(scaled_upper_bound(10, 0.0), 0);
+        assert_eq!(scaled_upper_bound(0, 1.0), 0);
     }
 
     #[test]
