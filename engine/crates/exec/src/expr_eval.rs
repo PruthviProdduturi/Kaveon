@@ -11436,6 +11436,18 @@ fn json_extract(document: &str, path: &str) -> Option<String> {
 }
 
 fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
+    // SQL/JSON paths may carry an explicit `lax` or `strict` mode prefix.
+    // The evaluator's existing function names already select the strict
+    // error behavior, so the path mode only needs to be removed before the
+    // structural extractor sees the `$` root marker.
+    let path = path.trim();
+    let path = if path.len() >= 4 && path[..4].eq_ignore_ascii_case("lax ") {
+        &path[4..]
+    } else if path.len() >= 7 && path[..7].eq_ignore_ascii_case("strict ") {
+        &path[7..]
+    } else {
+        path
+    };
     enum Segment {
         Key(String),
         Index(usize),
