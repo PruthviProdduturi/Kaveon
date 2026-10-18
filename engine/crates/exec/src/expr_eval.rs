@@ -5705,6 +5705,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             "BOOLEAN" => CastTarget::Boolean,
             "INT32" => CastTarget::Int32,
             "INT64" => CastTarget::Int64,
+            "UINT32" => CastTarget::UInt32,
             "FLOAT64" => CastTarget::Float64,
             "UTF8" => CastTarget::Utf8,
             "DATE32" => CastTarget::Date32,
@@ -7094,6 +7095,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             let result = match list.value_type() {
                 DataType::Int32 => position_primitive!(Int32Type, DataType::Int32),
+                DataType::UInt32 => position_primitive!(UInt32Type, DataType::UInt32),
                 DataType::Int64 => {
                     let needle = compute::cast(&args[1], &DataType::Int64)?;
                     let needle = needle.as_primitive::<Int64Type>();
@@ -21401,6 +21403,40 @@ mod tests {
             (
                 "needle",
                 Arc::new(Int32Array::from(vec![11, 7])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![Expr::Column("items".into()), Expr::Column("needle".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1)]
+        );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_uint32_lists() {
+        let mut lists = ListBuilder::new(PrimitiveBuilder::<UInt32Type>::new());
+        lists.values().append_value(7);
+        lists.values().append_value(u32::MAX);
+        lists.append(true);
+        lists.values().append_value(7);
+        lists.values().append_null();
+        lists.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(lists.finish()) as ArrayRef),
+            (
+                "needle",
+                Arc::new(UInt32Array::from(vec![u32::MAX, 7])) as ArrayRef,
             ),
         ])
         .unwrap();
