@@ -106,6 +106,17 @@ pub struct HybridFinalMerge {
     spill_threshold: u64,
 }
 
+impl Drop for HybridFinalMerge {
+    fn drop(&mut self) {
+        // A downstream operator such as TopN may stop after it has found its
+        // result and drop us without asking for the final `None`.  Release
+        // every run and wake any sibling rendezvous in that case; relying on
+        // field drop order leaves the lifecycle implicit and makes it easy to
+        // retain a run through a partially consumed merge.
+        self.cleanup();
+    }
+}
+
 impl HybridFinalMerge {
     /// Over a grouped-state input. With `spill`, a budget refusal moves
     /// the groups held so far to the disk in that many sub-partitions;
@@ -195,6 +206,19 @@ impl HybridFinalMerge {
         self.spilled
     }
 
+    /// Stop a merge that will not be consumed further.  This is idempotent
+    /// so error paths and `Drop` can use the same ownership boundary.
+    fn cleanup(&mut self) {
+        self.source = None;
+        self.pressure = None;
+        self.rendezvous = None;
+        self.merger = None;
+        self.merger_memory = None;
+        self.spill_reserve = None;
+        self.runs.clear();
+        self.pending.clear();
+    }
+
     /// The next unit of complete groups — every group in it is final,
     /// and no later unit holds any of them — or None once every group is
     /// out. The whole merge as one unit when the budget held it; one
@@ -207,13 +231,7 @@ impl HybridFinalMerge {
         let result = crate::expr_eval::with_expression_memory(Some(&memory), || self.advance());
         if result.is_err() {
             self.failed = true;
-            self.source = None;
-            self.pressure = None;
-            self.merger = None;
-            self.merger_memory = None;
-            self.spill_reserve = None;
-            self.runs.clear();
-            self.pending.clear();
+            self.cleanup();
         }
         result
     }
