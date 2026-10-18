@@ -283,6 +283,8 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
             | DataType::UInt64
             | DataType::Date32
             | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
             | DataType::Timestamp(_, _),
         ) => {
             let literal = Int64Array::from(vec![*value]);
@@ -596,8 +598,10 @@ impl LateMaterialisation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Date64Array, Int64Array, StringArray, StringDictionaryBuilder};
-    use arrow::datatypes::{Field, Schema};
+    use arrow::array::{
+        Date64Array, Int64Array, StringArray, StringDictionaryBuilder, Time64MicrosecondArray,
+    };
+    use arrow::datatypes::{Field, Schema, TimeUnit};
 
     fn batch() -> RecordBatch {
         let mut dictionary = StringDictionaryBuilder::<Int32Type>::new();
@@ -679,6 +683,34 @@ mod tests {
         assert_eq!(
             mask.iter().collect::<Vec<_>>(),
             vec![Some(false), Some(true)]
+        );
+    }
+
+    #[test]
+    fn compares_time64_columns_with_integer_microsecond_literals() {
+        let batch = RecordBatch::try_from_iter([(
+            "at",
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(3_600_000_000),
+                Some(43_200_000_000),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let predicate = StoragePredicate::Compare {
+            column: "at".into(),
+            op: CompareOp::Eq,
+            value: ScalarValue::Int64(43_200_000_000),
+        };
+        let compiled = CompiledPredicate::compile(&predicate, &batch.schema())
+            .expect("Time64 comparisons should compile");
+        let mask = compiled.selection(&batch).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true)]
+        );
+        assert_eq!(
+            batch.schema().field(0).data_type(),
+            &DataType::Time64(TimeUnit::Microsecond)
         );
     }
 
