@@ -11228,9 +11228,10 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
 
 /// Extract a JSON value at a conservative SQL/JSON path. The result is
 /// serialized JSON text so objects and arrays remain usable JSON rather than
-/// being silently coerced to a scalar string. Array wildcards (`[*]`) collect
-/// matching elements into one JSON array, which is the useful JSON_QUERY form;
-/// JSON_VALUE still rejects that array as non-scalar.
+/// being silently coerced to a scalar string. Array wildcards (`[*]`) and
+/// inclusive ranges (`[start to end]`) collect matching elements into one JSON
+/// array, which is the useful JSON_QUERY form; JSON_VALUE still rejects that
+/// array as non-scalar.
 fn json_extract(document: &str, path: &str) -> Option<String> {
     let value = json_extract_value(document, path)?;
     serde_json::to_string(&value).ok()
@@ -11240,6 +11241,7 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     enum Segment {
         Key(String),
         Index(usize),
+        Range(usize, usize),
         Wildcard,
     }
     let mut remainder = path.strip_prefix('$')?;
@@ -11286,8 +11288,18 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
                 remainder = &after_open[close + 1..];
                 continue;
             }
-            let index = after_open[..close].parse::<usize>().ok()?;
-            segments.push(Segment::Index(index));
+            let selector = after_open[..close].trim();
+            if let Some((start, end)) = selector.split_once("to") {
+                let start = start.trim().parse::<usize>().ok()?;
+                let end = end.trim().parse::<usize>().ok()?;
+                if start > end {
+                    return None;
+                }
+                segments.push(Segment::Range(start, end));
+            } else {
+                let index = selector.parse::<usize>().ok()?;
+                segments.push(Segment::Index(index));
+            }
             remainder = &after_open[close + 1..];
             continue;
         }
@@ -11307,6 +11319,16 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
                 Segment::Index(index) => {
                     if let Some(value) = value.get(index) {
                         next.push(value.clone());
+                    }
+                }
+                Segment::Range(start, end) => {
+                    if let serde_json::Value::Array(items) = value {
+                        // Clamp before iterating so a valid but very large end
+                        // value cannot turn a path into an unbounded loop.
+                        let last = end.min(items.len().saturating_sub(1));
+                        if start <= last {
+                            next.extend(items[start..=last].iter().cloned());
+                        }
                     }
                 }
                 Segment::Wildcard => match value {
@@ -21917,6 +21939,71 @@ mod tests {
         };
         assert!(
             evaluate(&value, &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .is_null(0)
+        );
+    }
+
+    #[test]
+    fn evaluates_json_query_inclusive_array_ranges_without_unbounded_iteration() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![Some(
+                r#"{"items":[{"id":1},{"id":2},{"id":3}]}"#,
+            )])) as ArrayRef,
+        )])
+        .unwrap();
+        let query = Expr::Function {
+            name: "JSON_QUERY".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.items[1 to 2].id".into())),
+            ],
+        };
+        let result = evaluate(&query, &batch).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "[2,3]");
+
+        let scalar = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.items[1 to 2].id".into())),
+            ],
+        };
+        assert!(
+            evaluate(&scalar, &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .is_null(0)
+        );
+
+        let clamped = Expr::Function {
+            name: "JSON_QUERY".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8(
+                    "$.items[1 to 18446744073709551615].id".into(),
+                )),
+            ],
+        };
+        assert_eq!(
+            evaluate(&clamped, &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            "[2,3]"
+        );
+
+        let reversed = Expr::Function {
+            name: "JSON_QUERY".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.items[2 to 1].id".into())),
+            ],
+        };
+        assert!(
+            evaluate(&reversed, &batch)
                 .unwrap()
                 .as_string::<i32>()
                 .is_null(0)
