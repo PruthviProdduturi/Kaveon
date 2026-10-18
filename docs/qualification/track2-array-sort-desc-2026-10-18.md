@@ -56,6 +56,40 @@ Pass criteria, both met:
 - The `Utf8` case returns `[pear, fig, apple]`, exercising the comparator on a
   non-numeric type.
 
+## Distributed and Trino-wire evidence
+
+The server differential corpus now includes
+`array_sort_desc_nulls_last`:
+
+```sql
+SELECT ARRAY_SORT_DESC(ARRAY[3, NULL, 1, 2]) AS sorted_values
+FROM {T} LIMIT 1
+```
+
+The case is compared across dictionary, plain, multi-file, partitioned, and
+clustered Parquet layouts, then against the in-process three-worker fragment
+path. The expected canonical value is `[3, 2, 1, NULL]`; all layouts and the
+distributed path must match the same result. The case can be run in isolation
+with:
+
+```powershell
+$env:KAVEON_DIFF_ONLY = "array_sort_desc_nulls_last"
+cargo test -p kaveon-server --bin kaveon-server the_differential_sweep_matches_across_parquet_encodings_and_execution_paths --quiet
+```
+
+The Trino-compatible HTTP route is also covered by
+`trino_wire_array_sort_desc_preserves_null_last_result`. It submits the query
+through the `X-Trino-Prepared-Statement` wire header, executes it through the
+Trino statement route, fetches the result page, and asserts the JSON array
+shape and NULL-last ordering:
+
+```powershell
+cargo test -p kaveon-server --bin kaveon-server trino_wire_array_sort_desc_preserves_null_last_result --quiet
+```
+
+This is Kaveon's distributed and wire serialization evidence. It is not a
+claim of a live external Trino differential run.
+
 ## Workspace gates
 
 Run from `engine/`, all on the same tree as the change:
@@ -82,8 +116,6 @@ resolved — see [`../guides/demo-cluster-restart.md`](../guides/demo-cluster-re
 
 What that leaves open for this function specifically:
 
-- No distributed differential result for `ARRAY_SORT_DESC`; the local and
-  partitioned differential corpus has not been extended to it.
 - No external Trino-wire comparison against the pinned Trino version, so the
   NULL placement and the collation used for text ordering are matched to
   documented Trino behaviour rather than to an observed Trino result.
