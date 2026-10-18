@@ -942,7 +942,7 @@ mod query_journal {
             (journal, entries)
         }
 
-        /// Append one terminal record: one line, written and flushed.
+        /// Append one terminal record: one line, written, flushed, and synced.
         /// The file is written again from the lines kept once it has
         /// grown past its bound. A write that fails is not retried and
         /// does not fail the statement — the journal is a history, not
@@ -955,7 +955,10 @@ mod query_journal {
                 let Ok(line) = serde_json::to_string(entry) else {
                     return;
                 };
-                if self.file.write_all(format!("{line}\n").as_bytes()).is_err() {
+                if self.file.write_all(format!("{line}\n").as_bytes()).is_err()
+                    || self.file.flush().is_err()
+                    || self.file.sync_data().is_err()
+                {
                     return;
                 }
                 self.recent.push_back(line);
