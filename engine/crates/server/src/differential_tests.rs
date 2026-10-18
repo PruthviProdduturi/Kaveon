@@ -1898,6 +1898,29 @@ fn distributed_nested_array_repeat_preserves_inner_arrays() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A bounded recursive CTE written with UNION (rather than UNION ALL) should
+/// retain its recursive integer sequence through the distributed planner.
+#[test]
+fn distributed_recursive_cte_union_matches_trino_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-recursive-cte-union-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION SELECT n + 1 FROM numbers WHERE n < 5) SELECT n FROM numbers ORDER BY n";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-recursive-cte-union", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec!["1", "2", "3", "4", "5"]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_map_keys_unnest_matches_trino_rows() {
     let directory =
