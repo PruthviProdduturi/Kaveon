@@ -2001,6 +2001,40 @@ fn array_position_nested<L: OffsetSizeTrait>(
     Ok(Arc::new(Int64Array::from(result)))
 }
 
+fn array_position_primitive<L, T>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+    data_type: &DataType,
+) -> Result<ArrayRef>
+where
+    L: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    T::Native: PartialEq,
+{
+    let needle = compute::cast(needle, data_type)?;
+    let needle = needle.as_primitive::<T>();
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) {
+                return None;
+            }
+            let values = list.value(row);
+            let values = values.as_primitive::<T>();
+            (0..values.len())
+                .find(|&index| {
+                    if needle.is_null(row) {
+                        values.is_null(index)
+                    } else {
+                        !values.is_null(index) && values.value(index) == needle.value(row)
+                    }
+                })
+                .map(|index| index as i64 + 1)
+                .or(Some(0))
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(Int64Array::from(result)))
+}
+
 fn array_position_large_utf8<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -7052,6 +7086,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 if list.value_type() == DataType::LargeUtf8 {
                     return array_position_large_utf8(list, &args[1]);
+                }
+                if list.value_type() == DataType::UInt8 {
+                    return array_position_primitive::<_, UInt8Type>(
+                        list,
+                        &args[1],
+                        &DataType::UInt8,
+                    );
                 }
                 return array_position_nested(list, &args[1]);
             }
@@ -17611,6 +17652,27 @@ mod tests {
         values.append(true);
         let mut needle = PrimitiveBuilder::<UInt64Type>::new();
         needle.append_value(u64::MAX);
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[
+                Arc::new(values.finish()) as ArrayRef,
+                Arc::new(needle.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
+    }
+
+    #[test]
+    fn array_position_accepts_large_uint8_lists() {
+        let mut values = LargeListBuilder::new(PrimitiveBuilder::<UInt8Type>::new());
+        values.values().append_value(7);
+        values.values().append_null();
+        values.values().append_value(u8::MAX);
+        values.append(true);
+        let mut needle = PrimitiveBuilder::<UInt8Type>::new();
+        needle.append_value(u8::MAX);
         let result = eval_scalar_function(
             "ARRAY_POSITION",
             &[
