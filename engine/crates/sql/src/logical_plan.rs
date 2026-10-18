@@ -1294,6 +1294,7 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("MAP_KEYS")
                     || name.eq_ignore_ascii_case("MAP_VALUES")
                     || name.eq_ignore_ascii_case("MAP_ENTRIES")
+                    || name.eq_ignore_ascii_case("ARRAY_HISTOGRAM")
                     || name.eq_ignore_ascii_case("MAP")
         )
 }
@@ -1308,6 +1309,12 @@ fn normalize_unnest_expression(expression: Expr) -> Expr {
             name: "MAP_ENTRIES".into(),
             args: vec![Expr::Function { name, args }],
         },
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ARRAY_HISTOGRAM") => {
+            Expr::Function {
+                name: "MAP_ENTRIES".into(),
+                args: vec![Expr::Function { name, args }],
+            }
+        }
         expression => expression,
     }
 }

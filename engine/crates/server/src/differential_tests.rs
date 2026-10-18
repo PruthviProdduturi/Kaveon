@@ -1890,6 +1890,24 @@ fn distributed_map_keys_unnest_matches_trino_rows() {
 }
 
 #[test]
+fn distributed_array_histogram_unnest_matches_trino_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-unnest-array-histogram-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT key, value FROM UNNEST(ARRAY_HISTOGRAM(ARRAY[2, 1, 2])) AS t(key, value) ORDER BY key";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-array-histogram", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["1\u{1f}1", "2\u{1f}2"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_map_entries_unnest_supports_row_field_access() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-unnest-map-entries-{}",
