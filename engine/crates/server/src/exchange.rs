@@ -1201,7 +1201,18 @@ pub fn assemble_chunks(
 ) -> ExchangeResult<(ExchangeIdentity, Vec<u8>)> {
     let chunks = ordered_chunks(chunks, limits)?;
     let identity = chunks[0].identity.clone();
-    let payload = chunks.into_iter().flat_map(|chunk| chunk.payload).collect();
+    // The ordered validation already walks every payload. Reserve the exact
+    // wire size here so large exchange assembly does not repeatedly grow and
+    // copy a coordinator-side buffer as chunks arrive.
+    let payload_len = chunks.iter().try_fold(0usize, |total, chunk| {
+        total
+            .checked_add(chunk.payload.len())
+            .ok_or(ExchangeError::IntegerOverflow)
+    })?;
+    let mut payload = Vec::with_capacity(payload_len);
+    for chunk in chunks {
+        payload.extend_from_slice(&chunk.payload);
+    }
     Ok((identity, payload))
 }
 
@@ -1689,6 +1700,25 @@ mod tests {
             assemble_chunks(vec![first, second], limits()),
             Err(ExchangeError::MixedChunkSet)
         );
+    }
+
+    #[test]
+    fn assembly_reserves_one_exact_payload_buffer() {
+        let first = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 0,
+            chunk_count: 2,
+            payload: Bytes::from_static(b"left"),
+        };
+        let second = ExchangeChunk {
+            identity: identity(),
+            chunk_index: 1,
+            chunk_count: 2,
+            payload: Bytes::from_static(b"right"),
+        };
+        let (_, payload) = assemble_chunks(vec![second, first], limits()).unwrap();
+        assert_eq!(payload, b"leftright");
+        assert_eq!(payload.capacity(), payload.len());
     }
 
     #[test]
