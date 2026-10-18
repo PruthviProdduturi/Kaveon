@@ -577,6 +577,7 @@ impl ExecutableFragmentBuilder<'_> {
                     projection: columns.clone().unwrap_or_default(),
                     predicate: None,
                     listing,
+                    assigned_splits: Vec::new(),
                 };
                 Ok(self.add_fragment(FragmentDraft::leaf(FragmentOperator::Scan(scan))))
             }

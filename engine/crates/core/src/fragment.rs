@@ -113,6 +113,11 @@ pub struct ScanSpec {
     /// older coordinator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing: Option<ScanListing>,
+    /// Coordinator-pinned file/row-group splits for this task. This field is
+    /// optional so fragments from older coordinators continue to execute by
+    /// using their local listing/partition fallback.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_splits: Vec<crate::SplitDescriptor>,
 }
 
 /// The listing of a directory table as the coordinator took it for the
@@ -612,6 +617,7 @@ mod tests {
                 projection: vec!["id".into()],
                 predicate: None,
                 listing: None,
+                assigned_splits: Vec::new(),
             }),
         }
     }

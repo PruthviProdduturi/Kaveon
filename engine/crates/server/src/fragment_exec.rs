@@ -8,9 +8,9 @@ use arrow::array::{ArrayRef, Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
-    AggregateFunction, AggregateMode, BatchOperator, CatalogManager, DataFormat, ExchangeId,
-    ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator, KaveonError,
-    Partitioning, QueryMemoryPool, Result, ScanFile, ScanListing,
+    AggregateFunction, AggregateMode, BatchOperator, BatchSource, CatalogManager, DataFormat,
+    ExchangeId, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
+    KaveonError, Partitioning, QueryMemoryPool, Result, ScanFile, ScanListing, SplitDescriptor,
 };
 use kaveon_exec::aggregate::{
     AggExpr, AggFunc, AggregateState, FinalAggregateValue, GroupedAggregateState, HashAggregate,
@@ -253,6 +253,88 @@ enum DirectoryRead {
     Verified(Arc<kaveon_storage::DirectoryListing>),
 }
 
+/// A task-local source assembled from the coordinator's pinned split list.
+/// Each split is a concrete Parquet object (and may carry one or more row
+/// groups), so the worker never lists the table directory after planning.
+struct AssignedParquetSource {
+    schema: SchemaRef,
+    readers: Vec<kaveon_storage::ParquetBatchIterator>,
+    next_reader: usize,
+}
+
+impl kaveon_core::BatchSource for AssignedParquetSource {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            let Some(reader) = self.readers.get_mut(self.next_reader) else {
+                return Ok(None);
+            };
+            if let Some(batch) = reader.next_batch()? {
+                return Ok(Some(batch));
+            }
+            self.next_reader += 1;
+        }
+    }
+}
+
+fn assigned_local_parquet_source(
+    scan: &kaveon_core::ScanSpec,
+    splits: &[SplitDescriptor],
+    metrics: &ScanMetrics,
+) -> Result<Option<Box<dyn kaveon_core::BatchSource>>> {
+    if splits.is_empty()
+        || splits
+            .iter()
+            .any(|split| !split.source_uri.starts_with("file://"))
+    {
+        return Ok(None);
+    }
+    let mut readers = Vec::with_capacity(splits.len());
+    let mut schema = None;
+    for split in splits {
+        let mut reader =
+            ParquetReader::new(local_path(&split.source_uri)?).with_metrics(metrics.clone());
+        if !scan.projection.is_empty() {
+            reader = reader.with_columns(scan.projection.clone());
+        }
+        if let Some(predicate) = &scan.predicate {
+            reader = reader.with_predicate(predicate.clone());
+        }
+        if let Some(row_group) = split
+            .properties
+            .get("row_group_index")
+            .map(|value| value.parse::<usize>())
+            .transpose()
+            .map_err(|error| exec_err(format!("invalid assigned row group: {error}")))?
+        {
+            reader = reader.with_row_groups(vec![row_group]);
+        }
+        let source = reader.read()?;
+        if let Some(expected) = &schema {
+            if expected != source.schema() {
+                return Err(exec_err(format!(
+                    "assigned split '{}' has a schema different from the first split",
+                    split.source_uri
+                )));
+            }
+        } else {
+            schema = Some(source.schema().clone());
+        }
+        readers.push(source);
+    }
+    let Some(schema) = schema else {
+        return Ok(None);
+    };
+    Ok(Some(Box::new(AssignedParquetSource {
+        schema,
+        readers,
+        next_reader: 0,
+    })))
+}
+
 /// The task's share of a count the coordinator made for the whole scan:
 /// dealt round-robin over the partitions, so the tasks sum to it.
 fn partition_share(total: u64, partition: ScanPartition) -> u64 {
@@ -308,6 +390,18 @@ fn compile_node(
     let node = nodes[&id];
     match &node.operator {
         FragmentOperator::Scan(scan) => {
+            if scan.listing.is_none()
+                && !scan.assigned_splits.is_empty()
+                && matches!(scan.format, DataFormat::Parquet | DataFormat::Delta)
+            {
+                let metrics = ScanMetrics::default();
+                if let Some(source) =
+                    assigned_local_parquet_source(scan, &scan.assigned_splits, &metrics)?
+                {
+                    scan_metrics.push(metrics);
+                    return Ok(Box::new(ScanOperator::new(source, None)?));
+                }
+            }
             let source: Box<dyn kaveon_core::BatchSource> = match scan.format {
                 DataFormat::Parquet => {
                     // The catalog snapshot the task was validated against
@@ -1992,6 +2086,15 @@ fn join_type(join_type: kaveon_core::JoinType) -> Result<JoinType> {
 
 fn local_path(uri: &str) -> Result<PathBuf> {
     let path = uri.strip_prefix("file://").unwrap_or(uri);
+    // `file:///C:/...` is the canonical URI emitted by the coordinator on
+    // Windows; the leading slash is not part of the drive-qualified path.
+    let path = if path.as_bytes().get(1) == Some(&b':') {
+        path.strip_prefix('/').unwrap_or(path)
+    } else if path.starts_with('/') && path.as_bytes().get(2) == Some(&b':') {
+        &path[1..]
+    } else {
+        path
+    };
     if path.is_empty() {
         return Err(exec_err("fragment scan source path cannot be empty"));
     }
@@ -3499,6 +3602,7 @@ mod tests {
                     projection: vec![],
                     predicate: None,
                     listing: None,
+                    assigned_splits: Vec::new(),
                 }),
             )],
         };
@@ -3531,6 +3635,106 @@ mod tests {
         assert_eq!(first.scan_metrics.len(), 1);
         assert_eq!(first.scan_metrics[0].snapshot().rows_emitted, 2);
         assert_eq!(second.scan_metrics[0].snapshot().rows_emitted, 2);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn worker_consumes_coordinator_splits_without_relisting_post_plan_files() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-assigned-splits-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let table = directory.join("items");
+        fs::create_dir_all(&table).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let write_file = |path: &std::path::Path, values: Vec<i64>| {
+            let properties = WriterProperties::builder()
+                .set_max_row_group_size(1)
+                .build();
+            let mut writer = ArrowWriter::try_new(
+                File::create(path).unwrap(),
+                Arc::clone(&schema),
+                Some(properties),
+            )
+            .unwrap();
+            writer
+                .write(
+                    &RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int64Array::from(values))],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            writer.close().unwrap();
+        };
+        let planned = table.join("part-00000.parquet");
+        write_file(&planned, vec![10, 20]);
+        let post_plan = table.join("part-00001.parquet");
+        write_file(&post_plan, vec![30, 40]);
+
+        let uri = |path: &std::path::Path| {
+            format!(
+                "file:///{}",
+                path.to_string_lossy()
+                    .replace('\\', "/")
+                    .trim_start_matches('/')
+            )
+        };
+        let fragment = ExecutableFragment {
+            version: EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(4),
+            root: FragmentNodeId(1),
+            nodes: vec![node(
+                1,
+                vec![],
+                FragmentOperator::Scan(ScanSpec {
+                    source_uri: table.to_string_lossy().into_owned(),
+                    format: DataFormat::Parquet,
+                    delta_version: None,
+                    iceberg_snapshot_id: None,
+                    table: ScanTable {
+                        catalog: "test".into(),
+                        schema: "default".into(),
+                        table: "items".into(),
+                    },
+                    projection: vec!["value".into()],
+                    predicate: None,
+                    listing: None,
+                    assigned_splits: vec![SplitDescriptor {
+                        id: kaveon_core::SplitId("planned-row-group-1".into()),
+                        source_uri: uri(&planned),
+                        properties: BTreeMap::from([
+                            ("format".into(), "parquet".into()),
+                            ("row_group_index".into(), "1".into()),
+                            ("scan_node_id".into(), "1".into()),
+                        ]),
+                    }],
+                }),
+            )],
+        };
+        let execution = execute_fragment(
+            &fragment,
+            &CatalogManager::new("missing", "missing"),
+            &inputs(),
+            ScanPartition::new(0, 1).unwrap(),
+        )
+        .unwrap();
+        let values = execution.result_batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .values()
+            .to_vec();
+        assert_eq!(values, [20]);
+        let snapshot = execution.scan_metrics[0].snapshot();
+        assert_eq!(snapshot.files_opened, 1);
+        assert_eq!(snapshot.row_groups_selected, 1);
 
         fs::remove_dir_all(directory).unwrap();
     }
@@ -3598,6 +3802,7 @@ mod tests {
                     projection: vec!["value".into()],
                     predicate: None,
                     listing: None,
+                    assigned_splits: Vec::new(),
                 }),
             )],
         };
