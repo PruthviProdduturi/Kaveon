@@ -18,7 +18,8 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // leave numeric/list brackets untouched so ARRAY[...] remains available
     // for the syntax that explicitly supports it.
     let bracket_normalized = normalize_bracket_identifiers(sql);
-    let json_returning_normalized = normalize_json_returning(&bracket_normalized);
+    let json_clauses_normalized = normalize_json_null_clauses(&bracket_normalized)?;
+    let json_returning_normalized = normalize_json_returning(&json_clauses_normalized);
     let normalized = normalize_lateral_unnest(&json_returning_normalized);
     // Lower the one recursive shape that has a finite, deterministic
     // equivalent in the existing UNNEST/SEQUENCE execution path.  More
@@ -55,6 +56,93 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),
     }
+}
+
+/// Lower the narrow SQL/JSON `ON EMPTY NULL` and `ON ERROR NULL` clauses.
+///
+/// The current evaluator already returns NULL for a missing path, a
+/// non-scalar JSON_VALUE result, and malformed JSON.  Removing these explicit
+/// NULL clauses therefore preserves the existing behavior while accepting the
+/// useful bounded Trino spelling.  Other actions (ERROR and DEFAULT), and
+/// malformed clauses, are rejected explicitly rather than being silently
+/// assigned the wrong semantics.
+fn normalize_json_null_clauses(sql: &str) -> Result<String> {
+    let mut output = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    while cursor < sql.len() {
+        let Some((name_start, name, open)) = next_json_function(sql, cursor) else {
+            output.push_str(&sql[cursor..]);
+            break;
+        };
+        output.push_str(&sql[cursor..name_start]);
+        let Some(close) = matching_paren(sql, open) else {
+            output.push_str(&sql[name_start..]);
+            break;
+        };
+        let inner = normalize_json_null_clauses(&sql[open + 1..close])?;
+        let inner = strip_json_null_clauses(&inner)?;
+        output.push_str(&name);
+        output.push('(');
+        output.push_str(&inner);
+        output.push(')');
+        cursor = close + 1;
+    }
+    Ok(output)
+}
+
+fn strip_json_null_clauses(inner: &str) -> Result<String> {
+    let bytes = inner.as_bytes();
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+    let mut depth = 0usize;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' | b'"' => cursor = quoted_sql_end(inner, cursor),
+            b'(' | b'[' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+            }
+            _ if depth == 0 && json_is_sql_word_at(inner, cursor, "ON") => {
+                let start = cursor;
+                cursor += 2;
+                cursor = skip_sql_space(inner, cursor);
+                let kind = if json_is_sql_word_at(inner, cursor, "EMPTY") {
+                    "ON EMPTY"
+                } else if json_is_sql_word_at(inner, cursor, "ERROR") {
+                    "ON ERROR"
+                } else {
+                    return Err(KaveonError::Sql(
+                        "invalid JSON ON clause; expected EMPTY or ERROR".into(),
+                    ));
+                };
+                cursor += kind[3..].len();
+                cursor = skip_sql_space(inner, cursor);
+                let Some((action, action_end)) = take_sql_word(inner, cursor) else {
+                    return Err(KaveonError::Sql(format!(
+                        "invalid JSON {kind} clause; expected NULL"
+                    )));
+                };
+                if !action.eq_ignore_ascii_case("NULL") {
+                    return Err(KaveonError::Sql(format!(
+                        "unsupported JSON {kind} clause action '{action}'; only NULL is supported"
+                    )));
+                }
+                cursor = action_end;
+                ranges.push((start, cursor));
+            }
+            _ => cursor += 1,
+        }
+    }
+    if let Some((start, end)) = ranges.into_iter().next_back() {
+        let mut result = inner.to_owned();
+        result.replace_range(start..end, "");
+        return strip_json_null_clauses(&result);
+    }
+    Ok(inner.to_owned())
 }
 
 /// Lower the bounded SQL/JSON typed-return form to the existing typed CAST
@@ -1141,6 +1229,40 @@ mod tests {
             normalized,
             "SELECT CAST(JSON_VALUE(JSON_PARSE('{\"label\":\"RETURNING BIGINT\"}'), '$.label') AS VARCHAR) FROM t WHERE note = 'JSON_VALUE(x RETURNING BIGINT)'"
         );
+    }
+
+    #[test]
+    fn json_null_clauses_lower_to_existing_null_behavior() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.missing' RETURNING BIGINT ON EMPTY NULL ON ERROR NULL), JSON_QUERY(payload, '$.missing' ON EMPTY NULL) FROM t",
+        )
+        .expect("bounded JSON NULL clauses should parse");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("CAST(JSON_VALUE(payload, '$.missing') AS BIGINT)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("JSON_QUERY(payload, '$.missing')"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("ON EMPTY"), "{rendered}");
+        assert!(!rendered.contains("ON ERROR"), "{rendered}");
+    }
+
+    #[test]
+    fn unsupported_json_null_actions_fail_closed() {
+        for sql in [
+            "SELECT JSON_VALUE(payload, '$.missing' ON EMPTY DEFAULT 'fallback') FROM t",
+            "SELECT JSON_VALUE(payload, '$.missing' ON ERROR ERROR) FROM t",
+        ] {
+            let error = parse_sql(sql).expect_err("unsupported JSON action must be rejected");
+            assert!(
+                error.to_string().contains("only NULL is supported")
+                    || error.to_string().contains("expected EMPTY or ERROR"),
+                "unexpected diagnostic: {error}"
+            );
+        }
     }
 
     #[test]
