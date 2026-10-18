@@ -1,4 +1,4 @@
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BooleanArray, Float64Array, Int32Array,
     Int32DictionaryArray, Int64Array, StringArray, UInt8Array, UInt64Array,
@@ -274,6 +274,7 @@ pub enum AggregateValue {
     Float64Bits(u64),
 }
 
+type DistinctSet = AHashSet<AggregateValue>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateState {
     Sum {
@@ -289,7 +290,7 @@ pub enum AggregateState {
         function: AggFunc,
         scale: Option<i8>,
         value: Option<i128>,
-        distinct: Option<HashSet<AggregateValue>>,
+        distinct: Option<DistinctSet>,
     },
     IntegerSum {
         sum: i128,
@@ -297,7 +298,7 @@ pub enum AggregateState {
     },
     IntegerMin(Option<i64>),
     IntegerMax(Option<i64>),
-    IntegerSumDistinct(HashSet<AggregateValue>),
+    IntegerSumDistinct(DistinctSet),
     Count(u64),
     Min(Option<f64>),
     Max(Option<f64>),
@@ -307,9 +308,9 @@ pub enum AggregateState {
         sum: f64,
         count: u64,
     },
-    CountDistinct(HashSet<AggregateValue>),
-    SumDistinct(HashSet<AggregateValue>),
-    AvgDistinct(HashSet<AggregateValue>),
+    CountDistinct(DistinctSet),
+    SumDistinct(DistinctSet),
+    AvgDistinct(DistinctSet),
     /// `APPROX_COUNT_DISTINCT`: the HyperLogLog sketch of the values seen.
     ApproxDistinct(HllSketch),
     /// `APPROX_PERCENTILE`: the KLL sketch of the values seen and what it
@@ -425,7 +426,7 @@ impl AggregateState {
                 },
                 value: None,
                 distinct: (expression.distinct && matches!(expression.func, AggFunc::Sum))
-                    .then(HashSet::new),
+                    .then(DistinctSet::new),
             };
         }
         if matches!(
@@ -434,7 +435,7 @@ impl AggregateState {
         ) {
             return match (expression.func, expression.distinct) {
                 (AggFunc::Sum, false) => Self::IntegerSum { sum: 0, count: 0 },
-                (AggFunc::Sum, true) => Self::IntegerSumDistinct(HashSet::new()),
+                (AggFunc::Sum, true) => Self::IntegerSumDistinct(DistinctSet::new()),
                 (AggFunc::Min, _) => Self::IntegerMin(None),
                 (AggFunc::Max, _) => Self::IntegerMax(None),
                 _ => Self::new(expression),
@@ -573,9 +574,9 @@ impl AggregateState {
             (AggFunc::Min, false) => Self::Min(None),
             (AggFunc::Max, false) => Self::Max(None),
             (AggFunc::Avg, false) => Self::Avg { sum: 0.0, count: 0 },
-            (AggFunc::Count, true) => Self::CountDistinct(HashSet::new()),
-            (AggFunc::Sum, true) => Self::SumDistinct(HashSet::new()),
-            (AggFunc::Avg, true) => Self::AvgDistinct(HashSet::new()),
+            (AggFunc::Count, true) => Self::CountDistinct(DistinctSet::new()),
+            (AggFunc::Sum, true) => Self::SumDistinct(DistinctSet::new()),
+            (AggFunc::Avg, true) => Self::AvgDistinct(DistinctSet::new()),
             (AggFunc::ApproxDistinct, _) => Self::ApproxDistinct(HllSketch::default_precision()),
             (AggFunc::ApproxPercentile, _) => Self::ApproxPercentile {
                 sketch: KllSketch::default_k(),
@@ -2162,7 +2163,7 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                         function,
                         scale,
                         value,
-                        distinct: is_distinct.then(HashSet::new),
+                        distinct: is_distinct.then(DistinctSet::new),
                     };
                     for item in tail {
                         state.update_exact(item.clone())?;
@@ -2336,7 +2337,7 @@ fn optional_f64(array: &Float64Array, row: usize) -> Option<f64> {
     (!array.is_null(row)).then(|| array.value(row))
 }
 
-fn encode_distinct_values(values: &HashSet<AggregateValue>) -> Result<Vec<u8>> {
+fn encode_distinct_values(values: &DistinctSet) -> Result<Vec<u8>> {
     let mut encoded = values
         .iter()
         .map(encode_aggregate_value)
@@ -2393,13 +2394,13 @@ fn encode_aggregate_value_into(value: &AggregateValue, output: &mut Vec<u8>) -> 
     Ok(())
 }
 
-fn decode_distinct_values(bytes: &[u8]) -> Result<HashSet<AggregateValue>> {
+fn decode_distinct_values(bytes: &[u8]) -> Result<DistinctSet> {
     let mut offset = 0;
     let value_count = read_u64(bytes, &mut offset)?;
     if value_count > (bytes.len().saturating_sub(offset) / 9) as u64 {
         return Err(exec_err("distinct state count exceeds encoded payload"));
     }
-    let mut values = HashSet::with_capacity(
+    let mut values = DistinctSet::with_capacity(
         usize::try_from(value_count).map_err(|_| exec_err("distinct state is too large"))?,
     );
     for _ in 0..value_count {
@@ -5588,7 +5589,7 @@ mod tests {
             QueryMemoryPool::new("distinct-probe", AGGREGATE_RESERVATION_SLAB_BYTES).unwrap();
         let account = pool.operator("distinct").unwrap();
         let mut reservations = ReservationSlab::default();
-        let mut state = AggregateState::CountDistinct(HashSet::new());
+        let mut state = AggregateState::CountDistinct(DistinctSet::new());
         assert!(
             admit_distinct_value(
                 &mut state,
@@ -6650,7 +6651,7 @@ mod tests {
     fn count_distinct_remains_exact_across_many_partial_states() {
         let mut partials = Vec::new();
         for partition in 0..8_u64 {
-            let mut state = AggregateState::CountDistinct(HashSet::new());
+            let mut state = AggregateState::CountDistinct(DistinctSet::new());
             for value in 0..25_000_u64 {
                 state
                     .update_distinct(AggregateValue::UInt64(value + (partition % 2) * 20_000))
@@ -6741,7 +6742,7 @@ mod tests {
 
     #[test]
     fn aggregate_state_arrow_stream_round_trips_every_state_kind() {
-        let distinct = HashSet::from([
+        let distinct = AHashSet::from([
             AggregateValue::Bool(true),
             AggregateValue::Int32(-7),
             AggregateValue::Int64(9),
@@ -6793,11 +6794,11 @@ mod tests {
 
     #[test]
     fn decoded_distinct_states_union_exact_values() {
-        let left = AggregateState::CountDistinct(HashSet::from([
+        let left = AggregateState::CountDistinct(DistinctSet::from([
             AggregateValue::Utf8("a".into()),
             AggregateValue::Utf8("b".into()),
         ]));
-        let right = AggregateState::CountDistinct(HashSet::from([
+        let right = AggregateState::CountDistinct(DistinctSet::from([
             AggregateValue::Utf8("b".into()),
             AggregateValue::Utf8("c".into()),
         ]));

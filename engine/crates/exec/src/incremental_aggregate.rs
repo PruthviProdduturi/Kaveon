@@ -1,5 +1,5 @@
 //! Incremental final-state merging. Encoded input is scratch, not retained state.
-use std::collections::HashSet;
+use ahash::AHashSet;
 
 use ahash::AHashMap;
 use arrow::array::{Array, BinaryArray};
@@ -545,7 +545,7 @@ impl IncrementalAggregateMerger {
     }
 }
 
-fn distinct_values(state: &AggregateState) -> Option<&HashSet<AggregateValue>> {
+fn distinct_values(state: &AggregateState) -> Option<&AHashSet<AggregateValue>> {
     match state {
         AggregateState::CountDistinct(values)
         | AggregateState::SumDistinct(values)
@@ -596,7 +596,7 @@ mod tests {
     fn duplicate_scalar_and_distinct_states_do_not_accumulate_input_reservations() {
         for state in [
             AggregateState::Count(1),
-            AggregateState::CountDistinct(HashSet::from([AggregateValue::Int64(7)])),
+            AggregateState::CountDistinct(AHashSet::from([AggregateValue::Int64(7)])),
         ] {
             let pool = QueryMemoryPool::new("incremental", 256 * 1024).unwrap();
             let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
@@ -753,7 +753,7 @@ mod tests {
         let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
         let mut rejected = false;
         for value in 0..20_000 {
-            let batch = batch(AggregateState::CountDistinct(HashSet::from([
+            let batch = batch(AggregateState::CountDistinct(AHashSet::from([
                 AggregateValue::Int64(value),
             ])));
             if merger.push_batch(&batch).is_err() {

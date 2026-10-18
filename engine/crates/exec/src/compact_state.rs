@@ -337,7 +337,7 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
                     function,
                     scale,
                     value,
-                    distinct: distinct.as_ref().map(|_| HashSet::new()),
+                    distinct: distinct.as_ref().map(|_| DistinctSet::new()),
                 };
                 if let Some(values) = distinct {
                     for value in values {
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn compact_round_trip_preserves_all_state_variants_and_is_canonical() {
-        let values = HashSet::from([AggregateValue::Int64(3), AggregateValue::Int64(9)]);
+        let values = DistinctSet::from([AggregateValue::Int64(3), AggregateValue::Int64(9)]);
         let states = vec![
             AggregateState::Sum {
                 sum: 1.25,
@@ -507,7 +507,7 @@ mod tests {
                 function: AggFunc::Sum,
                 scale: Some(4),
                 value: None,
-                distinct: Some(HashSet::from([AggregateValue::Decimal128(12345, 4)])),
+                distinct: Some(DistinctSet::from([AggregateValue::Decimal128(12345, 4)])),
             },
             AggregateState::ApproxDistinct({
                 let mut sketch = HllSketch::default_precision();
