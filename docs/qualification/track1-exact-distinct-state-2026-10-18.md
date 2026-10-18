@@ -10,7 +10,7 @@ merges.
 
 ## Evidence
 
-- Commit: `bb3101ea`
+- Commit: `120a9ff3`
 - `cargo check -p kaveon-server --all-targets`: passed
 - `cargo test -p kaveon-exec --lib distinct --quiet`: 32 passed, 0 failed
 - `cargo test -p kaveon-server global_final_aggregate_streams_without_hash_partition_spill --quiet`: 1 passed, 0 failed

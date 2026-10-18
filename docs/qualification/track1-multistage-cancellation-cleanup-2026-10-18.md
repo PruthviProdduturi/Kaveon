@@ -9,7 +9,7 @@ not enqueue duplicate cleanup work.
 
 ## Evidence
 
-- Commit: `bb3101ea`
+- Commit: `120a9ff3`
 - Test: `cancel_running_multi_stage_graph_queues_each_exchange_once`
 - Command: `cargo test -p kaveon-server cancel_running_multi_stage_graph_queues_each_exchange_once --quiet`
 - Result: 1 passed, 0 failed
