@@ -1325,6 +1325,12 @@ mod tests {
         assert_eq!(second_loss.stage_retries.len(), 3);
         assert_eq!(orchestrator.live_workers().len(), 1);
         assert_eq!(orchestrator.live_workers()[0].node_id, "worker-a");
+        assert!(
+            orchestrator
+                .finish_task(&pending_consumer.assignment.task_id)
+                .is_err(),
+            "a completion from the second superseded worker must remain fenced"
+        );
 
         run_stage(&mut orchestrator, 0);
         run_stage(&mut orchestrator, 1);
