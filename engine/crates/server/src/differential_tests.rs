@@ -1914,6 +1914,24 @@ fn distributed_map_keys_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// MAP_VALUES is a row-producing map projection and must retain value order
+/// and values through the distributed UNNEST path, just like MAP_KEYS.
+#[test]
+fn distributed_map_values_unnest_matches_trino_rows() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-unnest-map-values-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT * FROM UNNEST(MAP_VALUES(MAP(ARRAY['a', 'b'], ARRAY[10, 20]))) AS t(value) ORDER BY value";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-map-values", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(canonical_rows(&batches, true), vec!["10", "20"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_array_histogram_unnest_matches_trino_rows() {
     let directory = std::env::temp_dir().join(format!(
