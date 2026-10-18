@@ -5129,12 +5129,40 @@ async fn trino_response_shape(response: Response) -> Response {
                 });
         }
         if let Some(next_uri) = object.remove("next_uri") {
-            let next_uri = next_uri
-                .as_str()
-                .map(|uri| uri.replace("/v1/query/", "/v1/trino/query/"))
-                .map(serde_json::Value::String)
-                .unwrap_or(next_uri);
-            object.insert("nextUri".to_owned(), next_uri);
+            if next_uri.is_null() {
+                // A terminal page has no follow-up link. Preserve the native
+                // null rather than treating it as a malformed wire value.
+                object.insert("nextUri".to_owned(), serde_json::Value::Null);
+            } else {
+                let Some(raw_uri) = next_uri.as_str() else {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": {
+                                "message": "Trino result page contained a non-string next_uri",
+                                "errorName": "INTERNAL_ERROR"
+                            }
+                        })),
+                    )
+                        .into_response();
+                };
+                let next_uri = match normalize_trino_next_uri(raw_uri) {
+                    Ok(uri) => uri,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": {
+                                    "message": error,
+                                    "errorName": "INTERNAL_ERROR"
+                                }
+                            })),
+                        )
+                            .into_response();
+                    }
+                };
+                object.insert("nextUri".to_owned(), serde_json::Value::String(next_uri));
+            }
         }
         if let Some(elapsed_ms) = object.remove("elapsed_ms") {
             object.insert(
@@ -5163,6 +5191,67 @@ async fn trino_response_shape(response: Response) -> Response {
         }
     }
     (status, Json(value)).into_response()
+}
+
+/// Convert the native result-page link to the Trino wire shape without ever
+/// forwarding an arbitrary host or route to the client. Native results use a
+/// relative `/v1/query/...` path, but accepting an absolute same-path URL is
+/// useful for compatibility with internal proxies. The authority is always
+/// discarded, and every other path is rejected rather than becoming a link
+/// that a Trino client could follow outside the result API.
+fn normalize_trino_next_uri(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("Trino result page contained an empty next_uri".to_owned());
+    }
+    let (path, query, fragment) = if raw.starts_with('/') {
+        let parsed = reqwest::Url::parse(&format!("http://kaveon.invalid{raw}"))
+            .map_err(|_| "Trino result page contained an invalid next_uri".to_owned())?;
+        (
+            parsed.path().to_owned(),
+            parsed.query().map(str::to_owned),
+            parsed.fragment().map(str::to_owned),
+        )
+    } else {
+        let parsed = reqwest::Url::parse(raw)
+            .map_err(|_| "Trino result page contained an invalid next_uri".to_owned())?;
+        (
+            parsed.path().to_owned(),
+            parsed.query().map(str::to_owned),
+            parsed.fragment().map(str::to_owned),
+        )
+    };
+    if query.is_some() || fragment.is_some() {
+        return Err("Trino result page next_uri cannot contain a query or fragment".to_owned());
+    }
+    let suffix = if let Some(suffix) = path.strip_prefix("/v1/query/") {
+        suffix
+    } else if let Some(suffix) = path.strip_prefix("/v1/trino/query/") {
+        suffix
+    } else {
+        return Err(
+            "Trino result page next_uri must target /v1/query/<id>/results/<page>".to_owned(),
+        );
+    };
+    let mut segments = suffix.split('/');
+    let query_id = segments.next().unwrap_or_default();
+    let results = segments.next().unwrap_or_default();
+    let page = segments.next().unwrap_or_default();
+    if query_id.is_empty()
+        || results != "results"
+        || page.is_empty()
+        || segments.next().is_some()
+        || query_id == "."
+        || query_id == ".."
+    {
+        return Err(
+            "Trino result page next_uri must target /v1/query/<id>/results/<page>".to_owned(),
+        );
+    }
+    if !page.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("Trino result page next_uri page must be numeric".to_owned());
+    }
+    Ok(format!("/v1/trino/query/{query_id}/results/{page}"))
 }
 
 async fn get_trino_query(
@@ -23052,6 +23141,51 @@ mod streamed_root_tests {
         assert!(value.get("next_uri").is_none());
         assert_eq!(value["stats"]["elapsedTimeMillis"], 7);
         assert!(value.get("elapsed_ms").is_none());
+    }
+
+    #[test]
+    fn trino_next_uri_accepts_only_result_pages_and_drops_authority() {
+        assert_eq!(
+            normalize_trino_next_uri("/v1/query/q1/results/0").unwrap(),
+            "/v1/trino/query/q1/results/0"
+        );
+        assert_eq!(
+            normalize_trino_next_uri("https://proxy.example/v1/trino/query/q1/results/2").unwrap(),
+            "/v1/trino/query/q1/results/2"
+        );
+        for unsafe_uri in [
+            "https://evil.example/collect",
+            "/v1/admin/catalog",
+            "/v1/query/q1/results/next",
+            "/v1/query/q1/results/0?redirect=https://evil.example",
+            "/v1/query/q1/results/0#fragment",
+            "/v1/query/../results/0",
+        ] {
+            assert!(
+                normalize_trino_next_uri(unsafe_uri).is_err(),
+                "unsafe URI was accepted: {unsafe_uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn trino_response_shape_rejects_unsafe_paging_links() {
+        let response = Response::new(Body::from(
+            r#"{"id":"q1","next_uri":"https://evil.example/collect"}"#,
+        ));
+        let response = trino_response_shape(response).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["errorName"], "INTERNAL_ERROR");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("must target /v1/query")
+        );
     }
 
     #[tokio::test]
