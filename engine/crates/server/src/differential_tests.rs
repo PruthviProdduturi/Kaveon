@@ -2512,6 +2512,36 @@ fn distributed_grouping_sets_match_the_local_result() {
 
 /// `JOIN ... USING` must reach the same qualified equality keys through the
 /// fragment planner as it does through the node-local planner.
+/// Correlated scalar ORDER BY/OFFSET/LIMIT must page per correlated key before
+/// evaluating the outer comparison, and the distributed result must match the
+/// local plan exactly.
+#[test]
+fn distributed_correlated_scalar_ordered_offset_limit_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-scalar-offset-limit-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT COUNT(*) AS n FROM events e WHERE e.actions > (SELECT i.actions FROM events i WHERE i.user_id = e.user_id ORDER BY i.actions OFFSET 1 LIMIT 1)";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-correlated-scalar-offset-limit", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_join_using_matches_the_local_result() {
     let directory =
