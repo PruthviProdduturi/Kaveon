@@ -370,7 +370,7 @@ fn rewrite_agg_refs(expr: &Expr) -> Expr {
             data_type,
         } => Expr::Cast {
             expr: Box::new(rewrite_agg_refs(inner)),
-            data_type: *data_type,
+            data_type: data_type.clone(),
         },
         _ => expr.clone(),
     }
