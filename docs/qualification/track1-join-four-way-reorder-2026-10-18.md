@@ -27,6 +27,13 @@ cargo test -p kaveon-server the_differential_sweep_matches_across_parquet_encodi
 1 passed; 0 failed; 426 filtered out; finished in 205.10s
 ```
 
+The same command was rerun against the current `dev` source after the release
+workflow completed:
+
+```text
+1 passed; 0 failed; 429 filtered out; finished in 212.59s
+```
+
 This expands the bounded join-reorder corpus beyond the existing three-way
 case. It does not qualify skew splitting, a general cost-based join enumerator,
 or broad cloud-topology behavior; those remain open in the parity tracker.
