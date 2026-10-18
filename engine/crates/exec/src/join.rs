@@ -1,11 +1,12 @@
 use ahash::{AHashMap, AHashSet};
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, Int32DictionaryArray, UInt64Array,
-};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, UInt64Array};
 #[cfg(test)]
 use arrow::array::{Float32Array, Float64Array, UInt32Array};
 use arrow::compute::{concat_batches, take};
-use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{
+    DataType, Field, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef, TimeUnit,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
@@ -1766,15 +1767,10 @@ fn row_key(
                 DataType::Utf8 => Key::Utf8(column.as_string::<i32>().value(row).to_owned()),
                 DataType::LargeUtf8 => Key::Utf8(column.as_string::<i64>().value(row).to_owned()),
                 DataType::Dictionary(key_type, value_type)
-                    if key_type.as_ref() == &DataType::Int32
-                        && matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
+                    if matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
                 {
-                    let dictionary = column
-                        .as_any()
-                        .downcast_ref::<Int32DictionaryArray>()
-                        .expect("dictionary key type must match schema");
-                    let dictionary_index = dictionary.keys().value(row) as usize;
-                    let values = dictionary.values();
+                    let dictionary_index = dictionary_index(column, row, key_type)?;
+                    let values = dictionary_values(column, key_type)?;
                     let value = match values.data_type() {
                         DataType::Utf8 => values.as_string::<i32>().value(dictionary_index),
                         DataType::LargeUtf8 => values.as_string::<i64>().value(dictionary_index),
@@ -1783,30 +1779,25 @@ fn row_key(
                     Key::Utf8(value.to_owned())
                 }
                 DataType::Dictionary(key_type, value_type)
-                    if key_type.as_ref() == &DataType::Int32
-                        && matches!(
-                            value_type.as_ref(),
-                            DataType::Boolean
-                                | DataType::Int8
-                                | DataType::Int16
-                                | DataType::Int32
-                                | DataType::Int64
-                                | DataType::UInt8
-                                | DataType::UInt16
-                                | DataType::UInt32
-                                | DataType::UInt64
-                                | DataType::Float32
-                                | DataType::Float64
-                                | DataType::Decimal128(_, _)
-                                | DataType::Decimal256(_, _)
-                        ) =>
+                    if matches!(
+                        value_type.as_ref(),
+                        DataType::Boolean
+                            | DataType::Int8
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::Int64
+                            | DataType::UInt8
+                            | DataType::UInt16
+                            | DataType::UInt32
+                            | DataType::UInt64
+                            | DataType::Float32
+                            | DataType::Float64
+                            | DataType::Decimal128(_, _)
+                            | DataType::Decimal256(_, _)
+                    ) =>
                 {
-                    let dictionary = column
-                        .as_any()
-                        .downcast_ref::<DictionaryArray<Int32Type>>()
-                        .expect("dictionary key type must match schema");
-                    let dictionary_index = dictionary.keys().value(row) as usize;
-                    let values = dictionary.values();
+                    let dictionary_index = dictionary_index(column, row, key_type)?;
+                    let values = dictionary_values(column, key_type)?;
                     if values.is_null(dictionary_index) {
                         return Ok(None);
                     }
@@ -1898,22 +1889,17 @@ fn row_key(
                     }
                 }
                 DataType::Dictionary(key_type, value_type)
-                    if key_type.as_ref() == &DataType::Int32
-                        && matches!(
-                            value_type.as_ref(),
-                            DataType::Date32
-                                | DataType::Date64
-                                | DataType::Time32(_)
-                                | DataType::Time64(_)
-                                | DataType::Timestamp(_, _)
-                        ) =>
+                    if matches!(
+                        value_type.as_ref(),
+                        DataType::Date32
+                            | DataType::Date64
+                            | DataType::Time32(_)
+                            | DataType::Time64(_)
+                            | DataType::Timestamp(_, _)
+                    ) =>
                 {
-                    let dictionary = column
-                        .as_any()
-                        .downcast_ref::<DictionaryArray<Int32Type>>()
-                        .expect("dictionary key type must match schema");
-                    let dictionary_index = dictionary.keys().value(row) as usize;
-                    let values = dictionary.values();
+                    let dictionary_index = dictionary_index(column, row, key_type)?;
+                    let values = dictionary_values(column, key_type)?;
                     if values.is_null(dictionary_index) {
                         return Ok(None);
                     }
@@ -1969,6 +1955,114 @@ fn row_key(
             }))
         })
         .collect::<Result<Option<Vec<_>>>>()
+}
+
+fn dictionary_index(column: &dyn Array, row: usize, key_type: &DataType) -> Result<usize> {
+    let index = match key_type {
+        DataType::Int8 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row) as i64,
+        DataType::UInt8 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt8Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row) as i64,
+        DataType::Int16 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int16Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row) as i64,
+        DataType::UInt16 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row) as i64,
+        DataType::Int32 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row) as i64,
+        DataType::UInt32 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt32Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row) as i64,
+        DataType::Int64 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int64Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .keys()
+            .value(row),
+        DataType::UInt64 => {
+            let value = column
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt64Type>>()
+                .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+                .keys()
+                .value(row);
+            i64::try_from(value).map_err(|_| exec_err("dictionary key index exceeds usize"))?
+        }
+        other => return Err(exec_err(format!("unsupported dictionary key type {other}"))),
+    };
+    if index < 0 {
+        return Err(exec_err("dictionary key index is negative"));
+    }
+    usize::try_from(index).map_err(|_| exec_err("dictionary key index exceeds usize"))
+}
+
+fn dictionary_values(column: &dyn Array, key_type: &DataType) -> Result<ArrayRef> {
+    let values = match key_type {
+        DataType::Int8 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::UInt8 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt8Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::Int16 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int16Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::UInt16 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::Int32 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::UInt32 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt32Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::Int64 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int64Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        DataType::UInt64 => column
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt64Type>>()
+            .ok_or_else(|| exec_err("dictionary key type does not match schema"))?
+            .values(),
+        other => return Err(exec_err(format!("unsupported dictionary key type {other}"))),
+    };
+    Ok(values.clone())
 }
 
 fn exec_err(message: impl Into<String>) -> KaveonError {
@@ -2408,6 +2502,88 @@ mod tests {
                 None,
             ])),
             DataType::UInt64,
+        );
+    }
+
+    #[test]
+    fn dictionary_index_widths_unbox_values_without_reordering() {
+        macro_rules! check {
+            ($index_type:ty, $index_data_type:expr, $left_keys:expr, $right_keys:expr) => {{
+                let value_type =
+                    DataType::Dictionary(Box::new($index_data_type), Box::new(DataType::Int32));
+                let schema = Arc::new(Schema::new(vec![Field::new("key", value_type, true)]));
+                let values = Arc::new(Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None]));
+                let left_key = DictionaryArray::<$index_type>::try_new(
+                    $left_keys,
+                    Arc::clone(&values) as ArrayRef,
+                )
+                .unwrap();
+                let right_key =
+                    DictionaryArray::<$index_type>::try_new($right_keys, values).unwrap();
+                let left =
+                    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left_key)]).unwrap();
+                let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+                let mut join = HashJoin::try_new(
+                    Box::new(Input::new(left)),
+                    Box::new(Input::new(right)),
+                    JoinType::Inner,
+                    vec![("key".into(), "key".into())],
+                )
+                .unwrap();
+                let batches = kaveon_core::collect_batches(&mut join).unwrap();
+                assert_eq!(
+                    concat_batches(join.schema(), &batches).unwrap().num_rows(),
+                    2
+                );
+            }};
+        }
+        check!(
+            Int8Type,
+            DataType::Int8,
+            Int8Array::from(vec![Some(0), Some(1), Some(2)]),
+            Int8Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            UInt8Type,
+            DataType::UInt8,
+            UInt8Array::from(vec![Some(0), Some(1), Some(2)]),
+            UInt8Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            Int16Type,
+            DataType::Int16,
+            Int16Array::from(vec![Some(0), Some(1), Some(2)]),
+            Int16Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            UInt16Type,
+            DataType::UInt16,
+            UInt16Array::from(vec![Some(0), Some(1), Some(2)]),
+            UInt16Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            Int32Type,
+            DataType::Int32,
+            Int32Array::from(vec![Some(0), Some(1), Some(2)]),
+            Int32Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            UInt32Type,
+            DataType::UInt32,
+            UInt32Array::from(vec![Some(0), Some(1), Some(2)]),
+            UInt32Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            Int64Type,
+            DataType::Int64,
+            Int64Array::from(vec![Some(0), Some(1), Some(2)]),
+            Int64Array::from(vec![Some(1), Some(0), Some(2)])
+        );
+        check!(
+            UInt64Type,
+            DataType::UInt64,
+            UInt64Array::from(vec![Some(0), Some(1), Some(2)]),
+            UInt64Array::from(vec![Some(1), Some(0), Some(2)])
         );
     }
 
