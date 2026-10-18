@@ -1,7 +1,7 @@
 use ahash::{AHashMap, AHashSet};
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt32Array, UInt64Array,
-};
+#[cfg(test)]
+use arrow::array::UInt32Array;
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
