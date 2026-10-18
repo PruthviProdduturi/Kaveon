@@ -3917,7 +3917,15 @@ fn trino_expr_type(expression: &Expr) -> String {
             ScalarValue::Null => "unknown",
         }
         .to_owned(),
-        Expr::Function { name, .. } if name.eq_ignore_ascii_case("COUNT") => "bigint".to_owned(),
+        Expr::Function { name, .. }
+            if name.eq_ignore_ascii_case("COUNT") || name.eq_ignore_ascii_case("CARDINALITY") =>
+        {
+            "bigint".to_owned()
+        }
+        Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_PARSE") => "json".to_owned(),
+        Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_FORMAT") => {
+            "varchar".to_owned()
+        }
         _ => "unknown".to_owned(),
     }
 }
@@ -23183,6 +23191,21 @@ mod streamed_root_tests {
             ]
         );
         assert!(trino_output_metadata("SELECT * FROM orders").is_err());
+    }
+
+    #[test]
+    fn trino_describe_output_infers_json_and_cardinality_metadata() {
+        let metadata = trino_output_metadata(
+            "SELECT JSON_PARSE('{\"x\": 1}') AS document, CARDINALITY(ARRAY[1, 2]) AS size",
+        )
+        .expect("JSON and cardinality metadata");
+        assert_eq!(
+            metadata,
+            vec![
+                ("document".to_owned(), "json".to_owned(), true),
+                ("size".to_owned(), "bigint".to_owned(), true),
+            ]
+        );
     }
 
     #[tokio::test]
