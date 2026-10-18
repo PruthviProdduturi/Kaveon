@@ -1,6 +1,6 @@
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, Expr, KaveonError, Result};
+use kaveon_core::{BatchOperator, Expr, KaveonError, Result, ScalarValue};
 use std::sync::Arc;
 
 use crate::expr_eval::evaluate;
@@ -103,6 +103,25 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
         }
         Expr::Function { name, args } => {
             let output_name = format_function_name(name, args);
+            // `evaluate` sees an empty batch while the projection schema is
+            // built.  A ROW subscript has no rows from which to select its
+            // constant field in that probe, so the evaluator correctly
+            // returns a Null array; use the source struct type to preserve
+            // the actual output type for the subsequent non-empty batches.
+            if name.eq_ignore_ascii_case("ELEMENT_AT")
+                && args.len() == 2
+                && let (Some(DataType::Struct(fields)), Expr::Literal(ScalarValue::Int64(index))) =
+                    (expression_data_type(&args[0], schema), &args[1])
+                && let Some(field) = index
+                    .checked_sub(1)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| fields.get(index))
+            {
+                return Ok((
+                    Field::new(output_name, field.data_type().clone(), true),
+                    None,
+                ));
+            }
             let data_type = evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
                 .data_type()
                 .clone();
@@ -132,6 +151,16 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
             ),
             None,
         )),
+    }
+}
+
+fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
+    match expr {
+        Expr::Column(name) => crate::expr_eval::resolve_column_index(schema, name)
+            .ok()
+            .map(|index| schema.field(index).data_type().clone()),
+        Expr::Alias { expr, .. } => expression_data_type(expr, schema),
+        _ => None,
     }
 }
 
