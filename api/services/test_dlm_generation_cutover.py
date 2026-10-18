@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from services import dlm_compiled_artifact
 from services import dlm_generation_cutover as cutover
 
 
@@ -125,8 +126,17 @@ class DlmGenerationCutoverTests(unittest.TestCase):
         self.assertEqual((result["definition_revision"], result["run_id"]), (4, "7-v5"))
 
     def test_unchanged_definition_is_not_rewritten(self):
+        """A definition already carrying the current shape is left alone.
+
+        A definition written before the shape key is upgraded once, on its
+        next publication -- see the test below, which pins that migration."""
+        from services import dlm_compiled_artifact
         dataset = {"revision": 9, "document": {"created_by": "owner"}}
-        definition = {"revision": 3, "document": {"dataset_id": "7", "dataset_revision": 9}}
+        definition = {"revision": 3, "document": {
+            "dataset_id": "7", "dataset_revision": 9,
+            "dataset_shape_sha256": dlm_compiled_artifact.dataset_shape_key(
+                {"created_by": "owner"}),
+        }}
         artifact = {"path": "dlm/7/v1/compiled.json", "sha256": "b" * 64,
                     "bytes": 10, "version": 1}
         with patch.object(cutover.product_store, "read", side_effect=[dataset, definition]), \
@@ -136,6 +146,26 @@ class DlmGenerationCutoverTests(unittest.TestCase):
             cutover.publish(payload(), "owner")
         self.assertEqual([m.kind for call in transact.call_args_list
                           for m in call.args[0]], ["dlm_run", "dlm_run"])
+
+    def test_a_definition_without_a_shape_key_is_upgraded_once(self):
+        """The migration: a context keyed on the record revision was
+        invalidated by any write to its dataset, so the freshness sweep made
+        contexts unservable as a side effect of keeping them current. A
+        definition predating the shape key is rewritten on its next
+        publication and matches on shape from then on."""
+        from services import dlm_compiled_artifact
+        dataset = {"revision": 9, "document": {"created_by": "owner"}}
+        definition = {"revision": 3, "document": {"dataset_id": "7", "dataset_revision": 9}}
+        artifact = {"path": "dlm/7/v1/compiled.json", "sha256": "b" * 64,
+                    "bytes": 10, "version": 1}
+        with patch.object(cutover.product_store, "read", side_effect=[dataset, definition]),              patch.object(cutover.product_store, "list_records", return_value=[]),              patch.object(cutover.dlm_compiled_artifact, "publish", return_value=artifact),              patch.object(cutover.product_store, "transact") as transact:
+            cutover.publish(payload(), "owner")
+        kinds = [m.kind for call in transact.call_args_list for m in call.args[0]]
+        self.assertEqual(kinds, ["dlm_definition", "dlm_run", "dlm_run"])
+        written = transact.call_args_list[0].args[0][0].document
+        self.assertEqual(
+            written["dataset_shape_sha256"],
+            dlm_compiled_artifact.dataset_shape_key({"created_by": "owner"}))
 
     def test_owner_or_invalid_run_fails_before_artifact_publication(self):
         cases = (
@@ -230,8 +260,16 @@ class SupersededRunRetirementTests(unittest.TestCase):
         runs = [self._run(version) for version in range(1, 6)]
         order = []
         with patch.object(cutover.product_store, "read",
-                          side_effect=[dataset, {"revision": 1, "document":
-                                                 {"dataset_id": "7", "dataset_revision": 1}}]), \
+                          side_effect=[dataset, {"revision": 1, "document": {
+                              "dataset_id": "7", "dataset_revision": 1,
+                              # Current, so the definition is not rewritten:
+                              # this test is about which runs are retired, and
+                              # a migration advances the revision and changes
+                              # which runs stay eligible.
+                              "dataset_shape_sha256":
+                                  dlm_compiled_artifact.dataset_shape_key(
+                                      {"created_by": "owner"}),
+                          }}]), \
              patch.object(cutover.product_store, "list_records",
                           return_value=[{"id": record_id, "revision": revision,
                                          "document": document}

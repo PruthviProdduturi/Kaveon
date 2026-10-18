@@ -242,6 +242,37 @@ def context_identity(context: BulkContext) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+# The fields of a dataset that decide what a compiled context means.
+#
+# A context is compiled against the dataset's shape: which table it reads,
+# which columns exist, which are dimensions and which are metrics, the filters
+# that bound it and the column that carries time. Everything else on the
+# record -- its name, its description, its visibility, who last touched it and
+# when -- can change without making a single compiled cell wrong.
+#
+# This exists because the rule used to be the record's revision, so any write
+# at all invalidated the context. The freshness sweep refreshes datasets by
+# design, which meant the job that keeps a context current was also the thing
+# that made it unservable: two of nine datasets were in that state, the
+# billion-row telemetry table among them, each with a ready run at the right
+# definition revision that nothing would serve.
+DATASET_SHAPE_FIELDS = (
+    "columns", "dimensions", "metrics", "filters", "date_column",
+    "database_name", "schema_name", "table_name", "sql_text", "tables_used",
+    "source",
+)
+
+
+def dataset_shape_key(document: dict) -> str:
+    """A stable digest of the fields a compiled context depends on."""
+    if not isinstance(document, dict):
+        raise RuntimeError("Compiled DLM dataset document is invalid")
+    material = {field: document.get(field) for field in DATASET_SHAPE_FIELDS}
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"),
+                         default=str, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def read(dataset_id: str, actor: str, role: str,
          *, context: BulkContext | None = None) -> dict | None:
     """Resolve and verify the newest compiled run without a PostgreSQL fallback."""
@@ -269,9 +300,23 @@ def read(dataset_id: str, actor: str, role: str,
         return None
     definition = (context.definitions.get(dataset_id) if context is not None
                   else product_store.read("dlm_definition", dataset_id, actor, "Admin"))
-    expected_definition = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
-    if not definition or definition.get("document") != expected_definition:
+    # A definition matches on the dataset's shape when it records one, and on
+    # the record revision when it does not. The revision rule is what every
+    # definition written before this used, so it stays as the fallback rather
+    # than invalidating every compiled context at once; a dataset adopts the
+    # shape rule the next time its generation is published.
+    definition_document = definition.get("document") if definition else None
+    if not isinstance(definition_document, dict):
         raise DefinitionUnavailable("Compiled DLM definition is missing or stale")
+    recorded_shape = definition_document.get("dataset_shape_sha256")
+    if recorded_shape is not None:
+        if (definition_document.get("dataset_id") != dataset_id
+                or recorded_shape != dataset_shape_key(dataset_document)):
+            raise DefinitionUnavailable("Compiled DLM definition is missing or stale")
+    else:
+        expected_definition = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
+        if definition_document != expected_definition:
+            raise DefinitionUnavailable("Compiled DLM definition is missing or stale")
     definition_revision = definition.get("revision")
     if type(definition_revision) is not int or definition_revision < 1:
         raise RuntimeError("Compiled DLM definition revision is invalid")
