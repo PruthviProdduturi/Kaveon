@@ -22183,8 +22183,9 @@ mod streamed_root_tests {
             "{}",
             recovery.summary()
         );
-        // The final stage ran on the survivor alone; the scan stage's
-        // telemetry keeps the attempts that completed before the loss.
+        // The final stage ran on the survivor alone. Scan telemetry is
+        // idempotent: it keeps one current row per partition, while the
+        // recovery record retains every retry attempt.
         let final_stage = stages.iter().find(|stage| stage.stage_id == 1).unwrap();
         assert_eq!(final_stage.tasks.len(), 2);
         assert!(
@@ -22194,7 +22195,15 @@ mod streamed_root_tests {
                 .all(|task| task.node_id == "worker-a")
         );
         let scan_stage = stages.iter().find(|stage| stage.stage_id == 0).unwrap();
-        assert_eq!(scan_stage.tasks.len(), 4);
+        assert_eq!(scan_stage.tasks.len(), 2);
+        assert_eq!(
+            scan_stage
+                .tasks
+                .iter()
+                .map(|task| task.partition_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
         let json = serde_json::to_value(&recovery).unwrap();
         assert_eq!(json["stage_retries"][0]["stage"], 1);
         assert_eq!(json["stage_retries"][0]["from"], "worker-b");
