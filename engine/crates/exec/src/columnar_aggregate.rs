@@ -1993,6 +1993,13 @@ impl ColumnarGroups {
         states: &BinaryArray,
         rows: usize,
     ) -> Result<(usize, u64)> {
+        if rows > keys.len() || rows > states.len() {
+            return Err(exec_err(format!(
+                "aggregate exchange row count {rows} exceeds key/state columns ({}/{})",
+                keys.len(),
+                states.len()
+            )));
+        }
         let stride = self.stride();
         let mut new_bytes = 0u64;
         self.packed.clear();
@@ -3062,6 +3069,24 @@ mod tests {
             .downcast_ref::<BinaryArray>()
             .unwrap();
         assert_eq!(merge(&mut groups, keys, states).unwrap(), (1, 0));
+
+        // A corrupt exchange envelope must fail closed rather than allowing
+        // the row count to index past either binary column.
+        let empty = BinaryArray::new_null(0);
+        assert!(
+            groups
+                .merge_encoded_batch(keys, &empty, keys.len())
+                .unwrap_err()
+                .to_string()
+                .contains("row count")
+        );
+        assert!(
+            groups
+                .merge_encoded_batch(&empty, states, states.len())
+                .unwrap_err()
+                .to_string()
+                .contains("row count")
+        );
 
         // A state whose tag is not this column's.
         let other = batch(AggregateState::IntegerSum { sum: 2, count: 1 });
