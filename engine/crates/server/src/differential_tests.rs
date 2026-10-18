@@ -278,6 +278,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_boolean_extrema",
+        "SELECT ARRAY_MIN(ARRAY[true, NULL, false]) AS min_value, ARRAY_MAX(ARRAY[true, NULL, false]) AS max_value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_split_into_chunks",
         "SELECT ARRAY_SPLIT_INTO_CHUNKS(ARRAY[1, 2, 3, 4, 5], 2) AS chunks FROM {T} LIMIT 1",
         true,
