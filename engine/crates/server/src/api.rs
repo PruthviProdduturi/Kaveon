@@ -14,7 +14,7 @@ use kaveon_catalog::CascadePolicy;
 use kaveon_core::collect_batches;
 use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{
-    AdmittedQueryMemory, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
+    AdmittedQueryMemory, BinaryOp, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
     ColumnDefinition, ExchangeId, ExecutableFragment, Expr, MemoryAdmissionController,
     SchemaDefinition, SchemaId, StageId, TableDefinition, TableId, TaskId,
 };
@@ -3926,6 +3926,39 @@ fn trino_expr_type(expression: &Expr) -> String {
         Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_FORMAT") => {
             "varchar".to_owned()
         }
+        Expr::BinaryOp { left, op, right } => match op {
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge => "boolean".to_owned(),
+            BinaryOp::StringConcat => "varchar".to_owned(),
+            BinaryOp::Plus
+            | BinaryOp::Minus
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Modulo => {
+                let left_type = trino_expr_type(left);
+                let right_type = trino_expr_type(right);
+                if left_type == "double" || right_type == "double" {
+                    "double".to_owned()
+                } else if left_type == "bigint" || right_type == "bigint" {
+                    "bigint".to_owned()
+                } else {
+                    "unknown".to_owned()
+                }
+            }
+        },
+        Expr::IsNull(_)
+        | Expr::IsNotNull(_)
+        | Expr::Not(_)
+        | Expr::And(_, _)
+        | Expr::Or(_, _)
+        | Expr::Like { .. }
+        | Expr::Between { .. }
+        | Expr::InList { .. } => "boolean".to_owned(),
+        Expr::Extract { .. } => "bigint".to_owned(),
         _ => "unknown".to_owned(),
     }
 }
@@ -23230,6 +23263,22 @@ mod streamed_root_tests {
             vec![
                 ("document".to_owned(), "json".to_owned(), true),
                 ("size".to_owned(), "bigint".to_owned(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn trino_describe_output_infers_scalar_expression_metadata() {
+        let metadata = trino_output_metadata(
+            "SELECT 1 + 2 AS total, 1 < 2 AS is_ordered, 'a' || 'b' AS label",
+        )
+        .expect("scalar expression metadata");
+        assert_eq!(
+            metadata,
+            vec![
+                ("total".to_owned(), "bigint".to_owned(), true),
+                ("is_ordered".to_owned(), "boolean".to_owned(), true),
+                ("label".to_owned(), "varchar".to_owned(), true),
             ]
         );
     }
