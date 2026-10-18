@@ -740,6 +740,12 @@ fn frame_bounds(
         for (i, &row) in rows.iter().enumerate() {
             // NULLS LAST independently of direction; a finite boundary never includes NULL.
             if cols[0].is_null(row) {
+                // With NULLS FIRST, null rows precede every finite value. They
+                // must be skipped while finding a finite RANGE boundary; a
+                // null current row was handled above as its peer group.
+                if order[0].2 {
+                    continue;
+                }
                 return Ok(i);
             }
             let mut cmp = compare_offset(
@@ -1230,6 +1236,20 @@ mod tests {
         let input = uint32_batch(vec![Some(1), Some(2), Some(3), None]);
         let expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
         assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(2), Some(1)]);
+    }
+
+    #[test]
+    fn range_offsets_with_nulls_first_skip_null_boundaries() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = batch(vec![Some(1), Some(2), None]);
+        let mut expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
+        if let Expr::WindowFunction { order_by, .. } = &mut expr {
+            order_by[0].2 = true;
+        }
+        // The finite RANGE boundary for 1 and 2 must not terminate at the
+        // leading NULLS FIRST row. A NULL current row remains its peer group.
+        assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(1)]);
     }
 
     #[test]
