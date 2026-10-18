@@ -520,9 +520,8 @@ fn split_json_returning(inner: &str) -> Option<(&str, String)> {
                 let type_name = inner[type_start..].trim();
                 let upper_type = type_name.to_ascii_uppercase();
                 let data_type = match upper_type.as_str() {
-                    "BIGINT" | "INTEGER" | "DOUBLE" | "REAL" | "BOOLEAN" | "VARCHAR" | "JSON" => {
-                        upper_type
-                    }
+                    "TINYINT" | "SMALLINT" | "BIGINT" | "INTEGER" | "DOUBLE" | "REAL"
+                    | "BOOLEAN" | "VARCHAR" | "JSON" => upper_type,
                     _ => parse_json_decimal_type(type_name)?,
                 };
                 return (!arguments.trim().is_empty()).then_some((arguments, data_type));
