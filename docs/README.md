@@ -37,6 +37,7 @@ are planned rather than executable.
 - [Run the OpenSource product showcase](guides/product-showcase.md)
 - [Natural-language query flow](guides/nl-to-sql.md)
 - [Deploy Studio to Vercel](guides/vercel-deployment.md)
+- [Restore the hosted demo cluster](guides/demo-cluster-restart.md) — why it is offline, what a restart costs, and the shape decision to make first
 - [Deploy Vercel, Container Apps, and PostgreSQL](guides/deploy-vercel-azure-postgres.md)
 
 ## References
