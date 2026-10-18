@@ -2320,6 +2320,42 @@ fn distributed_constant_lateral_unnest_matches_trino_shape() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// `NOT IN` is null-aware: a NULL anywhere in the subquery makes every
+/// non-matching comparison UNKNOWN. The right side is broadcast so this
+/// remains true when the subquery is split across three workers.
+#[test]
+fn distributed_not_in_null_subquery_matches_local_semantics() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-not-in-null-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT id FROM (VALUES (1), (2), (3)) AS l(id) WHERE id NOT IN (SELECT value FROM (VALUES (2), (CAST(NULL AS BIGINT))) AS r(value)) ORDER BY id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-not-in-null", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    assert!(
+        expected.is_empty(),
+        "Trino NOT IN NULL semantics: {expected:?}"
+    );
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert!(
+        actual.is_empty(),
+        "distributed NOT IN leaked rows: {actual:?}"
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_correlated_sequence_unnest_repeats_each_left_row() {
     let directory = std::env::temp_dir().join(format!(

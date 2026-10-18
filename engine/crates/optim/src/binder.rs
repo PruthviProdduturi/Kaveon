@@ -767,6 +767,7 @@ impl Binder<'_> {
                 left_key,
                 right_key,
                 residual,
+                null_aware,
             } => {
                 let join =
                     self.bind_semi_join(*left, *right, left_key, right_key, residual, true, outer)?;
@@ -777,6 +778,7 @@ impl Binder<'_> {
                         left_key: join.left_key,
                         right_key: join.right_key,
                         residual: join.residual,
+                        null_aware,
                     },
                     aggregate_input: None,
                     correlations: join.correlations,
@@ -1425,6 +1427,7 @@ impl Binder<'_> {
                 left_key,
                 right_key,
                 residual,
+                null_aware,
             } => Ok((
                 LogicalPlan::AntiJoin {
                     left: Box::new(self.place(conjuncts, *left)?),
@@ -1432,6 +1435,7 @@ impl Binder<'_> {
                     left_key,
                     right_key,
                     residual,
+                    null_aware,
                 },
                 Vec::new(),
             )),

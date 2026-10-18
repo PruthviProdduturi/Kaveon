@@ -92,12 +92,14 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             left_key,
             right_key,
             residual,
+            null_aware,
         } => LogicalPlan::AntiJoin {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
             left_key,
             right_key,
             residual,
+            null_aware,
         },
         scan @ LogicalPlan::Scan { .. } => scan,
         unnest @ LogicalPlan::Unnest { .. } => unnest,
@@ -316,6 +318,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             left_key,
             right_key,
             residual,
+            null_aware,
         } => {
             let left_required = required.map(|mut columns| {
                 collect_columns(&left_key, &mut columns);
@@ -328,6 +331,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 left_key,
                 right_key,
                 residual,
+                null_aware,
             }
         }
         unnest @ LogicalPlan::Unnest { .. } => unnest,
@@ -885,12 +889,14 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
             left_key,
             right_key,
             residual,
+            null_aware,
         } => LogicalPlan::AntiJoin {
             left: Box::new(push_filter_into(predicate, *left)),
             right,
             left_key,
             right_key,
             residual,
+            null_aware,
         },
         LogicalPlan::Scan {
             table,

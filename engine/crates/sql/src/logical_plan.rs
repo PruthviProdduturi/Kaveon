@@ -283,6 +283,9 @@ pub enum LogicalPlan {
         left_key: Expr,
         right_key: Expr,
         residual: Option<Expr>,
+        /// `NOT IN` requires the complete right relation to observe a NULL
+        /// key on any worker. `NOT EXISTS` remains an ordinary anti join.
+        null_aware: bool,
     },
 }
 
@@ -1957,6 +1960,7 @@ fn extract_subquery_predicates(
                     left_key,
                     right_key,
                     residual: None,
+                    null_aware: true,
                 };
             } else {
                 *plan = LogicalPlan::SemiJoin {
@@ -1992,6 +1996,7 @@ fn extract_subquery_predicates(
                     left_key,
                     right_key,
                     residual: None,
+                    null_aware: false,
                 };
             } else {
                 *plan = LogicalPlan::SemiJoin {
@@ -5088,6 +5093,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 left_key,
                 right_key,
                 residual,
+                ..
             } => {
                 expressions.extend([left_key, right_key]);
                 expressions.extend(residual);
