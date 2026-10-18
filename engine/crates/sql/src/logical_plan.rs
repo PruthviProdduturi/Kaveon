@@ -3845,6 +3845,7 @@ fn cast_target_name(target: CastTarget) -> String {
         CastTarget::Boolean => "BOOLEAN".into(),
         CastTarget::Int32 => "INT32".into(),
         CastTarget::Int64 => "INT64".into(),
+        CastTarget::UInt8 => "UINT8".into(),
         CastTarget::UInt16 => "UINT16".into(),
         CastTarget::UInt32 => "UINT32".into(),
         CastTarget::Float64 => "FLOAT64".into(),
@@ -4028,6 +4029,7 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         ast::DataType::UnsignedInt(_)
         | ast::DataType::UnsignedInteger(_)
         | ast::DataType::UInt32 => Ok(CastTarget::UInt32),
+        ast::DataType::UnsignedTinyInt(_) | ast::DataType::UInt8 => Ok(CastTarget::UInt8),
         ast::DataType::UnsignedSmallInt(_) | ast::DataType::UInt16 => {
             Ok(CastTarget::UInt16)
         }

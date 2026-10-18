@@ -3879,6 +3879,7 @@ fn trino_expr_type(expression: &Expr) -> String {
             kaveon_core::CastTarget::Boolean => "boolean",
             kaveon_core::CastTarget::Int32 => "integer",
             kaveon_core::CastTarget::Int64 => "bigint",
+            kaveon_core::CastTarget::UInt8 => "tinyint",
             kaveon_core::CastTarget::UInt16 => "smallint",
             kaveon_core::CastTarget::UInt32 => "integer",
             kaveon_core::CastTarget::Float64 => "double",
