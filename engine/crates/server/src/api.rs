@@ -14231,7 +14231,10 @@ fn merge_partial_aggregates(
             columns.len()
         ));
     }
-    let mut groups = std::collections::BTreeMap::<String, Vec<serde_json::Value>>::new();
+    // The serialized group key is retained for deterministic output ordering,
+    // but the merge itself is a high-cardinality hash workload. Keep lookup
+    // O(1) while merging and sort only the final keys once.
+    let mut groups = std::collections::HashMap::<String, Vec<serde_json::Value>>::new();
     let account = memory
         .map(|memory| memory.operator("distributed-aggregate-merge"))
         .transpose()
@@ -14271,9 +14274,11 @@ fn merge_partial_aggregates(
             }
         }
     }
+    let mut ordered_groups = groups.into_iter().collect::<Vec<_>>();
+    ordered_groups.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Ok(TaskResponse {
         columns,
-        data: groups.into_values().collect(),
+        data: ordered_groups.into_iter().map(|(_, row)| row).collect(),
         elapsed_us,
     })
 }
