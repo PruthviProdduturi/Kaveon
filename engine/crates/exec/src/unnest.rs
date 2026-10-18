@@ -288,4 +288,42 @@ mod tests {
             &[2, 3, 4, 5, 6]
         );
     }
+
+    #[test]
+    fn expands_array_mutators_as_row_producing_inputs() {
+        let array = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(kaveon_core::ScalarValue::Int64(1)),
+                Expr::Literal(kaveon_core::ScalarValue::Int64(2)),
+            ],
+        };
+        for (name, expected) in [
+            ("ARRAY_APPEND", vec![1, 2, 3]),
+            ("ARRAY_PREPEND", vec![3, 1, 2]),
+            ("ARRAY_REMOVE", vec![1, 2]),
+        ] {
+            let expression = Expr::Function {
+                name: name.into(),
+                args: vec![
+                    array.clone(),
+                    Expr::Literal(kaveon_core::ScalarValue::Int64(3)),
+                ],
+            };
+            let mut operator =
+                UnnestOperator::new(&[expression], vec!["value".into()], false, "ord", 1).unwrap();
+            let batch = operator.next_batch().unwrap().unwrap();
+            assert_eq!(batch.num_rows(), expected.len(), "{name}");
+            assert_eq!(
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values(),
+                expected.as_slice(),
+                "{name}"
+            );
+        }
+    }
 }
