@@ -1633,6 +1633,20 @@ fn row_key(
                         .expect("type checked")
                         .value(row),
                 ),
+                // Narrow signed keys widen losslessly to the existing Int32
+                // hash representation. The planner keeps the original
+                // schema type, so this branch cannot alias an unrelated
+                // signed width without the normal key-type check.
+                DataType::Int8 => Key::Int32(
+                    column
+                        .as_primitive::<arrow::datatypes::Int8Type>()
+                        .value(row) as i32,
+                ),
+                DataType::Int16 => Key::Int32(
+                    column
+                        .as_primitive::<arrow::datatypes::Int16Type>()
+                        .value(row) as i32,
+                ),
                 DataType::Int32 => Key::Int32(
                     column
                         .as_primitive::<arrow::datatypes::Int32Type>()
@@ -1643,6 +1657,16 @@ fn row_key(
                 DataType::UInt32 => Key::UInt64(
                     column
                         .as_primitive::<arrow::datatypes::UInt32Type>()
+                        .value(row) as u64,
+                ),
+                DataType::UInt8 => Key::UInt64(
+                    column
+                        .as_primitive::<arrow::datatypes::UInt8Type>()
+                        .value(row) as u64,
+                ),
+                DataType::UInt16 => Key::UInt64(
+                    column
+                        .as_primitive::<arrow::datatypes::UInt16Type>()
                         .value(row) as u64,
                 ),
                 // Arrow Date32 is an i32 day number.  It has the same SQL
@@ -1772,8 +1796,9 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Decimal128Array, Decimal256Array, Int32Array, Int64Array, LargeStringArray,
-        StringArray, Time32MillisecondArray, TimestampMillisecondArray,
+        Date64Array, Decimal128Array, Decimal256Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, LargeStringArray, StringArray, Time32MillisecondArray,
+        TimestampMillisecondArray, UInt8Array, UInt16Array,
     };
     use arrow::datatypes::i256;
     use std::collections::VecDeque;
@@ -2012,6 +2037,66 @@ mod tests {
                 .as_primitive::<arrow::datatypes::UInt32Type>()
                 .value(0),
             u32::MAX
+        );
+    }
+
+    #[test]
+    fn narrow_integer_join_keys_widen_losslessly_and_skip_nulls() {
+        macro_rules! check {
+            ($array:ty, $type:expr, [$($left:expr),*], [$($right:expr),*], $expected:expr) => {{
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("key", $type, true),
+                    Field::new("side", DataType::Utf8, false),
+                ]));
+                let left = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(<$array>::from(vec![$($left),*])),
+                        Arc::new(StringArray::from(vec!["left"; 3])),
+                    ],
+                ).unwrap();
+                let right = RecordBatch::try_new(
+                    schema,
+                    vec![
+                        Arc::new(<$array>::from(vec![$($right),*])),
+                        Arc::new(StringArray::from(vec!["right"; 3])),
+                    ],
+                ).unwrap();
+                let mut join = HashJoin::try_new(
+                    Box::new(Input::new(left)), Box::new(Input::new(right)),
+                    JoinType::Inner, vec![("key".into(), "key".into())],
+                ).unwrap();
+                let batches = kaveon_core::collect_batches(&mut join).unwrap();
+                assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), $expected);
+            }};
+        }
+        check!(
+            Int8Array,
+            DataType::Int8,
+            [Some(i8::MIN), Some(7), None],
+            [Some(7), Some(i8::MIN), None],
+            2
+        );
+        check!(
+            Int16Array,
+            DataType::Int16,
+            [Some(i16::MIN), Some(7), None],
+            [Some(7), Some(i16::MIN), None],
+            2
+        );
+        check!(
+            UInt8Array,
+            DataType::UInt8,
+            [Some(0), Some(u8::MAX), None],
+            [Some(u8::MAX), Some(0), None],
+            2
+        );
+        check!(
+            UInt16Array,
+            DataType::UInt16,
+            [Some(0), Some(u16::MAX), None],
+            [Some(u16::MAX), Some(0), None],
+            2
         );
     }
 
