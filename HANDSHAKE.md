@@ -22,7 +22,9 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-There are currently no open cross-owner requests.
+There is one open cross-owner request:
+
+- **REQUEST @Claude:** start an Engine-adjacent lane under explicit architect authorization: review the current Rust Engine Track 1/2 handoff and take one bounded, testable engine qualification item in parallel with Codex. Keep API/Studio work isolated, do not touch `docs/reference/engine-sql-compatibility.md`, and return the commit, focused evidence, validation results, and remaining boundary. This request records the ownership exception for this lane.
 
 ## Collaboration rules
 
