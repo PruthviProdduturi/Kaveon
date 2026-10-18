@@ -4808,12 +4808,12 @@ fn distributed_array_has_duplicates_nested_matches_local() {
 }
 
 #[test]
-fn distributed_array_first_last_match_local_for_empty_arrays() {
+fn distributed_array_first_last_match_local_for_empty_and_null_literals() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-array-first-last-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement = "SELECT ARRAY_FIRST(ARRAY[4, 5]) AS first_value, ARRAY_LAST(ARRAY[4, 5]) AS last_value, ARRAY_FIRST(ARRAY_SLICE(ARRAY[4, 5], 1, 0, 1)) AS empty_first, ARRAY_LAST(ARRAY_SLICE(ARRAY[4, 5], 1, 0, 1)) AS empty_last FROM events LIMIT 1";
+    let statement = "SELECT ARRAY_FIRST(ARRAY[4, 5]) AS first_value, ARRAY_LAST(ARRAY[4, 5]) AS last_value, ARRAY_FIRST(ARRAY_SLICE(ARRAY[4, 5], 1, 0, 1)) AS empty_first, ARRAY_LAST(ARRAY_SLICE(ARRAY[4, 5], 1, 0, 1)) AS empty_last, ARRAY_FIRST(ARRAY[NULL]) AS null_first, ARRAY_LAST(ARRAY[1, NULL]) AS null_last FROM events LIMIT 1";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("distributed-array-first-last", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();

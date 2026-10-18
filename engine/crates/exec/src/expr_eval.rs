@@ -10080,6 +10080,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     builder.append(true);
                 }
                 Ok(Arc::new(builder.finish()))
+            } else if args.iter().all(|arg| arg.data_type() == &DataType::Null) {
+                // An all-NULL ARRAY has Trino's unresolved/NULL element type;
+                // preserve that type instead of arbitrarily widening it to
+                // DOUBLE through the generic fallback below.
+                let mut builder = ListBuilder::new(NullBuilder::new());
+                for _row in 0..num_rows {
+                    for _arg in args {
+                        builder.values().append_null();
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
             } else {
                 let values = args
                     .iter()
@@ -15042,6 +15054,18 @@ mod tests {
             last.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(3), None, None]
         );
+    }
+
+    #[test]
+    fn all_null_array_literals_preserve_null_element_type() {
+        let null = arrow::array::new_null_array(&DataType::Null, 1);
+        let list = eval_scalar_function("ARRAY", &[null], 1).unwrap();
+        let list = list.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::Null);
+        assert_eq!(list.value(0).data_type(), &DataType::Null);
+
+        let first = eval_scalar_function("ARRAY_FIRST", &[Arc::new(list.clone())], 1).unwrap();
+        assert_eq!(first.data_type(), &DataType::Null);
     }
 
     #[test]
