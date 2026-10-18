@@ -4,26 +4,6 @@
   --accent-dark: #2d7dd2;
   --accent-rgb: 74, 158, 232;
 
-  /* A brand fill that can carry its own white label.
-     The identity accent cannot, and every primary button in the product was
-     relying on it to: white on `--accent` measures 2.86:1 and on
-     `--accent-dark` 4.22:1, both short of the 4.5:1 a button label needs.
-     The gradient those buttons use runs between exactly those two, so its
-     lighter end was the worst text in the interface -- on the control a user
-     is most expected to press.
-     These are the same blue, not a different one: hue 208 and saturation
-     0.68 held fixed, value taken down until white clears. Declared on bare
-     `:root` and deliberately NOT overridden for dark, because white on a
-     fill does not depend on what is behind the fill. */
-  --accent-strong: #3571a6;      /* white 5.17:1 */
-  --accent-strong-deep: #2d608c; /* white 6.64:1 -- the gradient's far end */
-  --on-accent: #ffffff;
-  /* Likewise for a destructive fill. Light `--danger` (#dc2626) already
-     carries white at 4.83:1, but dark's (#f87171) manages 2.77:1 -- that red
-     was chosen as TEXT on a dark ground, and a confirm button used it as a
-     surface. One value serves both themes for the same reason as above. */
-  --danger-strong: #c81e1e;      /* white 5.74:1 */
-
   --bg-primary: #f8f7f5;
   --bg-surface: #fdfcfa;
   --bg-elevated: #ffffff;
@@ -230,8 +210,8 @@
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--accent-strong), var(--accent-strong-deep));
-  color: var(--on-accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: white;
   padding: 0.75rem 1.5rem;
   border-radius: 0.5rem;
   font-weight: 600;
@@ -252,4 +232,113 @@
   width: 40px;
   height: 40px;
   animation: spin 1s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   The maintenance notice.
+
+   Shown on the application surfaces while the demo cluster is deliberately
+   offline. It is not an error dialog and should not borrow an error's
+   styling: the work is planned, the date is known, and saying so in a calm
+   surface is the difference between a maintained product and a broken one.
+   --------------------------------------------------------------------------- */
+.service-notice {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: color-mix(in srgb, var(--text-primary) 45%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: service-notice-in 160ms ease-out;
+}
+
+.service-notice__card {
+  width: min(32rem, 100%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.75rem;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+}
+
+.service-notice__title {
+  margin: 0 0 0.6rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.service-notice__body {
+  margin: 0 0 0.85rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* The date is the point of the whole dialog: a window with an end is a
+   different message from an outage. */
+.service-notice__returns {
+  margin: 0 0 0.85rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.service-notice__aside {
+  margin: 0 0 1.4rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.service-notice__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.service-notice__link {
+  flex: 1 1 auto;
+  text-align: center;
+  padding: 0.55rem 1rem;
+  border-radius: 7px;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.service-notice__link:hover { background: var(--accent-strong-deep); }
+
+.service-notice__dismiss {
+  padding: 0.55rem 1rem;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.service-notice__dismiss:hover { border-color: var(--border-hover); }
+
+.service-notice__link:focus-visible,
+.service-notice__dismiss:focus-visible {
+  outline: 2px solid var(--accent-dark);
+  outline-offset: 2px;
+}
+
+@keyframes service-notice-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .service-notice { animation: none; }
 }
