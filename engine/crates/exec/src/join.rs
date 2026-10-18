@@ -247,62 +247,39 @@ impl BuildKeyFilter {
             .first()
             .map(|(left, _)| schema.field(*left).name().to_owned());
         let values = match &self.index {
-            JoinIndex::Int32 {
-                first_rows,
-                duplicate_rows,
-            } => Some(
+            JoinIndex::Int32 { first_rows, .. } => Some(
                 first_rows
                     .keys()
-                    .chain(duplicate_rows.keys())
                     .map(|value| ScalarValue::Int64(i64::from(*value)))
                     .collect(),
             ),
-            JoinIndex::Date32 {
-                first_rows,
-                duplicate_rows,
-            } => Some(
+            JoinIndex::Date32 { first_rows, .. } => Some(
                 first_rows
                     .keys()
-                    .chain(duplicate_rows.keys())
                     .map(|value| ScalarValue::Int64(i64::from(*value)))
                     .collect(),
             ),
-            JoinIndex::Int64 {
-                first_rows,
-                duplicate_rows,
-            } => Some(
+            JoinIndex::Int64 { first_rows, .. } => Some(
                 first_rows
                     .keys()
-                    .chain(duplicate_rows.keys())
                     .map(|value| ScalarValue::Int64(*value))
                     .collect(),
             ),
-            JoinIndex::Utf8 {
-                first_rows,
-                duplicate_rows,
-            } => Some(
+            JoinIndex::Utf8 { first_rows, .. } => Some(
                 first_rows
                     .keys()
-                    .chain(duplicate_rows.keys())
                     .map(|value| ScalarValue::Utf8(value.clone()))
                     .collect(),
             ),
-            JoinIndex::UInt64 {
-                first_rows,
-                duplicate_rows,
-            } => first_rows
+            JoinIndex::UInt64 { first_rows, .. } => first_rows
                 .keys()
-                .chain(duplicate_rows.keys())
                 .map(|value| i64::try_from(*value).ok().map(ScalarValue::Int64))
                 .collect::<Option<Vec<_>>>(),
             JoinIndex::Decimal256 {
-                first_rows,
-                duplicate_rows,
-                scale,
+                first_rows, scale, ..
             } => Some(
                 first_rows
                     .keys()
-                    .chain(duplicate_rows.keys())
                     .map(|value| ScalarValue::Decimal256 {
                         value: value.to_string(),
                         precision: 76,
@@ -2393,6 +2370,29 @@ mod tests {
                 .iter()
                 .all(|predicate| matches!(predicate, StoragePredicate::In { .. }))
         );
+    }
+
+    #[test]
+    fn single_key_runtime_filter_storage_in_excludes_duplicate_build_values() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(2),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let StoragePredicate::In { values, .. } = filter.storage_predicate(&schema).unwrap() else {
+            panic!("expected single-key IN predicate");
+        };
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&ScalarValue::Int64(1)));
+        assert!(values.contains(&ScalarValue::Int64(2)));
     }
 
     #[test]
