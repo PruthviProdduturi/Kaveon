@@ -290,46 +290,39 @@ fn try_sorted_batch_top_n(
                 .collect::<Result<Vec<_>>>()
         })
         .collect::<Result<Vec<_>>>()?;
-    let key_columns = (0..sort_exprs.len())
-        .map(|key| {
-            let columns = evaluated
-                .iter()
-                .map(|batch| batch[key].clone())
-                .collect::<Vec<_>>();
-            arrow::compute::concat(
-                &columns
-                    .iter()
-                    .map(|column| column.as_ref())
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|error| KaveonError::Execution(error.to_string()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let comparators = key_columns
+    // Keep key arrays in their source batches. Concatenating every ordering
+    // key at the coordinator adds a full copy before the bounded heap merge;
+    // pairwise Arrow comparators preserve the same null/direction semantics
+    // while comparing only the candidate rows that can enter the result.
+    let comparators = evaluated
         .iter()
-        .zip(sort_exprs)
-        .map(|(values, sort_expr)| {
-            arrow::array::make_comparator(
-                values.as_ref(),
-                values.as_ref(),
-                SortOptions {
-                    descending: !sort_expr.ascending,
-                    nulls_first: sort_expr.nulls_first,
-                },
-            )
-            .map_err(|error| KaveonError::Execution(error.to_string()))
+        .map(|left_keys| {
+            evaluated
+                .iter()
+                .map(|right_keys| {
+                    left_keys
+                        .iter()
+                        .zip(right_keys)
+                        .zip(sort_exprs)
+                        .map(|((left, right), sort_expr)| {
+                            arrow::array::make_comparator(
+                                left.as_ref(),
+                                right.as_ref(),
+                                SortOptions {
+                                    descending: !sort_expr.ascending,
+                                    nulls_first: sort_expr.nulls_first,
+                                },
+                            )
+                            .map_err(|error| KaveonError::Execution(error.to_string()))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()
         })
         .collect::<Result<Vec<_>>>()?;
-
-    let mut offsets = Vec::with_capacity(batches.len());
-    let mut offset = 0usize;
-    for batch in batches {
-        offsets.push(offset);
-        offset += batch.num_rows();
-    }
-    let compare = |left: usize, right: usize| {
-        for comparator in &comparators {
-            let ordering = comparator(left, right);
+    let compare = |left: (usize, usize), right: (usize, usize)| {
+        for (key, _) in sort_exprs.iter().enumerate() {
+            let ordering = comparators[left.0][right.0][key](left.1, right.1);
             if !ordering.is_eq() {
                 return ordering;
             }
@@ -337,9 +330,8 @@ fn try_sorted_batch_top_n(
         std::cmp::Ordering::Equal
     };
     let sorted = evaluated.iter().enumerate().all(|(batch, keys)| {
-        (1..keys.first().map_or(0, Array::len)).all(|row| {
-            compare(offsets[batch] + row - 1, offsets[batch] + row) != std::cmp::Ordering::Greater
-        })
+        (1..keys.first().map_or(0, Array::len))
+            .all(|row| compare((batch, row - 1), (batch, row)) != std::cmp::Ordering::Greater)
     });
     if !sorted {
         return Ok(None);
@@ -355,21 +347,18 @@ fn try_sorted_batch_top_n(
         .enumerate()
         .filter_map(|(batch, input)| (input.num_rows() > 0).then_some((batch, 0)))
         .collect::<Vec<_>>();
-    heap_build(&mut heap, |left, right| {
-        compare(offsets[left.0] + left.1, offsets[right.0] + right.1)
-    });
-    let mut references = Vec::with_capacity(limit.min(offset));
+    heap_build(&mut heap, |left, right| compare(*left, *right));
+    let total_rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+    let mut references = Vec::with_capacity(limit.min(total_rows));
     while references.len() < limit {
-        let Some((batch, row)) = heap_pop(&mut heap, |left, right| {
-            compare(offsets[left.0] + left.1, offsets[right.0] + right.1)
-        }) else {
+        let Some((batch, row)) = heap_pop(&mut heap, |left, right| compare(*left, *right)) else {
             break;
         };
         references.push((batch, row));
         let next_row = row + 1;
         if next_row < batches[batch].num_rows() {
             heap_push(&mut heap, (batch, next_row), |left, right| {
-                compare(offsets[left.0] + left.1, offsets[right.0] + right.1)
+                compare(*left, *right)
             });
         }
     }
