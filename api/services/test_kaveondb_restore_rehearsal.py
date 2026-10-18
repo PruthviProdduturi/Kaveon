@@ -37,6 +37,26 @@ def test_restore_is_create_only_verified_and_emits_cleanup_manifest():
     assert cleaned=={"cleanup_executed":True,"deleted_object_count":1}
 
 
+class ReadAfterWriteTamperingClient(Client):
+    def create_if_absent_with_etag(self, path, value):
+        self.values[path] = value + b"-tampered"
+        return '"etag-tampered"'
+
+
+def test_restore_fails_closed_when_read_after_write_changes_bytes():
+    manifest, content = fixture()
+    source = Client({"backups/b1/state-inventory.json": content})
+    target = ReadAfterWriteTamperingClient()
+
+    with pytest.raises(RuntimeError, match="read-after-write verification"):
+        rehearsal.execute(
+            manifest,
+            "https://acct.blob.core.windows.net/state/restores/job-1/",
+            source,
+            target,
+        )
+
+
 def test_existing_destination_fails_without_restore_claim():
     manifest,content=fixture();source=Client({"backups/b1/state-inventory.json":content})
     target=Client({"restores/job-1/state-inventory.json":b"existing"})
