@@ -733,6 +733,35 @@ mod tests {
     }
 
     #[test]
+    fn failed_run_publication_releases_bytes_and_removes_partial_artifact() {
+        let root = test_root("publication-failure");
+        let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
+        let input = batch();
+        let mut writer = manager.begin_run(&input.schema()).unwrap();
+        let partial_path = writer.path.clone();
+        let final_path = writer.final_path.clone();
+        writer.write(&input).unwrap();
+
+        // A conflicting destination makes the final rename fail after the
+        // stream has been flushed. The writer must still release its byte
+        // reservation and remove the unpublished partial stream.
+        fs::create_dir(&final_path).unwrap();
+        let error = match writer.finish() {
+            Ok(_) => panic!("spill publication unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(!error.to_string().is_empty());
+        assert!(!partial_path.exists());
+        assert_eq!(manager.snapshot().current_bytes, 0);
+        assert!(
+            final_path.is_dir(),
+            "the pre-existing conflict must be preserved"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn rejects_mismatched_batch_schema_and_cleans_partial_file() {
         let root = test_root("schema");
         let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
