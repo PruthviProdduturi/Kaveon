@@ -1304,6 +1304,7 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("ARRAY_DISTINCT")
                     || name.eq_ignore_ascii_case("ARRAY_FLATTEN")
                     || name.eq_ignore_ascii_case("ARRAY_REPEAT")
+                    || name.eq_ignore_ascii_case("REPEAT")
                     || name.eq_ignore_ascii_case("ARRAY_PREPEND")
                     || name.eq_ignore_ascii_case("ARRAY_REMOVE")
                     || name.eq_ignore_ascii_case("ARRAY_REVERSE")
@@ -1324,6 +1325,16 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
 /// `MAP_ENTRIES` list-of-row representation, so normalize only the explicit
 /// map constructor here; arbitrary table functions remain rejected.
 fn normalize_unnest_expression(expression: Expr) -> Expr {
+    match expression {
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("REPEAT") => Expr::Function {
+            name: "ARRAY_REPEAT".into(),
+            args,
+        },
+        other => normalize_unnest_expression_inner(other),
+    }
+}
+
+fn normalize_unnest_expression_inner(expression: Expr) -> Expr {
     match expression {
         Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") => Expr::Function {
             name: "MAP_ENTRIES".into(),

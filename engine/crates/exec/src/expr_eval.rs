@@ -9225,6 +9225,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REPEAT" => {
             check_arity(name, args, 2)?;
+            // Trino overloads REPEAT for both VARCHAR and ARRAY values. Keep
+            // the existing string path, but route list values through the
+            // typed ARRAY_REPEAT implementation so list element/null
+            // semantics and its bounded count checks are shared.
+            if matches!(
+                args[0].data_type(),
+                DataType::List(_) | DataType::LargeList(_)
+            ) {
+                return eval_scalar_function("ARRAY_REPEAT", args, num_rows);
+            }
             let counts = args[1].as_primitive::<Int64Type>();
             match args[0].data_type() {
                 DataType::Utf8 => {
@@ -14341,6 +14351,28 @@ mod tests {
         assert_eq!(first.value(1).as_primitive::<Int64Type>().values(), &[1, 2]);
         let null_value = repeated.value(1);
         let nulls = null_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(nulls.len(), 2);
+        assert_eq!(nulls.null_count(), 2);
+        assert_eq!(repeated.value(2).len(), 0);
+    }
+
+    #[test]
+    fn repeat_alias_supports_array_values() {
+        let values = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>([
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![]),
+        ])) as ArrayRef;
+        let counts = Arc::new(Int64Array::from(vec![2, 2, 0])) as ArrayRef;
+
+        let result = eval_scalar_function("REPEAT", &[values, counts], 3).unwrap();
+        let repeated = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let first = repeated.value(0);
+        let first = first.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        let nulls = repeated.value(1);
+        let nulls = nulls.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(nulls.len(), 2);
         assert_eq!(nulls.null_count(), 2);
         assert_eq!(repeated.value(2).len(), 0);
