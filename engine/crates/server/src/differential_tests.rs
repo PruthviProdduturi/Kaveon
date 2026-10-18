@@ -3418,6 +3418,35 @@ fn correlated_left_lateral_join_on_matches_local_null_extension() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A correlated EXISTS with a positive OFFSET must retain the per-key
+/// cardinality test when the outer rows are distributed across workers.
+#[test]
+fn distributed_correlated_exists_offset_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-exists-offset-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT t.user_id, t.actions FROM events t WHERE EXISTS (SELECT * FROM events o WHERE o.user_id = t.user_id OFFSET 1) ORDER BY t.user_id, t.actions LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-correlated-exists-offset", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 12);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn derived_values_join_using_matches_the_local_result() {
     let directory = std::env::temp_dir().join(format!(
