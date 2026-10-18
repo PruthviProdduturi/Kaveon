@@ -38,6 +38,10 @@ use std::sync::Arc;
 /// the coordinator read.
 #[derive(Clone, Debug, Default)]
 pub struct SourcePins {
+    /// The source identity observed during planning. This covers every
+    /// format, including single-file and directory Parquet sources, so
+    /// result-cache entries cannot survive a replacement outside Delta.
+    pub source_versions: BTreeMap<String, String>,
     pub delta_versions: BTreeMap<String, u64>,
     pub parquet_directories: BTreeMap<String, Arc<DirectoryListing>>,
     /// The whole directory each pinned listing was taken from — its

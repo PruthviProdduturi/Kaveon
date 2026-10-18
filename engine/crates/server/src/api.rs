@@ -6380,6 +6380,7 @@ async fn run_statement(
             &context.catalog_snapshot_id,
             &access_scope.cache_key(),
             &crate::result_cache::parameter_digest(&req.parameters, &req.named_parameters),
+            &planning_source_pins.source_versions,
             &planning_source_pins.delta_versions,
             context.time_zone.as_deref(),
         )
@@ -10594,6 +10595,10 @@ async fn optimize_with_durable_statistics(
         {
             pins.delta_versions
                 .insert(relation.location.clone(), version);
+        }
+        if let Some(version) = relation.current.as_ref() {
+            pins.source_versions
+                .insert(relation.location.clone(), version.identity_sha256.clone());
         }
         let whole = relation
             .current

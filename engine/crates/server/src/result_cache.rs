@@ -5,12 +5,11 @@
 //! A result is keyed by everything that decides it: the statement text
 //! (normalised outside string literals and quoted identifiers), the catalog
 //! and schema it resolved names in, the authenticated authorization scope,
-//! the published catalog snapshot, the Delta versions the planner pinned,
-//! and the request settings that shape rows (the time zone). A catalog publish changes the snapshot identity
-//! and clears the cache outright; a Delta version the planner pinned
-//! changes the key. Tables the planner did not pin (single-table scans of
-//! Delta or Parquet locations) are covered by the catalog snapshot and by
-//! the TTL, which is the staleness bound for them.
+//! the published catalog snapshot, every source identity the planner pinned,
+//! and the request settings that shape rows (the time zone). A catalog publish
+//! changes the snapshot identity and clears the cache outright; a source
+//! identity changes the key for Delta, Iceberg, directory Parquet, and
+//! single-file Parquet alike.
 //!
 //! Entries are evicted least-recently-used by bytes, expire after the TTL,
 //! and an entry larger than an eighth of the budget is never kept. A budget
@@ -47,6 +46,10 @@ pub struct ResultCacheKey {
     /// the statement here would let `WHERE id = $1` reuse another value's
     /// rows.
     pub parameter_digest: String,
+    /// The analyzed source identity for every resolved source. This is
+    /// deliberately broader than `delta_versions`: Parquet file and listing
+    /// changes must invalidate a cached result too.
+    pub source_versions: BTreeMap<String, String>,
     /// Source location to Delta version, as the planner pinned them.
     pub delta_versions: BTreeMap<String, u64>,
     pub time_zone: Option<String>,
@@ -63,6 +66,7 @@ impl ResultCacheKey {
         catalog_snapshot_id: &str,
         authorization_scope: &str,
         parameter_digest: &str,
+        source_versions: &BTreeMap<String, String>,
         delta_versions: &BTreeMap<String, u64>,
         time_zone: Option<&str>,
     ) -> Self {
@@ -73,6 +77,7 @@ impl ResultCacheKey {
             catalog_snapshot_id: catalog_snapshot_id.to_owned(),
             authorization_scope: authorization_scope.to_owned(),
             parameter_digest: parameter_digest.to_owned(),
+            source_versions: source_versions.clone(),
             delta_versions: delta_versions.clone(),
             time_zone: time_zone.map(str::to_owned),
         }
@@ -521,6 +526,7 @@ mod tests {
             "analyst:alice",
             "parameters:none",
             &BTreeMap::new(),
+            &BTreeMap::new(),
             None,
         )
     }
@@ -578,6 +584,10 @@ mod tests {
         other_snapshot.catalog_snapshot_id = "snapshot-2".into();
         let mut other_version = base.clone();
         other_version.delta_versions.insert("file:///t".into(), 3);
+        let mut other_source = base.clone();
+        other_source
+            .source_versions
+            .insert("file:///t".into(), "source-2".into());
         let mut other_zone = base.clone();
         other_zone.time_zone = Some("UTC".into());
         let mut other_principal = base.clone();
@@ -588,6 +598,7 @@ mod tests {
             other_schema,
             other_snapshot,
             other_version,
+            other_source,
             other_zone,
             other_principal,
             other_parameters,
