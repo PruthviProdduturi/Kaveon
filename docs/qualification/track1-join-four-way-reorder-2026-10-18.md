@@ -34,6 +34,29 @@ workflow completed:
 1 passed; 0 failed; 429 filtered out; finished in 212.59s
 ```
 
+The corpus was then extended with a five-way repeated-dimension join, adding
+one more statistics-aware reorder boundary:
+
+```sql
+SELECT t.country, COUNT(*) AS n
+FROM {T} t
+JOIN {U} u ON u.user_id = t.user_id
+JOIN {U} v ON v.locale = u.locale
+JOIN {U} w ON w.user_id = v.user_id
+JOIN {U} x ON x.locale = w.locale
+WHERE t.event_date = '2026-07-04'
+GROUP BY t.country
+ORDER BY n DESC, t.country
+LIMIT 5
+```
+
+The focused differential sweep passed this five-way case with exact local and
+partitioned results:
+
+```text
+1 passed; 0 failed; 429 filtered out; finished in 366.59s
+```
+
 This expands the bounded join-reorder corpus beyond the existing three-way
 case. It does not qualify skew splitting, a general cost-based join enumerator,
 or broad cloud-topology behavior; those remain open in the parity tracker.
