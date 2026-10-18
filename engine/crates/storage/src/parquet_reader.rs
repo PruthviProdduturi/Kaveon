@@ -1305,29 +1305,34 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
         DataType::Dictionary(_, values) => values.as_ref(),
         other => other,
     };
-    matches!(
-        (value, data_type),
-        (ScalarValue::Bool(_), DataType::Boolean)
-            | (
-                ScalarValue::Int64(_),
-                DataType::Int8
-                    | DataType::Int16
-                    | DataType::Int32
-                    | DataType::Int64
-                    | DataType::UInt8
-                    | DataType::UInt16
-                    | DataType::UInt32
-                    | DataType::UInt64
-                    | DataType::Date32
-                    | DataType::Date64
-                    | DataType::Timestamp(_, _)
-            )
-            | (
-                ScalarValue::Float64(_),
-                DataType::Float32 | DataType::Float64
-            )
-            | (ScalarValue::Utf8(_), DataType::Utf8 | DataType::LargeUtf8)
-    )
+    match (value, data_type) {
+        (ScalarValue::Bool(_), DataType::Boolean) => true,
+        (
+            ScalarValue::Int64(_),
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _),
+        ) => true,
+        (ScalarValue::Float64(_), DataType::Float32 | DataType::Float64) => true,
+        (
+            ScalarValue::Decimal128 { scale, value, .. },
+            DataType::Decimal128(precision, column_scale),
+        ) => scale == column_scale && decimal_fits_precision(*value, *precision),
+        (ScalarValue::Utf8(_), DataType::Utf8 | DataType::LargeUtf8) => true,
+        _ => false,
+    }
+}
+
+fn decimal_fits_precision(value: i128, precision: u8) -> bool {
+    value.unsigned_abs().to_string().len() <= usize::from(precision)
 }
 
 fn scalar_cmp(left: &ScalarValue, right: &ScalarValue) -> Option<Ordering> {
@@ -1378,7 +1383,9 @@ fn parquet_error(error: parquet::errors::ParquetError) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Date64Array, Int32Array, StringArray, TimestampMicrosecondArray};
+    use arrow::array::{
+        ArrayRef, Date64Array, Decimal128Array, Int32Array, StringArray, TimestampMicrosecondArray,
+    };
     use arrow::datatypes::{Field, Schema, TimeUnit};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -1494,6 +1501,35 @@ mod tests {
             .write(&batch)
             .expect("Timestamp batch must be writable");
         writer.close().expect("Timestamp writer must close");
+        file
+    }
+
+    fn decimal_fixture() -> TestFile {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-decimal-runtime-filter-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "amount",
+            DataType::Decimal128(10, 2),
+            false,
+        )]));
+        let amounts = Decimal128Array::from(vec![125_i128, 230, 400, 999])
+            .with_precision_and_scale(10, 2)
+            .expect("decimal fixture metadata must be valid");
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(amounts) as ArrayRef])
+            .expect("decimal batch must be valid");
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let output = File::create(&file.0).expect("Decimal file must be creatable");
+        let mut writer = ArrowWriter::try_new(output, schema, Some(properties))
+            .expect("Decimal writer must be valid");
+        writer
+            .write(&batch)
+            .expect("Decimal batch must be writable");
+        writer.close().expect("Decimal writer must close");
         file
     }
 
@@ -1711,6 +1747,53 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![1_706_745_600_000_000]);
+    }
+
+    #[test]
+    fn applies_decimal_runtime_filter_with_wider_build_precision() {
+        let file = decimal_fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_columns(vec!["amount".to_owned()])
+            .read()
+            .expect("Decimal source must open");
+        // BuildKeyFilter uses precision 38 for decimal hash keys; the probe
+        // column is DECIMAL(10,2). The storage predicate must retag the
+        // literal without converting its exact unscaled value.
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "amount",
+                    &[
+                        ScalarValue::Decimal128 {
+                            value: 125,
+                            precision: 38,
+                            scale: 2,
+                        },
+                        ScalarValue::Decimal128 {
+                            value: 400,
+                            precision: 38,
+                            scale: 2,
+                        },
+                    ],
+                )
+                .expect("Decimal runtime filter must be accepted")
+        );
+        let batches = source
+            .collect::<Result<Vec<_>>>()
+            .expect("Decimal runtime-filtered parquet must decode");
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .expect("Decimal output")
+                    .iter()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![125, 400]);
     }
 
     #[test]
