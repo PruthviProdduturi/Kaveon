@@ -726,6 +726,24 @@ fn scalar_to_ast_value(value: &ScalarValue) -> ast::Value {
             };
             ast::Value::Number(if negative { format!("-{text}") } else { text }, true)
         }
+        ScalarValue::Decimal256 {
+            value,
+            precision: _,
+            scale,
+        } => {
+            let negative = value.starts_with('-');
+            let digits = value.strip_prefix('-').unwrap_or(value);
+            let scale = (*scale).max(0) as usize;
+            let text = if scale == 0 {
+                digits.to_owned()
+            } else if digits.len() <= scale {
+                format!("0.{}{}", "0".repeat(scale - digits.len()), digits)
+            } else {
+                let split = digits.len() - scale;
+                format!("{}.{}", &digits[..split], &digits[split..])
+            };
+            ast::Value::Number(if negative { format!("-{text}") } else { text }, true)
+        }
     }
 }
 

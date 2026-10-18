@@ -3909,6 +3909,11 @@ fn trino_expr_type(expression: &Expr) -> String {
             } => {
                 return format!("decimal({precision},{scale})");
             }
+            ScalarValue::Decimal256 {
+                precision, scale, ..
+            } => {
+                return format!("decimal({precision},{scale})");
+            }
             ScalarValue::Null => "unknown",
         }
         .to_owned(),
