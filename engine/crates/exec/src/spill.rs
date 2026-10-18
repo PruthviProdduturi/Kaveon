@@ -284,6 +284,7 @@ impl SpillRunWriter {
             // is flushed. A process crash can leave a partial marker behind,
             // but never a path that readers could mistake for a finished run.
             fs::rename(&self.path, &self.final_path)?;
+            sync_published_run_directory(&self.final_path)?;
             Ok(output.commit())
         })();
         self.inner
@@ -308,6 +309,23 @@ impl SpillRunWriter {
             }),
         })
     }
+}
+
+/// A rename makes the completed run visible, but the directory entry itself
+/// also needs to reach stable storage before a node-loss recovery can rely on
+/// it. Directory fsync is supported on Unix; Windows' rename semantics are
+/// already the strongest portable option available through std::fs.
+fn sync_published_run_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .ok_or_else(|| KaveonError::Execution("spill run has no parent directory".into()))?;
+        File::open(parent)?.sync_data()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 impl Drop for SpillRunWriter {
