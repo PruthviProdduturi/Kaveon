@@ -1893,6 +1893,33 @@ fn distributed_except_all_preserves_null_multiplicity() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Distinct aggregates must ignore NULL inputs consistently when partial
+/// workers merge their states: COUNT is zero, while SUM and AVG remain NULL.
+#[test]
+fn distributed_distinct_aggregates_ignore_null_inputs() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-distinct-null-aggregates-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT COUNT(DISTINCT value) AS n, SUM(DISTINCT value) AS total, AVG(DISTINCT value) AS average FROM (VALUES (CAST(NULL AS BIGINT)), (CAST(NULL AS BIGINT))) AS input(value)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-distinct-null-aggregates", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["0\u{1f}NULL\u{1f}NULL".to_owned()]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_array_function_unnest_matches_trino_rows() {
     let directory = std::env::temp_dir().join(format!(
