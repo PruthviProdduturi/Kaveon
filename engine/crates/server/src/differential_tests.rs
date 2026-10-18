@@ -2594,6 +2594,32 @@ fn distributed_nested_cte_scope_matches_local_semantics() {
 }
 
 #[test]
+fn distributed_nested_array_unnest_preserves_inner_lists() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-nested-array-unnest-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT CARDINALITY(u.value) AS element_count FROM UNNEST(ARRAY[ARRAY[1, 2], ARRAY[3]]) AS u(value) ORDER BY element_count";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-nested-array-unnest", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["1", "2"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_correlated_sequence_unnest_repeats_each_left_row() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-correlated-sequence-unnest-{}",
