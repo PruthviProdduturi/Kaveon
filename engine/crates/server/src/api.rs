@@ -13661,7 +13661,12 @@ async fn execute_distributed_top_n(
     }
 
     let mut schema = None;
-    let mut partial_batches = Vec::new();
+    // Keep only the current global TopN candidate while workers complete.
+    // TopN is associative here: each worker returns at most `limit` rows, and
+    // merging that bounded candidate with the next worker cannot discard a
+    // row that could enter the final result. This avoids retaining every
+    // worker batch until the last task completes.
+    let mut global_candidate = None;
     let mut task_metrics = Vec::with_capacity(partition_count);
     while let Some(result) = tasks.join_next().await {
         match result {
@@ -13672,8 +13677,19 @@ async fn execute_distributed_top_n(
                 {
                     return Some(Err("workers returned incompatible TopN schemas".into()));
                 }
-                schema.get_or_insert(worker_schema);
-                partial_batches.extend(batches);
+                schema.get_or_insert(worker_schema.clone());
+                let mut merge_inputs = Vec::with_capacity(batches.len() + 1);
+                if let Some(candidate) = global_candidate.take() {
+                    merge_inputs.push(candidate);
+                }
+                merge_inputs.extend(batches);
+                global_candidate =
+                    match merge_top_n(&worker_schema, &merge_inputs, &sort_exprs, limit) {
+                        Ok(candidate) => candidate,
+                        Err(error) => {
+                            return Some(Err(format!("cannot merge distributed TopN: {error}")));
+                        }
+                    };
                 publish_task_completion(
                     query_id,
                     0,
@@ -13694,13 +13710,12 @@ async fn execute_distributed_top_n(
             "distributed TopN completed without a result schema".into()
         ));
     };
-    let merged = match merge_top_n(&schema, &partial_batches, &sort_exprs, limit) {
-        Ok(merged) => merged,
-        Err(error) => return Some(Err(format!("cannot merge distributed TopN: {error}"))),
+    let Some(merged) = global_candidate else {
+        return Some(Err("distributed TopN completed without result rows".into()));
     };
     let total_elapsed_us = elapsed_us(started);
     task_metrics.sort_unstable_by_key(|task| task.partition_index);
-    let batches = merged.into_iter().collect::<Vec<_>>();
+    let batches = vec![merged];
     Some(Ok((
         TaskResponse {
             columns: columns_from_schema(&schema),
