@@ -1,9 +1,11 @@
 use ahash::{AHashMap, AHashSet};
 #[cfg(test)]
 use arrow::array::UInt32Array;
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, Int32DictionaryArray, UInt64Array,
+};
 use arrow::compute::{concat_batches, take};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
@@ -1780,6 +1782,43 @@ fn row_key(
                     };
                     Key::Utf8(value.to_owned())
                 }
+                DataType::Dictionary(key_type, value_type)
+                    if key_type.as_ref() == &DataType::Int32
+                        && matches!(
+                            value_type.as_ref(),
+                            DataType::Boolean | DataType::Int32 | DataType::UInt32
+                        ) =>
+                {
+                    let dictionary = column
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int32Type>>()
+                        .expect("dictionary key type must match schema");
+                    let dictionary_index = dictionary.keys().value(row) as usize;
+                    let values = dictionary.values();
+                    if values.is_null(dictionary_index) {
+                        return Ok(None);
+                    }
+                    match value_type.as_ref() {
+                        DataType::Boolean => Key::Bool(
+                            values
+                                .as_any()
+                                .downcast_ref::<BooleanArray>()
+                                .expect("dictionary value type must match schema")
+                                .value(dictionary_index),
+                        ),
+                        DataType::Int32 => Key::Int32(
+                            values
+                                .as_primitive::<arrow::datatypes::Int32Type>()
+                                .value(dictionary_index),
+                        ),
+                        DataType::UInt32 => Key::UInt64(
+                            values
+                                .as_primitive::<arrow::datatypes::UInt32Type>()
+                                .value(dictionary_index) as u64,
+                        ),
+                        _ => unreachable!("dictionary value type was checked above"),
+                    }
+                }
                 data_type => {
                     return Err(exec_err(format!("unsupported join key type {data_type}")));
                 }
@@ -2097,6 +2136,54 @@ mod tests {
             [Some(0), Some(u16::MAX), None],
             [Some(u16::MAX), Some(0), None],
             2
+        );
+    }
+
+    #[test]
+    fn dictionary_numeric_and_boolean_join_keys_unbox_losslessly() {
+        fn check(left_values: ArrayRef, right_values: ArrayRef, value_type: DataType) {
+            let dictionary_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type));
+            let schema = Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+            let left_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), Some(2)]),
+                left_values,
+            )
+            .unwrap();
+            let right_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(1), Some(0), Some(2)]),
+                right_values,
+            )
+            .unwrap();
+            let left = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left_key)]).unwrap();
+            let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+            let mut join = HashJoin::try_new(
+                Box::new(Input::new(left)),
+                Box::new(Input::new(right)),
+                JoinType::Inner,
+                vec![("key".into(), "key".into())],
+            )
+            .unwrap();
+            let batches = kaveon_core::collect_batches(&mut join).unwrap();
+            assert_eq!(
+                concat_batches(join.schema(), &batches).unwrap().num_rows(),
+                2
+            );
+        }
+        check(
+            Arc::new(Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None])),
+            Arc::new(Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None])),
+            DataType::Int32,
+        );
+        check(
+            Arc::new(UInt32Array::from(vec![Some(0), Some(u32::MAX), None])),
+            Arc::new(UInt32Array::from(vec![Some(0), Some(u32::MAX), None])),
+            DataType::UInt32,
+        );
+        check(
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
+            DataType::Boolean,
         );
     }
 
