@@ -1968,6 +1968,29 @@ fn distributed_map_from_entries_rejects_duplicate_keys() {
 }
 
 #[test]
+fn distributed_map_from_entries_rejects_null_keys() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-map-from-entries-null-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT MAP_FROM_ENTRIES(ARRAY[ROW(CAST(NULL AS VARCHAR), 1)]) FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-from-entries-null", 16 << 20).unwrap();
+    let error = execute_distributed(statement, &plan, &manager, 3, &pool).unwrap_err();
+    assert!(
+        error.to_string().contains("NULL")
+            || error.to_string().contains("null")
+            || error.to_string().contains("MAP_FROM_ENTRIES"),
+        "unexpected null-key error: {error}"
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_map_entries_unnest_preserves_ordinality() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-unnest-map-entries-ordinality-{}",
