@@ -3958,6 +3958,28 @@ fn trino_expr_type(expression: &Expr) -> String {
                 .join(",");
             format!("row({fields})")
         }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ROW_FIELD") => {
+            let [row, field] = args.as_slice() else {
+                return "unknown".to_owned();
+            };
+            let Expr::Literal(ScalarValue::Utf8(field)) = field else {
+                return "unknown".to_owned();
+            };
+            let Some(index) = field
+                .strip_prefix("field")
+                .and_then(|value| value.parse::<usize>().ok())
+            else {
+                return "unknown".to_owned();
+            };
+            let row_type = trino_expr_type(row);
+            let Some(fields) = row_type
+                .strip_prefix("row(")
+                .and_then(|value| value.strip_suffix(')'))
+            else {
+                return "unknown".to_owned();
+            };
+            fields.split(',').nth(index).unwrap_or("unknown").to_owned()
+        }
         Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_FORMAT") => {
             "varchar".to_owned()
         }
@@ -23368,6 +23390,21 @@ mod streamed_root_tests {
                     "row(bigint,decimal(2,1))".to_owned(),
                     true,
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn trino_describe_output_infers_literal_row_field_metadata() {
+        let metadata = trino_output_metadata(
+            "SELECT (ROW(1, 'ready')).field0 AS id, (ROW(1, 'ready')).field1 AS label",
+        )
+        .expect("row field metadata");
+        assert_eq!(
+            metadata,
+            vec![
+                ("id".to_owned(), "bigint".to_owned(), true),
+                ("label".to_owned(), "varchar".to_owned(), true),
             ]
         );
     }
