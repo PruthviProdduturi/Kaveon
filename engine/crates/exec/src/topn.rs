@@ -1860,6 +1860,11 @@ mod tests {
             vec![Some(10), Some(9), Some(8)]
         );
         assert!(spill_metrics.snapshot().peak_bytes > 0);
+        assert_eq!(
+            spill_metrics.snapshot().current_bytes,
+            0,
+            "the final bounded batch releases its spill runs"
+        );
         assert!(memory_pool.snapshot().peak_bytes <= memory_limit);
     }
 }

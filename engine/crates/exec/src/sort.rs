@@ -416,6 +416,14 @@ impl ExternalMerge {
         }
         if let Some(remaining) = &mut self.remaining {
             *remaining -= rows.len();
+            if *remaining == 0 {
+                // The returned rows are deep copies, so no cursor data is
+                // needed after the final bounded batch. Release readers and
+                // spill-run handles now instead of retaining the files until
+                // the consumer asks for one more `None` batch.
+                self.cursors.clear();
+                self._runs.clear();
+            }
         }
         Ok(Some(concat_batches(&self.schema, &rows)?))
     }
