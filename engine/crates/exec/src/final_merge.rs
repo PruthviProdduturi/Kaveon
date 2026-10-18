@@ -445,22 +445,26 @@ impl HybridFinalMerge {
                 }
             } else {
                 self.push(batch)?;
-                // Threaded final merges share a query budget with their
-                // partials. Spill a live table once its account crosses
-                // half the budget so a sibling refusal can still make room;
-                // serial merges retain the refusal-driven path below.
-                if self
-                    .merger
-                    .as_ref()
-                    .is_some_and(|merger| merger.group_count() > 0)
-                    && self.spill.is_some()
-                    && self.pressure.is_some()
-                    && self.memory.snapshot().current_bytes > self.spill_threshold
-                {
-                    let merger = self.merger.take().expect("checked above");
-                    self.spill_table(merger)?;
-                }
             }
+            self.spill_at_shared_pressure()?;
+        }
+        Ok(())
+    }
+
+    /// Spill a threaded final table before a sibling refusal can exhaust the
+    /// shared query budget. The selection and non-selection paths use the
+    /// same pressure policy.
+    fn spill_at_shared_pressure(&mut self) -> Result<()> {
+        if self
+            .merger
+            .as_ref()
+            .is_some_and(|merger| merger.group_count() > 0)
+            && self.spill.is_some()
+            && self.pressure.is_some()
+            && self.memory.snapshot().current_bytes > self.spill_threshold
+        {
+            let merger = self.merger.take().expect("checked above");
+            self.spill_table(merger)?;
         }
         Ok(())
     }
