@@ -5705,6 +5705,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             "BOOLEAN" => CastTarget::Boolean,
             "INT32" => CastTarget::Int32,
             "INT64" => CastTarget::Int64,
+            "UINT8" => CastTarget::UInt8,
+            "UINT16" => CastTarget::UInt16,
             "UINT32" => CastTarget::UInt32,
             "FLOAT64" => CastTarget::Float64,
             "UTF8" => CastTarget::Utf8,
@@ -7094,6 +7096,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             let result = match list.value_type() {
+                DataType::UInt8 => position_primitive!(UInt8Type, DataType::UInt8),
                 DataType::Int32 => position_primitive!(Int32Type, DataType::Int32),
                 DataType::UInt16 => position_primitive!(UInt16Type, DataType::UInt16),
                 DataType::UInt32 => position_primitive!(UInt32Type, DataType::UInt32),
@@ -21438,6 +21441,40 @@ mod tests {
             (
                 "needle",
                 Arc::new(UInt32Array::from(vec![u32::MAX, 7])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![Expr::Column("items".into()), Expr::Column("needle".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1)]
+        );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_uint8_lists() {
+        let mut lists = ListBuilder::new(PrimitiveBuilder::<UInt8Type>::new());
+        lists.values().append_value(7);
+        lists.values().append_value(u8::MAX);
+        lists.append(true);
+        lists.values().append_value(7);
+        lists.values().append_null();
+        lists.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(lists.finish()) as ArrayRef),
+            (
+                "needle",
+                Arc::new(UInt8Array::from(vec![u8::MAX, 7])) as ArrayRef,
             ),
         ])
         .unwrap();
