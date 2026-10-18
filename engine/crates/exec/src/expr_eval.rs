@@ -8304,6 +8304,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ELEMENT_AT" => {
             check_arity(name, args, 2)?;
+            if let Some(row) = args[0].as_any().downcast_ref::<StructArray>() {
+                // Trino's row subscript is one-based and selects a field from
+                // a ROW value.  A ROW has one fixed output type, so the index
+                // must be constant for the batch (the analyzer normally
+                // enforces a literal); reject a varying runtime index rather
+                // than returning a type-unstable result.
+                let indices = compute::cast(&args[1], &DataType::Int64)?;
+                let indices = indices.as_primitive::<Int64Type>();
+                let mut selected = None;
+                for row_index in 0..num_rows {
+                    if indices.is_null(row_index) {
+                        continue;
+                    }
+                    let index = indices.value(row_index);
+                    if let Some(previous) = selected
+                        && previous != index
+                    {
+                        return Err(KaveonError::Execution(
+                            "ROW subscript index must be constant".into(),
+                        ));
+                    }
+                    selected = Some(index);
+                }
+                let Some(index) = selected else {
+                    return Ok(arrow::array::new_null_array(&DataType::Null, num_rows));
+                };
+                if index <= 0 || index as usize > row.num_columns() {
+                    return Err(KaveonError::Execution(format!(
+                        "ROW subscript index {index} is out of bounds for {} fields",
+                        row.num_columns()
+                    )));
+                }
+                let child = row.column(index as usize - 1).clone();
+                if row.null_count() == 0 {
+                    return Ok(child);
+                }
+                let valid = compute::is_not_null(row)?;
+                let nulls = arrow::array::new_null_array(child.data_type(), child.len());
+                return Ok(arrow::compute::kernels::zip::zip(&valid, &child, &nulls)?);
+            }
             if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
                 let map_keys = map.keys();
                 let requested = compute::cast(&args[1], map_keys.data_type())?;
@@ -13527,6 +13567,97 @@ mod tests {
         assert_eq!(
             value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(7), None]
+        );
+    }
+
+    #[test]
+    fn row_subscript_selects_one_based_field_and_masks_null_parent_rows() {
+        let fields = vec![
+            arrow::datatypes::Field::new("field0", DataType::Int64, true),
+            arrow::datatypes::Field::new("field1", DataType::Utf8, true),
+        ];
+        let row = StructArray::new(
+            fields.into(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(7), Some(9)])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])) as ArrayRef,
+            ],
+            Some(arrow::buffer::NullBuffer::from(vec![true, false])),
+        );
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("row", row.data_type().clone(), true),
+        ]));
+        let input = RecordBatch::try_new(schema, vec![Arc::new(row)]).unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![
+                    Expr::Column("row".into()),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), None]
+        );
+    }
+
+    #[test]
+    fn row_subscript_rejects_varying_and_out_of_range_indices() {
+        let row = StructArray::new(
+            vec![arrow::datatypes::Field::new(
+                "field0",
+                DataType::Int64,
+                true,
+            )]
+            .into(),
+            vec![Arc::new(Int64Array::from(vec![Some(7), Some(9)])) as ArrayRef],
+            None,
+        );
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("row", row.data_type().clone(), true),
+            arrow::datatypes::Field::new("index", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(row),
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
+            ],
+        )
+        .unwrap();
+        let varying = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![Expr::Column("row".into()), Expr::Column("index".into())],
+            },
+            &input,
+        )
+        .unwrap_err();
+        assert!(
+            varying
+                .to_string()
+                .contains("ROW subscript index must be constant")
+        );
+
+        let out_of_range = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![
+                    Expr::Column("row".into()),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &input,
+        )
+        .unwrap_err();
+        assert!(
+            out_of_range
+                .to_string()
+                .contains("ROW subscript index 2 is out of bounds")
         );
     }
 

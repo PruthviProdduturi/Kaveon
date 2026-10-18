@@ -6836,6 +6836,13 @@ mod tests {
     }
 
     #[test]
+    fn row_subscript_lowers_to_element_at() {
+        let plan = sql_to_logical_plan("SELECT (ROW(id, name))[2] FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"ELEMENT_AT\""), "{debug}");
+    }
+
+    #[test]
     fn studio_bracketed_identifier_lowers_to_a_column() {
         let plan = sql_to_logical_plan("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
             .unwrap();
