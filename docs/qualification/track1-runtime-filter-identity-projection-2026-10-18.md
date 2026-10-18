@@ -10,16 +10,18 @@ projection, even when the projection was only `source_column AS alias`.
 ## Change
 
 `ProjectOperator` now rewrites an incoming storage predicate through identity
-column projections, including aliases. Computed expressions decline the push,
-so the existing batch-level runtime filter remains the correctness fallback.
-Compound predicates are rewritten recursively only when every referenced
-column is an identity projection.
+column projections, including aliases. `SortOperator` forwards the rewritten
+predicate because sorting preserves the input rows and columns. Computed
+expressions decline the push, so the existing batch-level runtime filter
+remains the correctness fallback. Compound predicates are rewritten
+recursively only when every referenced column is an identity projection.
 
 ## Evidence
 
 The direct rewrite regression and the existing typed runtime-filter executor
 gate pass locally. The new three-worker differential compares local and
-distributed results for a Parquet probe scan behind an identity projection:
+distributed results for a Parquet probe scan behind an identity projection and
+an ordered derived scan:
 
 ```text
 cargo test -p kaveon-exec project::tests::runtime_predicate_rewrites_through_identity_alias_only -- --nocapture
