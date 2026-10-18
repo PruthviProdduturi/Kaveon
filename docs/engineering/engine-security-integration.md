@@ -175,7 +175,11 @@ that the operating system refuses to remove is left for a later retry. This is
 garbage collection, not recovery of an interrupted query.
 
 `KAVEON_COORDINATOR_EXCHANGE_SPOOL=false` restores worker-hosted memory exchange
-placement. Even in that mode, consumer retries retain the original exchange
+placement. Worker finalization removes every in-memory chunk for a completed or
+cancelled query while holding the store write lock and retains a bounded
+terminal-query marker for 15 minutes. Uploads that were already in flight when
+cancellation arrived are rejected, so they cannot recreate orphan exchange
+state. Even in that mode, consumer retries retain the original exchange
 location instead of mistakenly fetching from the new execution worker.
 
 `KAVEON_WORKER_EXCHANGE_SPOOL=true` gives a worker its own disk exchange store:
