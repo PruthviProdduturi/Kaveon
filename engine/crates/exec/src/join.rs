@@ -1,9 +1,9 @@
 use ahash::{AHashMap, AHashSet};
-#[cfg(test)]
-use arrow::array::UInt32Array;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, Int32DictionaryArray, UInt64Array,
 };
+#[cfg(test)]
+use arrow::array::{Float32Array, Float64Array, UInt32Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -1786,7 +1786,11 @@ fn row_key(
                     if key_type.as_ref() == &DataType::Int32
                         && matches!(
                             value_type.as_ref(),
-                            DataType::Boolean | DataType::Int32 | DataType::UInt32
+                            DataType::Boolean
+                                | DataType::Int32
+                                | DataType::UInt32
+                                | DataType::Float32
+                                | DataType::Float64
                         ) =>
                 {
                     let dictionary = column
@@ -1816,6 +1820,30 @@ fn row_key(
                                 .as_primitive::<arrow::datatypes::UInt32Type>()
                                 .value(dictionary_index) as u64,
                         ),
+                        DataType::Float32 => {
+                            let value = values
+                                .as_primitive::<arrow::datatypes::Float32Type>()
+                                .value(dictionary_index);
+                            Key::Float32(if value == 0.0 {
+                                0
+                            } else if value.is_nan() {
+                                f32::NAN.to_bits()
+                            } else {
+                                value.to_bits()
+                            })
+                        }
+                        DataType::Float64 => {
+                            let value = values
+                                .as_primitive::<arrow::datatypes::Float64Type>()
+                                .value(dictionary_index);
+                            Key::Float64(if value == 0.0 {
+                                0
+                            } else if value.is_nan() {
+                                f64::NAN.to_bits()
+                            } else {
+                                value.to_bits()
+                            })
+                        }
                         _ => unreachable!("dictionary value type was checked above"),
                     }
                 }
@@ -2184,6 +2212,69 @@ mod tests {
             Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
             Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])),
             DataType::Boolean,
+        );
+    }
+
+    #[test]
+    fn dictionary_float_join_keys_preserve_zero_nan_and_null_semantics() {
+        fn check(left_values: ArrayRef, right_values: ArrayRef, value_type: DataType) {
+            let dictionary_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type));
+            let schema = Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+            let left_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3)]),
+                left_values,
+            )
+            .unwrap();
+            let right_key = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3)]),
+                right_values,
+            )
+            .unwrap();
+            let left = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(left_key)]).unwrap();
+            let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+            let mut join = HashJoin::try_new(
+                Box::new(Input::new(left)),
+                Box::new(Input::new(right)),
+                JoinType::Inner,
+                vec![("key".into(), "key".into())],
+            )
+            .unwrap();
+            let batches = kaveon_core::collect_batches(&mut join).unwrap();
+            assert_eq!(
+                concat_batches(join.schema(), &batches).unwrap().num_rows(),
+                2
+            );
+        }
+        check(
+            Arc::new(Float32Array::from(vec![
+                Some(-0.0),
+                Some(f32::NAN),
+                Some(1.5),
+                None,
+            ])),
+            Arc::new(Float32Array::from(vec![
+                Some(0.0),
+                Some(f32::NAN),
+                Some(2.5),
+                None,
+            ])),
+            DataType::Float32,
+        );
+        check(
+            Arc::new(Float64Array::from(vec![
+                Some(-0.0),
+                Some(f64::NAN),
+                Some(1.5),
+                None,
+            ])),
+            Arc::new(Float64Array::from(vec![
+                Some(0.0),
+                Some(f64::NAN),
+                Some(2.5),
+                None,
+            ])),
+            DataType::Float64,
         );
     }
 
