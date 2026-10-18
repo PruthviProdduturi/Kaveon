@@ -23116,6 +23116,18 @@ mod streamed_root_tests {
             value["data"][0][4],
             serde_json::json!("row(bigint,varchar)")
         );
+        assert_eq!(
+            value["columns"][4],
+            serde_json::json!({
+                "name": "Type",
+                "type": "varchar",
+                "typeSignature": {"rawType": "varchar"}
+            })
+        );
+        assert_eq!(
+            value["data"][0][5],
+            serde_json::json!("row(bigint,varchar)")
+        );
     }
 
     /// The Trino wire route must preserve ARRAY_SORT_DESC's typed array result
