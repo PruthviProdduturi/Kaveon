@@ -3877,6 +3877,8 @@ fn trino_expr_type(expression: &Expr) -> String {
     match expression {
         Expr::Cast { data_type, .. } => match data_type {
             kaveon_core::CastTarget::Boolean => "boolean",
+            kaveon_core::CastTarget::Int8 => "tinyint",
+            kaveon_core::CastTarget::Int16 => "smallint",
             kaveon_core::CastTarget::Int32 => "integer",
             kaveon_core::CastTarget::Int64 => "bigint",
             kaveon_core::CastTarget::UInt8 => "tinyint",

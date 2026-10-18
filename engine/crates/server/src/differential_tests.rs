@@ -467,6 +467,16 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "int8_array_position",
+        "SELECT ARRAY_POSITION(ARRAY[CAST(-7 AS TINYINT), CAST(-128 AS TINYINT)], CAST(-128 AS TINYINT)) AS int8_pos FROM {T} LIMIT 1",
+        false,
+    ),
+    (
+        "int16_array_position",
+        "SELECT ARRAY_POSITION(ARRAY[CAST(-300 AS SMALLINT), CAST(-32768 AS SMALLINT)], CAST(-32768 AS SMALLINT)) AS int16_pos FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "uint32_array_position",
         "SELECT ARRAY_POSITION(ARRAY[CAST(7 AS UINT32), CAST(4294967295 AS UINT32)], CAST(4294967295 AS UINT32)) AS uint32_pos FROM {T} LIMIT 1",
         false,

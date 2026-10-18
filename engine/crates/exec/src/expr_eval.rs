@@ -5703,6 +5703,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         check_arity(name, args, 1)?;
         let target = match target {
             "BOOLEAN" => CastTarget::Boolean,
+            "INT8" => CastTarget::Int8,
+            "INT16" => CastTarget::Int16,
             "INT32" => CastTarget::Int32,
             "INT64" => CastTarget::Int64,
             "UINT8" => CastTarget::UInt8,
@@ -7097,6 +7099,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             let result = match list.value_type() {
+                DataType::Int8 => position_primitive!(Int8Type, DataType::Int8),
+                DataType::Int16 => position_primitive!(Int16Type, DataType::Int16),
                 DataType::UInt8 => position_primitive!(UInt8Type, DataType::UInt8),
                 DataType::Int32 => position_primitive!(Int32Type, DataType::Int32),
                 DataType::UInt16 => position_primitive!(UInt16Type, DataType::UInt16),
@@ -21409,6 +21413,74 @@ mod tests {
             (
                 "needle",
                 Arc::new(Int32Array::from(vec![11, 7])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![Expr::Column("items".into()), Expr::Column("needle".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1)]
+        );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_int8_lists() {
+        let mut lists = ListBuilder::new(PrimitiveBuilder::<Int8Type>::new());
+        lists.values().append_value(-7);
+        lists.values().append_value(i8::MIN);
+        lists.append(true);
+        lists.values().append_value(7);
+        lists.values().append_null();
+        lists.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(lists.finish()) as ArrayRef),
+            (
+                "needle",
+                Arc::new(Int8Array::from(vec![i8::MIN, 7])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![Expr::Column("items".into()), Expr::Column("needle".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(1)]
+        );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_int16_lists() {
+        let mut lists = ListBuilder::new(PrimitiveBuilder::<Int16Type>::new());
+        lists.values().append_value(-300);
+        lists.values().append_value(i16::MIN);
+        lists.append(true);
+        lists.values().append_value(300);
+        lists.values().append_null();
+        lists.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(lists.finish()) as ArrayRef),
+            (
+                "needle",
+                Arc::new(Int16Array::from(vec![i16::MIN, 300])) as ArrayRef,
             ),
         ])
         .unwrap();
