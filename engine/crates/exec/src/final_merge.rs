@@ -114,6 +114,7 @@ pub struct HybridFinalMerge {
     failed: bool,
     spilled: FinalMergeSpill,
     spill_threshold: u64,
+    proactive_spill: bool,
 }
 
 impl HybridFinalMerge {
@@ -168,6 +169,7 @@ impl HybridFinalMerge {
             failed: false,
             spilled: FinalMergeSpill::default(),
             spill_threshold,
+            proactive_spill: true,
         })
     }
 
@@ -201,6 +203,14 @@ impl HybridFinalMerge {
         self
     }
 
+    /// Disable proactive spilling when a downstream bounded consumer may stop
+    /// before draining all final groups (for example, a TopN tail).
+    #[must_use]
+    pub fn with_proactive_spill(mut self, enabled: bool) -> Self {
+        self.proactive_spill = enabled;
+        self
+    }
+
     /// The input's grouped-state schema.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
@@ -208,6 +218,21 @@ impl HybridFinalMerge {
 
     pub fn spilled(&self) -> FinalMergeSpill {
         self.spilled
+    }
+
+    /// Abandon a downstream consumer without retaining spill runs. Bounded
+    /// consumers such as TopN may stop after their result is complete while
+    /// the merge still owns replay runs; release those handles immediately so
+    /// the query's spill accounting and files return to zero.
+    pub fn cancel(&mut self) {
+        self.source = None;
+        self.pressure = None;
+        self.rendezvous = None;
+        self.merger = None;
+        self.merger_memory = None;
+        self.spill_reserve = None;
+        self.runs.clear();
+        self.pending.clear();
     }
 
     /// The next unit of complete groups — every group in it is final,
@@ -455,11 +480,16 @@ impl HybridFinalMerge {
     /// shared query budget. The selection and non-selection paths use the
     /// same pressure policy.
     fn spill_at_shared_pressure(&mut self) -> Result<()> {
+        if !self.proactive_spill {
+            return Ok(());
+        }
         let snapshot = self.memory.query().snapshot();
-        let threshold = if snapshot.limit_bytes <= 16 * 1024 * 1024 {
+        let threshold = if self.pressure.is_some() {
+            snapshot.limit_bytes.saturating_mul(3) / 4
+        } else if snapshot.limit_bytes <= 16 * 1024 * 1024 {
             self.spill_threshold / 5
         } else {
-            self.spill_threshold
+            snapshot.limit_bytes
         };
         if self
             .merger
@@ -469,7 +499,7 @@ impl HybridFinalMerge {
             && snapshot.current_bytes > threshold
         {
             let merger = self.merger.take().expect("checked above");
-            self.spill_table(merger)?;
+            self.spill_table_without_compaction(merger)?;
         }
         Ok(())
     }
@@ -515,7 +545,7 @@ impl HybridFinalMerge {
             );
         }
         if self.merger_memory.is_none() {
-            let prepaid = if self.spill.is_some() && self.pressure.is_some() {
+            let prepaid = if self.spill.is_some() {
                 (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
             } else {
                 0
@@ -554,7 +584,7 @@ impl HybridFinalMerge {
     /// retrying preserve the same exact semantics as `push`.
     fn push_selected(&mut self, batch: &RecordBatch, selected: &[u32]) -> Result<()> {
         if self.merger_memory.is_none() {
-            let prepaid = if self.spill.is_some() && self.pressure.is_some() {
+            let prepaid = if self.spill.is_some() {
                 (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
             } else {
                 0
@@ -588,7 +618,19 @@ impl HybridFinalMerge {
     /// per sub-partition they hash to, in chunks the budget admits beside
     /// the table; the table is gone when this returns, and a source
     /// thread waiting for memory is told so.
-    fn spill_table(&mut self, mut merger: IncrementalAggregateMerger) -> Result<()> {
+    fn spill_table(&mut self, merger: IncrementalAggregateMerger) -> Result<()> {
+        self.spill_table_with_compaction(merger, true)
+    }
+
+    fn spill_table_without_compaction(&mut self, merger: IncrementalAggregateMerger) -> Result<()> {
+        self.spill_table_with_compaction(merger, false)
+    }
+
+    fn spill_table_with_compaction(
+        &mut self,
+        mut merger: IncrementalAggregateMerger,
+        compact: bool,
+    ) -> Result<()> {
         let (spill, count) = self.spill.clone().expect("spilling needs a spill");
         merger.release_growth();
         let (merged, reservations) = merger.finish_groups()?;
@@ -694,25 +736,16 @@ impl HybridFinalMerge {
         for (partition, writer) in writers.into_iter().enumerate() {
             if let Some(writer) = writer {
                 self.runs[partition].push(writer.finish()?);
-                // Final-merge spills used to retain one IPC run per table and
-                // partition.  At a small query budget this creates hundreds
-                // of tiny readers and makes the final pass dominated by file
-                // open/decode overhead.  Reuse the bounded size-tiered
-                // compactor used by partitioned execution.  A memory refusal
-                // is deliberately propagated only when it leaves the input
-                // runs intact; callers can still fail closed with the same
-                // exact data rather than silently dropping a run.
+                if !compact {
+                    continue;
+                }
                 match crate::partitioned::compact_spill_runs(
                     &mut self.runs[partition],
                     &self.schema,
                     &self.memory,
                     &spill,
                 ) {
-                    Ok(()) | Err(KaveonError::MemoryLimit(_)) => {
-                        // Compaction is an optimization.  If the query is
-                        // already at its memory ceiling, retain the original
-                        // runs and let the bounded final reader process them.
-                    }
+                    Ok(()) | Err(KaveonError::MemoryLimit(_)) => {}
                     Err(error) => return Err(error),
                 }
             }
