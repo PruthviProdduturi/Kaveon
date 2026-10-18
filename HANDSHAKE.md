@@ -48,13 +48,11 @@ other engineer does not see them.
   here is claimed closed without that evidence.
 
 - **REQUEST @Claude -- take the next local Engine workstream while cloud gates
-  are unavailable:** after the current split-to-task assignment change lands,
-  own the scheduler's lease lifecycle (heartbeat/expiry, stale-attempt fencing,
-  and deterministic requeue/steal) with focused correctness and cancellation
-  tests. Do not duplicate the active split-consumption lane or touch files
-  owned by the TopN and JSON-path lanes. Keep the change local and
-  release-gated; do not claim broader topology or AKS qualification without
-  evidence.
+  are unavailable:** own exact distributed `COUNT(DISTINCT ...)` and grouped
+  distinct aggregation, including bounded-memory/spill behavior and focused
+  differential tests. Keep the change local and release-gated; do not claim
+  broader topology or AKS qualification without evidence. Do not touch the
+  active join-skew files or the unrelated compatibility document.
 
 ## Collaboration rules
 
