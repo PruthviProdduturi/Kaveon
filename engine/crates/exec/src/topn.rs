@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
 use arrow::array::{
-    Array, Decimal128Array, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array, UInt16Array,
-    UInt32Array, UInt64Array,
+    Array, Decimal128Array, Float32Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
@@ -663,6 +663,7 @@ fn try_integer_batch_top_n(
 // and nullable arrays retain Arrow's complete ordering semantics.
 #[derive(Clone, Copy)]
 enum IntegerSortKey<'a> {
+    Float32(&'a Float32Array),
     Signed8(&'a Int8Array),
     Signed16(&'a Int16Array),
     Signed32(&'a Int32Array),
@@ -676,6 +677,7 @@ enum IntegerSortKey<'a> {
 impl IntegerSortKey<'_> {
     fn len(self) -> usize {
         match self {
+            Self::Float32(values) => values.len(),
             Self::Signed8(values) => values.len(),
             Self::Signed16(values) => values.len(),
             Self::Signed32(values) => values.len(),
@@ -713,6 +715,17 @@ fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32A
                 IntegerSortKey::Unsigned16(values)
             } else if let Some(values) = values.downcast_ref::<UInt32Array>() {
                 IntegerSortKey::Unsigned32(values)
+            } else if let Some(values) = values.downcast_ref::<Float32Array>() {
+                // Arrow's ordering gives NaN and NULL special placement. Keep
+                // those cases on lexsort; finite non-null values are safe for
+                // the direct comparator below.
+                if values
+                    .iter()
+                    .any(|value| value.is_some_and(|value| !value.is_finite()))
+                {
+                    return None;
+                }
+                IntegerSortKey::Float32(values)
             } else {
                 IntegerSortKey::Unsigned(values.downcast_ref::<UInt64Array>()?)
             };
@@ -728,6 +741,10 @@ fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32A
     let compare = |a: &u32, b: &u32| {
         for (key, descending) in &keys {
             let ordering = match key {
+                IntegerSortKey::Float32(values) => values
+                    .value(*a as usize)
+                    .partial_cmp(&values.value(*b as usize))
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 IntegerSortKey::Signed8(values) => {
                     values.value(*a as usize).cmp(&values.value(*b as usize))
                 }
@@ -985,6 +1002,39 @@ mod tests {
         assert_eq!(
             take(values.as_ref(), &actual, None).unwrap().to_data(),
             take(values.as_ref(), &expected, None).unwrap().to_data()
+        );
+    }
+
+    #[test]
+    fn typed_float32_topn_matches_arrow_for_finite_values() {
+        let values = Arc::new(Float32Array::from(vec![-3.5, 0.0, 4.25, 4.25, 1.0, -0.25]));
+        for descending in [false, true] {
+            let columns = vec![SortColumn {
+                values: values.clone(),
+                options: Some(SortOptions {
+                    descending,
+                    nulls_first: false,
+                }),
+            }];
+            for limit in [0, 1, 3, 10] {
+                let actual = integer_top_n_indices(&columns, limit).unwrap();
+                let expected = lexsort_to_indices(&columns, Some(limit)).unwrap();
+                assert_eq!(
+                    take(values.as_ref(), &actual, None).unwrap().to_data(),
+                    take(values.as_ref(), &expected, None).unwrap().to_data()
+                );
+            }
+        }
+        let nan = Arc::new(Float32Array::from(vec![1.0, f32::NAN, 2.0]));
+        assert!(
+            integer_top_n_indices(
+                &[SortColumn {
+                    values: nan,
+                    options: None,
+                }],
+                2,
+            )
+            .is_none()
         );
     }
 
