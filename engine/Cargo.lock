@@ -2020,6 +2020,7 @@ dependencies = [
  "axum",
  "axum-server",
  "base64",
+ "fd-lock",
  "futures",
  "jsonwebtoken",
  "kaveon-catalog",
