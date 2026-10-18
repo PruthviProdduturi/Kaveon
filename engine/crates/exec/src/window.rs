@@ -123,8 +123,21 @@ impl BatchOperator for WindowOperator {
             let batch = concat_batches(self.source.schema(), &batches)?;
             drop(batches);
             let mut columns = batch.columns().to_vec();
+            // Multiple window expressions commonly share PARTITION BY and
+            // ORDER BY while differing only in frame or function. Reuse the
+            // expensive lexsort permutation for that exact layout; each
+            // expression still evaluates its own frame and output values.
+            let mut sorted_cache = HashMap::<String, Vec<usize>>::new();
             for expr in &self.expressions {
-                columns.push(evaluate_window(expr, &batch)?);
+                let sort_key = window_sort_key(expr);
+                let sorted = if let Some(sorted) = sorted_cache.get(&sort_key) {
+                    sorted.clone()
+                } else {
+                    let sorted = window_sort_indices(expr, &batch)?;
+                    sorted_cache.insert(sort_key, sorted.clone());
+                    sorted
+                };
+                columns.push(evaluate_window_with_sorted(expr, &batch, Some(&sorted))?);
             }
             Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?))
         })
@@ -190,7 +203,86 @@ where
         .all(|comparator| comparator(left, right) == Ordering::Equal)
 }
 
+fn window_sort_key(expr: &Expr) -> String {
+    let Expr::WindowFunction {
+        partition_by,
+        order_by,
+        ..
+    } = expr
+    else {
+        return format!("{expr:?}");
+    };
+    format!("{partition_by:?}|{order_by:?}")
+}
+
+fn window_sort_indices(expr: &Expr, batch: &RecordBatch) -> Result<Vec<usize>> {
+    let Expr::WindowFunction {
+        partition_by,
+        order_by,
+        ..
+    } = expr
+    else {
+        return Err(error("window operator requires window expressions"));
+    };
+    let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
+    let order_cols = normalize_dictionary_columns(columns(
+        &order_by
+            .iter()
+            .map(|(e, _, _)| e.clone())
+            .collect::<Vec<_>>(),
+        batch,
+    )?)?;
+    window_sort_indices_from_columns(&partition_cols, &order_cols, order_by, batch.num_rows())
+}
+
+fn window_sort_indices_from_columns(
+    partition_cols: &[ArrayRef],
+    order_cols: &[ArrayRef],
+    order_by: &[(Expr, bool, bool)],
+    row_count: usize,
+) -> Result<Vec<usize>> {
+    let mut sorts = partition_cols
+        .iter()
+        .map(|c| SortColumn {
+            values: c.clone(),
+            options: Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+        })
+        .collect::<Vec<_>>();
+    sorts.extend(
+        order_cols
+            .iter()
+            .zip(order_by)
+            .map(|(c, (_, asc, nulls_first))| SortColumn {
+                values: c.clone(),
+                options: Some(SortOptions {
+                    descending: !asc,
+                    nulls_first: *nulls_first,
+                }),
+            }),
+    );
+    if sorts.is_empty() {
+        Ok((0..row_count).collect())
+    } else {
+        Ok(lexsort_to_indices(&sorts, None)?
+            .values()
+            .iter()
+            .map(|&n| n as usize)
+            .collect())
+    }
+}
+
 fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
+    evaluate_window_with_sorted(expr, batch, None)
+}
+
+fn evaluate_window_with_sorted(
+    expr: &Expr,
+    batch: &RecordBatch,
+    sorted_override: Option<&[usize]>,
+) -> Result<ArrayRef> {
     let Expr::WindowFunction {
         name,
         args,
@@ -229,37 +321,15 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             .collect::<Vec<_>>(),
         batch,
     )?)?;
-    let mut sorts = partition_cols
-        .iter()
-        .map(|c| SortColumn {
-            values: c.clone(),
-            options: Some(SortOptions {
-                descending: false,
-                nulls_first: false,
-            }),
-        })
-        .collect::<Vec<_>>();
-    sorts.extend(
-        order_cols
-            .iter()
-            .zip(order_by)
-            .map(|(c, (_, asc, nulls_first))| SortColumn {
-                values: c.clone(),
-                options: Some(SortOptions {
-                    descending: !asc,
-                    nulls_first: *nulls_first,
-                }),
-            }),
-    );
-    let sorted = if sorts.is_empty() {
-        (0..batch.num_rows()).collect::<Vec<_>>()
-    } else {
-        lexsort_to_indices(&sorts, None)?
-            .values()
-            .iter()
-            .map(|&n| n as usize)
-            .collect()
-    };
+    let sorted =
+        sorted_override
+            .map(|rows| rows.to_vec())
+            .unwrap_or(window_sort_indices_from_columns(
+                &partition_cols,
+                &order_cols,
+                order_by,
+                batch.num_rows(),
+            )?);
     let mut partitions: Vec<Vec<usize>> = Vec::new();
     for (index, row) in sorted.into_iter().enumerate() {
         if index % 1024 == 0 {
