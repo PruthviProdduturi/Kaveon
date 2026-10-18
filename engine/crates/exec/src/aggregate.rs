@@ -4848,7 +4848,15 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
             let index = dictionary.keys().value(row) as usize;
             extract_key(&dictionary.values().clone(), index)
         }
-        _ => GroupKey::Utf8(Arc::from(format!("{:?}", arr.slice(row, 1)))),
+        // Complex values cannot use the primitive GroupKey variants.  Keep a
+        // canonical, type-tagged representation so COUNT(DISTINCT list/map/
+        // row) compares values rather than Arrow's physical offsets and
+        // buffers.  The previous debug representation included those offsets,
+        // so equal nested values in different batches could be counted twice.
+        _ => GroupKey::Utf8(Arc::from(
+            crate::distinct::complex_value_key(arr, row)
+                .unwrap_or_else(|_| format!("{:?}", arr.slice(row, 1))),
+        )),
     }
 }
 
@@ -5567,6 +5575,42 @@ mod tests {
             ]))],
         )
         .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            Vec::new(),
+            vec![AggExpr::new(AggFunc::Count, "value").distinct()],
+        )
+        .unwrap();
+        let result = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn count_distinct_nested_values_ignores_arrow_offsets() {
+        use arrow::array::{Int32Builder, ListBuilder};
+
+        let mut values = ListBuilder::new(Int32Builder::new());
+        values.values().append_value(1);
+        values.values().append_value(2);
+        values.append(true);
+        // This is a separate list slot with the same logical value.  Its
+        // physical offset differs and must not create a second distinct key.
+        values.values().append_value(1);
+        values.values().append_value(2);
+        values.append(true);
+        values.values().append_value(2);
+        values.append(true);
+        values.append(false);
+
+        let batch =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(values.finish()) as ArrayRef)])
+                .unwrap();
         let mut aggregate = HashAggregate::new(
             Box::new(Input::new(batch)),
             Vec::new(),
