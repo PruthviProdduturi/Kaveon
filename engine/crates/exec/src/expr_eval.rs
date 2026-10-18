@@ -712,6 +712,18 @@ fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
             Decimal128Array::from(vec![*value; len])
                 .with_precision_and_scale(*precision, *scale)?,
         )),
+        ScalarValue::Decimal256 {
+            value,
+            precision,
+            scale,
+        } => {
+            let value = arrow::datatypes::i256::from_string(value)
+                .ok_or_else(|| KaveonError::Execution("invalid Decimal256 literal".into()))?;
+            Ok(Arc::new(
+                arrow::array::Decimal256Array::from(vec![value; len])
+                    .with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
     }
 }
 
@@ -7092,6 +7104,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         list,
                         &args[1],
                         &DataType::UInt8,
+                    );
+                }
+                if list.value_type() == DataType::UInt16 {
+                    return array_position_primitive::<_, UInt16Type>(
+                        list,
+                        &args[1],
+                        &DataType::UInt16,
                     );
                 }
                 return array_position_nested(list, &args[1]);
@@ -17673,6 +17692,27 @@ mod tests {
         values.append(true);
         let mut needle = PrimitiveBuilder::<UInt8Type>::new();
         needle.append_value(u8::MAX);
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[
+                Arc::new(values.finish()) as ArrayRef,
+                Arc::new(needle.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
+    }
+
+    #[test]
+    fn array_position_accepts_large_uint16_lists() {
+        let mut values = LargeListBuilder::new(PrimitiveBuilder::<UInt16Type>::new());
+        values.values().append_value(7);
+        values.values().append_null();
+        values.values().append_value(u16::MAX);
+        values.append(true);
+        let mut needle = PrimitiveBuilder::<UInt16Type>::new();
+        needle.append_value(u16::MAX);
         let result = eval_scalar_function(
             "ARRAY_POSITION",
             &[
