@@ -32,8 +32,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Int64Array, StringArray, StringDictionaryBuilder, StructArray,
-    TimestampMicrosecondArray,
+    Array, ArrayRef, Date32Array, DictionaryArray, Int32Array, Int64Array, StringArray,
+    StringDictionaryBuilder, StructArray, TimestampMicrosecondArray,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -4182,6 +4182,73 @@ fn derived_values_join_using_matches_the_local_result() {
         true,
     );
     assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_dictionary_numeric_join_key_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-dictionary-numeric-join-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: PathBuf::from(&directory),
+        },
+    )
+    .with_schema("events");
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "key",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32)),
+        true,
+    )]));
+    let left_key = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![Some(0), Some(1), Some(2)]),
+        Arc::new(Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None])),
+    )
+    .unwrap();
+    let right_key = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![Some(1), Some(0), Some(2)]),
+        Arc::new(Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None])),
+    )
+    .unwrap();
+    let left = RecordBatch::try_new(schema.clone(), vec![Arc::new(left_key)]).unwrap();
+    let right = RecordBatch::try_new(schema, vec![Arc::new(right_key)]).unwrap();
+    catalog
+        .register_table(
+            "events",
+            TableMeta {
+                name: "left".into(),
+                ..write(&directory, "left.parquet", &left)
+            },
+        )
+        .unwrap();
+    catalog
+        .register_table(
+            "events",
+            TableMeta {
+                name: "right".into(),
+                ..write(&directory, "right.parquet", &right)
+            },
+        )
+        .unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    let statement = "SELECT l.key FROM left l JOIN right r USING (key) ORDER BY l.key";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-dictionary-numeric-join", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool).unwrap(),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 2);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
