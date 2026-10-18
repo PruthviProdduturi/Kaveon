@@ -103,6 +103,7 @@ pub struct HybridFinalMerge {
     drained: bool,
     failed: bool,
     spilled: FinalMergeSpill,
+    spill_threshold: u64,
 }
 
 impl HybridFinalMerge {
@@ -123,6 +124,7 @@ impl HybridFinalMerge {
             return Err(error("final merge needs at least one sub-partition"));
         }
         let partitions = spill.as_ref().map_or(0, |(_, count)| *count);
+        let spill_threshold = memory.query().snapshot().limit_bytes / 2;
         Ok(Self {
             source: Some(source),
             schema,
@@ -150,6 +152,7 @@ impl HybridFinalMerge {
             drained: false,
             failed: false,
             spilled: FinalMergeSpill::default(),
+            spill_threshold,
         })
     }
 
@@ -423,6 +426,21 @@ impl HybridFinalMerge {
                 }
             } else {
                 self.push(batch)?;
+                // Threaded final merges share a query budget with their
+                // partials. Spill a live table once its account crosses
+                // half the budget so a sibling refusal can still make room;
+                // serial merges retain the refusal-driven path below.
+                if self
+                    .merger
+                    .as_ref()
+                    .is_some_and(|merger| merger.group_count() > 0)
+                    && self.spill.is_some()
+                    && self.pressure.is_some()
+                    && self.memory.snapshot().current_bytes > self.spill_threshold
+                {
+                    let merger = self.merger.take().expect("checked above");
+                    self.spill_table(merger)?;
+                }
             }
         }
         Ok(())
@@ -517,9 +535,9 @@ impl HybridFinalMerge {
         }
         let merger_memory = self.merger_memory.clone();
         loop {
-            let merger = self.merger.get_or_insert_with(|| {
-                IncrementalAggregateMerger::new(merger_memory.clone())
-            });
+            let merger = self
+                .merger
+                .get_or_insert_with(|| IncrementalAggregateMerger::new(merger_memory.clone()));
             match merger.push_selected_batch(batch, selected) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
@@ -684,11 +702,7 @@ impl HybridFinalMerge {
 
 /// The rows of a grouped-state batch whose key hashes to thread `index`,
 /// or None when there are none; the batch itself when they all do.
-fn selected_rows(
-    batch: &RecordBatch,
-    selector: &ThreadSelector,
-    index: usize,
-) -> Result<Vec<u32>> {
+fn selected_rows(batch: &RecordBatch, selector: &ThreadSelector, index: usize) -> Result<Vec<u32>> {
     let keys = batch
         .column(0)
         .as_any()
