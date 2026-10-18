@@ -63,9 +63,9 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
 /// The current evaluator already returns NULL for a missing path, a
 /// non-scalar JSON_VALUE result, and malformed JSON.  Removing these explicit
 /// NULL clauses therefore preserves the existing behavior while accepting the
-/// useful bounded Trino spelling.  Other actions (ERROR and DEFAULT), and
-/// malformed clauses, are rejected explicitly rather than being silently
-/// assigned the wrong semantics.
+/// useful bounded Trino spelling. Literal DEFAULT actions are lowered to a
+/// four-argument evaluator function; arbitrary default expressions and typed
+/// RETURNING combinations remain rejected explicitly.
 fn normalize_json_null_clauses(sql: &str) -> Result<String> {
     let mut output = String::with_capacity(sql.len());
     let mut cursor = 0;
@@ -80,8 +80,15 @@ fn normalize_json_null_clauses(sql: &str) -> Result<String> {
             break;
         };
         let inner = normalize_json_null_clauses(&sql[open + 1..close])?;
-        let (inner, strict) = strip_json_null_clauses(&inner)?;
-        let function_name = if strict {
+        let (inner, strict, defaults) = strip_json_null_clauses(&inner)?;
+        let function_name = if defaults.is_some() {
+            if split_json_returning(&inner).is_some() {
+                return Err(KaveonError::Sql(
+                    "JSON DEFAULT clauses with RETURNING are not supported yet".into(),
+                ));
+            }
+            format!("{name}_DEFAULT")
+        } else if strict {
             format!("{name}_STRICT")
         } else {
             name
@@ -89,17 +96,27 @@ fn normalize_json_null_clauses(sql: &str) -> Result<String> {
         output.push_str(&function_name);
         output.push('(');
         output.push_str(&inner);
+        if let Some((empty_default, error_default)) = defaults {
+            output.push_str(", ");
+            output.push_str(empty_default.as_deref().unwrap_or("NULL"));
+            output.push_str(", ");
+            output.push_str(error_default.as_deref().unwrap_or("NULL"));
+        }
         output.push(')');
         cursor = close + 1;
     }
     Ok(output)
 }
 
-fn strip_json_null_clauses(inner: &str) -> Result<(String, bool)> {
+type JsonClauseDefaults = Option<(Option<String>, Option<String>)>;
+
+fn strip_json_null_clauses(inner: &str) -> Result<(String, bool, JsonClauseDefaults)> {
     let bytes = inner.as_bytes();
     let mut ranges = Vec::new();
     let mut strict = false;
     let mut null = false;
+    let mut empty_default = None;
+    let mut error_default = None;
     let mut cursor = 0;
     let mut depth = 0usize;
     while cursor < bytes.len() {
@@ -137,9 +154,31 @@ fn strip_json_null_clauses(inner: &str) -> Result<(String, bool)> {
                     null = true;
                 } else if action.eq_ignore_ascii_case("ERROR") {
                     strict = true;
+                } else if action.eq_ignore_ascii_case("DEFAULT") {
+                    cursor = skip_sql_space(inner, action_end);
+                    let Some((literal, literal_end)) = take_json_default_literal(inner, cursor)
+                    else {
+                        return Err(KaveonError::Sql(format!(
+                            "unsupported JSON {kind} DEFAULT expression; only SQL literals are supported"
+                        )));
+                    };
+                    if kind == "ON EMPTY" {
+                        if empty_default.is_some() {
+                            return Err(KaveonError::Sql("duplicate JSON ON EMPTY clause".into()));
+                        }
+                        empty_default = Some(literal);
+                    } else {
+                        if error_default.is_some() {
+                            return Err(KaveonError::Sql("duplicate JSON ON ERROR clause".into()));
+                        }
+                        error_default = Some(literal);
+                    }
+                    cursor = literal_end;
+                    ranges.push((start, cursor));
+                    continue;
                 } else {
                     return Err(KaveonError::Sql(format!(
-                        "unsupported JSON {kind} clause action '{action}'; only NULL or ERROR is supported"
+                        "unsupported JSON {kind} clause action '{action}'; only NULL, ERROR, or a literal DEFAULT is supported"
                     )));
                 }
                 cursor = action_end;
@@ -153,14 +192,55 @@ fn strip_json_null_clauses(inner: &str) -> Result<(String, bool)> {
             "JSON ON EMPTY/ON ERROR clauses must use the same action".into(),
         ));
     }
+    if (empty_default.is_some() || error_default.is_some()) && (strict || null) {
+        return Err(KaveonError::Sql(
+            "JSON DEFAULT clauses cannot be combined with NULL or ERROR clauses".into(),
+        ));
+    }
     if !ranges.is_empty() {
         let mut result = inner.to_owned();
         for (start, end) in ranges.into_iter().rev() {
             result.replace_range(start..end, "");
         }
-        return Ok((result, strict));
+        let defaults = if empty_default.is_some() || error_default.is_some() {
+            Some((empty_default, error_default))
+        } else {
+            None
+        };
+        return Ok((result, strict, defaults));
     }
-    Ok((inner.to_owned(), strict))
+    Ok((inner.to_owned(), strict, None))
+}
+
+/// Consume the narrow literal form accepted after a SQL/JSON DEFAULT action.
+/// Arbitrary expressions remain rejected so the rewrite cannot silently change
+/// evaluation order or type coercion semantics.
+fn take_json_default_literal(sql: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = sql.as_bytes();
+    let &first = bytes.get(start)?;
+    if first == b'\'' || first == b'"' {
+        let end = quoted_sql_end(sql, start);
+        return (end > start + 1).then(|| (sql[start..end].to_owned(), end));
+    }
+    let mut end = start;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || b".+-".contains(&bytes[end]))
+    {
+        end += 1;
+    }
+    if end == start {
+        return None;
+    }
+    let token = &sql[start..end];
+    if token.eq_ignore_ascii_case("TRUE")
+        || token.eq_ignore_ascii_case("FALSE")
+        || token.eq_ignore_ascii_case("NULL")
+        || token.parse::<i64>().is_ok()
+        || token.parse::<f64>().is_ok()
+    {
+        Some((token.to_owned(), end))
+    } else {
+        None
+    }
 }
 
 /// Lower the bounded SQL/JSON typed-return form to the existing typed CAST
@@ -1271,20 +1351,51 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_json_null_actions_fail_closed() {
-        for sql in [
-            "SELECT JSON_VALUE(payload, '$.missing' ON EMPTY DEFAULT 'fallback') FROM t",
-            "SELECT JSON_VALUE(payload, '$.missing' ON ERROR DEFAULT 'fallback') FROM t",
-        ] {
-            let error = parse_sql(sql).expect_err("unsupported JSON action must be rejected");
-            assert!(
-                error
-                    .to_string()
-                    .contains("only NULL or ERROR is supported")
-                    || error.to_string().contains("expected EMPTY or ERROR"),
-                "unexpected diagnostic: {error}"
-            );
-        }
+    fn json_default_literal_lowers_to_bounded_evaluator_function() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.missing' ON EMPTY DEFAULT 'fallback' ON ERROR DEFAULT 'bad'), JSON_QUERY(payload, '$.missing' ON EMPTY DEFAULT NULL) FROM t",
+        )
+        .expect("literal JSON DEFAULT clauses should parse");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("JSON_VALUE_DEFAULT(payload, '$.missing', 'fallback', 'bad')"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("JSON_QUERY_DEFAULT(payload, '$.missing', NULL, NULL)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn unsupported_json_default_expression_fails_closed() {
+        let error = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.missing' ON EMPTY DEFAULT other_column) FROM t",
+        )
+        .expect_err("non-literal JSON default must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("only SQL literals are supported")
+        );
+    }
+
+    #[test]
+    fn json_default_literal_keeps_returning_text_inside_quotes_literal() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.missing' ON EMPTY DEFAULT 'RETURNING BIGINT') FROM t",
+        )
+        .expect("RETURNING text inside a default string is not a clause");
+        assert!(statements[0].to_string().contains("'RETURNING BIGINT'"));
+    }
+
+    #[test]
+    fn json_default_with_returning_remains_rejected() {
+        let error = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.missing' RETURNING BIGINT ON EMPTY DEFAULT '0') FROM t",
+        )
+        .expect_err("typed JSON DEFAULT remains outside the bounded surface");
+        assert!(error.to_string().contains("RETURNING"));
     }
 
     #[test]

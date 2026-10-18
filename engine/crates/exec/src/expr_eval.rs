@@ -1318,6 +1318,10 @@ fn text_value(arr: &ArrayRef, row: usize) -> Result<Option<&str>> {
     }
 }
 
+fn optional_string_value(arr: &StringArray, row: usize) -> Option<String> {
+    (!arr.is_null(row)).then(|| arr.value(row).to_owned())
+}
+
 fn format_integer_in_base(value: i64, radix: u32) -> String {
     const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut magnitude = i128::from(value).abs();
@@ -5912,11 +5916,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         | "JSON_QUERY"
         | "JSON_VALUE"
         | "JSON_QUERY_STRICT"
-        | "JSON_VALUE_STRICT" => {
-            check_arity(name, args, 2)?;
+        | "JSON_VALUE_STRICT"
+        | "JSON_QUERY_DEFAULT"
+        | "JSON_VALUE_DEFAULT" => {
+            let has_defaults = upper.ends_with("_DEFAULT");
+            if has_defaults {
+                check_arity(name, args, 4)?;
+            } else {
+                check_arity(name, args, 2)?;
+            }
             let documents = &args[0];
             let paths = &args[1];
             let strict = upper.ends_with("_STRICT");
+            let empty_defaults = has_defaults.then(|| cast_to_string(&args[2])).transpose()?;
+            let error_defaults = has_defaults.then(|| cast_to_string(&args[3])).transpose()?;
             let result: StringArray = (0..num_rows)
                 .map(|row| {
                     let (Some(document), Some(path)) =
@@ -5924,6 +5937,38 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     else {
                         return Ok(None);
                     };
+                    if has_defaults {
+                        if serde_json::from_str::<serde_json::Value>(document).is_err() {
+                            return Ok(match &error_defaults {
+                                Some(array) => optional_string_value(array, row),
+                                None => None,
+                            });
+                        };
+                        let Some(value) = json_extract_value(document, path) else {
+                            return Ok(match &empty_defaults {
+                                Some(array) => optional_string_value(array, row),
+                                None => None,
+                            });
+                        };
+                        let extracted = if upper == "JSON_QUERY_DEFAULT" {
+                            match value {
+                                serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                                    json_extract(document, path)
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            match value {
+                                serde_json::Value::Array(_) | serde_json::Value::Object(_) => None,
+                                _ => json_extract_scalar(document, path),
+                            }
+                        };
+                        let empty_default = match &empty_defaults {
+                            Some(array) => optional_string_value(array, row),
+                            None => None,
+                        };
+                        return Ok(extracted.or(empty_default));
+                    }
                     if strict {
                         let value = json_extract_value(document, path).ok_or_else(|| {
                             KaveonError::Execution(format!(
@@ -21574,6 +21619,43 @@ mod tests {
         .unwrap();
         let error = evaluate(&value, &missing).expect_err("strict JSON_VALUE must fail on empty");
         assert!(error.to_string().contains("requested ERROR"), "{error}");
+    }
+
+    #[test]
+    fn json_default_literals_cover_empty_and_error_paths() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"customer":{"id":42}}"#),
+                    Some(r#"{"customer":{}}"#),
+                    Some("not-json"),
+                ])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![
+                    Some("$.customer.id"),
+                    Some("$.customer.id"),
+                    Some("$.customer.id"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let value = Expr::Function {
+            name: "JSON_VALUE_DEFAULT".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Column("path".into()),
+                Expr::Literal(ScalarValue::Utf8("missing".into())),
+                Expr::Literal(ScalarValue::Utf8("invalid".into())),
+            ],
+        };
+        let result = evaluate(&value, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "42");
+        assert_eq!(values.value(1), "missing");
+        assert_eq!(values.value(2), "invalid");
     }
 
     #[test]
