@@ -3769,6 +3769,9 @@ mod tests {
         let build = RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(Float32Array::from(vec![
+                // At this magnitude Float32's spacing is two; keep every
+                // boundary value representable so the test does not create a
+                // duplicate 16_777_216 value through an implicit cast.
                 Some(16_777_216.0),
                 Some(16_777_218.0),
             ]))],
@@ -3778,7 +3781,7 @@ mod tests {
             schema.clone(),
             vec![Arc::new(Float32Array::from(vec![
                 Some(16_777_216.0),
-                Some(16_777_217.0),
+                Some(16_777_220.0),
                 Some(16_777_218.0),
                 None,
             ]))],
