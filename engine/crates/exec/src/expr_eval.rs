@@ -1045,6 +1045,13 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
         ) {
             let mut rows = Vec::with_capacity(left.len());
             for row in 0..left.len() {
+                // A NULL ROW is unknown under every ordered comparison. Arrow
+                // keeps parent and child validity separate, so child values
+                // at this offset cannot be used to infer the parent state.
+                if left.is_null(row) || right.is_null(row) {
+                    rows.push(None);
+                    continue;
+                }
                 let mut result = Some(false);
                 for (left_field, right_field) in left.columns().iter().zip(right.columns()) {
                     let left_value = left_field.slice(row, 1);
@@ -13833,6 +13840,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value.as_boolean().iter().collect::<Vec<_>>(), vec![None; 3]);
+    }
+
+    #[test]
+    fn row_ordering_propagates_null_parent_rows() {
+        let fields = vec![arrow::datatypes::Field::new("value", DataType::Int64, true)];
+        let left = StructArray::new(
+            fields.clone().into(),
+            vec![Arc::new(Int64Array::from(vec![Some(9), Some(0)])) as ArrayRef],
+            Some(arrow::buffer::NullBuffer::from(vec![false, true])),
+        );
+        let right = StructArray::new(
+            fields.into(),
+            vec![Arc::new(Int64Array::from(vec![Some(1), Some(1)])) as ArrayRef],
+            None,
+        );
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("left", left.data_type().clone(), true),
+            arrow::datatypes::Field::new("right", right.data_type().clone(), true),
+        ]));
+        let input = RecordBatch::try_new(schema, vec![Arc::new(left), Arc::new(right)]).unwrap();
+        let value = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(Expr::Column("left".into())),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::Column("right".into())),
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_boolean().iter().collect::<Vec<_>>(),
+            vec![None, Some(true)]
+        );
     }
 
     #[test]
