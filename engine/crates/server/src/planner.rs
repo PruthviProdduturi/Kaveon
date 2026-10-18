@@ -4798,6 +4798,34 @@ mod tests {
     }
 
     #[test]
+    fn partitions_ordered_frames_when_window_expressions_share_keys() {
+        let graph = graph(
+            "SELECT region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC) AS rn, SUM(actions) OVER (PARTITION BY region ORDER BY actions DESC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling FROM orders",
+        );
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.exchanges.len(), 1);
+        assert_eq!(
+            graph.exchanges[0].partitioning,
+            Partitioning::Hash {
+                columns: vec!["region".into()],
+                partition_count: 4,
+            }
+        );
+        let root = &graph.stages[graph.root_stage.0 as usize];
+        assert_eq!(root.task_count, 4);
+        assert!(
+            root.plan.operator == "PartitionedWindow"
+                || root
+                    .plan
+                    .children
+                    .iter()
+                    .any(|child| child.operator == "PartitionedWindow"),
+            "expected a partitioned window in the final fragment: {:?}",
+            root.plan
+        );
+    }
+
+    #[test]
     fn keeps_mixed_window_partitions_on_single_final_stage() {
         let expr = |column: &str| kaveon_core::Expr::WindowFunction {
             name: "ROW_NUMBER".into(),

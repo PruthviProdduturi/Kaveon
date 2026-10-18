@@ -1109,6 +1109,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "partitioned_window_frames_share_exchange",
+        "SELECT country, region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country) AS rn, SUM(actions) OVER (PARTITION BY region ORDER BY actions DESC, country ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_actions FROM {T} ORDER BY region, rn, country LIMIT 12",
+        true,
+    ),
+    (
         "count_star_filter_only",
         "SELECT COUNT(*) AS n FROM {T} WHERE surface = 'Chat' AND country = 'India' AND event_date >= '2026-07-20'",
         false,
