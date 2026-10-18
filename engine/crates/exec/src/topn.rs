@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use arrow::array::{Array, Int32Array, Int64Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, Decimal128Array, Int32Array, Int64Array, UInt32Array, UInt64Array};
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -260,6 +260,7 @@ pub fn merge_top_n(
         })
         .collect::<Result<Vec<_>>>()?;
     let indices = integer_top_n_indices(&columns, limit)
+        .or_else(|| decimal_top_n_indices(&columns, limit))
         .map(Ok)
         .unwrap_or_else(|| lexsort_to_indices(&columns, Some(limit)))?;
     let output_columns = combined
@@ -719,6 +720,57 @@ fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32A
     Some(UInt32Array::from(indices))
 }
 
+/// Decimal128 ORDER BY keys are represented as scaled `i128` values.  When a
+/// final TopN has one decimal key, rank row references directly instead of
+/// concatenating every payload column before Arrow's general lexsort.  The
+/// comparison is exact because every value in one Arrow decimal array shares
+/// its scale; null placement follows the query's SortOptions.
+fn decimal_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32Array> {
+    if columns.len() != 1 {
+        return None;
+    }
+    let column = &columns[0];
+    let values = column.values.as_any().downcast_ref::<Decimal128Array>()?;
+    if values.len() > u32::MAX as usize {
+        return None;
+    }
+    let options = column.options.unwrap_or_default();
+    let mut indices: Vec<u32> = (0..values.len() as u32).collect();
+    indices.sort_by(|left, right| {
+        let left_null = values.is_null(*left as usize);
+        let right_null = values.is_null(*right as usize);
+        let ordering = match (left_null, right_null) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => {
+                if options.nulls_first {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            }
+            (false, true) => {
+                if options.nulls_first {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }
+            (false, false) => values
+                .value(*left as usize)
+                .cmp(&values.value(*right as usize)),
+        };
+        // Arrow's null placement is independent of direction: NULLS LAST
+        // stays last for both ascending and descending order.
+        if options.descending && !left_null && !right_null {
+            ordering.reverse()
+        } else {
+            ordering
+        }
+    });
+    indices.truncate(limit);
+    Some(UInt32Array::from(indices))
+}
+
 impl BatchOperator for TopNOperator {
     fn schema(&self) -> &SchemaRef {
         &self.schema
@@ -747,7 +799,7 @@ impl BatchOperator for TopNOperator {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, Int32Array, Int64Array, StringArray, UInt32Array};
+    use arrow::array::{Array, Decimal128Array, Int32Array, Int64Array, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
@@ -855,6 +907,42 @@ mod tests {
                         take(values.as_ref(), &expected, None).unwrap().to_data()
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn typed_decimal_topn_matches_arrow_with_nulls_and_ordering() {
+        let values = Arc::new(
+            Decimal128Array::from(vec![
+                Some(120),
+                None,
+                Some(-350),
+                Some(120),
+                Some(999),
+                None,
+                Some(-1),
+            ])
+            .with_precision_and_scale(10, 2)
+            .unwrap(),
+        );
+        for (descending, nulls_first) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let columns = vec![SortColumn {
+                values: values.clone(),
+                options: Some(SortOptions {
+                    descending,
+                    nulls_first,
+                }),
+            }];
+            for limit in [0, 1, 3, 7, 20] {
+                let actual = decimal_top_n_indices(&columns, limit).unwrap();
+                let expected = lexsort_to_indices(&columns, Some(limit)).unwrap();
+                assert_eq!(
+                    take(values.as_ref(), &actual, None).unwrap().to_data(),
+                    take(values.as_ref(), &expected, None).unwrap().to_data()
+                );
             }
         }
     }
