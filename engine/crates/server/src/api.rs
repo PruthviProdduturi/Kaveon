@@ -13830,13 +13830,17 @@ async fn execute_distributed_top_n(
                     merge_inputs.push(candidate);
                 }
                 merge_inputs.extend(batches);
-                global_candidate =
-                    match merge_top_n(&worker_schema, &merge_inputs, &sort_exprs, limit) {
-                        Ok(candidate) => candidate,
-                        Err(error) => {
-                            return Some(Err(format!("cannot merge distributed TopN: {error}")));
-                        }
-                    };
+                global_candidate = match merge_top_n_candidate(
+                    &worker_schema,
+                    &merge_inputs,
+                    &sort_exprs,
+                    limit,
+                ) {
+                    Ok(candidate) => Some(candidate),
+                    Err(error) => {
+                        return Some(Err(format!("cannot merge distributed TopN: {error}")));
+                    }
+                };
                 publish_task_completion(
                     query_id,
                     0,
@@ -13878,6 +13882,16 @@ async fn execute_distributed_top_n(
             tasks: task_metrics,
         },
     )))
+}
+
+fn merge_top_n_candidate(
+    schema: &arrow::datatypes::SchemaRef,
+    batches: &[arrow::record_batch::RecordBatch],
+    sort_exprs: &[SortExpr],
+    limit: usize,
+) -> kaveon_core::Result<arrow::record_batch::RecordBatch> {
+    Ok(merge_top_n(schema, batches, sort_exprs, limit)?
+        .unwrap_or_else(|| arrow::record_batch::RecordBatch::new_empty(schema.clone())))
 }
 
 fn top_n_merge_contract(plan: &LogicalPlan) -> Option<(Vec<SortExpr>, usize)> {
@@ -15635,10 +15649,10 @@ mod tests {
         StatisticsStatement, TaskRequest, TaskResponse, aggregate_merge_contract,
         await_task_memory, capabilities, catalog_test_state, collect_join_statistics_tables,
         decode_arrow_stream, encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
-        general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, mutation_actor,
-        parse_analyze_statement, parse_explain_statement, parse_statistics_statement,
-        statistics_diagnostics, task_request_from_dispatch, top_n_merge_contract,
-        transaction_api_guidance, validate_replacement,
+        general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, merge_top_n_candidate,
+        mutation_actor, parse_analyze_statement, parse_explain_statement,
+        parse_statistics_statement, statistics_diagnostics, task_request_from_dispatch,
+        top_n_merge_contract, transaction_api_guidance, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -21818,6 +21832,23 @@ mod tests {
         .unwrap();
 
         assert!(top_n_merge_contract(&zero_limit).is_none());
+    }
+
+    #[test]
+    fn distributed_top_n_keeps_the_schema_when_all_workers_are_empty() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "total",
+            DataType::Int64,
+            true,
+        )]));
+        let ordering = vec![kaveon_exec::sort::SortExpr::new(
+            kaveon_core::Expr::Column("total".into()),
+            false,
+        )];
+        let empty = merge_top_n_candidate(&schema, &[], &ordering, 10).unwrap();
+
+        assert_eq!(empty.schema(), schema);
+        assert_eq!(empty.num_rows(), 0);
     }
 
     #[test]
