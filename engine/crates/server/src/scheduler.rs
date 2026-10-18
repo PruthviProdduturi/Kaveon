@@ -5,6 +5,7 @@ use kaveon_core::{
 use kaveon_storage::{DeltaTableReader, ParquetReader};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TASK_ATTEMPTS: u32 = 3;
 const FORMAT_PROPERTY: &str = "format";
@@ -144,7 +145,7 @@ pub struct SplitScheduler {
     /// Retries retain the exact split batch leased by the failed attempt.
     /// Keeping it separate from `pending` prevents a retry from consuming
     /// newly enumerated splits and changing the assignment mid-query.
-    retries: VecDeque<(usize, u32, Vec<SplitDescriptor>)>,
+    retries: BTreeMap<usize, (u32, Vec<SplitDescriptor>)>,
     next_partition: usize,
     input_exchanges: Vec<ExchangeId>,
     output_exchanges: Vec<ExchangeId>,
@@ -152,6 +153,8 @@ pub struct SplitScheduler {
 
 struct LeasedTask {
     task_id: TaskId,
+    worker_id: String,
+    last_heartbeat_millis: u64,
     splits: Vec<SplitDescriptor>,
 }
 
@@ -166,7 +169,7 @@ impl SplitScheduler {
             stage_id,
             pending: splits.into(),
             leased: BTreeMap::new(),
-            retries: VecDeque::new(),
+            retries: BTreeMap::new(),
             next_partition: 0,
             input_exchanges: Vec::new(),
             output_exchanges: Vec::new(),
@@ -188,11 +191,27 @@ impl SplitScheduler {
         worker_id: impl Into<String>,
         split_limit: usize,
     ) -> Option<TaskAssignment> {
+        self.lease_at(worker_id, split_limit, scheduler_now_millis())
+    }
+
+    /// Lease work with an explicit clock value. The explicit form keeps the
+    /// expiry and takeover rules deterministic in tests and in coordinators
+    /// that already have a monotonic scheduling tick.
+    pub fn lease_at(
+        &mut self,
+        worker_id: impl Into<String>,
+        split_limit: usize,
+        now_millis: u64,
+    ) -> Option<TaskAssignment> {
         if split_limit == 0 || (self.pending.is_empty() && self.retries.is_empty()) {
             return None;
         }
         let (partition, attempt, splits) =
-            if let Some((partition, attempt, splits)) = self.retries.pop_front() {
+            if let Some((&partition, _)) = self.retries.first_key_value() {
+                let (_, (attempt, splits)) = self
+                    .retries
+                    .pop_first()
+                    .expect("retry entry observed above must remain present");
                 // A retry must replay the same deterministic storage assignment;
                 // it must not pick up work that was enumerated after the failed
                 // attempt.
@@ -210,16 +229,19 @@ impl SplitScheduler {
             partition,
             attempt,
         };
+        let worker_id = worker_id.into();
         self.leased.insert(
             partition,
             LeasedTask {
                 task_id: task_id.clone(),
+                worker_id: worker_id.clone(),
+                last_heartbeat_millis: now_millis,
                 splits: splits.clone(),
             },
         );
         Some(TaskAssignment {
             task_id,
-            worker_id: worker_id.into(),
+            worker_id,
             splits,
             input_exchanges: self.input_exchanges.clone(),
             output_exchanges: self.output_exchanges.clone(),
@@ -254,12 +276,50 @@ impl SplitScheduler {
             .leased
             .remove(&task_id.partition)
             .expect("validated lease must remain present");
-        self.retries.push_back((
+        self.retries.insert(
             task_id.partition,
-            task_id.attempt.saturating_add(1),
-            lease.splits,
-        ));
+            (task_id.attempt.saturating_add(1), lease.splits),
+        );
         true
+    }
+
+    /// Refresh a current task's lease. A completion, failure, or heartbeat
+    /// from an older attempt is rejected by the task identity fence.
+    pub fn heartbeat(&mut self, task_id: &TaskId, now_millis: u64) -> bool {
+        let Some(lease) = self.leased.get_mut(&task_id.partition) else {
+            return false;
+        };
+        if lease.task_id != *task_id {
+            return false;
+        }
+        lease.last_heartbeat_millis = now_millis;
+        true
+    }
+
+    /// Requeue leases whose heartbeat has expired. Partitions are inserted in
+    /// a sorted map so repeated expiry/retry decisions are deterministic even
+    /// when workers report failures in different orders.
+    pub fn expire_leases(&mut self, now_millis: u64, timeout_millis: u64) -> Vec<TaskId> {
+        let expired = self
+            .leased
+            .iter()
+            .filter(|(_, lease)| {
+                now_millis.saturating_sub(lease.last_heartbeat_millis) >= timeout_millis
+            })
+            .map(|(partition, lease)| (*partition, lease.task_id.clone()))
+            .collect::<Vec<_>>();
+
+        for (partition, task_id) in &expired {
+            let lease = self
+                .leased
+                .remove(partition)
+                .expect("expired lease observed above must remain present");
+            self.retries.insert(
+                *partition,
+                (task_id.attempt.saturating_add(1), lease.splits),
+            );
+        }
+        expired.into_iter().map(|(_, task_id)| task_id).collect()
     }
 
     pub fn steal(
@@ -278,9 +338,46 @@ impl SplitScheduler {
             attempt: task_id.attempt.saturating_add(1),
         };
         lease.task_id = next_task_id.clone();
+        lease.worker_id = worker_id.into();
+        lease.last_heartbeat_millis = scheduler_now_millis();
         Some(TaskAssignment {
             task_id: next_task_id,
-            worker_id: worker_id.into(),
+            worker_id: lease.worker_id.clone(),
+            splits: lease.splits.clone(),
+            input_exchanges: self.input_exchanges.clone(),
+            output_exchanges: self.output_exchanges.clone(),
+        })
+    }
+
+    /// Take over a lease only after its heartbeat has expired. This prevents a
+    /// healthy worker from being duplicated by a speculative retry while the
+    /// attempt number still fences any late result from the old worker.
+    pub fn steal_expired(
+        &mut self,
+        task_id: &TaskId,
+        worker_id: impl Into<String>,
+        now_millis: u64,
+        timeout_millis: u64,
+    ) -> Option<TaskAssignment> {
+        let lease = self.leased.get_mut(&task_id.partition)?;
+        if lease.task_id != *task_id
+            || now_millis.saturating_sub(lease.last_heartbeat_millis) < timeout_millis
+        {
+            return None;
+        }
+        let worker_id = worker_id.into();
+        let next_task_id = TaskId {
+            query_id: task_id.query_id.clone(),
+            stage_id: task_id.stage_id,
+            partition: task_id.partition,
+            attempt: task_id.attempt.saturating_add(1),
+        };
+        lease.task_id = next_task_id.clone();
+        lease.worker_id = worker_id.clone();
+        lease.last_heartbeat_millis = now_millis;
+        Some(TaskAssignment {
+            task_id: next_task_id,
+            worker_id,
             splits: lease.splits.clone(),
             input_exchanges: self.input_exchanges.clone(),
             output_exchanges: self.output_exchanges.clone(),
@@ -298,6 +395,13 @@ impl SplitScheduler {
     pub fn is_finished(&self) -> bool {
         self.pending.is_empty() && self.leased.is_empty() && self.retries.is_empty()
     }
+}
+
+fn scheduler_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -541,5 +645,83 @@ mod tests {
         assert!(!scheduler.fail(&tail.task_id));
         assert!(scheduler.complete(&stolen.task_id));
         assert!(scheduler.is_finished());
+    }
+
+    #[test]
+    fn heartbeat_keeps_a_lease_alive_and_expiry_requeues_exactly_once() {
+        let mut scheduler = super::SplitScheduler::new("query", StageId(5), vec![split("a")]);
+        let original = scheduler.lease_at("worker-a", 1, 100).unwrap();
+
+        assert!(
+            !scheduler
+                .expire_leases(199, 100)
+                .iter()
+                .any(|id| id == &original.task_id)
+        );
+        assert!(scheduler.heartbeat(&original.task_id, 200));
+        assert!(scheduler.expire_leases(299, 100).is_empty());
+
+        let expired = scheduler.expire_leases(300, 100);
+        assert_eq!(expired, vec![original.task_id.clone()]);
+        assert_eq!(scheduler.leased_task_count(), 0);
+        assert_eq!(scheduler.pending_split_count(), 0);
+
+        // The terminal marker was removed when expiry requeued the task. A
+        // second expiry tick cannot create another retry for the same attempt.
+        assert!(scheduler.expire_leases(301, 100).is_empty());
+        let retry = scheduler.lease_at("worker-b", 1, 301).unwrap();
+        assert_eq!(retry.task_id.partition, original.task_id.partition);
+        assert_eq!(retry.task_id.attempt, original.task_id.attempt + 1);
+        assert_eq!(retry.splits, original.splits);
+    }
+
+    #[test]
+    fn expired_takeover_fences_the_old_attempt_and_healthy_lease_cannot_be_stolen() {
+        let mut scheduler =
+            super::SplitScheduler::new("query", StageId(6), vec![split("a"), split("b")]);
+        let original = scheduler.lease_at("worker-a", 1, 100).unwrap();
+
+        assert!(
+            scheduler
+                .steal_expired(&original.task_id, "worker-b", 199, 100)
+                .is_none()
+        );
+        let takeover = scheduler
+            .steal_expired(&original.task_id, "worker-b", 200, 100)
+            .unwrap();
+        assert_eq!(takeover.worker_id, "worker-b");
+        assert_eq!(takeover.task_id.attempt, original.task_id.attempt + 1);
+        assert!(!scheduler.heartbeat(&original.task_id, 201));
+        assert!(!scheduler.complete(&original.task_id));
+        assert!(scheduler.heartbeat(&takeover.task_id, 202));
+        assert!(scheduler.complete(&takeover.task_id));
+    }
+
+    #[test]
+    fn expiry_retries_are_served_in_partition_order() {
+        let mut scheduler = super::SplitScheduler::new(
+            "query",
+            StageId(7),
+            vec![split("a"), split("b"), split("c")],
+        );
+        let first = scheduler.lease_at("worker-a", 1, 10).unwrap();
+        let second = scheduler.lease_at("worker-b", 1, 10).unwrap();
+        let third = scheduler.lease_at("worker-c", 1, 10).unwrap();
+
+        // Expiry walks the BTreeMap by partition, regardless of worker report
+        // order. The retry queue therefore cannot vary with completion races.
+        let expired = scheduler.expire_leases(20, 10);
+        assert_eq!(expired, vec![first.task_id, second.task_id, third.task_id]);
+        let retry1 = scheduler.lease_at("worker-d", 1, 21).unwrap();
+        let retry2 = scheduler.lease_at("worker-e", 1, 21).unwrap();
+        let retry3 = scheduler.lease_at("worker-f", 1, 21).unwrap();
+        assert_eq!(
+            [
+                retry1.splits[0].id.0.as_str(),
+                retry2.splits[0].id.0.as_str(),
+                retry3.splits[0].id.0.as_str()
+            ],
+            ["a", "b", "c"]
+        );
     }
 }
