@@ -11006,6 +11006,41 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     let mut segments = Vec::new();
     while !remainder.is_empty() {
         if let Some(after_dot) = remainder.strip_prefix('.') {
+            // SQL/JSON permits quoted member names after a dot.  This is
+            // needed for object keys containing path punctuation (for
+            // example `$ ."a.b".value`, without the display-space).  Keep
+            // the same backslash escaping accepted by bracket-quoted keys
+            // below, and leave the following path segment for the next
+            // parser iteration.
+            if let Some(quote @ ('\'' | '"')) = after_dot.chars().next() {
+                let mut key = String::new();
+                let mut escaped = false;
+                let mut close = None;
+                for (offset, character) in after_dot[quote.len_utf8()..].char_indices() {
+                    if escaped {
+                        key.push(character);
+                        escaped = false;
+                        continue;
+                    }
+                    if character == '\\' {
+                        escaped = true;
+                        continue;
+                    }
+                    if character == quote {
+                        let end = quote.len_utf8() + offset + character.len_utf8();
+                        if after_dot[end..].is_empty() || after_dot[end..].starts_with(['.', '[']) {
+                            close = Some(end);
+                            break;
+                        }
+                        return None;
+                    }
+                    key.push(character);
+                }
+                let close = close?;
+                segments.push(Segment::Key(key));
+                remainder = &after_dot[close..];
+                continue;
+            }
             let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
             let key = &after_dot[..end];
             if key.is_empty() {
@@ -21352,6 +21387,48 @@ mod tests {
                 .unwrap()
                 .as_string::<i32>()
                 .is_null(0)
+        );
+    }
+
+    #[test]
+    fn evaluates_json_value_with_quoted_dot_member_names() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"{"a.b":{"value":9},"a\"b":{"value":10}}"#),
+                Some(r#"{"a.b":{"value":null}}"#),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8(
+                    r#"$. "a.b".value"#.replace(" ", "").into(),
+                )),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "9");
+        assert!(values.is_null(1));
+
+        let escaped = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8(
+                    r#"$. "a\"b".value"#.replace(" ", "").into(),
+                )),
+            ],
+        };
+        assert_eq!(
+            evaluate(&escaped, &batch)
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            "10"
         );
     }
 

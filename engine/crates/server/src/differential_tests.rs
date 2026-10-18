@@ -512,6 +512,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "json_quoted_dot_member",
+        "SELECT JSON_VALUE(JSON_PARSE('{\"a.b\":{\"value\":9}}'), '$.\"a.b\".value') AS value FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "json_array_length",
         "SELECT JSON_ARRAY_LENGTH(JSON_PARSE('[1, 2, 3]')) AS length FROM {T} LIMIT 1",
         false,
