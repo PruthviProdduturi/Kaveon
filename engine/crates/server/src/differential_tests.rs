@@ -3804,6 +3804,35 @@ fn distributed_partitioned_window_sum_rows_frame_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A bounded GROUPS frame must advance by peer groups, not physical rows, and
+/// retain those peer boundaries when the partition is merged across workers.
+#[test]
+fn distributed_partitioned_window_sum_groups_frame_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-sum-groups-frame-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, user_id, actions, SUM(actions) OVER (PARTITION BY region ORDER BY actions GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW) AS grouped_actions FROM events WHERE event_date = '2026-07-04' ORDER BY region, actions, user_id LIMIT 18";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-window-sum-groups-frame", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 18);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// An unpartitioned value window must apply IGNORE NULLS across the global
 /// ordering, rather than independently inside each worker's input fragment.
 #[test]
