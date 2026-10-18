@@ -23078,6 +23078,46 @@ mod streamed_root_tests {
         let _ = std::fs::remove_dir_all(directory);
     }
 
+    #[tokio::test]
+    async fn trino_sql_prepare_describe_output_exposes_complex_metadata() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-trino-complex-metadata-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        let name = format!("complex_{}", Uuid::new_v4().simple());
+        let owner = alice();
+
+        let prepared = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!(
+                "PREPARE {name} FROM SELECT ROW(1, 'ready') AS state FROM numbers LIMIT 1"
+            )),
+        )
+        .await;
+        assert_eq!(prepared.status(), StatusCode::OK);
+
+        let output = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner,
+            HeaderMap::new(),
+            Bytes::from(format!("DESCRIBE OUTPUT {name}")),
+        )
+        .await;
+        let status = output.status();
+        let body = axum::body::to_bytes(output.into_body(), usize::MAX)
+            .await
+            .expect("complex output metadata body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("metadata JSON");
+        assert_eq!(value["data"][0][0], serde_json::json!("state"));
+        assert_eq!(
+            value["data"][0][4],
+            serde_json::json!("row(bigint,varchar)")
+        );
+    }
+
     /// The Trino wire route must preserve ARRAY_SORT_DESC's typed array result
     /// and its NULL-last descending contract.  Local evaluator tests cannot
     /// catch a serialization or prepared-statement regression here.
