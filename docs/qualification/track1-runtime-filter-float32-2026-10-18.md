@@ -12,7 +12,11 @@ near the 24-bit precision boundary cannot be widened and compared incorrectly.
 ## Evidence
 
 The focused executor regression verifies absent keys are rejected while values
-above the Float32 integer precision boundary retain exact Float32 semantics:
+above the Float32 integer precision boundary retain exact Float32 semantics.
+The boundary fixtures use representable even Float32 values (`16_777_216`,
+`16_777_218`, and `16_777_220`): an odd literal such as `16_777_217.0`
+rounds to `16_777_216.0` before execution and would intentionally create a
+duplicate matching row rather than test filter precision:
 
 ```text
 cargo test -p kaveon-exec runtime_join_filter -- --nocapture
