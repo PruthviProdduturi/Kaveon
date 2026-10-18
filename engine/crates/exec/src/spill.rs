@@ -200,7 +200,11 @@ impl SpillManager {
     /// before that leaves nothing behind.
     pub fn begin_run(&self, schema: &SchemaRef) -> Result<SpillRunWriter> {
         let run_id = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
-        let path = self.inner.directory.join(format!("run-{run_id}.arrow"));
+        let path = self
+            .inner
+            .directory
+            .join(format!("run-{run_id}.arrow.partial"));
+        let final_path = self.inner.directory.join(format!("run-{run_id}.arrow"));
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -219,6 +223,7 @@ impl SpillManager {
             schema: Arc::clone(schema),
             inner: Arc::clone(&self.inner),
             path,
+            final_path,
             rows: 0,
         })
     }
@@ -233,6 +238,7 @@ pub struct SpillRunWriter {
     schema: SchemaRef,
     inner: Arc<SpillInner>,
     path: PathBuf,
+    final_path: PathBuf,
     rows: u64,
 }
 
@@ -269,6 +275,10 @@ impl SpillRunWriter {
             writer.finish()?;
             let mut output = writer.into_inner()?;
             output.flush()?;
+            // Publish the run atomically only after the complete Arrow stream
+            // is flushed. A process crash can leave a partial marker behind,
+            // but never a path that readers could mistake for a finished run.
+            fs::rename(&self.path, &self.final_path)?;
             Ok(output.commit())
         })();
         self.inner
@@ -278,6 +288,7 @@ impl SpillRunWriter {
             Ok(bytes) => bytes,
             Err(error) => {
                 let _ = fs::remove_file(&self.path);
+                let _ = fs::remove_file(&self.final_path);
                 return Err(error);
             }
         };
@@ -286,7 +297,7 @@ impl SpillRunWriter {
         Ok(SpillRun {
             inner: Arc::new(SpillRunInner {
                 inner: Arc::clone(&self.inner),
-                path: std::mem::take(&mut self.path),
+                path: std::mem::take(&mut self.final_path),
                 bytes,
                 rows: self.rows,
             }),
@@ -661,6 +672,40 @@ mod tests {
         drop(reader);
         assert!(!path.exists());
         assert_eq!(manager.snapshot().current_bytes, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unfinished_run_is_not_published_until_stream_is_complete() {
+        let root = test_root("atomic-publication");
+        let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
+        let input = batch();
+        let mut writer = manager.begin_run(&input.schema()).unwrap();
+        let partial_path = writer.path.clone();
+        let final_path = writer.final_path.clone();
+        writer.write(&input).unwrap();
+
+        assert!(partial_path.exists());
+        assert!(!final_path.exists());
+        assert_eq!(
+            fs::read_dir(&manager.inner.directory)
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .filter(|entry| entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "arrow"))
+                .count(),
+            0,
+            "an incomplete stream must not look like a finished run"
+        );
+
+        let run = writer.finish().unwrap();
+        assert!(!partial_path.exists());
+        assert_eq!(run.path(), final_path);
+        assert!(run.path().exists());
+        drop(run);
+        assert!(!final_path.exists());
         let _ = fs::remove_dir_all(root);
     }
 
