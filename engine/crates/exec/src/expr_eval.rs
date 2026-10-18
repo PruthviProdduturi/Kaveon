@@ -1984,6 +1984,46 @@ fn array_join_text<L: OffsetSizeTrait>(
     Ok(Arc::new(result))
 }
 
+fn array_join_large_utf8(
+    list: &LargeListArray,
+    delimiter: &ArrayRef,
+    replacement: Option<&ArrayRef>,
+) -> Result<ArrayRef> {
+    let result: StringArray = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) {
+                return Ok(None);
+            }
+            let Some(delimiter) = text_value(delimiter, row)? else {
+                return Ok(None);
+            };
+            let values = list.value(row);
+            let values = values.as_string::<i64>();
+            let mut joined = String::new();
+            let mut emitted = false;
+            for index in 0..values.len() {
+                let value = if values.is_null(index) {
+                    replacement
+                        .map(|replacement| text_value(replacement, row))
+                        .transpose()?
+                        .flatten()
+                } else {
+                    Some(values.value(index))
+                };
+                let Some(value) = value else { continue };
+                if emitted {
+                    joined.push_str(delimiter);
+                }
+                joined.push_str(value);
+                emitted = true;
+            }
+            Ok(Some(joined))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into();
+    Ok(Arc::new(result))
+}
+
 fn array_position_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -7074,6 +7114,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             let replacement = args.get(2);
             if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                if list.value_type() == DataType::LargeUtf8 {
+                    return array_join_large_utf8(list, &args[1], replacement);
+                }
                 return array_join_text(list, &args[1], replacement);
             }
             let list = args[0]
@@ -22041,6 +22084,40 @@ mod tests {
         };
         let numeric_result = evaluate(&numeric_expr, &numeric_batch).unwrap();
         assert_eq!(numeric_result.as_string::<i32>().value(0), "10|30");
+    }
+
+    #[test]
+    fn evaluates_array_join_for_large_utf8_lists() {
+        let mut builder = LargeListBuilder::new(LargeStringBuilder::new());
+        builder.values().append_value("alpha");
+        builder.values().append_null();
+        builder.values().append_value("omega");
+        builder.append(true);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(builder.finish()) as ArrayRef),
+            (
+                "delimiter",
+                Arc::new(StringArray::from(vec![Some("|")])) as ArrayRef,
+            ),
+            (
+                "replacement",
+                Arc::new(StringArray::from(vec![Some("<null>")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_JOIN".into(),
+                args: vec![
+                    Expr::Column("items".into()),
+                    Expr::Column("delimiter".into()),
+                    Expr::Column("replacement".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "alpha|<null>|omega");
     }
 
     #[test]
