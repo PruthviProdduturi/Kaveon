@@ -4350,12 +4350,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let values = args
                 .iter()
                 .map(|arg| {
-                    if let Some(values) = arg.as_any().downcast_ref::<UInt64Array>() {
-                        if values.iter().flatten().any(|value| value > i64::MAX as u64) {
-                            return Err(arrow::error::ArrowError::ComputeError(
-                                "UINT64 value is outside BIGINT range".into(),
-                            ));
-                        }
+                    if let Some(values) = arg.as_any().downcast_ref::<UInt64Array>()
+                        && values.iter().flatten().any(|value| value > i64::MAX as u64)
+                    {
+                        return Err(arrow::error::ArrowError::ComputeError(
+                            "UINT64 value is outside BIGINT range".into(),
+                        ));
                     }
                     compute::cast(arg, &DataType::Int64)
                 })
@@ -10013,12 +10013,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 let values = args
                     .iter()
                     .map(|arg| {
-                        if let Some(values) = arg.as_any().downcast_ref::<UInt64Array>() {
-                            if values.iter().flatten().any(|value| value > i64::MAX as u64) {
-                                return Err(arrow::error::ArrowError::ComputeError(
-                                    "UINT64 value is outside BIGINT range".into(),
-                                ));
-                            }
+                        if let Some(values) = arg.as_any().downcast_ref::<UInt64Array>()
+                            && values.iter().flatten().any(|value| value > i64::MAX as u64)
+                        {
+                            return Err(arrow::error::ArrowError::ComputeError(
+                                "UINT64 value is outside BIGINT range".into(),
+                            ));
                         }
                         compute::cast(arg, &DataType::Int64)
                     })
