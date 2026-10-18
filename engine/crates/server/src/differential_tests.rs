@@ -1932,6 +1932,34 @@ fn distributed_map_values_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Correlated MAP_VALUES must be evaluated once per left row and preserve
+/// one-based ordinality through the distributed lateral UNNEST path.
+#[test]
+fn distributed_correlated_map_values_unnest_with_ordinality() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-correlated-unnest-map-values-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.id, u.value, u.ord FROM (VALUES (1), (2)) AS x(id) CROSS JOIN LATERAL UNNEST(MAP_VALUES(MAP(ARRAY['first', 'second'], ARRAY[x.id, x.id + 10]))) WITH ORDINALITY AS u(value, ord) ORDER BY x.id, u.ord";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-correlated-unnest-map-values", 16 << 20).unwrap();
+    let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    assert_eq!(
+        canonical_rows(&batches, true),
+        vec![
+            "1\u{1f}1\u{1f}1",
+            "1\u{1f}11\u{1f}2",
+            "2\u{1f}2\u{1f}1",
+            "2\u{1f}12\u{1f}2"
+        ]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_array_histogram_unnest_matches_trino_rows() {
     let directory = std::env::temp_dir().join(format!(
