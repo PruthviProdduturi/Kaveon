@@ -4223,10 +4223,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             )
         });
         let has_int64 = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
+        let has_float32 = args.iter().any(|arg| arg.data_type() == &DataType::Float32);
         if has_int64 && has_integer {
             data_type = DataType::Int64;
         }
-        if has_integer && args.iter().any(|arg| arg.data_type() == &DataType::Float64) {
+        if has_integer
+            && (has_float32 || args.iter().any(|arg| arg.data_type() == &DataType::Float64))
+        {
             data_type = DataType::Float64;
         }
         if data_type == DataType::Utf8
@@ -4250,6 +4253,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             | DataType::UInt16
                             | DataType::UInt32
                             | DataType::UInt64
+                            | DataType::Float32
                     ))
                 && !(data_type == DataType::LargeUtf8 && arg.data_type() == &DataType::Utf8)
                 && !(data_type == DataType::Int64
@@ -14418,6 +14422,19 @@ mod tests {
         let integer = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
         let double = Arc::new(Float64Array::from(vec![Some(2.5)])) as ArrayRef;
         let result = eval_scalar_function("ARRAY", &[integer, double], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Float64);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Float64Type>().values(),
+            &[1.0, 2.5]
+        );
+    }
+
+    #[test]
+    fn array_constructor_promotes_integer_and_real_to_double() {
+        let integer = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let real = Arc::new(Float32Array::from(vec![Some(2.5)])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[integer, real], 1).unwrap();
         let arrays = result.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(arrays.value_type(), DataType::Float64);
         assert_eq!(
