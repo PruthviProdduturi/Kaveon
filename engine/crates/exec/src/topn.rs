@@ -1,6 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 
-use arrow::array::{Array, Decimal128Array, Int32Array, Int64Array, UInt32Array, UInt64Array};
+use arrow::array::{
+    Array, Decimal128Array, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array, UInt16Array,
+    UInt32Array, UInt64Array,
+};
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -507,7 +510,27 @@ fn try_integer_batch_top_n(
                 .iter()
                 .map(|value| value.map(i128::from))
                 .collect::<Vec<_>>()
+        } else if let Some(values) = values.as_any().downcast_ref::<Int8Array>() {
+            values
+                .iter()
+                .map(|value| value.map(i128::from))
+                .collect::<Vec<_>>()
+        } else if let Some(values) = values.as_any().downcast_ref::<Int16Array>() {
+            values
+                .iter()
+                .map(|value| value.map(i128::from))
+                .collect::<Vec<_>>()
         } else if let Some(values) = values.as_any().downcast_ref::<UInt32Array>() {
+            values
+                .iter()
+                .map(|value| value.map(i128::from))
+                .collect::<Vec<_>>()
+        } else if let Some(values) = values.as_any().downcast_ref::<UInt8Array>() {
+            values
+                .iter()
+                .map(|value| value.map(i128::from))
+                .collect::<Vec<_>>()
+        } else if let Some(values) = values.as_any().downcast_ref::<UInt16Array>() {
             values
                 .iter()
                 .map(|value| value.map(i128::from))
@@ -639,8 +662,12 @@ fn try_integer_batch_top_n(
 // and nullable arrays retain Arrow's complete ordering semantics.
 #[derive(Clone, Copy)]
 enum IntegerSortKey<'a> {
+    Signed8(&'a Int8Array),
+    Signed16(&'a Int16Array),
     Signed32(&'a Int32Array),
     Signed(&'a Int64Array),
+    Unsigned8(&'a UInt8Array),
+    Unsigned16(&'a UInt16Array),
     Unsigned32(&'a UInt32Array),
     Unsigned(&'a UInt64Array),
 }
@@ -648,8 +675,12 @@ enum IntegerSortKey<'a> {
 impl IntegerSortKey<'_> {
     fn len(self) -> usize {
         match self {
+            Self::Signed8(values) => values.len(),
+            Self::Signed16(values) => values.len(),
             Self::Signed32(values) => values.len(),
             Self::Signed(values) => values.len(),
+            Self::Unsigned8(values) => values.len(),
+            Self::Unsigned16(values) => values.len(),
             Self::Unsigned32(values) => values.len(),
             Self::Unsigned(values) => values.len(),
         }
@@ -667,10 +698,18 @@ fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32A
         .iter()
         .map(|column| {
             let values = column.values.as_any();
-            let key = if let Some(values) = values.downcast_ref::<Int32Array>() {
+            let key = if let Some(values) = values.downcast_ref::<Int8Array>() {
+                IntegerSortKey::Signed8(values)
+            } else if let Some(values) = values.downcast_ref::<Int16Array>() {
+                IntegerSortKey::Signed16(values)
+            } else if let Some(values) = values.downcast_ref::<Int32Array>() {
                 IntegerSortKey::Signed32(values)
             } else if let Some(values) = values.downcast_ref::<Int64Array>() {
                 IntegerSortKey::Signed(values)
+            } else if let Some(values) = values.downcast_ref::<UInt8Array>() {
+                IntegerSortKey::Unsigned8(values)
+            } else if let Some(values) = values.downcast_ref::<UInt16Array>() {
+                IntegerSortKey::Unsigned16(values)
             } else if let Some(values) = values.downcast_ref::<UInt32Array>() {
                 IntegerSortKey::Unsigned32(values)
             } else {
@@ -688,10 +727,22 @@ fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32A
     let compare = |a: &u32, b: &u32| {
         for (key, descending) in &keys {
             let ordering = match key {
+                IntegerSortKey::Signed8(values) => {
+                    values.value(*a as usize).cmp(&values.value(*b as usize))
+                }
+                IntegerSortKey::Signed16(values) => {
+                    values.value(*a as usize).cmp(&values.value(*b as usize))
+                }
                 IntegerSortKey::Signed32(values) => {
                     values.value(*a as usize).cmp(&values.value(*b as usize))
                 }
                 IntegerSortKey::Signed(values) => {
+                    values.value(*a as usize).cmp(&values.value(*b as usize))
+                }
+                IntegerSortKey::Unsigned8(values) => {
+                    values.value(*a as usize).cmp(&values.value(*b as usize))
+                }
+                IntegerSortKey::Unsigned16(values) => {
                     values.value(*a as usize).cmp(&values.value(*b as usize))
                 }
                 IntegerSortKey::Unsigned32(values) => {
@@ -799,7 +850,10 @@ impl BatchOperator for TopNOperator {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, Decimal128Array, Int32Array, Int64Array, StringArray, UInt32Array};
+    use arrow::array::{
+        Array, Decimal128Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray,
+        UInt8Array, UInt16Array, UInt32Array,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
@@ -885,10 +939,18 @@ mod tests {
 
     #[test]
     fn typed_narrow_integer_topn_matches_arrow() {
+        let signed8 = Arc::new(Int8Array::from(vec![i8::MIN, 7, -3, 7, i8::MAX]));
+        let signed16 = Arc::new(Int16Array::from(vec![i16::MIN, 7, -3, 7, i16::MAX]));
         let signed = Arc::new(Int32Array::from(vec![i32::MIN, 7, -3, 7, i32::MAX]));
+        let unsigned8 = Arc::new(UInt8Array::from(vec![0, u8::MAX, 4, 4, 17]));
+        let unsigned16 = Arc::new(UInt16Array::from(vec![0, u16::MAX, 4, 4, 17]));
         let unsigned = Arc::new(UInt32Array::from(vec![0, u32::MAX, 4, 4, 17]));
         for values in [
+            Arc::clone(&signed8) as arrow::array::ArrayRef,
+            Arc::clone(&signed16) as arrow::array::ArrayRef,
             Arc::clone(&signed) as arrow::array::ArrayRef,
+            Arc::clone(&unsigned8) as arrow::array::ArrayRef,
+            Arc::clone(&unsigned16) as arrow::array::ArrayRef,
             Arc::clone(&unsigned) as arrow::array::ArrayRef,
         ] {
             for descending in [false, true] {
