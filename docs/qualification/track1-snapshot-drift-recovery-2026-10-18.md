@@ -23,3 +23,7 @@ cargo test -p kaveon-server scheduler_rejects_snapshot_drift_during_recovery -- 
 The regression passes on 2026-10-18. This is coordinator-level evidence; a
 live failover with a worker heartbeat changing during execution remains open.
 
+The companion heartbeat regression also verifies that a worker with an expired
+heartbeat is removed before recovery capacity is evaluated, so stale workers
+cannot be selected as replacements.
+

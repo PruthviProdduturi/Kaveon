@@ -21417,9 +21417,10 @@ mod tests {
         worker.catalog_snapshot_id = Some("snapshot-old".into());
         cluster.register_worker(worker);
 
-        let error =
-            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap_err();
-        assert!(error.starts_with("INSUFFICIENT_COMPATIBLE_WORKERS:"));
+        let compatible =
+            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap();
+        assert_eq!(compatible.len(), 1);
+        assert_eq!(compatible[0].node_id, "live");
 
         cluster.workers.remove("stale");
         let compatible =
@@ -21467,6 +21468,27 @@ mod tests {
         assert!(error.starts_with("INSUFFICIENT_COMPATIBLE_WORKERS:"));
         assert_eq!(cluster.compatible_workers("snapshot-required").len(), 1);
         assert_eq!(cluster.compatible_workers("snapshot-new").len(), 1);
+    }
+
+    #[test]
+    fn scheduler_drops_heartbeat_lapsed_worker_before_recovery() {
+        let config = crate::config::ServerConfig::default();
+        let mut cluster = crate::cluster::ClusterState::new(&config);
+        let mut worker = cluster.this_node.clone();
+        worker.role = crate::cluster::NodeRole::Worker;
+        worker.catalog_snapshot_id = Some("snapshot-required".into());
+        worker.node_id = "live".into();
+        cluster.register_worker(worker.clone());
+        worker.node_id = "lapsed".into();
+        worker.last_heartbeat = 0;
+        cluster.register_worker(worker);
+
+        let compatible =
+            super::workers_for_catalog_snapshot(&mut cluster, "snapshot-required").unwrap();
+        assert_eq!(compatible.len(), 1);
+        assert_eq!(compatible[0].node_id, "live");
+        assert!(cluster.workers.contains_key("live"));
+        assert!(!cluster.workers.contains_key("lapsed"));
     }
 
     #[test]
