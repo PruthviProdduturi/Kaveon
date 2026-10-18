@@ -80,8 +80,13 @@ fn normalize_json_null_clauses(sql: &str) -> Result<String> {
             break;
         };
         let inner = normalize_json_null_clauses(&sql[open + 1..close])?;
-        let inner = strip_json_null_clauses(&inner)?;
-        output.push_str(&name);
+        let (inner, strict) = strip_json_null_clauses(&inner)?;
+        let function_name = if strict {
+            format!("{name}_STRICT")
+        } else {
+            name
+        };
+        output.push_str(&function_name);
         output.push('(');
         output.push_str(&inner);
         output.push(')');
@@ -90,9 +95,11 @@ fn normalize_json_null_clauses(sql: &str) -> Result<String> {
     Ok(output)
 }
 
-fn strip_json_null_clauses(inner: &str) -> Result<String> {
+fn strip_json_null_clauses(inner: &str) -> Result<(String, bool)> {
     let bytes = inner.as_bytes();
     let mut ranges = Vec::new();
+    let mut strict = false;
+    let mut null = false;
     let mut cursor = 0;
     let mut depth = 0usize;
     while cursor < bytes.len() {
@@ -126,9 +133,13 @@ fn strip_json_null_clauses(inner: &str) -> Result<String> {
                         "invalid JSON {kind} clause; expected NULL"
                     )));
                 };
-                if !action.eq_ignore_ascii_case("NULL") {
+                if action.eq_ignore_ascii_case("NULL") {
+                    null = true;
+                } else if action.eq_ignore_ascii_case("ERROR") {
+                    strict = true;
+                } else {
                     return Err(KaveonError::Sql(format!(
-                        "unsupported JSON {kind} clause action '{action}'; only NULL is supported"
+                        "unsupported JSON {kind} clause action '{action}'; only NULL or ERROR is supported"
                     )));
                 }
                 cursor = action_end;
@@ -137,12 +148,19 @@ fn strip_json_null_clauses(inner: &str) -> Result<String> {
             _ => cursor += 1,
         }
     }
-    if let Some((start, end)) = ranges.into_iter().next_back() {
-        let mut result = inner.to_owned();
-        result.replace_range(start..end, "");
-        return strip_json_null_clauses(&result);
+    if strict && null {
+        return Err(KaveonError::Sql(
+            "JSON ON EMPTY/ON ERROR clauses must use the same action".into(),
+        ));
     }
-    Ok(inner.to_owned())
+    if !ranges.is_empty() {
+        let mut result = inner.to_owned();
+        for (start, end) in ranges.into_iter().rev() {
+            result.replace_range(start..end, "");
+        }
+        return Ok((result, strict));
+    }
+    Ok((inner.to_owned(), strict))
 }
 
 /// Lower the bounded SQL/JSON typed-return form to the existing typed CAST
@@ -204,10 +222,12 @@ fn next_json_function(sql: &str, start: usize) -> Option<(usize, String, usize)>
         }
         let name = &sql[name_start..cursor];
         let upper = name.to_ascii_uppercase();
-        if (upper == "JSON_VALUE" || upper == "JSON_QUERY")
-            && bytes
-                .get(name_start.wrapping_sub(1))
-                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+        if matches!(
+            upper.as_str(),
+            "JSON_VALUE" | "JSON_QUERY" | "JSON_VALUE_STRICT" | "JSON_QUERY_STRICT"
+        ) && bytes
+            .get(name_start.wrapping_sub(1))
+            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
         {
             let mut open = cursor;
             while open < bytes.len() && bytes[open].is_ascii_whitespace() {
@@ -1254,15 +1274,34 @@ mod tests {
     fn unsupported_json_null_actions_fail_closed() {
         for sql in [
             "SELECT JSON_VALUE(payload, '$.missing' ON EMPTY DEFAULT 'fallback') FROM t",
-            "SELECT JSON_VALUE(payload, '$.missing' ON ERROR ERROR) FROM t",
+            "SELECT JSON_VALUE(payload, '$.missing' ON ERROR DEFAULT 'fallback') FROM t",
         ] {
             let error = parse_sql(sql).expect_err("unsupported JSON action must be rejected");
             assert!(
-                error.to_string().contains("only NULL is supported")
+                error
+                    .to_string()
+                    .contains("only NULL or ERROR is supported")
                     || error.to_string().contains("expected EMPTY or ERROR"),
                 "unexpected diagnostic: {error}"
             );
         }
+    }
+
+    #[test]
+    fn json_error_clause_lowers_to_strict_function() {
+        let statements = parse_sql(
+            "SELECT JSON_VALUE(payload, '$.missing' RETURNING BIGINT ON EMPTY ERROR), JSON_QUERY(payload, '$.missing' ON ERROR ERROR) FROM t",
+        )
+        .expect("bounded JSON ERROR clauses should parse");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("CAST(JSON_VALUE_STRICT(payload, '$.missing') AS BIGINT)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("JSON_QUERY_STRICT(payload, '$.missing')"),
+            "{rendered}"
+        );
     }
 
     #[test]
