@@ -4913,6 +4913,27 @@ mod tests {
     }
 
     #[test]
+    fn mixed_partition_windows_remain_gathered_for_correct_frames() {
+        let graph = graph(
+            "SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions) AS by_region, ROW_NUMBER() OVER (PARTITION BY country ORDER BY actions) AS by_country FROM orders",
+        );
+        assert_eq!(graph.stages.len(), 2);
+        assert_eq!(graph.exchanges.len(), 1);
+        let root = &graph.stages[graph.root_stage.0 as usize];
+        assert_eq!(root.task_count, 1);
+        assert!(
+            root.plan.operator == "FinalWindow"
+                || root
+                    .plan
+                    .children
+                    .iter()
+                    .any(|child| child.operator == "FinalWindow"),
+            "mixed partition windows must use one final stage: {:?}",
+            root.plan
+        );
+    }
+
+    #[test]
     fn shares_exchange_for_reordered_window_partition_keys() {
         let expr = |columns: &[&str]| kaveon_core::Expr::WindowFunction {
             name: "ROW_NUMBER".into(),
