@@ -444,6 +444,7 @@ impl CoordinatorOrchestrator {
             .get(&assignment.task_id.stage_id)
             .ok_or_else(|| execution_error("task references a missing executable fragment"))?
             .clone();
+        let fragment = fragment_with_task_splits(fragment, &assignment.splits);
         let exchange_inputs = self.input_locations(&assignment)?;
         let exchange_outputs = self.output_locations(&assignment)?;
         let execution_partition = ExecutionPartition {
@@ -649,7 +650,12 @@ fn scan_splits(
                 .into_iter()
                 .enumerate()
                 .filter(|(index, _)| index % partition_count == partition)
-                .map(|(_, split)| split),
+                .map(|(_, mut split)| {
+                    split
+                        .properties
+                        .insert("scan_node_id".into(), node.id.0.to_string());
+                    split
+                }),
         );
     }
     splits
@@ -669,6 +675,7 @@ fn append_listed_file_splits(
     let mut properties = BTreeMap::from([
         ("format".into(), "parquet".into()),
         ("size".into(), file.size.to_string()),
+        ("scan_node_id".into(), node_id.to_string()),
     ]);
     if let Some(row_groups) = &file.row_groups {
         for row_group in row_groups {
@@ -689,6 +696,34 @@ fn append_listed_file_splits(
             properties,
         });
     }
+}
+
+/// Copy the coordinator's task-local split assignment into the executable
+/// fragment sent to the worker. The fragment field is optional on the wire,
+/// so older coordinators/fragments retain their local scan fallback.
+fn fragment_with_task_splits(
+    mut fragment: ExecutableFragment,
+    splits: &[kaveon_core::SplitDescriptor],
+) -> ExecutableFragment {
+    if splits.is_empty() {
+        return fragment;
+    }
+    for node in &mut fragment.nodes {
+        let FragmentOperator::Scan(scan) = &mut node.operator else {
+            continue;
+        };
+        scan.assigned_splits = splits
+            .iter()
+            .filter(|split| {
+                split
+                    .properties
+                    .get("scan_node_id")
+                    .is_some_and(|id| id == &node.id.0.to_string())
+            })
+            .cloned()
+            .collect();
+    }
+    fragment
 }
 
 fn validate_fragments(
@@ -989,6 +1024,7 @@ mod tests {
                     projection: vec!["id".into()],
                     predicate: None,
                     listing: None,
+                    assigned_splits: Vec::new(),
                 }),
             }],
         };
@@ -1014,6 +1050,14 @@ mod tests {
                 .splits
                 .iter()
                 .all(|split| split.properties["format"] == "parquet")
+        }));
+        assert!(dispatches.iter().all(|dispatch| {
+            dispatch.fragment.nodes.iter().any(|node| {
+                let FragmentOperator::Scan(scan) = &node.operator else {
+                    return false;
+                };
+                scan.assigned_splits == dispatch.assignment.splits
+            })
         }));
         std::fs::remove_dir_all(root).unwrap();
     }
