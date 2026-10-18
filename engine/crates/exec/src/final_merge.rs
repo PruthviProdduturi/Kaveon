@@ -101,8 +101,10 @@ pub struct HybridFinalMerge {
     /// This merge sees every batch and keeps the rows whose key hashes
     /// to its thread.
     selection: Option<(ThreadSelector, usize)>,
-    /// Opt-in selected-row merge for benchmarking; the filtered Arrow path
-    /// remains the compatibility default until spill behavior is qualified.
+    /// Selected-row merge for hash-partitioned inputs. Columnar aggregate
+    /// states consume the chosen row indices without a filter/take allocation;
+    /// unsupported layouts fall back to the compatibility path in
+    /// `push_selected`.
     zero_copy_selection: bool,
     /// Runs on the disk by sub-partition, each a set of distinct groups.
     runs: Vec<Vec<SpillRun>>,
@@ -152,7 +154,12 @@ impl HybridFinalMerge {
             rendezvous: None,
             pressure: None,
             selection: None,
-            zero_copy_selection: false,
+            // The columnar selected-row path is safe for the production
+            // partitioned merge and falls back per batch when a layout cannot
+            // consume indices directly. Keep it enabled by default so a
+            // distributed aggregate does not materialize a filtered batch at
+            // every worker before merging.
+            zero_copy_selection: true,
             runs: (0..partitions).map(|_| Vec::new()).collect(),
             pending: VecDeque::new(),
             drained: false,
@@ -1462,7 +1469,10 @@ mod tests {
         // What the spilled tables leave held — the prepaid balances, the
         // spill reserves, the batches in flight — is well under this;
         // what the live tables hold is well over it.
-        let leaves = 12u64 << 20;
+        // The production selected-row path retains less Arrow scratch than
+        // the filtered compatibility path, but the source still needs room
+        // to cross the admission boundary and exercise pressure handling.
+        let leaves = 40u64 << 20;
         openers.push({
             let schema = schema.clone();
             let batch = last.clone();
