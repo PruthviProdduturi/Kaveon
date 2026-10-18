@@ -41,3 +41,10 @@ The current source also passes the focused Trino compatibility suite:
 cargo test -p kaveon-server trino_ --quiet
 29 passed; 0 failed; 401 filtered out; finished in 0.28s
 ```
+
+The complete server differential corpus also passed locally:
+
+```text
+cargo test -p kaveon-server --bin kaveon-server differential_tests --quiet
+41 passed; 0 failed; 389 filtered out; finished in 223.59s
+```
