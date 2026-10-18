@@ -3663,6 +3663,37 @@ fn distributed_unpartitioned_first_value_ignore_nulls_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// LEAD with a skip count and a literal default must look ahead in the
+/// globally ordered, NULL-filtered stream after distributed window merge.
+#[test]
+fn distributed_unpartitioned_lead_ignore_nulls_with_default_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-global-lead-ignore-nulls-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT input_id, actions, LEAD(industry, 2, 'missing') IGNORE NULLS OVER (ORDER BY actions, input_id) AS next_industry FROM (VALUES (1, 1, CAST('alpha' AS VARCHAR)), (2, 2, CAST(NULL AS VARCHAR)), (3, 3, CAST(NULL AS VARCHAR))) AS input(input_id, actions, industry) ORDER BY actions, input_id";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-window-global-lead-ignore-nulls", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 3);
+    assert!(actual.iter().any(|row| row.ends_with("missing")));
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths() {
     let directory =
