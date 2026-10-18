@@ -266,7 +266,7 @@ fn compare_column(
 /// the kernels cannot compare the two. A dictionary column compares through
 /// its dictionary: once per distinct value, then an index lookup per row.
 fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<ArrayRef> {
-    use arrow::array::{BooleanArray, Decimal128Array, Float64Array, Int64Array};
+    use arrow::array::{BooleanArray, Decimal128Array, Float32Array, Float64Array, Int64Array};
     Some(match (value, data_type) {
         (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
         // Narrower and unsigned integer columns, and day-number dates,
@@ -295,6 +295,17 @@ fn comparison_literal(value: &ScalarValue, data_type: &DataType) -> Option<Array
                 },
             )
             .ok()?
+        }
+        (ScalarValue::Float64(value), DataType::Float32) => {
+            // Runtime-filter values are represented as f64 at the engine
+            // boundary. Narrow only when the value is exactly representable
+            // as an Arrow Float32; otherwise declining pushdown is safer than
+            // rounding a value into a different key.
+            let narrowed = *value as f32;
+            if f64::from(narrowed) != *value {
+                return None;
+            }
+            Arc::new(Float32Array::from(vec![narrowed]))
         }
         (ScalarValue::Float64(value), DataType::Float64) => {
             Arc::new(Float64Array::from(vec![*value]))
