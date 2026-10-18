@@ -4699,6 +4699,45 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 Ok(Arc::new(builder.finish()) as ArrayRef)
             }
+            DataType::LargeList(field) if field.data_type() == &DataType::Int64 => {
+                let elements = args[0]
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "ARRAY_REPEAT requires a large LIST for nested values".into(),
+                        )
+                    })?;
+                let mut builder = LargeListBuilder::new(LargeListBuilder::new(Int64Builder::new()));
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    if elements.is_null(row) {
+                        for _ in 0..count {
+                            builder.values().append(false);
+                        }
+                    } else {
+                        let inner = elements.value(row);
+                        let inner = inner.as_primitive::<Int64Type>();
+                        for _ in 0..count {
+                            for value in inner.iter() {
+                                builder.values().values().append_option(value);
+                            }
+                            builder.values().append(true);
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
             DataType::Boolean => repeat_primitive!(
                 BooleanArray,
                 BooleanBuilder::new(),
@@ -14016,6 +14055,40 @@ mod tests {
         assert_eq!(first.value(1).as_primitive::<Int64Type>().values(), &[1, 2]);
         let null_value = repeated.value(1);
         let nulls = null_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(nulls.len(), 2);
+        assert_eq!(nulls.null_count(), 2);
+        assert_eq!(repeated.value(2).len(), 0);
+    }
+
+    #[test]
+    fn array_repeat_preserves_nested_large_integer_arrays() {
+        let mut nested = LargeListBuilder::new(Int64Builder::new());
+        nested.values().append_value(1);
+        nested.values().append_value(2);
+        nested.append(true);
+        nested.append(false);
+        nested.values().append_value(3);
+        nested.append(true);
+        let values = Arc::new(nested.finish()) as ArrayRef;
+        let counts = Arc::new(Int64Array::from(vec![2, 2, 0])) as ArrayRef;
+
+        let result = eval_scalar_function("ARRAY_REPEAT", &[values, counts], 3).unwrap();
+        let repeated = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(
+            repeated.value_type(),
+            DataType::LargeList(Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Int64,
+                true,
+            )))
+        );
+        let first = repeated.value(0);
+        let first = first.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(first.value(1).as_primitive::<Int64Type>().values(), &[1, 2]);
+        let nulls = repeated.value(1);
+        let nulls = nulls.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(nulls.len(), 2);
         assert_eq!(nulls.null_count(), 2);
         assert_eq!(repeated.value(2).len(), 0);
