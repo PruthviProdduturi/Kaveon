@@ -15,10 +15,21 @@ pub fn enumerate_local_splits(
     source: impl AsRef<Path>,
     format: DataFormat,
 ) -> Result<Vec<SplitDescriptor>> {
+    enumerate_local_splits_at(source, format, None)
+}
+
+/// Enumerate local splits at the coordinator's pinned snapshot. Delta scans
+/// must use the same version carried by the executable fragment; enumerating
+/// the latest log here could assign files that were not visible to the query.
+pub fn enumerate_local_splits_at(
+    source: impl AsRef<Path>,
+    format: DataFormat,
+    delta_version: Option<u64>,
+) -> Result<Vec<SplitDescriptor>> {
     let source = source.as_ref();
     match format {
         DataFormat::Parquet => enumerate_parquet_splits(source),
-        DataFormat::Delta => enumerate_delta_splits(source),
+        DataFormat::Delta => enumerate_delta_splits(source, delta_version),
         DataFormat::Iceberg => {
             let snapshot =
                 kaveon_storage::IcebergReader::new(source.to_string_lossy().into_owned())
@@ -58,8 +69,13 @@ fn enumerate_parquet_splits(path: &Path) -> Result<Vec<SplitDescriptor>> {
         .collect())
 }
 
-fn enumerate_delta_splits(path: &Path) -> Result<Vec<SplitDescriptor>> {
-    DeltaTableReader::new(path)
+fn enumerate_delta_splits(path: &Path, version: Option<u64>) -> Result<Vec<SplitDescriptor>> {
+    let reader = DeltaTableReader::new(path);
+    let reader = match version {
+        Some(version) => reader.with_version(version),
+        None => reader,
+    };
+    reader
         .active_file_paths()?
         .into_iter()
         .enumerate()

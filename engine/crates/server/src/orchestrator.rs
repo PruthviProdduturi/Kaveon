@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::Path;
 
 use kaveon_core::{
-    ExchangeId, ExecutableFragment, KaveonError, Partitioning, Result, StageGraph, StageId,
-    TaskAssignment, TaskId, TaskState,
+    ExchangeId, ExecutableFragment, FragmentOperator, KaveonError, Partitioning, Result, ScanFile,
+    StageGraph, StageId, TaskAssignment, TaskId, TaskState,
 };
 use serde::Serialize;
 
@@ -124,7 +125,7 @@ impl CoordinatorOrchestrator {
         workers.sort_by(|left, right| left.node_id.cmp(&right.node_id));
         validate_workers(&workers)?;
 
-        let assignments = build_assignments(&graph, &workers);
+        let assignments = build_assignments(&graph, &fragments, &workers)?;
         let runtime = StageRuntime::with_max_task_attempts(
             graph.clone(),
             assignments.values().cloned().collect(),
@@ -563,8 +564,9 @@ fn ordinal(count: u32) -> String {
 
 fn build_assignments(
     graph: &StageGraph,
+    fragments: &BTreeMap<StageId, ExecutableFragment>,
     workers: &[NodeInfo],
-) -> BTreeMap<(StageId, usize), TaskAssignment> {
+) -> Result<BTreeMap<(StageId, usize), TaskAssignment>> {
     let mut assignments = BTreeMap::new();
     for stage in &graph.stages {
         let input_exchanges = graph
@@ -581,6 +583,10 @@ fn build_assignments(
             .collect::<Vec<_>>();
         for partition in 0..stage.task_count {
             let worker = &workers[partition % workers.len()];
+            let splits = fragments
+                .get(&stage.id)
+                .map(|fragment| scan_splits(fragment, partition, stage.task_count))
+                .unwrap_or_default();
             assignments.insert(
                 (stage.id, partition),
                 TaskAssignment {
@@ -591,14 +597,98 @@ fn build_assignments(
                         attempt: 0,
                     },
                     worker_id: worker.node_id.clone(),
-                    splits: Vec::new(),
+                    splits,
                     input_exchanges: input_exchanges.clone(),
                     output_exchanges: output_exchanges.clone(),
                 },
             );
         }
     }
-    assignments
+    Ok(assignments)
+}
+
+/// Materialize coordinator-selected scan work in each task assignment.
+/// Directory listings carry exact files/row groups; local single-file Parquet
+/// and pinned Delta scans are enumerated deterministically. Remote sources
+/// without a listing retain their fragment-level source contract.
+fn scan_splits(
+    fragment: &ExecutableFragment,
+    partition: usize,
+    partition_count: usize,
+) -> Vec<kaveon_core::SplitDescriptor> {
+    let mut splits = Vec::new();
+    for node in &fragment.nodes {
+        let FragmentOperator::Scan(scan) = &node.operator else {
+            continue;
+        };
+        if let Some(listing) = &scan.listing {
+            let Some(files) = listing
+                .assignment
+                .as_ref()
+                .and_then(|assignment| assignment.partitions.get(partition))
+            else {
+                continue;
+            };
+            for file in files {
+                append_listed_file_splits(&mut splits, node.id.0, &scan.source_uri, file);
+            }
+            continue;
+        }
+        let Some(local) = scan.source_uri.strip_prefix("file://") else {
+            continue;
+        };
+        let Ok(enumerated) = crate::scheduler::enumerate_local_splits_at(
+            Path::new(local),
+            scan.format,
+            scan.delta_version,
+        ) else {
+            continue;
+        };
+        splits.extend(
+            enumerated
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _)| index % partition_count == partition)
+                .map(|(_, split)| split),
+        );
+    }
+    splits
+}
+
+fn append_listed_file_splits(
+    output: &mut Vec<kaveon_core::SplitDescriptor>,
+    node_id: u32,
+    source_uri: &str,
+    file: &ScanFile,
+) {
+    let source_uri = format!(
+        "{}/{}",
+        source_uri.trim_end_matches('/'),
+        file.path.trim_start_matches('/')
+    );
+    let mut properties = BTreeMap::from([
+        ("format".into(), "parquet".into()),
+        ("size".into(), file.size.to_string()),
+    ]);
+    if let Some(row_groups) = &file.row_groups {
+        for row_group in row_groups {
+            properties.insert("row_group_index".into(), row_group.to_string());
+            output.push(kaveon_core::SplitDescriptor {
+                id: kaveon_core::SplitId(format!(
+                    "scan-{node_id}-{}-row-group-{row_group}",
+                    file.path
+                )),
+                source_uri: source_uri.clone(),
+                properties: properties.clone(),
+            });
+        }
+    } else {
+        output.push(kaveon_core::SplitDescriptor {
+            id: kaveon_core::SplitId(format!("scan-{node_id}-{}", file.path)),
+            source_uri,
+            properties,
+        });
+    }
 }
 
 fn validate_fragments(
@@ -853,6 +943,79 @@ mod tests {
                     .any(|cleanup| cleanup.locations.contains(&location))
             );
         }
+    }
+
+    #[test]
+    fn coordinator_assignments_carry_enumerated_local_delta_splits() {
+        let root = std::env::temp_dir().join(format!(
+            "kaveon-orchestrator-delta-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("_delta_log")).unwrap();
+        std::fs::write(
+            root.join("_delta_log/00000000000000000000.json"),
+            "{\"add\":{\"path\":\"part-a.parquet\"}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("_delta_log/00000000000000000001.json"),
+            "{\"add\":{\"path\":\"part-b.parquet\"}}\n",
+        )
+        .unwrap();
+        let source_uri = format!("file://{}", root.display());
+        let graph = StageGraph {
+            query_id: "delta-query".into(),
+            root_stage: StageId(0),
+            stages: vec![stage(0, 2)],
+            exchanges: vec![],
+        };
+        let fragment = ExecutableFragment {
+            version: kaveon_core::EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(0),
+            root: FragmentNodeId(0),
+            nodes: vec![FragmentNode {
+                id: FragmentNodeId(0),
+                inputs: vec![],
+                operator: FragmentOperator::Scan(kaveon_core::ScanSpec {
+                    source_uri,
+                    format: kaveon_core::DataFormat::Delta,
+                    delta_version: Some(0),
+                    iceberg_snapshot_id: None,
+                    table: kaveon_core::ScanTable {
+                        catalog: "lake".into(),
+                        schema: "public".into(),
+                        table: "events".into(),
+                    },
+                    projection: vec!["id".into()],
+                    predicate: None,
+                    listing: None,
+                }),
+            }],
+        };
+        let fragments = BTreeMap::from([(StageId(0), fragment)]);
+        let orchestrator = CoordinatorOrchestrator::new(
+            graph,
+            fragments,
+            vec![worker("worker-a"), worker("worker-b")],
+        )
+        .unwrap();
+        let dispatches = orchestrator.ready_dispatches().unwrap();
+        let assigned = dispatches
+            .iter()
+            .flat_map(|dispatch| dispatch.assignment.splits.iter())
+            .map(|split| split.source_uri.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(assigned.len(), 1);
+        assert!(assigned.iter().any(|uri| uri.ends_with("part-a.parquet")));
+        assert!(!assigned.iter().any(|uri| uri.ends_with("part-b.parquet")));
+        assert!(dispatches.iter().all(|dispatch| {
+            dispatch
+                .assignment
+                .splits
+                .iter()
+                .all(|split| split.properties["format"] == "parquet")
+        }));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn run_stage(orchestrator: &mut CoordinatorOrchestrator, stage: u32) -> Vec<TaskDispatch> {
