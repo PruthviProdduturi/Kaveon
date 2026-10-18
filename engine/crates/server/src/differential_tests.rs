@@ -2795,6 +2795,34 @@ fn derived_values_join_using_matches_the_local_result() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// FULL JOIN USING must keep SQL NULL keys non-matching and preserve the
+/// merged key/coalescing shape across distributed fragments.
+#[test]
+fn distributed_full_join_using_null_keys_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-full-using-null-keys-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT COALESCE(l.id, r.id) AS id, l.label, r.label FROM (VALUES (1, 'left-one'), (CAST(NULL AS BIGINT), 'left-null')) AS l(id, label) FULL JOIN (VALUES (1, 'right-one'), (2, 'right-two'), (CAST(NULL AS BIGINT), 'right-null')) AS r(id, label) USING (id) ORDER BY 1, 2, 3";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-full-join-using-null-keys", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_join_using_wildcard_suppresses_the_right_key() {
     let directory =
