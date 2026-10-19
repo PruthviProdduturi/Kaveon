@@ -17,11 +17,11 @@ an active long-running manager that shares the root.
   verifies stale private directories are removed while unrelated root entries
   remain.
 - `spill::tests::restart_age_fence_preserves_a_recent_spill_directory`
-  verifies the age fence preserves a recent private directory.
+  verifies the age fence preserves a recent private directory.`r`n- `spill::tests::unreadable_spill_timestamp_is_never_reclaimed` verifies an unreadable timestamp cannot trigger deletion.
 
 ## Boundary
 
-This is local process-start cleanup with an age fence. It does not prove direct
+This is local process-start cleanup with an age fence. The cleanup predicate is fail-closed when filesystem metadata is unreadable. It does not prove direct
 OS `ENOSPC`, node loss during a live spill, or remote object-store spill
 recovery. A shared spill root should use the same configured age policy across
 coordinators and workers; operators should choose an age longer than their
