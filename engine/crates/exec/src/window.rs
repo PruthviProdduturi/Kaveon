@@ -925,13 +925,25 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
             None,
         )?);
     }
-    if name == "SUM" && matches!(col.data_type(), DataType::Int32 | DataType::Int64) {
+    // Trino widens the signed integral SUM family (TINYINT through BIGINT)
+    // to BIGINT.  Keep that widening exact instead of routing narrow Arrow
+    // integers through the floating-point fallback.  Window aggregates use
+    // the same evaluator for local and exchanged partitions, so this also
+    // keeps a narrow cast stable across worker boundaries.
+    if name == "SUM"
+        && matches!(
+            col.data_type(),
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        )
+    {
         let mut sum = 0i128;
         for &row in &rows {
-            sum += if matches!(col.data_type(), DataType::Int32) {
-                col.as_primitive::<Int32Type>().value(row) as i128
-            } else {
-                col.as_primitive::<Int64Type>().value(row) as i128
+            sum += match col.data_type() {
+                DataType::Int8 => col.as_primitive::<Int8Type>().value(row) as i128,
+                DataType::Int16 => col.as_primitive::<Int16Type>().value(row) as i128,
+                DataType::Int32 => col.as_primitive::<Int32Type>().value(row) as i128,
+                DataType::Int64 => col.as_primitive::<Int64Type>().value(row) as i128,
+                _ => unreachable!("integral window SUM type was checked above"),
             };
         }
         let sum = i64::try_from(sum).map_err(|_| error("window SUM integer overflow"))?;
@@ -956,7 +968,11 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
     }
     if !matches!(
         col.data_type(),
-        DataType::Int32 | DataType::Int64 | DataType::UInt64 | DataType::Float64
+        DataType::Int32
+            | DataType::Int64
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
     ) {
         return Err(error(format!(
             "{name} window does not support {}",
@@ -1277,6 +1293,56 @@ mod tests {
         let input = float_batch(vec![Some(1.0), Some(1.5), Some(2.0), None]);
         let expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
         assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(3), Some(1)]);
+    }
+
+    #[test]
+    fn window_sum_widens_tinyint_and_real_without_float_input_loss() {
+        let tinyint = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int8, true)])),
+            vec![Arc::new(Int8Array::from(vec![
+                Some(2),
+                Some(-1),
+                Some(3),
+                None,
+            ]))],
+        )
+        .unwrap();
+        assert_eq!(
+            evaluate_window(&expression("SUM", None), &tinyint)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(-1), Some(4), Some(4)]
+        );
+
+        let smallint = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int16, true)])),
+            vec![Arc::new(Int16Array::from(vec![
+                Some(300),
+                Some(-100),
+                None,
+            ]))],
+        )
+        .unwrap();
+        assert_eq!(
+            evaluate_window(&expression("SUM", None), &smallint)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(200), Some(-100), Some(200)]
+        );
+
+        let real = float_batch(vec![Some(1.5), Some(2.5), None]);
+        assert_eq!(
+            evaluate_window(&expression("SUM", None), &real)
+                .unwrap()
+                .as_primitive::<Float64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1.5), Some(4.0), Some(4.0)]
+        );
     }
 
     #[test]

@@ -5702,6 +5702,35 @@ fn distributed_partitioned_window_sum_rows_frame_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Narrow numeric window inputs must retain Trino's widening contract after
+/// the partition is exchanged: TINYINT SUM returns BIGINT rather than failing
+/// in the worker's window evaluator or silently accumulating through f64.
+#[test]
+fn distributed_partitioned_window_sum_tinyint_widens_exactly() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-tinyint-sum-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, user_id, SUM(CAST(actions AS TINYINT)) OVER (PARTITION BY region ORDER BY actions, user_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rolling_actions FROM events WHERE event_date = '2026-07-04' ORDER BY region, actions, user_id LIMIT 24";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-window-tinyint-sum", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A bounded GROUPS frame must advance by peer groups, not physical rows, and
 /// retain those peer boundaries when the partition is merged across workers.
 #[test]
