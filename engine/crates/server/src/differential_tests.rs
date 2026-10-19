@@ -360,6 +360,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_filter_lambda",
+        "SELECT FILTER(ARRAY[1, 2, NULL, 3], x -> x > 1) AS filtered FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,

@@ -3666,10 +3666,8 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
         ast::Expr::Lambda(lambda) => {
-            if lambda.params.len() != 2 {
-                return Err(sql_err(
-                    "ARRAY_SORT comparator lambda must have exactly two parameters",
-                ));
+            if !(1..=2).contains(&lambda.params.len()) {
+                return Err(sql_err("lambda must have one or two parameters"));
             }
             // Keep the closure as an expression node so it is serialized with
             // the logical plan and evaluated at the array operator boundary.
@@ -8218,6 +8216,23 @@ mod tests {
             args.get(2),
             Some(Expr::Function { name, args })
                 if name == "__KAVEON_LAMBDA" && args.len() == 3
+        ));
+    }
+
+    #[test]
+    fn lowers_filter_lambda_with_one_parameter() {
+        let plan = sql_to_logical_plan("SELECT FILTER(ARRAY[1, 2, 3], x -> x > 1) FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected FILTER");
+        };
+        assert_eq!(name, "FILTER");
+        assert!(matches!(
+            args.get(1),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 2
         ));
     }
 
