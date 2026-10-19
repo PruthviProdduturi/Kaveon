@@ -5824,6 +5824,125 @@ fn distributed_partitioned_window_smallint_range_matches_exact_rows() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// TINYINT RANGE boundaries widen before arithmetic, preserve NULL/duplicate
+/// peers, and stay partition-local after a three-worker hash exchange.
+#[test]
+fn distributed_partitioned_window_tinyint_range_matches_exact_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-tinyint-range-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let values = vec![
+        Some(i8::MIN),
+        Some(i8::MIN + 1),
+        Some(0),
+        Some(i8::MAX - 1),
+        Some(i8::MAX),
+        Some(i8::MAX),
+        None,
+        None,
+        Some(i8::MIN),
+        Some(i8::MIN + 1),
+        Some(1),
+        Some(i8::MAX - 2),
+        Some(i8::MAX - 1),
+        Some(i8::MAX),
+        None,
+        None,
+    ];
+    let input = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("p", DataType::Utf8, false),
+            Field::new("id", DataType::Int64, false),
+            Field::new("x", DataType::Int8, true),
+        ])),
+        vec![
+            Arc::new(StringArray::from_iter_values(
+                (0..16).map(|i| if i < 8 { "a" } else { "b" }),
+            )),
+            Arc::new(Int64Array::from_iter_values(0..16)),
+            Arc::new(Int8Array::from(values)),
+        ],
+    )
+    .unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: directory.clone(),
+        },
+    )
+    .with_schema("events");
+    catalog
+        .register_table(
+            "events",
+            write_directory(&directory, "range_tinyint", &input, 3),
+        )
+        .unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    let preceding = [1, 2, 1, 1, 3, 3, 2, 2, 1, 2, 1, 1, 2, 2, 2, 2];
+    let following = [2, 1, 1, 3, 2, 2, 2, 2, 2, 1, 1, 2, 2, 1, 2, 2];
+    for ascending in [true, false] {
+        for nulls in ["FIRST", "LAST"] {
+            for preceding_bound in [true, false] {
+                let direction = if ascending { "ASC" } else { "DESC" };
+                let bounds = if preceding_bound {
+                    "1 PRECEDING AND CURRENT ROW"
+                } else {
+                    "CURRENT ROW AND 1 FOLLOWING"
+                };
+                let statement = format!(
+                    "SELECT id, COUNT(*) OVER (PARTITION BY p ORDER BY x {direction} NULLS {nulls} RANGE BETWEEN {bounds}) AS n FROM range_tinyint"
+                );
+                let plan = bound_plan(&statement, &manager);
+                let graph = crate::planner::build_stage_graph(&statement, &plan, 3).unwrap();
+                assert!(graph.exchanges.iter().any(|exchange| exchange.partitioning
+                    == Partitioning::Hash {
+                        columns: vec!["p".into()],
+                        partition_count: 3,
+                    }));
+                let root = graph
+                    .stages
+                    .iter()
+                    .find(|stage| stage.id == graph.root_stage)
+                    .unwrap();
+                assert_eq!(root.task_count, 3, "window must execute on three tasks");
+                let counts = if ascending == preceding_bound {
+                    &preceding
+                } else {
+                    &following
+                };
+                let mut exact = counts
+                    .iter()
+                    .enumerate()
+                    .map(|(id, count)| format!("{id}\u{1f}{count}"))
+                    .collect::<Vec<_>>();
+                exact.sort();
+                let pool =
+                    QueryMemoryPool::new("distributed-window-tinyint-range", 32 << 20).unwrap();
+                let mut local =
+                    crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+                assert_eq!(
+                    canonical_rows(&drain(local.operator.as_mut()), false),
+                    exact,
+                    "local: {statement}"
+                );
+                drop(local);
+                assert_eq!(pool.snapshot().current_bytes, 0);
+                let actual = execute_distributed(&statement, &plan, &manager, 3, &pool).unwrap();
+                assert_eq!(
+                    canonical_rows(&actual, false),
+                    exact,
+                    "distributed: {statement}"
+                );
+                assert_eq!(pool.snapshot().current_bytes, 0);
+            }
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 /// An unpartitioned value window must apply IGNORE NULLS across the global
 /// ordering, rather than independently inside each worker's input fragment.
 #[test]
