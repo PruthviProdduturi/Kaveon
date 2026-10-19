@@ -255,6 +255,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "regexp_count_and_extract_all",
+        "SELECT REGEXP_COUNT('banana', 'ana') AS count, REGEXP_EXTRACT_ALL('id=12 id=34', 'id=([0-9]+)') AS ids FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_remove",
         "SELECT ARRAY_REMOVE(ARRAY[1, 2, 2, 3], 2) AS removed FROM {T} LIMIT 1",
         false,
