@@ -784,6 +784,12 @@ pub fn product_catalog_commit(
     let storage = if config.product_transactions.storage_mode == "local" {
         kaveon_storage::local_file_commit(&config.product_transactions.local_path)
             .map_err(anyhow::Error::msg)?
+    } else if config.product_transactions.storage_mode == "emulator" {
+        // Development only. The local mode above is a filesystem, which cannot
+        // exercise conditional PUT or the provider error text the conflict
+        // classifier reads; this runs the deployed blob path against Azurite.
+        kaveon_storage::emulator_adls_commit(&config.product_transactions.container)
+            .map_err(anyhow::Error::msg)?
     } else {
         kaveon_storage::workload_identity_adls_commit(
             &config.product_transactions.account,
