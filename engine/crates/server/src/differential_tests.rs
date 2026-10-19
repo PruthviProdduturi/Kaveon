@@ -2923,6 +2923,37 @@ fn distributed_partitioned_lag_ignore_nulls_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Partitioned value windows must keep their frame-local value semantics after
+/// the hash exchange.  Exercise all three Trino value-window functions with
+/// explicit ROWS frames, NULLS ordering, and IGNORE NULLS; the global
+/// unpartitioned exchange remains a separate qualification boundary.
+#[test]
+fn distributed_partitioned_value_windows_ignore_nulls_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-partitioned-value-windows-ignore-nulls-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, user_id, actions, FIRST_VALUE(industry) IGNORE NULLS OVER (PARTITION BY region ORDER BY actions, user_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS first_industry, LAST_VALUE(industry) IGNORE NULLS OVER (PARTITION BY region ORDER BY actions, user_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS last_industry, NTH_VALUE(industry, 2) IGNORE NULLS OVER (PARTITION BY region ORDER BY actions, user_id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS second_industry FROM events WHERE event_date = '2026-07-04' ORDER BY region, actions, user_id LIMIT 18";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-partitioned-value-windows", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 18);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A NULL in a NOT IN subquery makes every non-matching probe UNKNOWN. Keep
 /// this three-valued rule identical through the local planner and fragments,
 /// including a NULL probe row.
