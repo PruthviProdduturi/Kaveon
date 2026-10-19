@@ -1337,6 +1337,32 @@ fn text_value(arr: &ArrayRef, row: usize) -> Result<Option<&str>> {
     }
 }
 
+fn map_text_array(
+    arr: &ArrayRef,
+    num_rows: usize,
+    transform: impl Fn(&str) -> String,
+) -> Result<ArrayRef> {
+    if arr.data_type() == &DataType::LargeUtf8 {
+        let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+        for row in 0..num_rows {
+            match text_value(arr, row)? {
+                Some(value) => result.append_value(transform(value)),
+                None => result.append_null(),
+            }
+        }
+        Ok(Arc::new(result.finish()))
+    } else {
+        let mut result = StringBuilder::with_capacity(num_rows, 0);
+        for row in 0..num_rows {
+            match text_value(arr, row)? {
+                Some(value) => result.append_value(transform(value)),
+                None => result.append_null(),
+            }
+        }
+        Ok(Arc::new(result.finish()))
+    }
+}
+
 fn optional_string_value(arr: &StringArray, row: usize) -> Option<String> {
     (!arr.is_null(row)).then(|| arr.value(row).to_owned())
 }
@@ -6118,21 +6144,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     match upper.as_str() {
         "UPPER" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: StringArray = arr.iter().map(|v| v.map(|s| s.to_uppercase())).collect();
-            Ok(Arc::new(result))
+            map_text_array(&args[0], num_rows, str::to_uppercase)
         }
         "LOWER" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: StringArray = arr.iter().map(|v| v.map(|s| s.to_lowercase())).collect();
-            Ok(Arc::new(result))
+            map_text_array(&args[0], num_rows, str::to_lowercase)
         }
         "TRIM" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: StringArray = arr.iter().map(|v| v.map(|s| s.trim().to_owned())).collect();
-            Ok(Arc::new(result))
+            map_text_array(&args[0], num_rows, |value| value.trim().to_owned())
         }
         "CHR" => {
             check_arity(name, args, 1)?;
@@ -24582,5 +24602,31 @@ mod tests {
         let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
         assert_eq!(values.value(0), "12");
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_basic_text_mappers_for_large_utf8() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(LargeStringArray::from(vec![Some("  Kaveon  "), None])) as ArrayRef,
+        )])
+        .unwrap();
+        for (name, expected) in [
+            ("UPPER", "  KAVEON  "),
+            ("LOWER", "  kaveon  "),
+            ("TRIM", "Kaveon"),
+        ] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![Expr::Column("value".into())],
+                },
+                &batch,
+            )
+            .unwrap();
+            let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            assert_eq!(values.value(0), expected, "{name}");
+            assert!(values.is_null(1), "{name}");
+        }
     }
 }
