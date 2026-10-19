@@ -240,6 +240,11 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
             {
                 return Ok((Field::new(output_name, data_type, true), None));
             }
+            if name.eq_ignore_ascii_case("REDUCE")
+                && let Some(data_type) = expression_data_type(expr, schema)
+            {
+                return Ok((Field::new(output_name, data_type, true), None));
+            }
             let data_type = evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
                 .data_type()
                 .clone();
@@ -480,6 +485,31 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 result_type,
                 true,
             ))))
+        }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("REDUCE") && args.len() == 4 => {
+            let state_type = expression_data_type(&args[1], schema)?;
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[3]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 2 {
+                return None;
+            }
+            let Expr::Literal(ScalarValue::Utf8(parameter)) = &lambda_args[0] else {
+                return None;
+            };
+            let mut fields = vec![Field::new(parameter, state_type, true)];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|field| field.name() != parameter)
+                    .map(|field| field.as_ref().clone()),
+            );
+            expression_data_type(&lambda_args[1], &Arc::new(Schema::new(fields)))
         }
         Expr::BinaryOp { left, op, right } => {
             if matches!(
