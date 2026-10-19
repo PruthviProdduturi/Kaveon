@@ -41,7 +41,8 @@
 use std::cell::Cell;
 
 use kaveon_core::{
-    BinaryOp, CatalogManager, Expr, KaveonError, Result, TableReference, expression_contains_column,
+    BinaryOp, CatalogManager, Expr, KaveonError, Result, ScalarValue, TableReference,
+    expression_contains_column,
 };
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 
@@ -600,8 +601,9 @@ impl Binder<'_> {
                 // lateral table function. Bind its expressions against the
                 // complete left scope; the physical planner will execute the
                 // resulting operator once per left input batch.
-                if join_type == JoinType::Cross
-                    && condition.is_none()
+                let lateral_left = join_type == JoinType::Left
+                    && matches!(condition, Some(Expr::Literal(ScalarValue::Bool(true))));
+                if ((join_type == JoinType::Cross && condition.is_none()) || lateral_left)
                     && let LogicalPlan::Unnest {
                         expressions,
                         columns,

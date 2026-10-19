@@ -20,6 +20,7 @@ pub struct LateralUnnestOperator {
     element_types: Vec<DataType>,
     ordinality: bool,
     ordinality_start: i64,
+    preserve_empty: bool,
     schema: SchemaRef,
 }
 
@@ -31,6 +32,7 @@ impl LateralUnnestOperator {
         ordinality: bool,
         ordinality_column: impl Into<String>,
         ordinality_start: i64,
+        preserve_empty: bool,
     ) -> Result<Self> {
         if expressions.is_empty() || columns.is_empty() {
             return Err(KaveonError::Execution(
@@ -81,7 +83,7 @@ impl LateralUnnestOperator {
             )));
         }
         if ordinality {
-            fields.push(Field::new(ordinality_column, DataType::Int64, false).into());
+            fields.push(Field::new(ordinality_column, DataType::Int64, preserve_empty).into());
         }
         Ok(Self {
             input,
@@ -89,6 +91,7 @@ impl LateralUnnestOperator {
             element_types,
             ordinality,
             ordinality_start,
+            preserve_empty,
             schema: Arc::new(Schema::new(fields)),
         })
     }
@@ -123,7 +126,12 @@ impl BatchOperator for LateralUnnestOperator {
                 .iter()
                 .map(|list| list.row_len(row))
                 .collect::<Vec<_>>();
-            let width = lengths.iter().copied().max().unwrap_or(0);
+            let actual_width = lengths.iter().copied().max().unwrap_or(0);
+            let width = if self.preserve_empty && actual_width == 0 {
+                1
+            } else {
+                actual_width
+            };
             for (index, list) in lists.iter().enumerate() {
                 let value = list.row_value(row, width)?;
                 element_chunks[index].push(value);
@@ -131,7 +139,11 @@ impl BatchOperator for LateralUnnestOperator {
             for offset in 0..width {
                 row_indices.push(row as u32);
                 if self.ordinality {
-                    ordinals.push(self.ordinality_start + offset as i64);
+                    ordinals.push(if actual_width == 0 {
+                        None
+                    } else {
+                        Some(self.ordinality_start + offset as i64)
+                    });
                 }
             }
         }
@@ -326,6 +338,7 @@ mod tests {
             true,
             "ord",
             1,
+            false,
         )
         .unwrap();
         let output = operator.next_batch().unwrap().unwrap();
@@ -374,6 +387,7 @@ mod tests {
             false,
             "ordinality",
             1,
+            false,
         )
         .unwrap();
         let output = operator.next_batch().unwrap().unwrap();
@@ -387,5 +401,49 @@ mod tests {
                 .values(),
             &[1, 1, 2, 3]
         );
+    }
+
+    #[test]
+    fn preserves_empty_input_rows_for_left_lateral_join() {
+        let mut values = ListBuilder::new(Int64Builder::new());
+        values.append(true);
+        values.values().append_value(7);
+        values.append(true);
+        let array = Arc::new(values.finish()) as ArrayRef;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "arr",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let mut operator = LateralUnnestOperator::new(
+            Box::new(OneBatch {
+                schema,
+                batch: Some(batch),
+            }),
+            vec![Expr::Column("arr".into())],
+            vec!["value".into()],
+            true,
+            "ord",
+            1,
+            true,
+        )
+        .unwrap();
+        let output = operator.next_batch().unwrap().unwrap();
+        assert_eq!(output.num_rows(), 2);
+        let values = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert!(values.is_null(0));
+        assert_eq!(values.value(1), 7);
+        let ordinals = output
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert!(ordinals.is_null(0));
+        assert_eq!(ordinals.value(1), 1);
     }
 }

@@ -11,11 +11,12 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// The wire format a coordinator sends. Version 7 adds the input-aware
+/// The wire format a coordinator sends. Version 8 adds null-extension for
+/// left-lateral UNNEST; version 7 added the input-aware
 /// `LateralUnnest` operator; version 6 added the directory listing to a scan
 /// (`ScanSpec::listing`), and version 5 carried the location alone. A worker
 /// accepts older fragments with those fields absent.
-pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 7;
+pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 8;
 /// The oldest wire format a worker still executes.
 pub const OLDEST_EXECUTABLE_FRAGMENT_VERSION: u16 = 5;
 
@@ -57,6 +58,8 @@ pub enum FragmentOperator {
         with_ordinality: bool,
         ordinality_column: String,
         ordinality_start: i64,
+        #[serde(default)]
+        preserve_empty: bool,
     },
     ExchangeInput(ExchangeInput),
     Filter {

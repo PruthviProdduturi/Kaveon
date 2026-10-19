@@ -4044,6 +4044,42 @@ fn distributed_correlated_lateral_unnest_matches_local_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A LEFT JOIN LATERAL UNNEST must retain the outer row when its correlated
+/// array is empty, with NULL right fields and NULL ordinality.
+#[test]
+fn distributed_left_correlated_lateral_unnest_null_extends_empty_arrays() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-left-correlated-lateral-unnest-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT x.id, u.value, u.ord FROM (VALUES (1, CAST(NULL AS ARRAY<BIGINT>)), (2, ARRAY[20, 30])) AS x(id, arr) LEFT JOIN LATERAL UNNEST(x.arr) WITH ORDINALITY AS u(value, ord) ON TRUE ORDER BY x.id, u.ord";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-left-correlated-lateral-unnest", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        vec![
+            "1\u{1f}NULL\u{1f}NULL",
+            "2\u{1f}20\u{1f}1",
+            "2\u{1f}30\u{1f}2",
+        ]
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Multiple correlated arrays must be zipped with NULL padding and retain the
 /// one-based ordinality defined by Trino's lateral UNNEST contract.
 #[test]
