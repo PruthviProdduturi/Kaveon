@@ -3844,7 +3844,38 @@ fn eval_map_zip_with(
         compute::concat(&chunks)?
     };
     let values = if values_out.is_empty() {
-        left.values().slice(0, 0)
+        // Empty and all-NULL maps still need the lambda's result type. Evaluate
+        // its body once against typed NULLs so projection schema and runtime
+        // schema agree even when no map entry is available.
+        let mut fields = vec![
+            Field::new(&parameter_names[0], left_key_type.clone(), true),
+            Field::new(&parameter_names[1], left_value_type.clone(), true),
+            Field::new(&parameter_names[2], right_value_type.clone(), true),
+        ];
+        let mut columns = vec![
+            arrow::array::new_null_array(&left_key_type, 1),
+            arrow::array::new_null_array(&left_value_type, 1),
+            arrow::array::new_null_array(&right_value_type, 1),
+        ];
+        for (field, column) in outer_batch
+            .schema()
+            .fields()
+            .iter()
+            .zip(outer_batch.columns())
+        {
+            if parameter_names.iter().any(|name| name == field.name()) {
+                continue;
+            }
+            fields.push(field.as_ref().clone());
+            columns.push(if !column.is_empty() {
+                column.slice(0, 1)
+            } else {
+                arrow::array::new_null_array(field.data_type(), 1)
+            });
+        }
+        let hint_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        let hint = decode_dictionary(&evaluate(&lambda_args[3], &hint_batch)?)?;
+        arrow::array::new_empty_array(hint.data_type())
     } else {
         let chunks = values_out
             .iter()
