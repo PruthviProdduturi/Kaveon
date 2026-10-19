@@ -17347,6 +17347,68 @@ mod tests {
     }
 
     #[test]
+    fn map_zip_with_empty_maps_keep_lambda_result_type() {
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let empty_map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(entry_fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 0_i32])),
+                StructArray::new(
+                    entry_fields,
+                    vec![
+                        Arc::new(StringArray::from(Vec::<&str>::new())),
+                        Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    ],
+                    None,
+                ),
+                Some(arrow::buffer::NullBuffer::from(vec![true])),
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let batch =
+            RecordBatch::try_from_iter([("left_map", empty_map.clone()), ("right_map", empty_map)])
+                .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_ZIP_WITH".into(),
+                args: vec![
+                    Expr::Column("left_map".into()),
+                    Expr::Column("right_map".into()),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("key".into())),
+                            Expr::Literal(ScalarValue::Utf8("left_value".into())),
+                            Expr::Literal(ScalarValue::Utf8("right_value".into())),
+                            Expr::Function {
+                                name: "CONCAT".into(),
+                                args: vec![
+                                    Expr::Column("key".into()),
+                                    Expr::Literal(ScalarValue::Utf8("_out".into())),
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 0]);
+        assert_eq!(map.values().data_type(), &DataType::Utf8);
+    }
+
+    #[test]
     fn sequence_infers_direction_and_validates_steps() {
         let batch =
             RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
