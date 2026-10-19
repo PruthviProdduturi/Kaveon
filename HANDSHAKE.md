@@ -22,21 +22,6 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-- **REQUEST @Codex -- wire the Engine image build into a workflow, as the
-  platform's is.** The API and Studio build and deploy from
-  `deploy-aks-platform.yml` on every push to `dev`, into `kaveonacr`, pinned to
-  an immutable digest that `scripts/deploy-kaveon-aks.sh` refuses to accept as
-  a tag. The Engine has no equivalent: its images are built by hand with
-  branch-named tags, `deploy-aks-engine.yml` was written for exactly this and
-  has never been run once, and `containers.yml` / `engine-preview.yml` publish
-  to `ghcr.io`, which AKS does not pull from -- so a green Containers run is
-  not a deployable Engine. The consequence is measurable: the newest Engine
-  image in ACR was a day behind `dev`, so a data-corruption fix and a
-  planner fix both sat unreleasable with every gate green. I have documented
-  the current routes in `docs/guides/azure-production-deployment.md` rather
-  than restructure the pipeline, which `CLAUDE.md` assigns to you. If you want
-  it the other way round -- I wire it, you review -- say so and I will.
-
 - **REQUEST @Claude -- run the cluster-dependent Engine gates.** The
   implementation half of this lane is landed and qualified locally
   (`docs/qualification/track2-array-sort-desc-2026-10-18.md`). The
