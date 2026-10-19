@@ -5215,6 +5215,8 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
             || !matches!(
                 field,
                 ast::DateTimeField::Day
+                    | ast::DateTimeField::Month
+                    | ast::DateTimeField::Year
                     | ast::DateTimeField::Second
                     | ast::DateTimeField::Millisecond
                     | ast::DateTimeField::Milliseconds
@@ -5225,7 +5227,7 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
             )
         {
             return Err(sql_err(
-                "temporal RANGE offsets support INTERVAL DAY for DATE or fixed-unit SECOND/MILLISECOND/MICROSECOND/NANOSECOND for TIMESTAMP",
+                "temporal RANGE offsets support INTERVAL DAY/MONTH/YEAR for DATE or fixed-unit SECOND/MILLISECOND/MICROSECOND/NANOSECOND for TIMESTAMP",
             ));
         }
         let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = interval.value.as_ref()
@@ -5308,6 +5310,12 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                 let (field, amount, fractional) = interval_offset(expr)?.unwrap();
                 Ok(match field {
                     ast::DateTimeField::Day => WindowFrameBound::PrecedingDays(amount),
+                    ast::DateTimeField::Month => WindowFrameBound::PrecedingMonths(amount),
+                    ast::DateTimeField::Year => {
+                        WindowFrameBound::PrecedingMonths(amount.checked_mul(12).ok_or_else(
+                            || sql_err("temporal RANGE YEAR interval overflows month count"),
+                        )?)
+                    }
                     ast::DateTimeField::Second if fractional => {
                         WindowFrameBound::PrecedingNanos(amount)
                     }
@@ -5336,6 +5344,12 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                 let (field, amount, fractional) = interval_offset(expr)?.unwrap();
                 Ok(match field {
                     ast::DateTimeField::Day => WindowFrameBound::FollowingDays(amount),
+                    ast::DateTimeField::Month => WindowFrameBound::FollowingMonths(amount),
+                    ast::DateTimeField::Year => {
+                        WindowFrameBound::FollowingMonths(amount.checked_mul(12).ok_or_else(
+                            || sql_err("temporal RANGE YEAR interval overflows month count"),
+                        )?)
+                    }
                     ast::DateTimeField::Second if fractional => {
                         WindowFrameBound::FollowingNanos(amount)
                     }
@@ -7969,6 +7983,26 @@ mod tests {
             frame.as_ref().expect("frame should be Some").start,
             WindowFrameBound::PrecedingNanos(250_000_000)
         );
+    }
+
+    #[test]
+    fn parses_calendar_temporal_range_month_and_year_bounds() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(v) OVER (ORDER BY d RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '2' YEAR FOLLOWING) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected window expression");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.start, WindowFrameBound::PrecedingMonths(1));
+        assert_eq!(frame.end, WindowFrameBound::FollowingMonths(24));
     }
 
     #[test]
