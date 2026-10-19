@@ -6745,15 +6745,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REGEXP_COUNT" => {
             check_arity(name, args, 2)?;
-            let values = as_string_array(&args[0])?;
-            let patterns = as_string_array(&args[1])?;
             let result: Int64Array = (0..num_rows)
                 .map(|row| {
-                    if values.is_null(row) || patterns.is_null(row) {
-                        return Ok(None);
+                    let value = text_value(&args[0], row)?;
+                    let pattern = text_value(&args[1], row)?;
+                    match (value, pattern) {
+                        (Some(value), Some(pattern)) => {
+                            let regex = compiled_regex_for("REGEXP_COUNT", pattern)?;
+                            Ok(Some(regex.find_iter(value).count() as i64))
+                        }
+                        _ => Ok(None),
                     }
-                    let regex = compiled_regex_for("REGEXP_COUNT", patterns.value(row))?;
-                    Ok(Some(regex.find_iter(values.value(row)).count() as i64))
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -6761,17 +6763,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REGEXP_EXTRACT_ALL" => {
             check_arity(name, args, 2)?;
-            let values = as_string_array(&args[0])?;
-            let patterns = as_string_array(&args[1])?;
             let mut builder = ListBuilder::new(StringBuilder::new());
             for row in 0..num_rows {
-                if values.is_null(row) || patterns.is_null(row) {
+                let value = text_value(&args[0], row)?;
+                let pattern = text_value(&args[1], row)?;
+                let (Some(value), Some(pattern)) = (value, pattern) else {
                     builder.append(false);
                     continue;
-                }
-                let regex = compiled_regex_for("REGEXP_EXTRACT_ALL", patterns.value(row))?;
+                };
+                let regex = compiled_regex_for("REGEXP_EXTRACT_ALL", pattern)?;
                 let has_capture = regex.captures_len() > 1;
-                for captures in regex.captures_iter(values.value(row)) {
+                for captures in regex.captures_iter(value) {
                     let matched = captures
                         .get(if has_capture { 1 } else { 0 })
                         .map(|match_| match_.as_str())
@@ -24290,6 +24292,67 @@ mod tests {
         assert_eq!(
             second.iter().collect::<Vec<_>>(),
             vec![Some("a"), Some("b"), Some("c")]
+        );
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_regexp_count_and_extract_all_for_large_utf8() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(LargeStringArray::from(vec![
+                    Some("banana"),
+                    Some("id=12 id=34"),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(LargeStringArray::from(vec![
+                    Some("ana"),
+                    Some(r"id=(\d+)"),
+                    Some("."),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+
+        let count = evaluate(
+            &Expr::Function {
+                name: "REGEXP_COUNT".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("pattern".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            count
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), None]
+        );
+
+        let extracted = evaluate(
+            &Expr::Function {
+                name: "REGEXP_EXTRACT_ALL".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("pattern".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = extracted.as_any().downcast_ref::<ListArray>().unwrap();
+        let first_value = values.value(0);
+        let first = first_value.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(first.iter().collect::<Vec<_>>(), vec![Some("ana")]);
+        let second_value = values.value(1);
+        let second = second_value.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            second.iter().collect::<Vec<_>>(),
+            vec![Some("12"), Some("34")]
         );
         assert!(values.is_null(2));
     }
