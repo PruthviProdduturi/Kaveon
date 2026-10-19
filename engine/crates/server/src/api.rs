@@ -3917,6 +3917,9 @@ fn trino_expr_type(expression: &Expr) -> String {
             kaveon_core::CastTarget::Decimal128 { precision, scale } => {
                 return format!("decimal({precision},{scale})");
             }
+            kaveon_core::CastTarget::Array(element) => {
+                return format!("array({})", trino_cast_target_type(element));
+            }
             kaveon_core::CastTarget::Map { key, value } => {
                 return format!(
                     "map({},{})",
@@ -4062,6 +4065,9 @@ fn trino_cast_target_type(target: &kaveon_core::CastTarget) -> String {
         .into(),
         kaveon_core::CastTarget::Decimal128 { precision, scale } => {
             format!("decimal({precision},{scale})")
+        }
+        kaveon_core::CastTarget::Array(element) => {
+            format!("array({})", trino_cast_target_type(element))
         }
         kaveon_core::CastTarget::Map { key, value } => {
             format!(

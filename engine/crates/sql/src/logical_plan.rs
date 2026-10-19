@@ -1290,6 +1290,13 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
     matches!(expression, Expr::Column(_))
         || matches!(
             expression,
+            Expr::Cast {
+                data_type: CastTarget::Array(_),
+                ..
+            }
+        )
+        || matches!(
+            expression,
             Expr::Function { name, .. }
                 if name.eq_ignore_ascii_case("ARRAY")
                     // SEQUENCE is a first-class Trino array constructor.  It
@@ -3965,6 +3972,7 @@ fn cast_target_name(target: CastTarget) -> String {
             with_timezone: true,
         } => "TIMESTAMP_TZ".into(),
         CastTarget::Decimal128 { precision, scale } => format!("DECIMAL_{precision}_{scale}"),
+        CastTarget::Array(element) => format!("ARRAY({})", cast_target_name((*element).clone())),
         CastTarget::Map { key, value } => {
             format!(
                 "MAP({}, {})",
@@ -4199,6 +4207,22 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
                 precision: p,
                 scale: s,
             })
+        }
+        ast::DataType::Array(element) => {
+            let element = match element {
+                ast::ArrayElemTypeDef::AngleBracket(element)
+                | ast::ArrayElemTypeDef::Parenthesis(element)
+                | ast::ArrayElemTypeDef::SquareBracket(element, None) => element,
+                ast::ArrayElemTypeDef::None => {
+                    return Err(sql_err("ARRAY cast requires an element type"));
+                }
+                ast::ArrayElemTypeDef::SquareBracket(_, Some(_)) => {
+                    return Err(sql_err("sized ARRAY casts are not supported"));
+                }
+            };
+            Ok(CastTarget::Array(Box::new(
+                ast_data_type_to_cast_target(element)?,
+            )))
         }
         ast::DataType::Map(key, value) => Ok(CastTarget::Map {
             key: Box::new(ast_data_type_to_cast_target(key)?),

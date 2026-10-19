@@ -141,6 +141,9 @@ pub enum CastTarget {
         precision: u8,
         scale: i8,
     },
+    /// A recursively typed array target, used for typed NULL arrays and
+    /// row-producing UNNEST inputs where the value carries no Arrow type.
+    Array(Box<CastTarget>),
     /// A recursively typed map target. This is primarily needed for typed
     /// NULL map literals, where the source carries no Arrow type to infer.
     Map {
@@ -194,6 +197,9 @@ impl CastTarget {
             Self::Decimal128 { precision, scale } => {
                 arrow::datatypes::DataType::Decimal128(*precision, *scale)
             }
+            Self::Array(element) => arrow::datatypes::DataType::List(std::sync::Arc::new(
+                arrow::datatypes::Field::new("item", element.to_arrow_type(), true),
+            )),
             Self::Map { key, value } => arrow::datatypes::DataType::Map(
                 std::sync::Arc::new(arrow::datatypes::Field::new(
                     "entries",
