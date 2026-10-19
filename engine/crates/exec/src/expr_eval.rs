@@ -7405,17 +7405,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                 }
             }
-            let arr = as_string_array(&args[0])?;
-            let needle = as_string_array(&args[1])?;
             let result: BooleanArray = (0..num_rows)
                 .map(|i| {
-                    if arr.is_null(i) || needle.is_null(i) {
-                        None
-                    } else {
-                        Some(arr.value(i).contains(needle.value(i)))
-                    }
+                    Ok(match (text_value(&args[0], i), text_value(&args[1], i)) {
+                        (Ok(Some(value)), Ok(Some(needle))) => Some(value.contains(needle)),
+                        (Ok(None), _) | (_, Ok(None)) => None,
+                        (Err(error), _) | (_, Err(error)) => {
+                            // Keep the scalar string contract explicit while allowing both
+                            // Arrow UTF-8 widths through the same row-wise path.
+                            return Err(error);
+                        }
+                    })
                 })
-                .collect();
+                .collect::<Result<BooleanArray>>()?;
             Ok(Arc::new(result))
         }
         "ARRAY_JOIN" => {
@@ -20069,6 +20071,37 @@ mod tests {
         );
         assert_eq!(values.value(1).len(), 1);
         assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn contains_accepts_large_utf8_values_and_needles() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::LargeUtf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(LargeStringArray::from(vec![
+                Some("Kaveon engine"),
+                Some("Trino engine"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "CONTAINS".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8("engine".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), None]
+        );
     }
 
     #[test]
