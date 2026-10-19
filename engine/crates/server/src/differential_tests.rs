@@ -5998,6 +5998,38 @@ fn distributed_date_range_interval_day_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Fixed-unit temporal RANGE offsets use timestamp physical precision rather
+/// than calendar arithmetic.  Keep the local and three-worker paths identical
+/// while the broader distributed window exchange remains intentionally
+/// centralized.
+#[test]
+fn distributed_timestamp_range_interval_second_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-timestamp-range-interval-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT event_date, SUM(actions) OVER (ORDER BY CAST(event_date AS TIMESTAMP) RANGE BETWEEN INTERVAL '86400' SECOND PRECEDING AND INTERVAL '86400' SECOND FOLLOWING) AS rolling_actions FROM events WHERE event_date BETWEEN DATE '2026-07-01' AND DATE '2026-07-10' ORDER BY event_date, user_id LIMIT 18";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-window-timestamp-range-interval", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Narrow numeric window inputs must retain Trino's widening contract after
 /// the partition is exchanged: TINYINT SUM returns BIGINT rather than failing
 /// in the worker's window evaluator or silently accumulating through f64.

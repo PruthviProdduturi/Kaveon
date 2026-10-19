@@ -5204,35 +5204,44 @@ fn ast_window_frame(frame: &ast::WindowFrame) -> Result<WindowFrame> {
 }
 
 fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBound> {
-    fn interval_days(expr: &ast::Expr) -> Result<Option<u64>> {
+    fn interval_offset(expr: &ast::Expr) -> Result<Option<(ast::DateTimeField, u64)>> {
         let ast::Expr::Interval(interval) = expr else {
             return Ok(None);
         };
-        if interval.leading_field != Some(ast::DateTimeField::Day) || interval.last_field.is_some()
+        let Some(field) = interval.leading_field.clone() else {
+            return Err(sql_err("temporal RANGE offset requires an INTERVAL unit"));
+        };
+        if interval.last_field.is_some()
+            || !matches!(field, ast::DateTimeField::Day | ast::DateTimeField::Second)
         {
             return Err(sql_err(
-                "temporal RANGE offsets currently support INTERVAL DAY only",
+                "temporal RANGE offsets support INTERVAL DAY for DATE or INTERVAL SECOND for TIMESTAMP",
             ));
         }
         let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = interval.value.as_ref()
         else {
             return Err(sql_err(
-                "INTERVAL DAY RANGE offset must be a string literal",
+                "temporal RANGE INTERVAL offset must be a string literal",
             ));
         };
-        let days = value
+        let amount = value
             .parse::<u64>()
-            .map_err(|_| sql_err(format!("invalid INTERVAL DAY RANGE offset: {value}")))?;
-        Ok(Some(days))
+            .map_err(|_| sql_err(format!("invalid temporal RANGE INTERVAL offset: {value}")))?;
+        Ok(Some((field, amount)))
     }
 
     match bound {
         ast::WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
         ast::WindowFrameBound::Preceding(None) => Ok(WindowFrameBound::UnboundedPreceding),
         ast::WindowFrameBound::Preceding(Some(expr)) => match expr.as_ref() {
-            expr if interval_days(expr)?.is_some() => Ok(WindowFrameBound::PrecedingDays(
-                interval_days(expr)?.unwrap(),
-            )),
+            expr if interval_offset(expr)?.is_some() => {
+                let (field, amount) = interval_offset(expr)?.unwrap();
+                Ok(match field {
+                    ast::DateTimeField::Day => WindowFrameBound::PrecedingDays(amount),
+                    ast::DateTimeField::Second => WindowFrameBound::PrecedingSeconds(amount),
+                    _ => unreachable!(),
+                })
+            }
             ast::Expr::Value(v) => match v {
                 ast::Value::Number(n, _) => n
                     .parse::<u64>()
@@ -5244,9 +5253,14 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
         },
         ast::WindowFrameBound::Following(None) => Ok(WindowFrameBound::UnboundedFollowing),
         ast::WindowFrameBound::Following(Some(expr)) => match expr.as_ref() {
-            expr if interval_days(expr)?.is_some() => Ok(WindowFrameBound::FollowingDays(
-                interval_days(expr)?.unwrap(),
-            )),
+            expr if interval_offset(expr)?.is_some() => {
+                let (field, amount) = interval_offset(expr)?.unwrap();
+                Ok(match field {
+                    ast::DateTimeField::Day => WindowFrameBound::FollowingDays(amount),
+                    ast::DateTimeField::Second => WindowFrameBound::FollowingSeconds(amount),
+                    _ => unreachable!(),
+                })
+            }
             ast::Expr::Value(v) => match v {
                 ast::Value::Number(n, _) => n
                     .parse::<u64>()
@@ -7789,6 +7803,26 @@ mod tests {
         let frame = frame.as_ref().expect("frame should be Some");
         assert_eq!(frame.start, WindowFrameBound::PrecedingDays(2));
         assert_eq!(frame.end, WindowFrameBound::FollowingDays(1));
+    }
+
+    #[test]
+    fn parses_temporal_range_interval_second_bounds() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(v) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '2' SECOND PRECEDING AND INTERVAL '1' SECOND FOLLOWING) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected window expression");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.start, WindowFrameBound::PrecedingSeconds(2));
+        assert_eq!(frame.end, WindowFrameBound::FollowingSeconds(1));
     }
 
     #[test]
