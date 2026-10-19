@@ -9,7 +9,7 @@ use kaveon_core::{
     StoragePredicate, StorageType, TableReference, TableStatistics,
 };
 use kaveon_sql::logical_plan::{JoinDistribution, JoinType, LogicalPlan};
-use kaveon_storage::{DeltaTableReader, IcebergReader, ParquetReader};
+use kaveon_storage::{DeltaTableReader, IcebergReader, ParquetReader, SourceStatistics};
 use std::{collections::HashMap, sync::Arc};
 
 const BROADCAST_BUILD_MAX_ROWS: u64 = 1_000_000;
@@ -26,7 +26,8 @@ pub struct RelationStatistics {
     pub columns: Vec<String>,
     /// Exact bytes from the pinned source metadata, when available.
     pub bytes_hint: Option<u64>,
-    /// The table's statistics on record — fresh or stale, for costing.
+    /// Column statistics for costing; `from_source` accepts only the
+    /// document matching the pinned source identity.
     pub table: Option<Arc<TableStatistics>>,
 }
 
@@ -49,12 +50,22 @@ impl RelationStatistics {
         }
     }
 
-    /// The bytes as stored, when the statistics record them.
+    /// Use source facts from one identity. Stale column statistics cannot
+    /// shrink a current build's row or byte estimate for broadcast admission.
+    pub fn from_source(source: &SourceStatistics, table: Option<Arc<TableStatistics>>) -> Self {
+        Self {
+            rows: source.row_count,
+            columns: source.columns.clone(),
+            bytes_hint: source.bytes,
+            table: table.filter(|table| table.is_current_for(&source.identity_sha256)),
+        }
+    }
+
+    /// The bytes as stored, from exact source metadata. A statistics
+    /// document may itself have incomplete file sizes, so it is not a
+    /// fallback for an absent source bound.
     fn bytes(&self) -> Option<u64> {
-        self.table
-            .as_ref()
-            .map(|table| table.bytes)
-            .or(self.bytes_hint)
+        self.bytes_hint
     }
 }
 
@@ -326,7 +337,7 @@ fn join_distribution(
         && build.rows <= BROADCAST_BUILD_MAX_ROWS
         && build
             .bytes
-            .is_none_or(|bytes| bytes <= BROADCAST_BUILD_MAX_BYTES)
+            .is_some_and(|bytes| bytes <= BROADCAST_BUILD_MAX_BYTES)
         && probe.rows
             >= build
                 .rows
@@ -730,9 +741,10 @@ mod tests {
     use kaveon_sql::logical_plan::sql_to_logical_plan;
     use std::{fs, path::PathBuf};
     fn stats(table: &str) -> Option<RelationStatistics> {
-        Some(RelationStatistics::exact(
+        Some(RelationStatistics::exact_with_bytes(
             if table == "small" { 10 } else { 10_000 },
             vec!["id".into(), "value".into()],
+            if table == "small" { 1_000 } else { 1_000_000 },
         ))
     }
 
@@ -955,6 +967,66 @@ mod tests {
     }
 
     #[test]
+    fn exact_source_broadcast_bounds_ignore_stale_and_incomplete_documents() {
+        let mut source = SourceStatistics {
+            identity_sha256: "current".into(),
+            row_count: 10,
+            bytes: Some(BROADCAST_BUILD_MAX_BYTES + 1),
+            columns: vec!["id".into()],
+            schema: Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+                "id",
+                DataType::Int64,
+                false,
+            )])),
+            delta_version: None,
+            parquet_listing: None,
+        };
+        let mut stored = table_statistics(1);
+        stored.bytes = 1;
+        let scan = sql_to_logical_plan("SELECT * FROM small WHERE id = 5000").unwrap();
+        let stale = RelationStatistics::from_source(&source, Some(Arc::new(stored.clone())));
+        assert!(stale.table.is_none());
+        let bound = relation(&scan, &mut |_| Some(stale.clone())).unwrap();
+        assert_eq!(bound.rows, 10);
+        assert_eq!(bound.bytes, source.bytes);
+        assert_eq!(
+            join_distribution(JoinType::Left, Some(&estimate(10_000, None)), Some(&bound)),
+            JoinDistribution::Partitioned,
+        );
+
+        stored.source_version.identity_sha256 = source.identity_sha256.clone();
+        source.bytes = None;
+        let missing = RelationStatistics::from_source(&source, Some(Arc::new(stored.clone())));
+        assert!(missing.table.is_some());
+        assert_eq!(
+            missing.bytes(),
+            None,
+            "an incomplete document cannot supply zero bytes"
+        );
+        assert_eq!(
+            join_distribution(
+                JoinType::Left,
+                Some(&estimate(10_000, None)),
+                Some(&estimate(missing.rows, missing.bytes())),
+            ),
+            JoinDistribution::Partitioned,
+        );
+
+        source.bytes = Some(1_000);
+        stored.bytes = BROADCAST_BUILD_MAX_BYTES + 1;
+        let fresh = RelationStatistics::from_source(&source, Some(Arc::new(stored)));
+        assert_eq!(fresh.bytes(), Some(1_000));
+        assert_eq!(
+            join_distribution(
+                JoinType::Left,
+                Some(&estimate(10_000, None)),
+                Some(&estimate(fresh.rows, fresh.bytes())),
+            ),
+            JoinDistribution::BroadcastRight,
+        );
+    }
+
+    #[test]
     fn filtered_estimates_never_round_a_nonempty_relation_to_zero() {
         assert_eq!(scaled_upper_bound(1, 0.001), 1);
         assert_eq!(scaled_upper_bound(10, 0.101), 2);
@@ -968,11 +1040,12 @@ mod tests {
             join_distribution(
                 JoinType::Inner,
                 Some(&estimate(4_000_000, None)),
-                Some(&estimate(1_000_000, None))
+                Some(&estimate(1_000_000, Some(BROADCAST_BUILD_MAX_BYTES)))
             ),
             JoinDistribution::BroadcastRight
         );
         for (join_type, probe, build) in [
+            (JoinType::Inner, 4_000_000, Some(1_000_000)),
             (JoinType::Inner, 3_999_999, Some(1_000_000)),
             (JoinType::Inner, 8_000_000, Some(1_000_001)),
             (JoinType::Inner, 10, None),
@@ -1186,7 +1259,7 @@ mod tests {
             Some(RelationStatistics {
                 rows: 1_000_000,
                 columns: vec!["id".into(), "region".into()],
-                bytes_hint: None,
+                bytes_hint: Some(100_000_000),
                 table: (table == "events").then(|| Arc::new(table_statistics(1_000_000))),
             })
         };
@@ -1262,13 +1335,14 @@ mod tests {
             distribution: JoinDistribution::Partitioned,
         };
         let optimized = optimize_with_statistics(plan, &mut |table| {
-            Some(RelationStatistics::exact(
+            Some(RelationStatistics::exact_with_bytes(
                 if table == "large" {
                     10_000_000
                 } else {
                     1_000_000
                 },
                 vec!["id".into()],
+                1_000_000,
             ))
         });
         let LogicalPlan::Join { distribution, .. } = optimized else {

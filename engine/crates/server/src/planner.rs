@@ -4223,14 +4223,17 @@ mod tests {
         .unwrap();
         qualify_tables(&mut plan, "test", "default");
         let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
-            Some(kaveon_optim::statistics::RelationStatistics::exact(
-                if table.ends_with("customers") {
-                    10
-                } else {
-                    10_000
-                },
-                vec!["id".into(), "name".into()],
-            ))
+            Some(
+                kaveon_optim::statistics::RelationStatistics::exact_with_bytes(
+                    if table.ends_with("customers") {
+                        10
+                    } else {
+                        10_000
+                    },
+                    vec!["id".into(), "name".into()],
+                    1_000,
+                ),
+            )
         });
 
         let graph = build_stage_graph("broadcast-query", &plan, 4).unwrap();
@@ -4269,14 +4272,17 @@ mod tests {
         .unwrap();
         qualify_tables(&mut plan, "test", "default");
         let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
-            Some(kaveon_optim::statistics::RelationStatistics::exact(
-                if table.ends_with("customers") {
-                    10
-                } else {
-                    10_000
-                },
-                vec!["id".into(), "name".into()],
-            ))
+            Some(
+                kaveon_optim::statistics::RelationStatistics::exact_with_bytes(
+                    if table.ends_with("customers") {
+                        10
+                    } else {
+                        10_000
+                    },
+                    vec!["id".into(), "name".into()],
+                    1_000,
+                ),
+            )
         });
 
         let graph = build_stage_graph("broadcast-left-outer-query", &plan, 4).unwrap();
@@ -4306,14 +4312,17 @@ mod tests {
         qualify_tables(&mut plan, "test", "default");
         let plan = kaveon_optim::rules::push_filter_down(plan);
         let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
-            Some(kaveon_optim::statistics::RelationStatistics::exact(
-                if table.ends_with("customers") {
-                    10
-                } else {
-                    10_000
-                },
-                vec!["id".into()],
-            ))
+            Some(
+                kaveon_optim::statistics::RelationStatistics::exact_with_bytes(
+                    if table.ends_with("customers") {
+                        10
+                    } else {
+                        10_000
+                    },
+                    vec!["id".into()],
+                    1_000,
+                ),
+            )
         });
         let fragments =
             build_executable_fragments("dynamic-filter-boundary", &plan, &fixture.catalog, 4)

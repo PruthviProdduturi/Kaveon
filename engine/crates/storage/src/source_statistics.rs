@@ -25,6 +25,9 @@ static LATEST_DELTA_STATISTICS: OnceLock<Mutex<HashMap<String, (u64, SourceProfi
 pub struct SourceStatistics {
     pub identity_sha256: String,
     pub row_count: u64,
+    /// Stored file bytes under this identity; unknown if any active Delta
+    /// add action omits its size. Missing metadata must never mean zero.
+    pub bytes: Option<u64>,
     pub columns: Vec<String>,
     /// The source's own schema (Delta log, Iceberg metadata, Parquet
     /// footer), read with the row count and no data pages: `CREATE TABLE`
@@ -440,6 +443,7 @@ fn parquet_profile(
         statistics: SourceStatistics {
             identity_sha256,
             row_count: footers.row_count,
+            bytes: Some(footers.file_bytes),
             columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
             schema: Arc::clone(schema),
             delta_version: None,
@@ -468,6 +472,14 @@ fn delta_profile(
 ) -> Result<SourceProfile> {
     let version = snapshot.version;
     let file_count = snapshot.files.len() as u64;
+    let exact_file_bytes = (snapshot.details.len() == snapshot.files.len())
+        .then(|| {
+            snapshot
+                .details
+                .iter()
+                .try_fold(0u64, |total, detail| total.checked_add(detail.size?))
+        })
+        .flatten();
     let file_bytes = snapshot.details.iter().fold(0u64, |total, detail| {
         total.saturating_add(detail.size.unwrap_or(0))
     });
@@ -484,6 +496,7 @@ fn delta_profile(
             statistics: SourceStatistics {
                 identity_sha256,
                 row_count,
+                bytes: exact_file_bytes,
                 columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
                 schema,
                 delta_version: Some(version),
@@ -507,6 +520,7 @@ fn delta_profile(
         statistics: SourceStatistics {
             identity_sha256,
             row_count: metadata.row_count,
+            bytes: Some(metadata.profile.file_bytes),
             columns: metadata
                 .schema
                 .fields()
@@ -557,6 +571,7 @@ fn iceberg_profile(
         statistics: SourceStatistics {
             identity_sha256,
             row_count: snapshot.row_count,
+            bytes: Some(snapshot.total_bytes),
             columns: snapshot
                 .schema
                 .fields()
@@ -898,6 +913,7 @@ mod tests {
         let first = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
         let repeated = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
         assert_eq!(first.row_count, 3);
+        assert_eq!(first.bytes, Some(fs::metadata(&path).unwrap().len()));
         assert_eq!(first.columns, ["id", "name"]);
         assert_eq!(
             first
@@ -1006,6 +1022,7 @@ mod tests {
         assert_eq!(first.delta_version, Some(0));
         let profile = profile_source(directory.to_str().unwrap(), DataFormat::Delta).unwrap();
         assert_eq!(profile.statistics, first);
+        assert_eq!(first.bytes, Some(profile.compressed_bytes));
         assert_eq!(profile.file_count, 2);
         assert_eq!(profile.row_group_count, Some(2));
         assert_eq!(
@@ -1081,6 +1098,7 @@ mod tests {
         assert_eq!(profile.file_count, 2);
         assert_eq!(profile.row_group_count, None);
         assert_eq!(profile.compressed_bytes, 3500);
+        assert_eq!(profile.statistics.bytes, Some(3500));
         assert_eq!(profile.uncompressed_bytes, None);
         assert_eq!(profile.last_modified_ms, Some(1_700_000_500_000));
         let id = &profile.columns[0];
@@ -1104,6 +1122,37 @@ mod tests {
             7
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn delta_exact_bytes_require_every_active_size_and_a_nonoverflowing_sum() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        for (sizes, expected) in [
+            (vec![Some(100), Some(250)], Some(350)),
+            (vec![Some(100), None], None),
+            (vec![None, Some(250)], None),
+            (vec![Some(u64::MAX), Some(1)], None),
+        ] {
+            let snapshot = DeltaSnapshot {
+                version: 0,
+                files: vec![Path::from("a.parquet"), Path::from("b.parquet")],
+                schema: Some(Arc::clone(&schema)),
+                details: sizes
+                    .into_iter()
+                    .map(|size| DeltaFileDetail {
+                        size,
+                        stats: Some(r#"{"numRecords":5}"#.into()),
+                        ..Default::default()
+                    })
+                    .collect(),
+            };
+            let profile = delta_profile("test".into(), snapshot, |_| {
+                panic!("complete row statistics require no footer reads")
+            })
+            .unwrap();
+            assert_eq!(profile.statistics.row_count, 10);
+            assert_eq!(profile.statistics.bytes, expected);
+        }
     }
 
     #[test]

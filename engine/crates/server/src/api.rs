@@ -10339,7 +10339,7 @@ struct PlannedRelation {
 
 impl PlannedRelation {
     /// The statistics on record when they describe the source's current
-    /// version: the only ones that may answer rather than cost.
+    /// version: the only ones that may answer or shrink a join estimate.
     fn current_statistics(&self) -> Option<&Arc<kaveon_core::TableStatistics>> {
         let current = self.current.as_ref()?;
         self.statistics
@@ -10412,7 +10412,7 @@ const REFRESH_SCAN_THREADS: usize = 4;
 /// background: files added to a full document are read and folded in, a
 /// removal or a metadata-only document is recomputed at the document's
 /// depth. One refresh per table at a time; a refresh that fails leaves
-/// the previous document, which still costs.
+/// the previous document available for the next refresh attempt.
 fn schedule_statistics_refresh(state: &Arc<AppState>, relation: &PlannedRelation) {
     let (Some(table_id), Some(statistics)) = (&relation.table_id, &relation.statistics) else {
         return;
@@ -10673,7 +10673,7 @@ async fn optimize_with_durable_statistics(
                 .insert(relation.location.clone(), *skipped);
         }
         // Statistics behind the source refresh in the background; until
-        // then they still cost — they never answer.
+        // then join admission uses the exact source facts alone.
         if state.config.statistics_auto_refresh
             && relation.statistics.is_some()
             && relation.current.is_some()
@@ -10695,12 +10695,12 @@ async fn optimize_with_durable_statistics(
                 Some((_, rows, _)) => *rows,
                 None => current.row_count,
             };
-            kaveon_optim::statistics::RelationStatistics {
-                rows,
-                columns: current.columns.clone(),
-                bytes_hint: None,
-                table: relation.statistics.clone(),
-            }
+            let mut statistics = kaveon_optim::statistics::RelationStatistics::from_source(
+                current,
+                relation.statistics.clone(),
+            );
+            statistics.rows = rows;
+            statistics
         });
         cache.insert(table.clone(), value);
         planning.relations.insert(table, relation);
@@ -16993,6 +16993,88 @@ mod tests {
             ["customers".to_owned(), "events".to_owned()]
         );
     }
+
+    #[tokio::test]
+    async fn exact_source_bytes_plan_broadcast_and_stale_stats_keep_partitioned_results() {
+        use crate::differential_tests::{canonical_rows, execute_distributed};
+        use kaveon_core::{Partitioning, QueryMemoryPool};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![100, 101, 102]))],
+        )
+        .unwrap();
+        let (state, directory) = analyze_test_state_configured(schema, batch, |config| {
+            config.statistics_auto_refresh = false;
+        })
+        .await;
+        let table_id = kaveon_core::TableId::new("table:lake:sales:orders").unwrap();
+        let old = kaveon_storage::metadata_statistics(
+            directory.join("orders.parquet").to_str().unwrap(),
+            kaveon_core::DataFormat::Parquet,
+            table_id,
+        )
+        .unwrap();
+        write_orders(&directory, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let catalog = Arc::clone(&*state.catalog.read().await);
+        for (subquery, broadcast) in [
+            ("SELECT id FROM lake.sales.orders ORDER BY id LIMIT 1", true),
+            ("SELECT id FROM lake.sales.orders WHERE id = 1", false),
+        ] {
+            if !broadcast {
+                state
+                    .catalog_store
+                    .put_table_statistics("test", &old)
+                    .unwrap();
+            }
+            let sql = format!(
+                "SELECT a.id, b.id AS build_id FROM lake.sales.orders a LEFT JOIN ({subquery}) b ON a.id = b.id"
+            );
+            let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(&sql).unwrap();
+            let plan = kaveon_optim::binder::bind(plan, &catalog).unwrap();
+            let plan = kaveon_optim::rules::push_projection_down(
+                kaveon_optim::rules::push_filter_down(plan),
+            );
+            let (plan, _, planning) =
+                super::optimize_with_durable_statistics(&state, plan, &catalog).await;
+            let relation = &planning.relations["lake.sales.orders"];
+            assert!(relation.current_statistics().is_none());
+            assert_eq!(
+                relation.current.as_ref().unwrap().bytes,
+                Some(
+                    std::fs::metadata(directory.join("orders.parquet"))
+                        .unwrap()
+                        .len()
+                )
+            );
+            let graph = crate::planner::build_stage_graph("source-bytes", &plan, 3).unwrap();
+            assert_eq!(
+                graph
+                    .exchanges
+                    .iter()
+                    .any(|exchange| { exchange.partitioning == Partitioning::Broadcast }),
+                broadcast,
+                "{plan:?}"
+            );
+
+            let pool = QueryMemoryPool::new("source-bytes", 64 << 20).unwrap();
+            let expected = (1..=8)
+                .map(|id| format!("{id}\u{1f}{}", if id == 1 { "1" } else { "NULL" }))
+                .collect::<Vec<_>>();
+            let mut local = crate::planner::plan_query_with_memory(&plan, &catalog, &pool).unwrap();
+            let mut batches = Vec::new();
+            while let Some(batch) = local.operator.next_batch().unwrap() {
+                batches.push(batch);
+            }
+            assert_eq!(canonical_rows(&batches, false), expected);
+            drop(local);
+            let distributed = execute_distributed(&sql, &plan, &catalog, 3, &pool).unwrap();
+            assert_eq!(canonical_rows(&distributed, false), expected);
+            assert_eq!(pool.snapshot().current_bytes, 0);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
@@ -20709,9 +20791,10 @@ mod tests {
     }
 
     /// With the automatic refresh off, statistics behind the source stay
-    /// as they are: they still cost a join, they never answer.
+    /// as they are: fresh source metadata costs a join, and the stale
+    /// document never answers.
     #[tokio::test]
-    async fn stale_statistics_cost_but_never_answer() {
+    async fn stale_statistics_stay_stored_but_never_answer() {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -20741,7 +20824,7 @@ mod tests {
                 assert_eq!(body["data"], serde_json::json!([[350]]));
             }
         }
-        // A join over the stale table still plans from its statistics.
+        // A join over the stale table still plans from fresh source metadata.
         let (body, record) = submit_and_record(
             &state,
             "SELECT COUNT(*) FROM orders o JOIN events e ON o.id = e.id WHERE e.id = 2",
