@@ -6,7 +6,7 @@ and the output lambda receives the final state. Outer-row columns remain
 available to both lambdas, while lambda parameters shadow captured columns.
 
 The implementation preserves typed NULL elements, returns NULL for a NULL input
-array, and requires one state/result value per evaluated row. It intentionally
+array, retains captured outer-row columns, and requires one state/result value per evaluated row. It intentionally
 does not claim arbitrary lambda arities, complex state serialization, or a
 distributed stateful reduction protocol.
 
@@ -14,7 +14,8 @@ distributed stateful reduction protocol.
 
 - SQL lowering test: `lowers_reduce_input_and_output_lambdas` in
   `engine/crates/sql/src/logical_plan.rs`.
-- Local evaluator test: `reduce_applies_input_and_output_lambdas` in
+- Local evaluator tests: `reduce_applies_input_and_output_lambdas` and
+  `reduce_keeps_outer_columns_and_null_array_rows` in
   `engine/crates/exec/src/expr_eval.rs`.
 - Distributed differential corpus case: `array_reduce_lambda` in
   `engine/crates/server/src/differential_tests.rs`, compared across the local
