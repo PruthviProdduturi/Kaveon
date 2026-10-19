@@ -1396,6 +1396,61 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_merge_spill_unions_duplicate_distinct_values_across_runs() {
+        // Three partial states belong to each group.  The repeated zero is
+        // deliberately split across input batches so it must survive a
+        // spill/replay cycle without being counted twice.
+        let rows = (0..12_000i64)
+            .flat_map(|group| {
+                [0_i64, 1, 0]
+                    .into_iter()
+                    .map(move |value| GroupedAggregateState {
+                        group_keys: vec![AggregateValue::Int64(group)],
+                        states: vec![AggregateState::CountDistinct(
+                            [AggregateValue::Int64(value)].into_iter().collect(),
+                        )],
+                    })
+            })
+            .collect::<Vec<_>>();
+        let batches_all = rows
+            .chunks(3_001)
+            .map(|chunk| {
+                grouped_aggregate_states_to_typed_batch(chunk, &[DataType::Int64]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let pool = QueryMemoryPool::new("distinct-duplicate-spill", 4 << 20).unwrap();
+        let spill = SpillManager::new(spill_root("distinct-duplicate-spill"), 1 << 30).unwrap();
+        let mut merge = HybridFinalMerge::new(
+            batches(&batches_all),
+            pool.operator("final").unwrap(),
+            Some((spill.clone(), 8)),
+        )
+        .unwrap();
+        let mut groups = 0usize;
+        let mut distinct = 0usize;
+        while let Some((merged, reservations)) = merge.next_groups().unwrap() {
+            let MergedGroups::Rows(merged) = merged else {
+                panic!("DISTINCT states merge on the row path");
+            };
+            groups += merged.len();
+            for group in &merged {
+                let AggregateState::CountDistinct(values) = &group.states[0] else {
+                    panic!("layout");
+                };
+                assert_eq!(values.len(), 2, "duplicate value was counted twice");
+                distinct += values.len();
+            }
+            drop(reservations);
+        }
+        assert_eq!(groups, 12_000);
+        assert_eq!(distinct, 24_000);
+        assert!(merge.spilled().tables >= 2, "{:?}", merge.spilled());
+        assert_eq!(spill.snapshot().current_bytes, 0);
+        drop(merge);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn hybrid_merge_fails_closed_when_a_sub_partition_does_not_fit() {
         let batches_all = q33_partial_batches(400_000, 8_192);
         let pool = QueryMemoryPool::new("skew", 6 << 20).unwrap();
