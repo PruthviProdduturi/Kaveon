@@ -162,7 +162,7 @@ pub fn optimize_with_statistics(
             // This is deliberately bounded: the rewrite needs exact
             // relation facts and leaves outer, USING, residual, and larger
             // join graphs to the existing conservative rules.
-            if let Some(reordered) = reorder_four_way_inner(
+            if let Some(reordered) = reorder_left_deep_inner(
                 (*left).clone(),
                 (*right).clone(),
                 join_type,
@@ -336,12 +336,13 @@ pub fn optimize_with_statistics(
     }
 }
 
-/// Reorder a four-relation left-deep inner equi-join chain when every leaf
-/// has exact source statistics.  The parser emits a left-deep tree, so the
-/// bounded search only considers connected left-deep build orders.  It keeps
-/// the existing conservative behavior for outer/USING/residual joins and
-/// restores the written output order with an explicit projection.
-fn reorder_four_way_inner(
+/// Reorder a bounded left-deep inner equi-join chain when every leaf has exact
+/// source statistics. The parser emits a left-deep tree, so the search only
+/// considers connected left-deep build orders. Keeping the cap small prevents
+/// factorial planning work from becoming a query-time denial of service while
+/// covering the common star/snowflake join shapes. Unsupported outer,
+/// `USING`, and residual joins remain on the conservative path.
+fn reorder_left_deep_inner(
     left: LogicalPlan,
     right: LogicalPlan,
     join_type: JoinType,
@@ -352,8 +353,8 @@ fn reorder_four_way_inner(
     if join_type != JoinType::Inner || condition.is_none() || using_columns.is_some() {
         return None;
     }
-    let mut leaves = Vec::with_capacity(4);
-    let mut conditions = Vec::with_capacity(3);
+    let mut leaves = Vec::with_capacity(6);
+    let mut conditions = Vec::with_capacity(5);
     let mut current = left;
     loop {
         let LogicalPlan::Join {
@@ -381,7 +382,7 @@ fn reorder_four_way_inner(
     leaves.push(right);
     conditions.reverse();
     conditions.push(condition?.clone());
-    if leaves.len() != 4 || conditions.len() != 3 {
+    if !(4..=6).contains(&leaves.len()) || conditions.len() != leaves.len() - 1 {
         return None;
     }
 
@@ -393,7 +394,7 @@ fn reorder_four_way_inner(
         .iter()
         .map(|estimate| estimate.alias.clone())
         .collect::<Vec<_>>();
-    if aliases.iter().collect::<HashSet<_>>().len() != 4 {
+    if aliases.iter().collect::<HashSet<_>>().len() != leaves.len() {
         return None;
     }
     let edges = conditions
@@ -1403,6 +1404,46 @@ mod tests {
         let rendered = format!("{input:?}");
         assert!(rendered.contains("table: \"micro\""));
         assert!(rendered.contains("table: \"tiny\""));
+    }
+
+    #[test]
+    fn reorders_a_five_way_chain_with_a_connected_left_deep_order() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM large l JOIN medium m ON l.id=m.id JOIN tiny t ON m.id=t.id JOIN micro u ON t.id=u.id JOIN nano n ON u.id=n.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut |table| {
+            let (rows, bytes) = match table {
+                "large" => (10_000_000, 100_000_000),
+                "medium" => (100_000, 10_000_000),
+                "tiny" => (10, 1_000),
+                "micro" => (5, 500),
+                "nano" => (2, 200),
+                _ => return None,
+            };
+            Some(RelationStatistics::exact_with_bytes(
+                rows,
+                vec!["id".into()],
+                bytes,
+            ))
+        });
+        let LogicalPlan::Project { input, columns } = optimized else {
+            panic!("five-way reorder must restore the written projection")
+        };
+        assert_eq!(columns.len(), 5);
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| match column {
+                    Expr::Alias { name, .. } => name.as_str(),
+                    _ => panic!("qualified output alias missing"),
+                })
+                .collect::<Vec<_>>(),
+            vec!["l.id", "m.id", "t.id", "u.id", "n.id"]
+        );
+        let rendered = format!("{input:?}");
+        assert!(rendered.contains("table: \"nano\""));
+        assert!(rendered.contains("table: \"micro\""));
     }
 
     #[test]
