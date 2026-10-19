@@ -385,6 +385,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "transform_keys_lambda",
+        "SELECT TRANSFORM_KEYS(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), (key, value) -> CONCAT(key, '_x')) AS transformed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,
