@@ -4432,6 +4432,22 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Find an array element",
         ),
         (
+            "array_positions",
+            "array(bigint)",
+            "[array, unknown]",
+            "scalar",
+            true,
+            "Find all matching array element positions",
+        ),
+        (
+            "array_has_duplicates",
+            "boolean",
+            "[array]",
+            "scalar",
+            true,
+            "Test whether an array contains duplicates",
+        ),
+        (
             "array_sort",
             "array",
             "[array]",
@@ -4478,6 +4494,14 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "scalar",
             true,
             "Return consecutive array n-grams",
+        ),
+        (
+            "combinations",
+            "array(array)",
+            "[array, bigint]",
+            "scalar",
+            true,
+            "Return bounded array combinations",
         ),
         (
             "cardinality",
@@ -24274,6 +24298,8 @@ mod streamed_root_tests {
         assert_eq!(sum[2], serde_json::json!(["double"]));
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
         assert!(rows.iter().any(|row| row[0] == "array_sum"));
+        assert!(rows.iter().any(|row| row[0] == "array_positions"));
+        assert!(rows.iter().any(|row| row[0] == "combinations"));
         assert!(rows.iter().any(|row| row[0] == "array_average"));
         assert!(rows.iter().any(|row| row[0] == "array_cum_sum"));
         assert!(rows.iter().any(|row| row[0] == "array_ngrams"));
