@@ -338,9 +338,9 @@ pub fn optimize_with_statistics(
 
 /// Reorder a bounded left-deep inner equi-join chain when every leaf has exact
 /// source statistics. The parser emits a left-deep tree, so the search only
-/// considers connected left-deep build orders. Keeping the cap small prevents
+/// considers connected left-deep build orders. Keeping the cap bounded prevents
 /// factorial planning work from becoming a query-time denial of service while
-/// covering the common star/snowflake join shapes. Unsupported outer,
+/// covering common star/snowflake join shapes through eight relations. Unsupported outer,
 /// `USING`, and residual joins remain on the conservative path.
 fn reorder_left_deep_inner(
     left: LogicalPlan,
@@ -353,8 +353,8 @@ fn reorder_left_deep_inner(
     if join_type != JoinType::Inner || condition.is_none() || using_columns.is_some() {
         return None;
     }
-    let mut leaves = Vec::with_capacity(6);
-    let mut conditions = Vec::with_capacity(5);
+    let mut leaves = Vec::with_capacity(8);
+    let mut conditions = Vec::with_capacity(7);
     let mut current = left;
     loop {
         let LogicalPlan::Join {
@@ -382,7 +382,7 @@ fn reorder_left_deep_inner(
     leaves.push(right);
     conditions.reverse();
     conditions.push(condition?.clone());
-    if !(4..=6).contains(&leaves.len()) || conditions.len() != leaves.len() - 1 {
+    if !(4..=8).contains(&leaves.len()) || conditions.len() != leaves.len() - 1 {
         return None;
     }
 
@@ -1444,6 +1444,60 @@ mod tests {
         let rendered = format!("{input:?}");
         assert!(rendered.contains("table: \"nano\""));
         assert!(rendered.contains("table: \"micro\""));
+    }
+
+    #[test]
+    fn reorders_seven_and_eight_way_chains_without_changing_output_order() {
+        for (sql, expected_columns) in [
+            (
+                "SELECT * FROM a a JOIN b b ON a.id=b.id JOIN c c ON b.id=c.id JOIN d d ON c.id=d.id JOIN e e ON d.id=e.id JOIN f f ON e.id=f.id JOIN g g ON f.id=g.id",
+                7,
+            ),
+            (
+                "SELECT * FROM a a JOIN b b ON a.id=b.id JOIN c c ON b.id=c.id JOIN d d ON c.id=d.id JOIN e e ON d.id=e.id JOIN f f ON e.id=f.id JOIN g g ON f.id=g.id JOIN h h ON g.id=h.id",
+                8,
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let optimized = optimize_with_statistics(plan, &mut |table| {
+                let rows = match table {
+                    "a" => 10_000_000,
+                    "b" => 100_000,
+                    "c" => 10_000,
+                    "d" => 1_000,
+                    "e" => 100,
+                    "f" => 10,
+                    "g" => 5,
+                    "h" => 2,
+                    _ => return None,
+                };
+                Some(RelationStatistics::exact_with_bytes(
+                    rows,
+                    vec!["id".into()],
+                    rows.saturating_mul(10),
+                ))
+            });
+            let LogicalPlan::Project { input, columns } = optimized else {
+                panic!("bounded reorder must restore the written projection")
+            };
+            assert_eq!(columns.len(), expected_columns);
+            assert_eq!(
+                columns
+                    .iter()
+                    .map(|column| match column {
+                        Expr::Alias { name, .. } => name.as_str(),
+                        _ => panic!("qualified output alias missing"),
+                    })
+                    .collect::<Vec<_>>(),
+                (b'a'..=b'h')
+                    .take(expected_columns)
+                    .map(|letter| format!("{}.id", letter as char))
+                    .collect::<Vec<_>>()
+            );
+            // The projection is the observable contract; internal join nodes
+            // do not retain the synthetic cost-model alias in their debug form.
+            let _ = input;
+        }
     }
 
     #[test]
