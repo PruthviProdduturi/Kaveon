@@ -22,6 +22,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning style={{ background: "#171717" }}>
       <head>
+        {/* Readable with `curl -s <host> | grep kaveon-build`, which is the
+            question asked of a deployment most often and the one that was
+            hardest to answer: what is actually serving here? */}
+        <meta name="kaveon-build" content={process.env.NEXT_PUBLIC_KAVEON_BUILD ?? 'unknown'} />
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
         {/* Set the ground and the theme BEFORE any CSS/JS loads — prevents a flash.
             The product page at / is a theme-independent #0a0a0a surface and renders

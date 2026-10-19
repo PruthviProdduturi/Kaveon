@@ -1,9 +1,41 @@
 import type { NextConfig } from "next";
 import { config } from 'dotenv';
 import { resolve } from 'path';
+import { execSync } from 'child_process';
+import { version as studioVersion } from './package.json';
 
 // Load environment variables from root .env file
 config({ path: resolve(__dirname, '../.env') });
+
+// Which build is this?
+//
+// Answering that for the live site used to mean downloading its JavaScript
+// chunks and grepping them for a string only the new code contained. The
+// commit is known at build time on every builder that matters, so record it
+// and let the page say so.
+//
+// Vercel and GitHub Actions each expose the SHA under their own name; the
+// local fallback asks git, and a build from a tarball with no git and no CI
+// honestly reports that it does not know rather than inventing a value.
+function buildCommit(): string {
+  const fromCi =
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    process.env.GITHUB_SHA ||
+    process.env.KAVEON_BUILD_COMMIT;
+  if (fromCi) return fromCi.slice(0, 8);
+  try {
+    return execSync('git rev-parse --short=8 HEAD', {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+export const KAVEON_BUILD = `${studioVersion}+${buildCommit()}`;
 
 const nextConfig: NextConfig = {
   // Required for Docker/Container Apps deployment — creates a self-contained
@@ -59,6 +91,8 @@ const nextConfig: NextConfig = {
 
   // Expose environment variables to the browser with NEXT_PUBLIC_ prefix
   env: {
+    // Inlined at build time, so the running page carries it without a request.
+    NEXT_PUBLIC_KAVEON_BUILD: KAVEON_BUILD,
     NEXT_PUBLIC_API_BASE_URL: process.env.API_URL || 'http://localhost:8080',
     NEXT_PUBLIC_API_URL: process.env.API_URL || 'http://localhost:8080',
     NEXT_PUBLIC_AZURE_CLIENT_ID: process.env.AZURE_CLIENT_ID || '',
