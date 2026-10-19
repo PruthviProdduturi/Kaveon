@@ -1943,6 +1943,35 @@ fn distributed_sequence_unnest_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Trino infers a descending unit step when SEQUENCE starts above its stop.
+#[test]
+fn distributed_sequence_unnest_infers_descending_default_step() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-unnest-sequence-descending-default-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT value, ord FROM UNNEST(SEQUENCE(3, 1)) WITH ORDINALITY AS t(value, ord) ORDER BY ord";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-unnest-sequence-descending-default", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["3\u{1f}1", "2\u{1f}2", "1\u{1f}3"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// EXCEPT ALL removes only the matched multiplicity, including NULL values;
 /// the distributed set path must preserve that three-valued key semantics.
 #[test]
