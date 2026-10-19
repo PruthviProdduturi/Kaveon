@@ -264,11 +264,14 @@ fn cleanup_stale_spill_directories(root: &Path, stale_before: SystemTime) -> Res
             continue;
         }
 
-        let modified = entry
-            .metadata()?
-            .modified()
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        if modified <= stale_before {
+        // A timestamp failure must fail closed. Treating an unreadable
+        // timestamp as the Unix epoch would classify an active directory as
+        // ancient and could delete a live spill during another process's
+        // startup sweep.
+        if is_stale_spill_metadata(
+            entry.metadata().and_then(|metadata| metadata.modified()),
+            stale_before,
+        ) {
             match fs::remove_dir_all(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -277,6 +280,13 @@ fn cleanup_stale_spill_directories(root: &Path, stale_before: SystemTime) -> Res
         }
     }
     Ok(())
+}
+
+fn is_stale_spill_metadata(
+    modified: std::io::Result<SystemTime>,
+    stale_before: SystemTime,
+) -> bool {
+    modified.is_ok_and(|modified| modified <= stale_before)
 }
 
 /// A run being written: an Arrow IPC stream on the spill directory whose
@@ -929,5 +939,12 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unreadable_spill_timestamp_is_never_reclaimed() {
+        let cutoff = SystemTime::now();
+        let error = std::io::Error::other("metadata unavailable");
+        assert!(!is_stale_spill_metadata(Err(error), cutoff));
     }
 }
