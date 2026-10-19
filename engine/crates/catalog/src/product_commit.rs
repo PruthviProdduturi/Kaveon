@@ -236,6 +236,12 @@ impl ProductCatalogCommit {
                 return CommitOutcome::Rejected;
             }
         };
+        // Genesis is a published snapshot like any other, and it is the one an
+        // empty deployment reports. Leaving it out made the metric read zero
+        // until the first ordinary commit, which is exactly when an operator
+        // would first look at it.
+        self.metrics
+            .record_snapshot_bytes(snapshot.len() as u64, MAX_SNAPSHOT_BYTES as u64);
         let snapshot_sha256 = digest(&snapshot);
         match self
             .storage
@@ -594,6 +600,10 @@ operation {}",
                 return (CommitOutcome::Rejected, false);
             }
         };
+        // The encoded size is in hand exactly here and nowhere later, and the
+        // ceiling is enforced on it, so this is where it becomes observable.
+        self.metrics
+            .record_snapshot_bytes(bytes.len() as u64, MAX_SNAPSHOT_BYTES as u64);
         let snapshot_sha256 = digest(&bytes);
         let published_manifest_tables = manifest.typed_tables.clone();
         shard.entries.insert(
@@ -1414,6 +1424,36 @@ mod tests {
     fn catalog_with(storage: AdlsConditionalCommit) -> ProductCatalogCommit {
         ProductCatalogCommit::new(storage, "product", Arc::new(TransactionMetrics::default()))
             .unwrap()
+    }
+
+    /// The occupancy metric must reflect a real commit, not just unit-level
+    /// arithmetic. Without this the field could report zero forever and every
+    /// test of it would still pass.
+    #[tokio::test]
+    async fn a_commit_publishes_the_snapshot_size_it_was_measured_against() {
+        let catalog = catalog();
+        let before = catalog.transaction_metrics();
+        assert_eq!(before.snapshot_bytes, 0, "nothing published yet");
+
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        assert!(matches!(
+            catalog.initialize(genesis).await,
+            CommitOutcome::Committed(_)
+        ));
+
+        let after = catalog.transaction_metrics();
+        assert!(
+            after.snapshot_bytes > 0,
+            "a published snapshot must report its encoded size"
+        );
+        assert_eq!(
+            after.snapshot_bytes_limit, MAX_SNAPSHOT_BYTES as u64,
+            "the reported ceiling must be the one actually enforced, or the percentage beside it means nothing"
+        );
+        assert!(
+            after.snapshot_percent_of_limit < 100,
+            "a genesis snapshot cannot already be at the ceiling"
+        );
     }
 
     #[tokio::test]
