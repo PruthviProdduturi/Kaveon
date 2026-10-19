@@ -2294,14 +2294,18 @@ impl ColumnarGroups {
             // Validate the compact envelope before allocating any new group
             // slots. A malformed layout must not leave a half-created group
             // behind for a spill retry or a later batch.
-            let input = compact_state::begin(states.value(row))?;
+            let mut input = compact_state::begin(states.value(row))?;
             if input.count != self.accumulators.len() {
                 return Err(exec_err(
                     "partial group does not match the aggregate layout",
                 ));
             }
+            // `begin` has already validated the envelope. Read the first tag
+            // from that cursor instead of reopening the envelope through
+            // `first_tag`, which would repeat the magic/count parsing on the
+            // final merge hot path.
             if let Some(accumulator) = self.accumulators.first()
-                && !accumulator.accepts_tag(compact_state::first_tag(states.value(row))?)
+                && !accumulator.accepts_tag(input.bytes.byte()?)
             {
                 return Err(exec_err(
                     "partial group does not match the aggregate layout",
@@ -2317,11 +2321,6 @@ impl ColumnarGroups {
             }
             let slot = self.slots[row] as usize;
             let mut input = compact_state::begin(states.value(row))?;
-            if input.count != self.accumulators.len() {
-                return Err(exec_err(
-                    "partial group does not match the aggregate layout",
-                ));
-            }
             for accumulator in &mut self.accumulators {
                 accumulator.merge_bytes(slot, &mut input.bytes)?;
             }
@@ -2354,14 +2353,14 @@ impl ColumnarGroups {
             if keys.is_null(row) || states.is_null(row) {
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
             }
-            let input = compact_state::begin(states.value(row))?;
+            let mut input = compact_state::begin(states.value(row))?;
             if input.count != self.accumulators.len() {
                 return Err(exec_err(
                     "partial group does not match the aggregate layout",
                 ));
             }
             if let Some(accumulator) = self.accumulators.first()
-                && !accumulator.accepts_tag(compact_state::first_tag(states.value(row))?)
+                && !accumulator.accepts_tag(input.bytes.byte()?)
             {
                 return Err(exec_err(
                     "partial group does not match the aggregate layout",
@@ -2376,11 +2375,6 @@ impl ColumnarGroups {
             let input_row = usize::try_from(input_row)
                 .map_err(|_| exec_err("selected aggregate row index overflow"))?;
             let mut input = compact_state::begin(states.value(input_row))?;
-            if input.count != self.accumulators.len() {
-                return Err(exec_err(
-                    "partial group does not match the aggregate layout",
-                ));
-            }
             for accumulator in &mut self.accumulators {
                 accumulator.merge_bytes(slot, &mut input.bytes)?;
             }
