@@ -6075,6 +6075,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             "UINT16" => CastTarget::UInt16,
             "UINT32" => CastTarget::UInt32,
             "UINT64" => CastTarget::UInt64,
+            "FLOAT32" => CastTarget::Float32,
             "FLOAT64" => CastTarget::Float64,
             "UTF8" => CastTarget::Utf8,
             "DATE32" => CastTarget::Date32,
@@ -21315,6 +21316,27 @@ mod tests {
         let dates = result.as_primitive::<arrow::datatypes::Date32Type>();
         assert_eq!(dates.value(0), 20_000);
         assert!(dates.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_real_cast_as_float32_with_null_preservation() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![Some("1.23456789"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Cast {
+                expr: Box::new(Expr::Column("value".into())),
+                data_type: CastTarget::Float32,
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.data_type(), &DataType::Float32);
+        let values = result.as_primitive::<Float32Type>();
+        assert_eq!(values.value(0), 1.234_567_9_f32);
+        assert!(values.is_null(1));
     }
 
     #[test]

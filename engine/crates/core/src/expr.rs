@@ -131,6 +131,11 @@ pub enum CastTarget {
     UInt16,
     UInt32,
     UInt64,
+    /// Trino REAL uses IEEE-754 single precision (Arrow Float32), distinct
+    /// from DOUBLE/Float64. Keeping this target explicit preserves the
+    /// rounding boundary at the SQL type system rather than silently
+    /// widening REAL values to DOUBLE.
+    Float32,
     Float64,
     Utf8,
     Date32,
@@ -203,6 +208,7 @@ impl CastTarget {
             Self::UInt16 => arrow::datatypes::DataType::UInt16,
             Self::UInt32 => arrow::datatypes::DataType::UInt32,
             Self::UInt64 => arrow::datatypes::DataType::UInt64,
+            Self::Float32 => arrow::datatypes::DataType::Float32,
             Self::Float64 => arrow::datatypes::DataType::Float64,
             Self::Utf8 => arrow::datatypes::DataType::Utf8,
             Self::Date32 => arrow::datatypes::DataType::Date32,
