@@ -1106,7 +1106,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
         <div style={{ display: "flex", gap: 24 }}>
           <Link href="/docs" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Documentation</Link>
           <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
-          <OpenKaveon className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Open Kaveon</OpenKaveon>
+          <OpenKaveon paused="text" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Open Kaveon</OpenKaveon>
         </div>
       </footer>
     </div>
