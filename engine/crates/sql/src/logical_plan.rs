@@ -4670,7 +4670,16 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             )));
         }
         let argument = args.first().cloned().unwrap_or(Expr::Star);
-        args = vec![aggregate_filter_expr(&name, argument, filter)?];
+        // FILTER qualifies the value argument only.  Preserve ordered-set
+        // parameters such as APPROX_PERCENTILE's percentile (or percentile
+        // array) so the projection still names the same aggregate output as
+        // the aggregate collector below.
+        let filtered = aggregate_filter_expr(&name, argument, filter)?;
+        if args.is_empty() {
+            args = vec![filtered];
+        } else {
+            args[0] = filtered;
+        }
     }
 
     if let Some(over) = &func.over {
@@ -8586,6 +8595,23 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.matches("Case {").count() >= 2, "{debug}");
         assert!(!debug.contains("FILTER is unsupported"), "{debug}");
+    }
+
+    #[test]
+    fn preserves_approx_percentile_fraction_when_lowering_filter() {
+        let (_columns, aggregates) = aggregates_of(
+            "SELECT APPROX_PERCENTILE(latency, 0.95) FILTER (WHERE status = 'ok') FROM events",
+        );
+        let [aggregate] = aggregates.as_slice() else {
+            panic!("expected one aggregate: {aggregates:?}");
+        };
+        assert!(matches!(
+            aggregate,
+            AggregateExpr::ApproxPercentile {
+                expr: Expr::Column(column),
+                percentiles: Percentiles { fractions, list: false }
+            } if column == "__kaveon_arg_0" && fractions == &vec![0.95]
+        ));
     }
 
     #[test]
