@@ -4069,11 +4069,17 @@ fn eval_map_zip_with(
             if parameter_names.iter().any(|name| name == field.name()) {
                 continue;
             }
-            fields.push(field.as_ref().clone());
-            columns.push(if !column.is_empty() {
-                column.slice(0, 1)
-            } else {
+            let empty_outer_column = column.is_empty();
+            fields.push(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_nullable(field.is_nullable() || empty_outer_column),
+            );
+            columns.push(if empty_outer_column {
                 arrow::array::new_null_array(field.data_type(), 1)
+            } else {
+                column.slice(0, 1)
             });
         }
         let hint_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
@@ -17863,6 +17869,79 @@ mod tests {
         .unwrap();
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map.value_offsets(), &[0, 0]);
+        assert_eq!(map.values().data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn map_zip_with_empty_outer_batch_preserves_non_nullable_schema() {
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let empty_map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(entry_fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32])),
+                StructArray::new(
+                    entry_fields,
+                    vec![
+                        Arc::new(StringArray::from(Vec::<&str>::new())),
+                        Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    ],
+                    None,
+                ),
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let map_type = empty_map.data_type().clone();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("user_id", DataType::Int64, false),
+                Field::new("left_map", map_type.clone(), false),
+                Field::new("right_map", map_type, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef,
+                empty_map.clone(),
+                empty_map,
+            ],
+        )
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_ZIP_WITH".into(),
+                args: vec![
+                    Expr::Column("left_map".into()),
+                    Expr::Column("right_map".into()),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("key".into())),
+                            Expr::Literal(ScalarValue::Utf8("left_value".into())),
+                            Expr::Literal(ScalarValue::Utf8("right_value".into())),
+                            Expr::Function {
+                                name: "CONCAT".into(),
+                                args: vec![
+                                    Expr::Column("key".into()),
+                                    Expr::Literal(ScalarValue::Utf8("_out".into())),
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.len(), 0);
         assert_eq!(map.values().data_type(), &DataType::Utf8);
     }
 
