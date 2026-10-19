@@ -120,70 +120,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Off unless an installation opts in with KAVEON_VERCEL_DEPLOY=true.
+  # Studio is not deployed from here any more.
   #
-  # This was off because Studio ran on AKS behind its own ingress, and every
-  # push republished a second, parallel Studio on Vercel whose AUTH_URL named a
-  # host of its own -- so a visitor who reached it was redirected away from the
-  # installation they started on. That is no longer the shape of the
-  # deployment: the AKS cluster is deallocated, kaveon.io resolves to Vercel,
-  # and AUTH_URL names kaveon.io, so Vercel is not a second Studio beside the
-  # real one. It is the only one. The original hazard was a stale parallel
-  # copy, and there is no longer a copy to be parallel to.
+  # This job published on every push to dev. dev takes several hundred commits
+  # a day and almost none of them touch Studio, so the free tier's 100
+  # deployments a day were spent on Engine and documentation work and then the
+  # push that did change Studio was refused -- the live site stayed stale with
+  # the fix sitting green on dev. Each push-triggered deployment also minted a
+  # permanent, publicly addressable kaveon-<hash>.vercel.app, which is where
+  # the stale-alias confusion came from.
   #
-  # If AKS returns as the serving installation, turn the variable off again
-  # before pointing kaveon.io back at it, or the old hazard returns with it.
+  # Deployment moved to .github/workflows/deploy-studio.yml: once a day on a
+  # schedule, skipped when Studio has not changed, and runnable by hand from
+  # the Actions tab when something should not wait. KAVEON_VERCEL_DEPLOY is
+  # still the master switch, and it is read there.
   #
-  # The deployment itself is gated on paths below, which is not an
-  # optimisation: the free tier allows 100 deployments a day, dev takes
-  # hundreds of commits a day, and nearly all of them are Engine or
-  # documentation work that cannot change what Studio serves. Deploying on
-  # every push spends the day's quota on commits that change nothing and then
-  # refuses the push that changes Studio.
-  deploy:
-    name: Deploy to Vercel
-    runs-on: ubuntu-latest
-    needs: [web]
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.KAVEON_VERCEL_DEPLOY == 'true'
-    env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Needed to diff against the previous tip of the branch.
-          fetch-depth: 0
-
-      - name: Decide whether this push changed Studio
-        id: scope
-        run: |
-          before='${{ github.event.before }}'
-          if [ -z "$before" ] \
-            || [ "$before" = "0000000000000000000000000000000000000000" ] \
-            || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
-            # A new branch, a force-push, or a base that is no longer reachable.
-            # Deploy rather than guess: a missed deployment is the failure mode
-            # that leaves the live site stale without saying so.
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-            echo 'No usable base commit; deploying.'
-            exit 0
-          fi
-          if git diff --name-only "$before" '${{ github.sha }}' \
-            | grep -qE '^(studio/|packages/|package.json|pnpm-lock.yaml|vercel.json)'; then
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-            echo 'Studio changed; deploying.'
-          else
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            echo 'Studio untouched by this push; skipping the deployment.'
-          fi
-
-      - name: Install Vercel CLI
-        if: steps.scope.outputs.changed == 'true'
-        run: npm install -g vercel
-
-      # Remote build now works: vercel.json's installCommand uses `npm install`
-      # (npm's fetch avoids the pnpm/undici ERR_INVALID_THIS that broke Vercel's
-      # sandbox). Requires a VERCEL_TOKEN scoped to the prodduturi-labs team.
-      - name: Deploy to Vercel
-        if: steps.scope.outputs.changed == 'true'
-        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+  # Everything above still runs on every push: Studio is built and
+  # type-checked, the API is tested, and secrets are scanned. Only publishing
+  # moved.

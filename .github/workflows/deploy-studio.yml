@@ -1,0 +1,85 @@
+name: Deploy Studio
+
+# One deployment a day, on a schedule, instead of one per push.
+#
+# Vercel's free tier allows 100 deployments a day. `dev` takes several hundred
+# commits a day and almost none of them touch Studio, so deploying per push
+# spent the quota on Engine and documentation work and then refused the push
+# that actually changed Studio -- the live site sat stale with the fix sitting
+# green on `dev`. Every push-triggered deployment also minted a permanent,
+# publicly addressable `kaveon-<hash>.vercel.app`, which is where the stale
+# alias confusion came from.
+#
+# A daily cadence caps that at one version a day, predictably, and leaves 99
+# deployments of headroom for the manual runs below.
+on:
+  schedule:
+    # 07:00 UTC. GitHub cron has no timezone, so this is midnight Pacific while
+    # daylight time is in effect and 23:00 the evening before once it ends.
+    # Pick a different hour here if the clock change matters.
+    - cron: '0 7 * * *'
+  # So a change does not have to wait for the clock. Run it from the Actions
+  # tab; `force` deploys even when Studio has not changed.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Deploy even if Studio has not changed in the last day'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-studio
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Studio to Vercel
+    runs-on: ubuntu-latest
+    # Same master switch as before: unset the variable to stop deploying
+    # entirely, without editing this file.
+    if: vars.KAVEON_VERCEL_DEPLOY == 'true'
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Has Studio changed since the last run?
+        id: scope
+        run: |
+          if [ '${{ inputs.force }}' = 'true' ]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'Forced by the operator.'
+            exit 0
+          fi
+          # A day of commits, since that is this workflow's period. Anything
+          # Studio builds from counts; Engine and docs work does not.
+          if git log --since='25 hours ago' --name-only --pretty=format: origin/dev \
+            | grep -qE '^(studio/|packages/|package.json|pnpm-lock.yaml|vercel.json)'; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'Studio changed in the last day; deploying.'
+          else
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'Studio unchanged in the last day; nothing to deploy.'
+          fi
+
+      - name: Install Vercel CLI
+        if: steps.scope.outputs.changed == 'true'
+        run: npm install -g vercel
+
+      # Remote build: vercel.json's installCommand uses `npm install` (npm's
+      # fetch avoids the pnpm/undici ERR_INVALID_THIS that broke Vercel's
+      # sandbox). Requires a VERCEL_TOKEN scoped to the prodduturi-labs team.
+      - name: Deploy to Vercel
+        if: steps.scope.outputs.changed == 'true'
+        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Report what is now serving
+        if: steps.scope.outputs.changed == 'true'
+        run: |
+          sha="$(git rev-parse --short=8 origin/dev)"
+          echo "Deployed dev at $sha." >> "$GITHUB_STEP_SUMMARY"
+          echo 'Confirm with: curl -s https://kaveon.io | grep kaveon-build' >> "$GITHUB_STEP_SUMMARY"
