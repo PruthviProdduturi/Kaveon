@@ -622,6 +622,25 @@ mod tests {
     }
 
     #[test]
+    fn typed_partial_sum_merge_rejects_count_overflow_at_exchange_boundary() {
+        let first = batch(AggregateState::Sum {
+            sum: 4.5,
+            count: u64::MAX,
+        });
+        let second = batch(AggregateState::Sum { sum: 1.0, count: 1 });
+        let mut merger = IncrementalAggregateMerger::new(None);
+
+        merger.push_batch(&first).unwrap();
+        let error = merger.push_batch(&second).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("floating aggregate count overflow")
+        );
+    }
+
+    #[test]
     fn columnar_merge_matches_the_row_merge_and_holds_its_groups_as_columns() {
         // Integer, date and text keys with every in-place state: the columnar
         // merge takes the layout, folds partials from both encoders, and
