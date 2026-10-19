@@ -1102,6 +1102,11 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <KaveonMark size={16} useDirectColor />
           <span style={{ fontSize: 12, color: "#e2e8f0" }}>&copy; {new Date().getFullYear()} Kaveon</span>
+          {process.env.NEXT_PUBLIC_KAVEON_BUILD && (
+            <span style={{ fontSize: 11, color: "#6b7280", fontVariantNumeric: "tabular-nums" }}>
+              {process.env.NEXT_PUBLIC_KAVEON_BUILD}
+            </span>
+          )}
         </div>
         <div style={{ display: "flex", gap: 24 }}>
           <Link href="/docs" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Documentation</Link>
