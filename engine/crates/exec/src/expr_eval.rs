@@ -6602,34 +6602,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "{name} requires 2 or 3 arguments"
                 )));
             }
-            let arr = as_string_array(&args[0])?;
             let starts = args[1].as_primitive::<Int64Type>();
             let lengths = if args.len() == 3 {
                 Some(args[2].as_primitive::<Int64Type>())
             } else {
                 None
             };
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || starts.is_null(i) {
-                        return None;
+            let value_at = |row: usize| -> Result<Option<String>> {
+                let Some(value) = text_value(&args[0], row)? else {
+                    return Ok(None);
+                };
+                if starts.is_null(row) {
+                    return Ok(None);
+                }
+                let start = (starts.value(row) - 1).max(0) as usize;
+                let chars = value.chars().skip(start);
+                Ok(Some(match lengths {
+                    Some(lens) if !lens.is_null(row) => {
+                        chars.take(lens.value(row).max(0) as usize).collect()
                     }
-                    let s = arr.value(i);
-                    let start = (starts.value(i) - 1).max(0) as usize;
-                    if start >= s.len() {
-                        return Some(String::new());
+                    _ => chars.collect(),
+                }))
+            };
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    match value_at(row)? {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
                     }
-                    let remaining = &s[start..];
-                    match lengths {
-                        Some(lens) if !lens.is_null(i) => {
-                            let len = lens.value(i).max(0) as usize;
-                            Some(remaining.chars().take(len).collect())
-                        }
-                        _ => Some(remaining.to_owned()),
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    match value_at(row)? {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "CONCAT" => {
             if args.is_empty() {
@@ -24650,5 +24663,33 @@ mod tests {
         .unwrap();
         let values = codepoint.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(955), None]);
+    }
+
+    #[test]
+    fn evaluates_substr_for_large_utf8_without_splitting_unicode() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(LargeStringArray::from(vec![Some("λKaveon"), None])) as ArrayRef,
+            ),
+            ("start", Arc::new(Int64Array::from(vec![2, 1])) as ArrayRef),
+            ("length", Arc::new(Int64Array::from(vec![5, 1])) as ArrayRef),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "SUBSTR".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Column("start".into()),
+                    Expr::Column("length".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "Kaveo");
+        assert!(values.is_null(1));
     }
 }
