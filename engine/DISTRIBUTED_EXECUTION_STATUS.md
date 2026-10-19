@@ -6,7 +6,7 @@ This file is a reviewed capability snapshot for Kaveon's distributed analytical 
 
 - Branch: `dev`
 - Execution unit: Arrow `RecordBatch`
-- Storage partitioning: deterministic Parquet row-group and Delta active-file partitions; Parquet, Delta (JSON commits and v1 checkpoints, pinned version) and Iceberg on local disk and ADLS Gen2 (decoder lanes, pinned object identity); S3 through the same reader, unqualified; a plain Parquet directory is not yet a table (in progress)
+- Storage partitioning: deterministic Parquet row-group and Delta active-file partitions; Parquet, Delta (JSON commits and v1 checkpoints, pinned version) and Iceberg on local disk and ADLS Gen2 (decoder lanes, pinned object identity); S3 through the same reader, unqualified. A plain Parquet directory is a supported table: the coordinator lists and pins files/row groups, carries bounded assignments to workers, and workers verify the listing digest before reading; remote object-store qualification remains open.
 - Coordinator/worker transport: HTTPS task submission, streamed Arrow IPC exchange partitions to the consuming node (worker spools on AKS), Arrow IPC task results; same-column runtime `OR`-of-`IN` predicates are folded into one exact storage pushdown before decoding
 - Shipped distributed query shapes: scan/filter/project, partial/final grouped and global aggregates (columnar table, flushing partials, hybrid final merge), DISTINCT and exact COUNT(DISTINCT) over hash-partitioned rows, Sort/TopN/limit/offset, repartitioned or broadcast hash joins, semi/anti joins, window functions, UNION/INTERSECT/EXCEPT
 - Shipped local query shapes: everything above plus outer joins, CTEs, derived tables, uncorrelated scalar subqueries, decorrelated EXISTS/NOT EXISTS and correlated scalar aggregates (the binder, `kaveon_optim::binder`), window functions with ROWS/RANGE/GROUPS frames, EXTRACT and the date/time functions, `date ± INTERVAL`, Decimal128 arithmetic, LIKE/REGEXP_REPLACE, dictionary columns end to end; TPC-H 21 of 22 (`docs/qualification/tpch/coverage.md`)
@@ -106,7 +106,7 @@ Items 1, 2, 4 (spill), 5 (streamed output), 6 (admission queue, resource groups)
 2. Stream exchange decode on the consumer.
 3. Connect deterministic storage split enumeration to fragment task assignments instead of worker-count partitions.
 4. Qualify aggregate and join spill under skew and disk exhaustion; put final-merge spill on the task metrics.
-5. Residual semi joins (TPC-H Q21); plain Parquet directory tables (in progress).
+5. Residual semi joins (TPC-H Q21); cloud qualification of plain Parquet directory listings and split assignments.
 6. Sustained soak, backup/restore and upgrade rehearsal on the current image; five-worker evidence.
 7. Record repeatable release-build performance and memory evidence; do not publish single-run claims.
 
