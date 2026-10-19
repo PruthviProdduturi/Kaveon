@@ -614,6 +614,43 @@ mod tests {
     }
 
     #[test]
+    fn mid_stream_write_failure_releases_bytes_and_removes_partial_artifact() {
+        let root = test_root("mid-stream-failure");
+        let manager = SpillManager::new(&root, 1_024).unwrap();
+        let input = batch();
+        let mut writer = manager.begin_run(&input.schema()).unwrap();
+        let partial_path = writer.path.clone();
+        let mut failed = false;
+        let mut wrote_bytes = false;
+
+        for _ in 0..1_024 {
+            match writer.write(&input) {
+                Ok(()) => {
+                    wrote_bytes = true;
+                }
+                Err(error) => {
+                    assert!(error.to_string().contains("spill limit exceeded"));
+                    failed = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(wrote_bytes, "the failure must occur after a partial write");
+        assert!(failed, "the bounded writer must reject the exhausted run");
+        drop(writer);
+        assert!(!partial_path.exists());
+        assert_eq!(manager.snapshot().current_bytes, 0);
+        assert!(
+            fs::read_dir(&manager.inner.directory)
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn concurrent_spill_admission_is_bounded_and_releases_capacity() {
         // Exercise the same atomic reservation used by Arrow IPC writers. Two
         // 32-byte writers may be admitted, but a racing third writer must be
