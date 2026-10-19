@@ -16244,6 +16244,68 @@ mod tests {
     }
 
     #[test]
+    fn array_sort_comparator_orders_nulls_explicitly() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let compare = Expr::Function {
+            name: "__KAVEON_LAMBDA".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("x".into())),
+                Expr::Literal(ScalarValue::Utf8("y".into())),
+                Expr::Case {
+                    operand: None,
+                    when_then: vec![
+                        (
+                            Expr::IsNull(Box::new(Expr::Column("x".into()))),
+                            Expr::Literal(ScalarValue::Int64(1)),
+                        ),
+                        (
+                            Expr::IsNull(Box::new(Expr::Column("y".into()))),
+                            Expr::Literal(ScalarValue::Int64(-1)),
+                        ),
+                        (
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("x".into())),
+                                op: BinaryOp::Lt,
+                                right: Box::new(Expr::Column("y".into())),
+                            },
+                            Expr::Literal(ScalarValue::Int64(-1)),
+                        ),
+                    ],
+                    else_expr: Some(Box::new(Expr::Literal(ScalarValue::Int64(1)))),
+                },
+            ],
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Null),
+                            Expr::Literal(ScalarValue::Int64(2)),
+                            Expr::Literal(ScalarValue::Int64(1)),
+                        ],
+                    },
+                    compare,
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(
+            list.value(0)
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), None]
+        );
+    }
+
+    #[test]
     fn array_sort_accepts_narrow_integer_and_float32_lists() {
         use arrow::array::{Float32Builder, Int32Builder, ListBuilder};
 

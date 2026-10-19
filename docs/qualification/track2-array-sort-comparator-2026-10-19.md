@@ -21,6 +21,7 @@ Local parser, logical-plan, and evaluator tests:
 cargo test -p kaveon-sql parses_two_parameter_lambda_for_array_sort -- --nocapture
 cargo test -p kaveon-sql lowers_array_sort_comparator_as_a_serializable_lambda_expression -- --nocapture
 cargo test -p kaveon-exec array_sort_comparator_uses_lambda_body_and_preserves_result_type -- --nocapture
+cargo test -p kaveon-exec array_sort_comparator_orders_nulls_explicitly -- --nocapture
 ```
 
 The full server differential corpus includes the comparator query and compares
@@ -32,7 +33,8 @@ cargo test -p kaveon-server --bin kaveon-server differential_tests::the_differen
 ```
 
 Result on the final comparator implementation: **1 passed, 0 failed**
-in 433.26 seconds.
+in 433.26 seconds. The evaluator qualification also covers explicit NULL
+ordering in the comparator unit test above.
 
 ## Boundary
 
