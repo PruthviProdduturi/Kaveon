@@ -1,8 +1,8 @@
 # Track 1/2 workspace qualification — 2026-10-19
 
-This qualification covers pushed source commits `40ca5ed6`, `da325644`, and `1ba64984`, including the
+This qualification covers pushed source commits `40ca5ed6`, `da325644`, `1ba64984`, `441284bf`, and `f7b23f1a`, including the
 empty-map type inference fixes for `TRANSFORM_VALUES` and `TRANSFORM_KEYS`,
-the LargeUtf8 `ARRAY_HISTOGRAM` key-width fix, and their focused regressions.
+the LargeUtf8 `ARRAY_HISTOGRAM` key-width fix, the `LargeList<LargeUtf8>` `ARRAY_DISTINCT` offset-preservation fix, and their focused regressions.
 
 ## Validation
 
