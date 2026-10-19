@@ -29,9 +29,17 @@ ADLS commit-path gate passed **12 tests, 0 failures, 1 ignored**. Storage smoke
 checks for a 1M-row full scan, projection, and single-row-group read also
 completed successfully.
 
-The repository already provides an opt-in Azurite Compose profile and a
-conditional-commit provider test. Docker was unavailable during this run, so
-the Azurite provider-error and networked Compose checks remain pending.
+The opt-in Azurite Compose profile is now running alongside the local stack.
+The ignored provider test passed **1/1** against Azurite, including the real
+Azure-protocol `409 BlobAlreadyExists` and `412 ConditionNotMet` responses:
+
+```text
+cargo test -p kaveon-storage azurite -- --ignored --nocapture
+test adls_commit::tests::azurite_conditional_commit_matches_the_contract ... ok
+```
+
+The remaining container-level work is the full Trino differential run and
+failure injection across the networked Compose topology.
 
 ## Remaining environment-dependent gates
 
