@@ -5,7 +5,8 @@ use sqlparser::ast::{
     TableFactor, TableWithJoins, Value,
 };
 use sqlparser::dialect::{
-    BigQueryDialect, ClickHouseDialect, DuckDbDialect, GenericDialect, MsSqlDialect,
+    BigQueryDialect, ClickHouseDialect, DatabricksDialect, DuckDbDialect, GenericDialect,
+    MsSqlDialect,
 };
 use sqlparser::parser::Parser;
 
@@ -37,6 +38,15 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // which cannot carry ordinality metadata.
     if contains_lateral_unnest(sql)
         && let Ok(statements) = Parser::parse_sql(&BigQueryDialect {}, &normalized)
+    {
+        return Ok(statements);
+    }
+    // Databricks is the sqlparser dialect that exposes the standard
+    // `parameter -> expression` lambda AST used by Trino's comparator
+    // functions. Keep this retry narrow so ordinary SQL retains DuckDB's
+    // aggregate FILTER and identifier behavior.
+    if normalized.contains("->")
+        && let Ok(statements) = Parser::parse_sql(&DatabricksDialect {}, &normalized)
     {
         return Ok(statements);
     }
@@ -1736,6 +1746,16 @@ mod tests {
         let statements = parse_sql("SELECT ARRAY[NULL], ARRAY[1, NULL] FROM t").unwrap();
         assert_eq!(statements.len(), 1);
         assert!(statements[0].to_string().contains("ARRAY[NULL]"));
+    }
+
+    #[test]
+    fn parses_two_parameter_lambda_for_array_sort() {
+        let statements = parse_sql(
+            "SELECT ARRAY_SORT(ARRAY[3, 1, 2], (x, y) -> CASE WHEN x < y THEN -1 WHEN x > y THEN 1 ELSE 0 END) FROM t",
+        )
+        .expect("Databricks lambda fallback should parse comparator syntax");
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].to_string().contains("->"));
     }
 
     /// Both together: a rewrite in the same statement as non-ASCII text, which

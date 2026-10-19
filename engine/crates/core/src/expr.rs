@@ -79,6 +79,11 @@ pub fn expression_contains_column(expr: &Expr) -> bool {
         | Expr::Not(inner)
         | Expr::Cast { expr: inner, .. }
         | Expr::Extract { expr: inner, .. } => expression_contains_column(inner),
+        // Comparator lambdas bind their parameter names inside the body. The
+        // bounded Engine closure path deliberately does not capture outer
+        // relation columns, so do not expose the bound names as scan inputs.
+        // Any attempted outer capture fails when the body is evaluated.
+        Expr::Function { name, .. } if name == "__KAVEON_LAMBDA" => false,
         Expr::Function { args, .. } => args.iter().any(expression_contains_column),
         Expr::Alias { expr, .. } => expression_contains_column(expr),
         Expr::Case {
