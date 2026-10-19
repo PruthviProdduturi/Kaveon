@@ -3346,6 +3346,46 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn sql_endpoint_commits_product_insert_with_reordered_columns() {
+        let (registry, _catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO product.datasets (document_json, id) VALUES ('{"name":"Orders"}', 'orders')"#.into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let identity = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let record = registry
+            .read_product(&identity, ProductRecordKind::Dataset, "orders")
+            .await
+            .expect("reordered insert should commit by column name");
+        assert_eq!(record.document["name"], "Orders");
+    }
+
     #[test]
     fn transaction_parameter_binder_preserves_literals_comments_and_arrays() {
         let bound = bind_transaction_parameters(

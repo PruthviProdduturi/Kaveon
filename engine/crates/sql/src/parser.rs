@@ -1271,14 +1271,27 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                 .iter()
                 .map(|column| column.value.as_str())
                 .collect();
+            // SQL INSERT column order is part of the statement contract, not
+            // the product-record storage layout. Resolve both supported
+            // columns by name so clients can emit `(document_json, id)` as
+            // well as the canonical `(id, document_json)` order.
+            let id_index = columns
+                .iter()
+                .position(|column| column.eq_ignore_ascii_case("id"));
+            let document_index = columns
+                .iter()
+                .position(|column| column.eq_ignore_ascii_case("document_json"));
             if columns.len() != 2
-                || !columns[0].eq_ignore_ascii_case("id")
-                || !columns[1].eq_ignore_ascii_case("document_json")
+                || id_index.is_none()
+                || document_index.is_none()
+                || id_index == document_index
             {
                 return Err(sql_error(
-                    "product INSERT columns must be (id, document_json)",
+                    "product INSERT columns must contain exactly id and document_json",
                 ));
             }
+            let id_index = id_index.expect("validated product INSERT id column");
+            let document_index = document_index.expect("validated product INSERT document column");
             let Some(SetExpr::Values(values)) =
                 insert.source.as_deref().map(|query| query.body.as_ref())
             else {
@@ -1295,8 +1308,11 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                 .map(|row| {
                     Ok(ProductDmlCommand::Create {
                         kind: kind.clone(),
-                        id: string_literal(&row[0], "product ID")?,
-                        document_json: string_literal(&row[1], "product document_json")?,
+                        id: string_literal(&row[id_index], "product ID")?,
+                        document_json: string_literal(
+                            &row[document_index],
+                            "product document_json",
+                        )?,
                     })
                 })
                 .collect()
@@ -2211,7 +2227,7 @@ mod tests {
     fn product_adapter_rejects_generic_rows_and_unsafe_shapes() {
         for sql in [
             "INSERT INTO app.users (id, document_json) VALUES ('u-1', '{}')",
-            "INSERT INTO product.datasets (document_json, id) VALUES ('{}', 'd-1')",
+            "INSERT INTO product.datasets (id, id) VALUES ('d-1', 'd-1')",
             "UPDATE product.datasets SET document_json = '{}' WHERE id = 'd-1' AND owner = 'alice'",
             "DELETE FROM product.datasets WHERE revision = 1 AND revision = 2",
         ] {
@@ -2224,6 +2240,24 @@ mod tests {
                 "unexpectedly adapted {sql}"
             );
         }
+    }
+
+    #[test]
+    fn product_insert_resolves_columns_by_name() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (document_json, id) VALUES ('{\"name\":\"Orders\"}', 'ds-1')",
+        )
+        .unwrap() else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
     }
 
     #[test]
