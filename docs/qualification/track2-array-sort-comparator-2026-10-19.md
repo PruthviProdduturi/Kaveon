@@ -44,6 +44,13 @@ The core dependency-scope tests pass **2 passed, 0 failed**: lambda parameter
 names are excluded from relation dependencies, while a captured outer column
 remains visible to projection and scan planning.
 
+After tightening the comparator contract, the focused distributed rerun passed:
+
+```text
+KAVEON_DIFF_ONLY=array_sort_comparator
+1 passed; 0 failed; 610 filtered out; finished in 9.69 seconds
+```
+
 ## Boundary
 
 Comparator results that are NULL or non-integer, arbitrary lambda expressions
