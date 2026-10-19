@@ -7087,6 +7087,35 @@ fn a_distributed_grouped_aggregate_under_spill_matches_the_local_result() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// UTF-8 grouping keeps its logical values when the same aggregate is
+/// evaluated locally and after the three-worker fragment exchange.  The
+/// worker-side path codes each string batch once; this guards that optimization
+/// against changing null handling, duplicate groups, or final ordering.
+#[test]
+fn distributed_utf8_grouped_aggregate_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-utf8-group-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, COUNT(*) AS n, SUM(actions) AS total FROM events GROUP BY country ORDER BY country";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("utf8-group-local", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let distributed_pool = QueryMemoryPool::new("utf8-group-distributed", 64 << 20).unwrap();
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &distributed_pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(distributed_pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Outer and cross joins use the same executable fragment path as inner joins.
 /// Keep their qualification separate from the spill gate because a filtered
 /// right/full build may legitimately fit in memory and therefore need not
