@@ -390,7 +390,7 @@ impl ResultCache {
         // wrapping below the budget and admitting an unbounded cache entry.
         // The normal path never approaches this bound, but fail-closed
         // accounting is part of the cache's memory safety contract.
-        while inner.bytes.saturating_add(bytes) > self.budget_bytes {
+        while inner.bytes > self.budget_bytes.saturating_sub(bytes) {
             let Some((_, oldest)) = inner.order.iter().next() else {
                 break;
             };
