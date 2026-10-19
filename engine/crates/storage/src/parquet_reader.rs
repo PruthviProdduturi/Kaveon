@@ -1432,7 +1432,7 @@ fn scalar_matches_data_type(value: &ScalarValue, data_type: &DataType) -> bool {
         ) => arrow::datatypes::i256::from_string(value)
             .and_then(|value| rescale_decimal256(value, *scale, *column_scale))
             .is_some_and(|value| decimal256_fits_precision(&value.to_string(), *column_precision)),
-        (ScalarValue::Utf8(_), DataType::Utf8 | DataType::LargeUtf8) => true,
+        (ScalarValue::Utf8(_), DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => true,
         _ => false,
     }
 }
