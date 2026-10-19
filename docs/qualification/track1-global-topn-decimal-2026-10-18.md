@@ -32,6 +32,8 @@ cargo clippy -p kaveon-exec --lib -- -D warnings
 
 ## Remaining boundary
 
-Multi-key decimal ordering, Decimal256, scale conversion, cloud/deployed
-qualification, and sustained distributed ordering remain covered by the
-broader Track 1 gates rather than this local optimization.
+Multi-key Decimal128 heap ordering is separately qualified in
+`track1-global-topn-multi-decimal-heap-2026-10-18.md`; Decimal256 selection is
+qualified in `track1-global-topn-decimal256-2026-10-18.md`. Scale conversion,
+cloud/deployed qualification, and sustained distributed ordering remain
+covered by the broader Track 1 gates rather than this local optimization.

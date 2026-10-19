@@ -239,11 +239,11 @@ pub fn merge_top_n(
         return Ok(Some(result));
     }
 
-    // Multi-key integer ordering can also retain bounded row references
+    // Multi-key integer/Decimal128 ordering can retain bounded row references
     // without concatenating every payload column. Unsupported expressions
     // retain the generic Arrow path below.
     if sort_exprs.len() > 1
-        && let Some(result) = try_integer_multi_batch_top_n(schema, &non_empty, sort_exprs, limit)?
+        && let Some(result) = try_exact_multi_batch_top_n(schema, &non_empty, sort_exprs, limit)?
     {
         return Ok(Some(result));
     }
@@ -623,13 +623,16 @@ fn try_integer_batch_top_n(
 }
 
 /// Uses a bounded k-way merge when every ordering expression is a non-null
-/// integer and each input batch is already sorted. Distributed workers emit
-/// exactly this shape for local TopN results, so the coordinator can avoid
-/// concatenating all payload columns before selecting the final rows.
+/// Int64, UInt64, or Decimal128 key and each input batch is already sorted.
+/// Decimal keys retain their exact unscaled values; each key position has the
+/// same precision/scale across batches because the input schemas must match.
+/// Distributed workers emit this shape for local TopN results, so the
+/// coordinator can avoid concatenating all payload columns before selecting
+/// the final rows.
 ///
 /// Nullable keys, unsupported types, and unsorted input deliberately return
 /// `None`; the caller then keeps Arrow's complete lexicographic path.
-fn try_integer_multi_batch_top_n(
+fn try_exact_multi_batch_top_n(
     schema: &SchemaRef,
     batches: &[RecordBatch],
     sort_exprs: &[SortExpr],
@@ -653,6 +656,8 @@ fn try_integer_multi_batch_top_n(
                     .iter()
                     .map(|value| value.expect("non-null key") as i128)
                     .collect()
+            } else if let Some(values) = values.as_any().downcast_ref::<Decimal128Array>() {
+                values.values().to_vec()
             } else {
                 return Ok(None);
             };
@@ -2105,7 +2110,7 @@ mod tests {
                 for limit in [1, 17, all.num_rows(), all.num_rows() + 10] {
                     // Call the specialization directly so a fallback cannot
                     // hide a failure to merge sorted typed candidates.
-                    let actual = try_integer_multi_batch_top_n(&schema, &sorted, &ordering, limit)
+                    let actual = try_exact_multi_batch_top_n(&schema, &sorted, &ordering, limit)
                         .unwrap()
                         .expect("typed sorted candidates");
                     assert_eq!(actual, arrow_sort(&all, Some(limit)));
@@ -2149,6 +2154,200 @@ mod tests {
             result.column(2).as_ref(),
             &Int64Array::from_iter_values(0..37)
         );
+    }
+
+    #[test]
+    fn multi_decimal_heap_merge_matches_arrow_with_exact_scaled_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Decimal128(38, 6), false),
+            Field::new("sequence", DataType::Decimal128(38, 2), false),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let extreme = 10_i128.pow(38) - 1;
+        let workers = (0..33)
+            .map(|worker| {
+                let ids = (0..worker % 9 + 1)
+                    .map(|row| worker * 10 + row)
+                    .collect::<Vec<_>>();
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(
+                            Decimal128Array::from_iter_values(ids.iter().map(|id| match id % 5 {
+                                0 => -extreme,
+                                1 => extreme,
+                                _ => i128::from(id % 5 - 3),
+                            }))
+                            .with_precision_and_scale(38, 6)
+                            .unwrap(),
+                        ),
+                        Arc::new(
+                            Decimal128Array::from_iter_values(
+                                ids.iter().map(|id| extreme - i128::from(*id)),
+                            )
+                            .with_precision_and_scale(38, 2)
+                            .unwrap(),
+                        ),
+                        Arc::new(Int64Array::from(ids)),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let all = concat_batches(&schema, &workers).unwrap();
+        for ascending in [false, true] {
+            for sequence_ascending in [false, true] {
+                let ordering = vec![
+                    SortExpr::new(Expr::Column("score".into()), ascending),
+                    SortExpr::new(Expr::Column("sequence".into()), sequence_ascending),
+                ];
+                let arrow_sort = |batch: &RecordBatch, limit| {
+                    let columns = [0, 1]
+                        .into_iter()
+                        .zip(&ordering)
+                        .map(|(column, expr)| SortColumn {
+                            values: batch.column(column).clone(),
+                            options: Some(SortOptions {
+                                descending: !expr.ascending,
+                                nulls_first: expr.nulls_first,
+                            }),
+                        })
+                        .collect::<Vec<_>>();
+                    let indices = lexsort_to_indices(&columns, limit).unwrap();
+                    RecordBatch::try_new(
+                        schema.clone(),
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|column| take(column.as_ref(), &indices, None).unwrap())
+                            .collect(),
+                    )
+                    .unwrap()
+                };
+                let sorted = workers
+                    .iter()
+                    .map(|batch| arrow_sort(batch, None))
+                    .collect::<Vec<_>>();
+                for limit in [1, 17, all.num_rows(), all.num_rows() + 10] {
+                    let actual = try_exact_multi_batch_top_n(&schema, &sorted, &ordering, limit)
+                        .unwrap()
+                        .expect("typed sorted decimal candidates");
+                    assert_eq!(actual, arrow_sort(&all, Some(limit)));
+                }
+                assert!(
+                    merge_top_n(&schema, &sorted, &ordering, 0)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn multi_decimal_heap_merge_preserves_equal_key_source_order() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Decimal128(38, 6), false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let workers = (0..17)
+            .map(|worker| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(
+                            Decimal128Array::from(vec![10_i128.pow(37) + 1; 3])
+                                .with_precision_and_scale(38, 6)
+                                .unwrap(),
+                        ),
+                        Arc::new(UInt64Array::from(vec![u64::MAX; 3])),
+                        Arc::new(Int64Array::from_iter_values(worker * 3..worker * 3 + 3)),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let ordering = vec![
+            SortExpr::new(Expr::Column("score".into()), false),
+            SortExpr::new(Expr::Column("sequence".into()), true),
+        ];
+        let actual = try_exact_multi_batch_top_n(&schema, &workers, &ordering, 37)
+            .unwrap()
+            .expect("typed decimal/integer peers");
+        assert_eq!(
+            actual.column(2).as_ref(),
+            &Int64Array::from_iter_values(0..37)
+        );
+    }
+
+    #[test]
+    fn multi_decimal_heap_merge_defers_nulls_and_unsorted_rows_to_arrow() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Decimal128(38, 6), true),
+            Field::new("sequence", DataType::Int64, false),
+        ]));
+        for nullable in [false, true] {
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(
+                        Decimal128Array::from(vec![
+                            Some(10_i128.pow(37) + 1),
+                            Some(-10_i128.pow(37)),
+                            if nullable { None } else { Some(1) },
+                            Some(10_i128.pow(37)),
+                        ])
+                        .with_precision_and_scale(38, 6)
+                        .unwrap(),
+                    ),
+                    Arc::new(Int64Array::from(vec![0, 1, 2, 3])),
+                ],
+            )
+            .unwrap();
+            for ascending in [false, true] {
+                for nulls_first in [false, true] {
+                    let mut first = SortExpr::new(Expr::Column("score".into()), ascending);
+                    first.nulls_first = nulls_first;
+                    let ordering =
+                        vec![first, SortExpr::new(Expr::Column("sequence".into()), true)];
+                    assert!(
+                        try_exact_multi_batch_top_n(
+                            &schema,
+                            std::slice::from_ref(&batch),
+                            &ordering,
+                            3,
+                        )
+                        .unwrap()
+                        .is_none()
+                    );
+                    let columns = [0, 1]
+                        .into_iter()
+                        .zip(&ordering)
+                        .map(|(column, expr)| SortColumn {
+                            values: batch.column(column).clone(),
+                            options: Some(SortOptions {
+                                descending: !expr.ascending,
+                                nulls_first: expr.nulls_first,
+                            }),
+                        })
+                        .collect::<Vec<_>>();
+                    let indices = lexsort_to_indices(&columns, Some(3)).unwrap();
+                    let expected = RecordBatch::try_new(
+                        schema.clone(),
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|column| take(column.as_ref(), &indices, None).unwrap())
+                            .collect(),
+                    )
+                    .unwrap();
+                    let actual = merge_top_n(&schema, std::slice::from_ref(&batch), &ordering, 3)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
     }
 
     #[test]
