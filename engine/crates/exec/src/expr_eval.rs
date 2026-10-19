@@ -6179,13 +6179,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "CODEPOINT" => {
             check_arity(name, args, 1)?;
-            let values = as_string_array(&args[0])?;
             let result: Int64Array = (0..num_rows)
                 .map(|row| {
-                    if values.is_null(row) {
+                    let Some(value) = text_value(&args[0], row)? else {
                         return Ok(None);
-                    }
-                    let mut characters = values.value(row).chars();
+                    };
+                    let mut characters = value.chars();
                     let character = characters.next().ok_or_else(|| {
                         KaveonError::Execution(
                             "CODEPOINT requires exactly one Unicode code point".into(),
@@ -24628,5 +24627,21 @@ mod tests {
             assert_eq!(values.value(0), expected, "{name}");
             assert!(values.is_null(1), "{name}");
         }
+
+        let single = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(LargeStringArray::from(vec![Some("λ"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let codepoint = evaluate(
+            &Expr::Function {
+                name: "CODEPOINT".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &single,
+        )
+        .unwrap();
+        let values = codepoint.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(955), None]);
     }
 }
