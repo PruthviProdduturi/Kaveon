@@ -9756,10 +9756,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     ) {
                         return array_distinct_nested(list);
                     }
-                    let element_type = match list.value_type() {
-                        DataType::LargeUtf8 => DataType::Utf8,
-                        other => other.clone(),
-                    };
+                    let element_type = list.value_type().clone();
                     let field = Field::new("item", element_type, true);
                     Some(compute::cast(&args[0], &DataType::List(Arc::new(field)))?)
                 } else {
@@ -18375,6 +18372,28 @@ mod tests {
     }
 
     #[test]
+    fn array_distinct_large_list_large_utf8_preserves_child_type() {
+        let mut input = LargeListBuilder::new(LargeStringBuilder::new());
+        input.values().append_value("b");
+        input.values().append_value("a");
+        input.values().append_value("b");
+        input.values().append_null();
+        input.values().append_value("a");
+        input.values().append_null();
+        input.append(true);
+        let result =
+            eval_scalar_function("ARRAY_DISTINCT", &[Arc::new(input.finish()) as ArrayRef], 1)
+                .unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::LargeUtf8);
+        let inner = list.value(0);
+        assert_eq!(
+            inner.as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("b"), Some("a"), None]
+        );
+    }
+
+    #[test]
     fn array_distinct_preserves_temporal_element_type() {
         let batch = RecordBatch::try_from_iter([
             (
@@ -21395,8 +21414,9 @@ mod tests {
         )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(result.value_type(), DataType::LargeUtf8);
         let inner = result.value(0);
-        let values = inner.as_string::<i32>();
+        let values = inner.as_string::<i64>();
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some("z"), None, Some("a")]
