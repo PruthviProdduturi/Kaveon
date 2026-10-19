@@ -201,6 +201,25 @@ pub struct CatalogSnapshot {
     /// field; the next typed-row change infers a bounded schema.
     #[serde(default)]
     pub typed_schemas: BTreeMap<String, TypedTableSchema>,
+    /// How many product records point at each referenced target, keyed the way
+    /// `product_record_key` keys a record.
+    ///
+    /// Referential integrity is enforced today by scanning every record and
+    /// resolving its references against this same map of records. That scan is
+    /// exactly what eviction removes: once the bulk kinds live in side objects
+    /// the snapshot can no longer see who points at a dataset, and deleting
+    /// one would stop being restricted without anything failing.
+    ///
+    /// So this is maintained alongside the scan while the scan is still
+    /// authoritative, and `validate` checks the two agree. It is small by
+    /// construction -- one entry per referenced target rather than per
+    /// referencing record, and the 800 query-history rows an owner may hold
+    /// point at a handful of datasets between them.
+    ///
+    /// Absent on snapshots written before this field existed, which is why it
+    /// is only cross-checked when present.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_counts: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +325,7 @@ impl CatalogSnapshot {
             typed_tables: BTreeMap::new(),
             typed_row_indexes: BTreeMap::new(),
             typed_schemas: BTreeMap::new(),
+            reference_counts: BTreeMap::new(),
         })
     }
 
@@ -578,7 +598,8 @@ impl CatalogSnapshot {
         if control_records.len() > MAX_CONTROL_RECORDS {
             return Err(error("snapshot control-record limit exceeded"));
         }
-        validate_product_records(&product_records)?;
+        let reference_counts = count_references(&product_records);
+        validate_product_records(&product_records, &reference_counts)?;
         // `build_typed_row_indexes` validates the rows it is given before it
         // builds anything, so validating them here as well walked every row in
         // the catalog twice for nothing.
@@ -604,6 +625,10 @@ impl CatalogSnapshot {
             typed_tables: self.typed_tables.clone(),
             typed_row_indexes,
             typed_schemas,
+            // Derived from the records this snapshot actually carries, so the
+            // index is correct by construction at every generation rather than
+            // carried forward and hoped about.
+            reference_counts,
         };
         next.validate()?;
         Ok(next)
@@ -622,7 +647,7 @@ impl CatalogSnapshot {
         if self.control_records.len() > MAX_CONTROL_RECORDS {
             return Err(error("snapshot control-record limit exceeded"));
         }
-        validate_product_records(&self.product_records)?;
+        validate_product_records(&self.product_records, &self.reference_counts)?;
         validate_typed_rows(&self.typed_rows)?;
         validate_typed_schema_bindings(&self.typed_rows, &self.typed_schemas)?;
         validate_typed_row_indexes(&self.typed_rows, &self.typed_row_indexes)?;
@@ -1138,11 +1163,13 @@ fn read_error(error: ManifestError) -> ProductReadError {
 
 fn validate_product_records(
     records: &BTreeMap<String, ProductRecordRef>,
+    counts: &BTreeMap<String, u64>,
 ) -> Result<(), ManifestError> {
     if records.len() > MAX_PRODUCT_RECORDS {
         return Err(error("snapshot product-record limit exceeded"));
     }
     let mut unique = BTreeSet::new();
+    let mut observed: BTreeMap<String, u64> = BTreeMap::new();
     for (key, record) in records {
         validate_product_record(record)?;
         if key != &record.key() {
@@ -1178,9 +1205,35 @@ fn validate_product_records(
                     "product record '{key}' references missing '{target}'"
                 )));
             }
+            *observed.entry(target).or_insert(0) += 1;
         }
     }
+    if !counts.is_empty() && *counts != observed {
+        // The index is about to become the only answer to "may this be
+        // deleted?", so a disagreement with the scan has to be loud while the
+        // scan can still be consulted.
+        return Err(error(
+            "reference counts disagree with the records they were derived from",
+        ));
+    }
     Ok(())
+}
+
+/// Count references by target, the way `validate` derives them.
+///
+/// This is the index's definition. Keeping it beside the validation that
+/// cross-checks it is what stops the two drifting apart.
+#[must_use]
+pub fn count_references(records: &BTreeMap<String, ProductRecordRef>) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for record in records.values() {
+        for reference in &record.references {
+            *counts
+                .entry(product_record_key(reference.kind, &reference.id))
+                .or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 fn validate_typed_rows(
@@ -1983,6 +2036,111 @@ mod tests {
                 .contains("unique-value limit")
         );
         assert!(base.product_records.is_empty());
+    }
+
+    #[test]
+    fn counts_references_by_target_not_by_referencing_record() {
+        // Three recents pointing at one dashboard is one entry of three, not
+        // three entries. That ratio is the whole reason the index is small
+        // enough to keep in the snapshot once the records leave it.
+        let mut records = BTreeMap::new();
+        for index in 0..3 {
+            let id = format!("recent-{index}");
+            records.insert(
+                product_record_key(ProductRecordKind::UserRecent, &id),
+                ProductRecordRef {
+                    kind: ProductRecordKind::UserRecent,
+                    id,
+                    revision: 1,
+                    document: ImmutableFileRef {
+                        path: "product/recent/document.json".into(),
+                        sha256: DIGEST.into(),
+                    },
+                    unique_values: BTreeMap::new(),
+                    references: BTreeSet::from([ProductRecordReference {
+                        kind: ProductRecordKind::Dashboard,
+                        id: "board".into(),
+                    }]),
+                },
+            );
+        }
+
+        let counts = count_references(&records);
+        assert_eq!(
+            counts.len(),
+            1,
+            "one referenced target, not three referrers"
+        );
+        assert_eq!(
+            counts[&product_record_key(ProductRecordKind::Dashboard, "board")],
+            3
+        );
+    }
+
+    #[test]
+    fn a_reference_index_that_disagrees_with_the_records_is_refused() {
+        let mut records = BTreeMap::new();
+        records.insert(
+            product_record_key(ProductRecordKind::UserRecent, "recent"),
+            ProductRecordRef {
+                kind: ProductRecordKind::UserRecent,
+                id: "recent".into(),
+                revision: 1,
+                document: ImmutableFileRef {
+                    path: "product/recent/document.json".into(),
+                    sha256: DIGEST.into(),
+                },
+                unique_values: BTreeMap::new(),
+                references: BTreeSet::from([ProductRecordReference {
+                    kind: ProductRecordKind::Dashboard,
+                    id: "board".into(),
+                }]),
+            },
+        );
+        records.insert(
+            product_record_key(ProductRecordKind::Dashboard, "board"),
+            ProductRecordRef {
+                kind: ProductRecordKind::Dashboard,
+                id: "board".into(),
+                revision: 1,
+                document: ImmutableFileRef {
+                    path: "product/dashboard/document.json".into(),
+                    sha256: DIGEST.into(),
+                },
+                unique_values: BTreeMap::new(),
+                references: BTreeSet::new(),
+            },
+        );
+
+        // Derived from the records: accepted.
+        let honest = count_references(&records);
+        assert!(validate_product_records(&records, &honest).is_ok());
+
+        // Understating a count is the dangerous direction: it would let a
+        // dashboard be deleted while something still points at it. It must not
+        // pass quietly.
+        let mut understated = honest.clone();
+        understated.insert(product_record_key(ProductRecordKind::Dashboard, "board"), 0);
+        let refused = validate_product_records(&records, &understated);
+        assert!(
+            refused.is_err(),
+            "an index claiming nothing references the dashboard must be refused while \
+the records still say otherwise"
+        );
+        assert!(
+            refused
+                .unwrap_err()
+                .to_string()
+                .contains("reference counts disagree"),
+            "the refusal must name the disagreement rather than some other failure"
+        );
+
+        // An empty index is how every snapshot written before this field
+        // existed looks, and those must still validate.
+        assert!(
+            validate_product_records(&records, &BTreeMap::new()).is_ok(),
+            "a snapshot predating the index must not be refused for lacking it"
+        );
     }
 
     #[test]
