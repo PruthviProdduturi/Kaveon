@@ -1840,6 +1840,34 @@ fn distributed_multi_array_unnest_matches_trino_padding() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A typed NULL array contributes no values but still participates in Trino's
+/// multi-array padding shape. The non-null sibling determines row count and
+/// the NULL array column is null-padded for every output row.
+#[test]
+fn distributed_multi_array_unnest_typed_null_array_pads_rows() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-unnest-null-array-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT * FROM UNNEST(ARRAY[1, 2], CAST(NULL AS ARRAY<VARCHAR>)) WITH ORDINALITY AS t(id, label, ord) ORDER BY ord";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-null-array", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["1\u{1f}NULL\u{1f}1", "2\u{1f}NULL\u{1f}2"]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// BigQuery's zero-based `WITH OFFSET` form shares the same leaf fragment
 /// operator as Trino's one-based `WITH ORDINALITY`; the start value must
 /// survive binding, serialization, and distributed execution.
