@@ -220,6 +220,19 @@ pub struct CatalogSnapshot {
     /// is only cross-checked when present.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reference_counts: BTreeMap<String, u64>,
+    /// Where each accumulating kind's records live, one immutable object per
+    /// kind, content-addressed and named by the digest of its contents.
+    ///
+    /// `product_records` still holds every kind in memory; this is only about
+    /// which of them are serialised into the snapshot. A kind named here is
+    /// resolved and merged back on read, so nothing above this layer can tell
+    /// the difference.
+    ///
+    /// Empty on snapshots written before the split, which is what makes those
+    /// readable: no entries means nothing to resolve and every record is
+    /// already inline.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub product_record_tables: BTreeMap<String, ImmutableFileRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,6 +339,7 @@ impl CatalogSnapshot {
             typed_row_indexes: BTreeMap::new(),
             typed_schemas: BTreeMap::new(),
             reference_counts: BTreeMap::new(),
+            product_record_tables: BTreeMap::new(),
         })
     }
 
@@ -629,6 +643,9 @@ impl CatalogSnapshot {
             // index is correct by construction at every generation rather than
             // carried forward and hoped about.
             reference_counts,
+            // Assigned when the manifest is split for publication; the
+            // in-memory snapshot carries every record inline until then.
+            product_record_tables: BTreeMap::new(),
         };
         next.validate()?;
         Ok(next)
@@ -1041,13 +1058,16 @@ pub const fn accumulates_with_use(kind: ProductRecordKind) -> bool {
 /// The second map is keyed by kind name, which is what names the object each
 /// kind is published to. Kinds with no records produce no entry, so a
 /// deployment that has never used chat publishes no chat object.
+/// Product records keyed the way `product_record_key` keys them.
+pub type ProductRecords = BTreeMap<String, ProductRecordRef>;
+/// Those records grouped by kind name, which is what names the object each
+/// kind is published to.
+pub type ProductRecordsByKind = BTreeMap<String, ProductRecords>;
+
 #[must_use]
 pub fn partition_product_records(
-    records: &BTreeMap<String, ProductRecordRef>,
-) -> (
-    BTreeMap<String, ProductRecordRef>,
-    BTreeMap<String, BTreeMap<String, ProductRecordRef>>,
-) {
+    records: &ProductRecords,
+) -> (ProductRecords, ProductRecordsByKind) {
     let mut inline = BTreeMap::new();
     let mut evicted: BTreeMap<String, BTreeMap<String, ProductRecordRef>> = BTreeMap::new();
     for (key, record) in records {
@@ -1070,9 +1090,9 @@ pub fn partition_product_records(
 /// in both halves is a corrupt snapshot rather than a merge policy, so it is
 /// refused instead of resolved.
 pub fn merge_product_records(
-    inline: BTreeMap<String, ProductRecordRef>,
-    evicted: BTreeMap<String, BTreeMap<String, ProductRecordRef>>,
-) -> Result<BTreeMap<String, ProductRecordRef>, ManifestError> {
+    inline: ProductRecords,
+    evicted: ProductRecordsByKind,
+) -> Result<ProductRecords, ManifestError> {
     let mut merged = inline;
     for (kind_name, records) in evicted {
         for (key, record) in records {
@@ -1096,7 +1116,7 @@ pub fn merge_product_records(
     Ok(merged)
 }
 
-fn product_record_key(kind: ProductRecordKind, id: &str) -> String {
+pub(crate) fn product_record_key(kind: ProductRecordKind, id: &str) -> String {
     format!("{}/{}", kind.name(), id)
 }
 

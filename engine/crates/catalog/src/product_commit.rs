@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     product_manifest::{
-        CatalogChange, CatalogSnapshot, ImmutableFileRef, PrepareChange, SnapshotRef, TypedTableRef,
+        CatalogChange, CatalogSnapshot, ImmutableFileRef, PrepareChange, ProductRecordRef,
+        SnapshotRef, TypedTableRef, merge_product_records, partition_product_records,
     },
     product_metrics::{TransactionMetrics, TransactionOutcome},
 };
@@ -555,7 +556,7 @@ cannot be told from a new operation"
         // Carve the typed tables out before encoding. What gets published and
         // digested is the manifest — references to the tables, not the rows —
         // so the snapshot's size no longer grows with the catalog's contents.
-        let (manifest, pending_tables) = match split_typed_tables(&next, Some(&head.verified)) {
+        let (manifest, mut pending_tables) = match split_typed_tables(&next, Some(&head.verified)) {
             Ok(split) => split,
             Err(()) => {
                 eprintln!(
@@ -566,6 +567,23 @@ cannot be told from a new operation"
                 return (CommitOutcome::Rejected, false);
             }
         };
+        // The accumulating kinds leave the manifest the same way, and their
+        // objects join the ones that must land before the head moves.
+        let manifest = match split_product_records(&manifest, Some(&head.verified)) {
+            Ok((manifest, pending)) => {
+                pending_tables.extend(pending);
+                manifest
+            }
+            Err(()) => {
+                eprintln!(
+                    "[product-commit] rejected: a per-kind product-record object exceeds its bound; operation {}",
+                    request.operation_id
+                );
+                attempt.finish(TransactionOutcome::Rejected);
+                return (CommitOutcome::Rejected, false);
+            }
+        };
+
         // Create-only and content-addressed, published before the head moves,
         // so a snapshot never references a table that is not there. An
         // interrupted commit leaves orphaned table objects, which are
@@ -606,6 +624,7 @@ operation {}",
             .record_snapshot_bytes(bytes.len() as u64, MAX_SNAPSHOT_BYTES as u64);
         let snapshot_sha256 = digest(&bytes);
         let published_manifest_tables = manifest.typed_tables.clone();
+        let published_product_tables = manifest.product_record_tables.clone();
         shard.entries.insert(
             request.operation_id.clone(),
             OperationRecord {
@@ -668,6 +687,7 @@ operation {}",
                 // references rather than its parent's.
                 let mut published = next.clone();
                 published.typed_tables = published_manifest_tables;
+                published.product_record_tables = published_product_tables;
                 self.remember_snapshot(&VerifiedSnapshot {
                     sha256: snapshot_sha256,
                     snapshot: Arc::new(published),
@@ -962,6 +982,7 @@ operation {}",
             decode(&object.bytes, MAX_SNAPSHOT_BYTES).ok_or(CommitErrorKind::Invalid)?;
         // Before validation, because validation reasons about the rows and a
         // manifest on its own carries only references to them.
+        let snapshot = self.materialise_product_records(snapshot).await?;
         let snapshot = self.materialise_typed_tables(snapshot).await?;
         if snapshot.reference() != *reference || snapshot.validate().is_err() {
             return Err(CommitErrorKind::Invalid);
@@ -1065,6 +1086,47 @@ operation {}",
     /// rows inline and references nothing, so it is already materialised and
     /// is returned untouched — those snapshots stay readable, and the first
     /// commit after this change writes the new form.
+    /// Resolve the per-kind objects a snapshot references and merge them back.
+    ///
+    /// Everything above this sees the map it has always seen, which is why no
+    /// accessor changed. A snapshot written before the split names no objects
+    /// and is returned untouched.
+    async fn materialise_product_records(
+        &self,
+        mut snapshot: CatalogSnapshot,
+    ) -> Result<CatalogSnapshot, CommitErrorKind> {
+        if snapshot.product_record_tables.is_empty() {
+            return Ok(snapshot);
+        }
+        let mut evicted = BTreeMap::new();
+        for (kind, reference) in snapshot.product_record_tables.clone() {
+            if !valid_digest(&reference.sha256) {
+                return Err(CommitErrorKind::Invalid);
+            }
+            let bytes = self
+                .storage
+                .read_bounded(
+                    &format!("{}/{}", self.prefix, reference.path),
+                    MAX_PRODUCT_RECORD_TABLE_BYTES,
+                )
+                .await
+                .map_err(|error| error.kind)?
+                .bytes;
+            // Named by its own digest, so a mismatch is corruption rather than
+            // a stale read and must not be served.
+            if digest(&bytes) != reference.sha256 {
+                return Err(CommitErrorKind::Invalid);
+            }
+            let records: BTreeMap<String, ProductRecordRef> =
+                decode(&bytes, MAX_PRODUCT_RECORD_TABLE_BYTES).ok_or(CommitErrorKind::Invalid)?;
+            evicted.insert(kind, records);
+        }
+        snapshot.product_records =
+            merge_product_records(std::mem::take(&mut snapshot.product_records), evicted)
+                .map_err(|_| CommitErrorKind::Invalid)?;
+        Ok(snapshot)
+    }
+
     async fn materialise_typed_tables(
         &self,
         mut snapshot: CatalogSnapshot,
@@ -1204,10 +1266,53 @@ const MAX_TYPED_TABLE_BYTES: usize = 64 * 1024 * 1024;
 /// digest is computed and compared, which costs an encode and a SHA-256 of
 /// every table in the catalog on every commit.
 #[allow(clippy::type_complexity)]
+/// Objects that must be published before the head moves, as (path, bytes).
+/// Named because two split functions return it and clippy counts the nesting.
+type PendingObjects = Vec<(String, Vec<u8>)>;
+
+/// A per-kind product-record object. Sized like a typed table, because it
+/// holds the same sort of thing: many small records of one shape.
+const MAX_PRODUCT_RECORD_TABLE_BYTES: usize = MAX_TYPED_TABLE_BYTES;
+
+/// Move the accumulating kinds out of the manifest and into one object each.
+///
+/// Mirrors `split_typed_tables`, including the reuse that makes it worth
+/// doing: an object named by the digest of its contents is already published
+/// when the digest matches, so a kind nobody touched is not written again. A
+/// commit that saves one favourite republishes the favourite, not every row of
+/// query history ever recorded.
+fn split_product_records(
+    snapshot: &CatalogSnapshot,
+    parent: Option<&VerifiedSnapshot>,
+) -> Result<(CatalogSnapshot, PendingObjects), ()> {
+    let (inline, evicted) = partition_product_records(&snapshot.product_records);
+    let mut manifest = snapshot.clone();
+    manifest.product_records = inline;
+    manifest.product_record_tables = BTreeMap::new();
+    let mut pending = Vec::new();
+    for (kind, records) in &evicted {
+        let bytes = encode_bounded(records, MAX_PRODUCT_RECORD_TABLE_BYTES)?;
+        let sha256 = digest(&bytes);
+        let path = format!("product-records/{sha256}.json");
+        // Equal digests mean equal bytes, so the object is already there and
+        // writing it again would be a no-op that costs a round trip.
+        let already_published = parent
+            .and_then(|parent| parent.snapshot.product_record_tables.get(kind))
+            .is_some_and(|reference| reference.sha256 == sha256);
+        if !already_published {
+            pending.push((path.clone(), bytes));
+        }
+        manifest
+            .product_record_tables
+            .insert(kind.clone(), ImmutableFileRef { path, sha256 });
+    }
+    Ok((manifest, pending))
+}
+
 fn split_typed_tables(
     snapshot: &CatalogSnapshot,
     parent: Option<&VerifiedSnapshot>,
-) -> Result<(CatalogSnapshot, Vec<(String, Vec<u8>)>), ()> {
+) -> Result<(CatalogSnapshot, PendingObjects), ()> {
     let mut manifest = snapshot.clone();
     manifest.typed_rows = BTreeMap::new();
     manifest.typed_tables = BTreeMap::new();
@@ -1416,6 +1521,8 @@ mod tests {
     };
     use object_store::{ObjectStore, memory::InMemory, path::Path};
 
+    use crate::product_manifest::product_record_key;
+
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn catalog() -> ProductCatalogCommit {
@@ -1429,6 +1536,170 @@ mod tests {
     /// The occupancy metric must reflect a real commit, not just unit-level
     /// arithmetic. Without this the field could report zero forever and every
     /// test of it would still pass.
+    /// A snapshot written before the split still reads, and the next commit
+    /// migrates it.
+    ///
+    /// Every existing deployment looks like this: records inline, no per-kind
+    /// objects named. Reading one must work unchanged, and the first commit
+    /// after the upgrade must move the accumulating kinds out without losing
+    /// a record -- which is the half that usually breaks, because the split is
+    /// deriving objects from records that were never published that way.
+    #[tokio::test]
+    async fn a_snapshot_written_before_the_split_reads_and_then_migrates() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+
+        // The pre-upgrade shape: history inline, nothing named. `initialize`
+        // publishes its genesis whole, so this is the real thing rather than a
+        // hand-built imitation.
+        let mut genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        for number in 0..40u32 {
+            let id = format!("legacy-{number:04}");
+            let record = related_record(ProductRecordKind::QueryHistory, &id, None);
+            genesis
+                .product_records
+                .insert(product_record_key(record.kind, &record.id), record);
+        }
+        assert!(
+            genesis.product_record_tables.is_empty(),
+            "the legacy shape names no per-kind objects"
+        );
+        assert!(matches!(
+            catalog.initialize(genesis.clone()).await,
+            CommitOutcome::Committed(_)
+        ));
+
+        // It reads, through a handle that has never seen it, with nothing to
+        // resolve.
+        let legacy = catalog_with(storage.clone())
+            .read_snapshot(&genesis.reference())
+            .await
+            .expect("a pre-split snapshot still reads");
+        assert_eq!(legacy.product_records.len(), 40);
+        assert!(legacy.product_record_tables.is_empty());
+
+        // One ordinary commit on top of it.
+        let id = "legacy-new".to_owned();
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-after-upgrade".into(),
+            operation_id: "op-after-upgrade".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: related_record(ProductRecordKind::QueryHistory, &id, None),
+            }],
+        };
+        let CommitOutcome::Committed(migrated) = catalog
+            .commit_with_documents(request.clone(), documents_for(&request))
+            .await
+        else {
+            panic!("the first commit after the upgrade did not land");
+        };
+
+        // All 41 survive, and they are no longer in the snapshot's own bytes.
+        assert_eq!(migrated.product_records.len(), 41);
+        let reread = catalog_with(storage)
+            .read_snapshot(&migrated.reference())
+            .await
+            .expect("the migrated snapshot reads back");
+        assert_eq!(
+            reread.product_records, migrated.product_records,
+            "migration must not lose or alter a record"
+        );
+        assert!(
+            reread
+                .product_record_tables
+                .contains_key(ProductRecordKind::QueryHistory.name()),
+            "after migrating, the snapshot must name the object its history lives in"
+        );
+        let (inline, _) = partition_product_records(&reread.product_records);
+        assert!(
+            inline.is_empty(),
+            "no accumulating record may remain inline after migration"
+        );
+    }
+
+    /// Records of an accumulating kind survive the round trip, and stop
+    /// costing the snapshot anything.
+    ///
+    /// The partition test measures that the manifest gets smaller. This one
+    /// asks the question that decides whether the change is shippable: after
+    /// committing a few hundred query-history records one at a time, are they
+    /// all still there, and is the published snapshot carrying a reference
+    /// instead of the rows?
+    #[tokio::test]
+    async fn accumulating_records_survive_eviction_and_leave_the_snapshot() {
+        // The storage is held separately so a second handle can read the same
+        // objects with an empty cache. Reading through the committing handle
+        // would be served from the snapshot it remembered and would never
+        // resolve a per-kind object, which is the thing under test.
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        const ROWS: u32 = 300;
+        let mut current = genesis;
+        for number in 0..ROWS {
+            let id = format!("history-{number:04}");
+            let request = PrepareChange {
+                base: current.reference(),
+                snapshot_id: format!("snapshot-history-{number}"),
+                operation_id: format!("op-history-{number}"),
+                request_digest: DIGEST.into(),
+                changes: vec![CatalogChange::CreateProduct {
+                    record: related_record(ProductRecordKind::QueryHistory, &id, None),
+                }],
+            };
+            // Product records carry their document alongside the change, so
+            // the plain commit path rejects them.
+            match catalog
+                .commit_with_documents(request.clone(), documents_for(&request))
+                .await
+            {
+                CommitOutcome::Committed(next) => current = next,
+                other => panic!("commit {number} did not land: {other:?}"),
+            }
+        }
+
+        // Every record is readable from the in-memory snapshot the commit
+        // returned, because eviction is about the published bytes and nothing
+        // else.
+        assert_eq!(current.product_records.len() as u32, ROWS);
+        for number in 0..ROWS {
+            assert!(
+                current
+                    .product_record(
+                        ProductRecordKind::QueryHistory,
+                        &format!("history-{number:04}")
+                    )
+                    .unwrap()
+                    .is_some(),
+                "record {number} is missing from the snapshot it was committed to"
+            );
+        }
+
+        // And readable again after a full round trip through storage, which is
+        // where the per-kind object is actually resolved.
+        let reread = catalog_with(storage)
+            .read_snapshot(&current.reference())
+            .await
+            .expect("the published snapshot reads back");
+        assert_eq!(
+            reread.product_records, current.product_records,
+            "a snapshot read back from storage must hold exactly the records committed to it"
+        );
+
+        // The manifest itself carries a reference rather than the records. The
+        // published bytes are what the ceiling is enforced on, so this is the
+        // assertion the whole change is for.
+        let (inline, _) = partition_product_records(&current.product_records);
+        assert!(
+            inline.is_empty(),
+            "query history must not be serialised into the snapshot any more"
+        );
+    }
+
     #[tokio::test]
     async fn a_commit_publishes_the_snapshot_size_it_was_measured_against() {
         let catalog = catalog();
