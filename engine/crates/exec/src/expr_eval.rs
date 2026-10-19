@@ -6829,19 +6829,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REGEXP_SPLIT" => {
             check_arity(name, args, 2)?;
-            let values = as_string_array(&args[0])?;
-            let patterns = as_string_array(&args[1])?;
             let mut builder = ListBuilder::new(StringBuilder::new());
             for row in 0..num_rows {
-                if values.is_null(row) || patterns.is_null(row) {
-                    builder.append(false);
-                    continue;
+                match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
+                    (Some(value), Some(pattern)) => {
+                        let regex = compiled_regex_for("REGEXP_SPLIT", pattern)?;
+                        for part in regex.split(value) {
+                            builder.values().append_value(part);
+                        }
+                        builder.append(true);
+                    }
+                    _ => builder.append(false),
                 }
-                let regex = compiled_regex_for("REGEXP_SPLIT", patterns.value(row))?;
-                for part in regex.split(values.value(row)) {
-                    builder.values().append_value(part);
-                }
-                builder.append(true);
             }
             Ok(Arc::new(builder.finish()))
         }
@@ -20032,6 +20031,41 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some("one"), Some("two"), Some("")]
+        );
+        assert_eq!(values.value(1).len(), 1);
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn regexp_split_accepts_large_utf8_values_and_patterns() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::LargeUtf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(LargeStringArray::from(vec![
+                Some("alpha::beta::"),
+                Some("no delimiter"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_SPLIT".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8("::".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let first_values = values.value(0);
+        let first = first_values.as_string::<i32>();
+        assert_eq!(
+            first.iter().collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("beta"), Some("")]
         );
         assert_eq!(values.value(1).len(), 1);
         assert!(values.is_null(2));
