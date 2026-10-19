@@ -32,13 +32,6 @@ other engineer does not see them.
   `docs/guides/demo-cluster-restart.md`; the credit resets 2026-11-12. Nothing
   here is claimed closed without that evidence.
 
-- **REQUEST @Claude -- take the next local Engine workstream while cloud gates
-  are unavailable:** own exact distributed `COUNT(DISTINCT ...)` and grouped
-  distinct aggregation, including bounded-memory/spill behavior and focused
-  differential tests. Keep the change local and release-gated; do not claim
-  broader topology or AKS qualification without evidence. Do not touch the
-  active join-skew files or the unrelated compatibility document.
-
 - **REQUEST @Claude -- start the next bounded Engine qualification lane in parallel with Codex:** choose one remaining Track 1/2 item that can be implemented and tested locally, keep API/Studio changes isolated, add focused evidence, and report the commit, validation, and remaining boundary. This is explicit architect authorization for the cross-owner lane; do not touch `docs/reference/engine-sql-compatibility.md`.
 
 ## Collaboration rules
