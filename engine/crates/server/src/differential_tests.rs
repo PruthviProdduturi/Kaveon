@@ -7499,3 +7499,75 @@ fn distributed_global_topn_multi_decimal_heap_matches_local() {
     }
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// UTF-8 keys retain binary ordering through typed worker-head selection,
+/// exchange serialization, nullable fallback, and final OFFSET.
+#[test]
+fn distributed_global_topn_multi_utf8_heap_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-global-topn-multi-utf8-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("name", DataType::Utf8, true),
+        Field::new("suffix", DataType::Utf8, true),
+        Field::new("id", DataType::Int64, false),
+    ]));
+    let names = ["", "a", "aa", "e\u{301}", "é", "中", "🙂"];
+    let rows = 33 * 16;
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from_iter((0..rows).map(|id| {
+                (id % 7 != 0).then_some(names[id as usize % names.len()])
+            }))),
+            Arc::new(StringArray::from_iter((0..rows).map(|id| {
+                (id % 11 != 0)
+                    .then(|| format!("{}{}", "shared-prefix".repeat(16), names[id as usize % 3]))
+            }))),
+            Arc::new(Int64Array::from_iter_values(0..rows)),
+        ],
+    )
+    .unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: directory.clone(),
+        },
+    )
+    .with_schema("events");
+    let meta = write_directory(&directory, "utf8_ranked", &batch, 33);
+    catalog.register_table("events", meta).unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    for name_direction in ["ASC", "DESC"] {
+        for suffix_direction in ["ASC", "DESC"] {
+            for null_order in ["FIRST", "LAST"] {
+                for predicate in ["", "WHERE name IS NOT NULL AND suffix IS NOT NULL"] {
+                    let statement = format!(
+                        "SELECT name, suffix, id FROM utf8_ranked {predicate} ORDER BY name {name_direction} NULLS {null_order}, suffix {suffix_direction} NULLS {null_order}, id ASC LIMIT 73 OFFSET 19"
+                    );
+                    let plan = bound_plan(&statement, &manager);
+                    let pool = QueryMemoryPool::new("global-topn-multi-utf8", 64 << 20).unwrap();
+                    let mut local =
+                        crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+                    let local_batches = drain(local.operator.as_mut());
+                    let schema = local_batches[0].schema();
+                    let expected = arrow::compute::concat_batches(&schema, &local_batches).unwrap();
+                    drop(local);
+                    assert_eq!(expected.num_rows(), 73);
+                    for workers in [3, 17, 40] {
+                        let actual =
+                            execute_distributed(&statement, &plan, &manager, workers, &pool)
+                                .unwrap();
+                        let actual = arrow::compute::concat_batches(&schema, &actual).unwrap();
+                        assert_eq!(actual, expected, "{statement}, workers={workers}");
+                        assert_eq!(pool.snapshot().current_bytes, 0);
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
