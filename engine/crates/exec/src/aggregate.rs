@@ -1440,14 +1440,25 @@ pub fn grouped_aggregate_states_from_batches(
 ) -> Result<Vec<GroupedAggregateState>> {
     let mut groups = Vec::new();
     let mut expected_types = None;
+    let mut expected_output_types = None;
     for batch in batches {
         validate_grouped_state_schema(&batch.schema())?;
         let types = grouped_aggregate_key_types(&batch.schema())?;
+        let output_types = grouped_aggregate_output_types(&batch.schema())?;
         if expected_types
             .as_ref()
             .is_some_and(|expected| expected != &types)
         {
             return Err(exec_err("aggregate partial group key types differ"));
+        }
+        if !output_types.is_empty() {
+            if expected_output_types
+                .as_ref()
+                .is_some_and(|expected| expected != &output_types)
+            {
+                return Err(exec_err("aggregate partial output types differ"));
+            }
+            expected_output_types = Some(output_types.clone());
         }
         expected_types = Some(types.clone());
         let keys = batch.column(0).as_binary::<i32>();
@@ -1459,9 +1470,13 @@ pub fn grouped_aggregate_states_from_batches(
             if keys.is_null(row) || states.is_null(row) {
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
             }
+            let decoded_states = compact_state::decode(states.value(row))?;
+            if !output_types.is_empty() {
+                validate_state_output_types(&decoded_states, &output_types)?;
+            }
             groups.push(GroupedAggregateState {
                 group_keys: decode_group_keys(keys.value(row))?,
-                states: compact_state::decode(states.value(row))?,
+                states: decoded_states,
             });
             validate_group_key_types(&groups[groups.len() - 1..], &types)?;
         }
@@ -1473,6 +1488,7 @@ pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggreg
     let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
     validate_grouped_state_schema(&reader.schema())?;
     let types = grouped_aggregate_key_types(&reader.schema())?;
+    let output_types = grouped_aggregate_output_types(&reader.schema())?;
     let mut groups = Vec::new();
     // Keys arrive in the producer's map order; each must still be unique.
     let mut seen_keys = HashSet::<Vec<u8>>::new();
@@ -1492,9 +1508,13 @@ pub fn decode_grouped_aggregate_states(bytes: &[u8]) -> Result<Vec<GroupedAggreg
             if !seen_keys.insert(encoded_key.to_vec()) {
                 return Err(exec_err("grouped aggregate state contains duplicate keys"));
             }
+            let decoded_states = compact_state::decode(states.value(row))?;
+            if !output_types.is_empty() {
+                validate_state_output_types(&decoded_states, &output_types)?;
+            }
             groups.push(GroupedAggregateState {
                 group_keys: decode_group_keys(encoded_key)?,
-                states: compact_state::decode(states.value(row))?,
+                states: decoded_states,
             });
             validate_group_key_types(&groups[groups.len() - 1..], &types)?;
         }
@@ -6015,6 +6035,76 @@ mod tests {
         };
         assert_eq!(decoded(&columnar_batch), decoded(&row_batch));
         assert_eq!(columnar_batch.num_rows(), 3);
+    }
+
+    #[test]
+    fn typed_count_distinct_exchange_validates_output_type_and_unions_partials() {
+        let first = vec![GroupedAggregateState {
+            group_keys: vec![AggregateValue::Int64(7)],
+            states: vec![AggregateState::CountDistinct(DistinctSet::from([
+                AggregateValue::Int64(11),
+                AggregateValue::Int64(13),
+            ]))],
+        }];
+        let second = vec![GroupedAggregateState {
+            group_keys: vec![AggregateValue::Int64(7)],
+            states: vec![AggregateState::CountDistinct(DistinctSet::from([
+                AggregateValue::Int64(13),
+                AggregateValue::Int64(17),
+            ]))],
+        }];
+        let first_batch = grouped_aggregate_states_to_schema_batch(
+            &first,
+            &[DataType::Int64],
+            &[DataType::UInt64],
+        )
+        .unwrap();
+        let second_batch = grouped_aggregate_states_to_schema_batch(
+            &second,
+            &[DataType::Int64],
+            &[DataType::UInt64],
+        )
+        .unwrap();
+
+        let partials = grouped_aggregate_states_from_batches(&[first_batch, second_batch]).unwrap();
+        let merged = merge_grouped_aggregate_states(partials).unwrap();
+        assert_eq!(merged[0].states[0].count_result().unwrap(), 3);
+        assert_eq!(
+            finalize_grouped_aggregate_states(&merged).unwrap()[0].values,
+            vec![FinalAggregateValue::Count(3)]
+        );
+
+        let wrong_output = attach_output_types(
+            grouped_aggregate_states_to_typed_batch(&first, &[DataType::Int64]).unwrap(),
+            &[DataType::Float64],
+        )
+        .unwrap();
+        let error = grouped_aggregate_states_from_batches(&[wrong_output]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("aggregate state/output type mismatch")
+        );
+
+        let stream_batch = grouped_aggregate_states_to_schema_batch(
+            &first,
+            &[DataType::Int64],
+            &[DataType::UInt64],
+        )
+        .unwrap();
+        let stream_batch = attach_output_types(stream_batch, &[DataType::Float64]).unwrap();
+        let mut bytes = Vec::new();
+        {
+            let mut writer = StreamWriter::try_new(&mut bytes, &stream_batch.schema()).unwrap();
+            writer.write(&stream_batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let stream_error = decode_grouped_aggregate_states(&bytes).unwrap_err();
+        assert!(
+            stream_error
+                .to_string()
+                .contains("aggregate state/output type mismatch")
+        );
     }
 
     #[test]
