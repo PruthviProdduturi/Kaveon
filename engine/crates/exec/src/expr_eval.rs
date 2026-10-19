@@ -6828,8 +6828,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "REGEXP_EXTRACT requires 2 or 3 arguments".into(),
                 ));
             }
-            let values = as_string_array(&args[0])?;
-            let patterns = as_string_array(&args[1])?;
             let groups = if args.len() == 3 {
                 Some(compute::cast(&args[2], &DataType::Int64)?)
             } else {
@@ -6838,11 +6836,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let groups = groups
                 .as_ref()
                 .map(|array| array.as_primitive::<Int64Type>());
-            let result: StringArray = (0..num_rows)
+            let extracted = (0..num_rows)
                 .map(|row| {
-                    if values.is_null(row) || patterns.is_null(row) {
+                    let (Some(value), Some(pattern)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
                         return Ok(None);
-                    }
+                    };
                     let group = match groups {
                         Some(groups) if groups.is_null(row) => return Ok(None),
                         Some(groups) => {
@@ -6856,17 +6856,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         }
                         None => 0,
                     };
-                    let regex = compiled_regex_for("REGEXP_EXTRACT", patterns.value(row))?;
-                    let captures = regex.captures(values.value(row));
+                    let regex = compiled_regex_for("REGEXP_EXTRACT", pattern)?;
+                    let captures = regex.captures(value);
                     Ok(captures.and_then(|captures| {
                         captures
                             .get(group)
                             .map(|matched| matched.as_str().to_owned())
                     }))
                 })
-                .collect::<Result<Vec<_>>>()?
-                .into();
-            Ok(Arc::new(result))
+                .collect::<Result<Vec<_>>>()?;
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for value in extracted {
+                    match value {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                Ok(Arc::new(StringArray::from(extracted)))
+            }
         }
         "REGEXP_SPLIT" => {
             check_arity(name, args, 2)?;
@@ -24539,5 +24549,38 @@ mod tests {
         .unwrap();
         let values = result.as_any().downcast_ref::<BooleanArray>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(true), None]);
+    }
+
+    #[test]
+    fn evaluates_regexp_extract_for_large_utf8() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(LargeStringArray::from(vec![Some("id=12"), None])) as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(LargeStringArray::from(vec![
+                    Some(r"id=(\d+)"),
+                    Some("id=(\\d+)"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REGEXP_EXTRACT".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Column("pattern".into()),
+                    Expr::Literal(ScalarValue::Int64(1)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "12");
+        assert!(values.is_null(1));
     }
 }
