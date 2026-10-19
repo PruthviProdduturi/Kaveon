@@ -156,35 +156,45 @@ reference-only record -- has a document body started being inlined into the snap
     println!();
 }
 
-/// The number that actually decides the architecture.
+/// The number that actually decides the architecture: how many people can use
+/// this deployment before writes stop.
 ///
-/// Artifacts are bounded by human curation; the bulk kinds are not. A
-/// deployment's ceiling is therefore set by how fast query history, activity
-/// and recents accumulate, not by how many dashboards anyone builds. This
-/// weights the mix accordingly: for every curated artifact, many rows of
-/// bulk.
+/// The first version of this weighted the kinds by a ratio chosen by hand,
+/// which made the answer a model. It does not need to be. The product already
+/// caps its bulk kinds per owner, and those caps are constants:
+///
+/// | kind            | cap per owner | where                              |
+/// |-----------------|---------------|------------------------------------|
+/// | `query_history` | 800           | `MAX_HISTORY_PER_OWNER`            |
+/// | `chat_message`  | 900           | `MAX_OWNER_MESSAGES`               |
+/// | `user_recent`   | 20            | `user_recents.py`, hard-coded      |
+/// | `activity`      | **uncapped**  | no retention sweep exists          |
+///
+/// So a single active owner can hold 1,720 records in the snapshot before any
+/// dataset, chart or dashboard is counted, and `activity` adds to that without
+/// limit. Dividing the ceiling by that number gives the figure below, and it
+/// is small.
 #[test]
-fn snapshot_ceiling_for_a_realistic_mix() {
-    // Per 1 dataset: 4 charts, 1 dashboard, 2 saved queries, and the bulk that
-    // using them generates.
-    let weights: [(ProductRecordKind, usize); 8] = [
-        (ProductRecordKind::Dataset, 1),
-        (ProductRecordKind::Chart, 4),
-        (ProductRecordKind::Dashboard, 1),
-        (ProductRecordKind::SavedQuery, 2),
-        (ProductRecordKind::Favorite, 3),
-        (ProductRecordKind::UserRecent, 10),
-        (ProductRecordKind::Activity, 25),
-        (ProductRecordKind::QueryHistory, 60),
-    ];
-    let per_unit: usize = weights.iter().map(|(_, n)| n).sum();
+fn how_many_owners_fit_under_the_ceiling() {
+    // The caps the product enforces today. If one of these changes, this test
+    // is where the consequence shows up.
+    const QUERY_HISTORY_PER_OWNER: usize = 800;
+    const CHAT_MESSAGES_PER_OWNER: usize = 900;
+    const RECENTS_PER_OWNER: usize = 20;
 
-    let build = |units: usize| {
+    let per_owner: Vec<(ProductRecordKind, usize)> = vec![
+        (ProductRecordKind::QueryHistory, QUERY_HISTORY_PER_OWNER),
+        (ProductRecordKind::ChatMessage, CHAT_MESSAGES_PER_OWNER),
+        (ProductRecordKind::UserRecent, RECENTS_PER_OWNER),
+    ];
+    let records_per_owner: usize = per_owner.iter().map(|(_, n)| n).sum();
+
+    let build = |owners: usize| {
         let mut records = Vec::new();
-        for unit in 0..units {
-            for (kind, count) in weights {
-                for n in 0..count {
-                    records.push(record(kind, unit * 1_000 + n));
+        for owner in 0..owners {
+            for (kind, count) in &per_owner {
+                for n in 0..*count {
+                    records.push(record(*kind, owner * 100_000 + n));
                 }
             }
         }
@@ -192,31 +202,27 @@ fn snapshot_ceiling_for_a_realistic_mix() {
     };
 
     let empty = encoded_len(&snapshot_with(std::iter::empty()));
-    let small = encoded_len(&build(50));
-    let large = encoded_len(&build(100));
-    let per_record = (large - small) as f64 / ((50 * per_unit) as f64);
-    let capacity = ((MAX_SNAPSHOT_BYTES - empty) as f64 / per_record) as u64;
+    let one = encoded_len(&build(1));
+    let three = encoded_len(&build(3));
+    let bytes_per_owner = (three - one) as f64 / 2.0;
+    let owners = ((MAX_SNAPSHOT_BYTES - empty) as f64 / bytes_per_owner) as u64;
 
     println!();
-    println!("realistic mix: {per_unit} records per curated dataset");
-    println!("  bytes/record          {per_record:.1}");
-    println!("  records at ceiling    {capacity}");
-    println!("  datasets at ceiling   {}", capacity / per_unit as u64);
-    println!(
-        "  query-history rows    {} of the ceiling",
-        capacity * 60 / per_unit as u64
-    );
+    println!("records one owner may hold at their caps: {records_per_owner}");
+    println!("  bytes per owner            {bytes_per_owner:.0}");
+    println!("  owners at the ceiling      {owners}");
     println!();
     println!(
-        "A commit republishes all of this, so the last write before the ceiling \n\
-         encodes about {:.1} MiB.",
-        MAX_SNAPSHOT_BYTES as f64 / (1024.0 * 1024.0)
+        "That is the whole snapshot, before a single dataset, chart or dashboard,\n\
+and before `activity`, which has no retention sweep at all."
     );
     println!();
 
+    // Not an aspiration -- a tripwire. If the ceiling ever admits fewer owners
+    // than this, something has grown and the architecture decision is overdue.
     assert!(
-        capacity > 1_000,
-        "a ceiling of {capacity} records would be too low to run a product on; \
-check the record shape before believing it"
+        owners >= 5,
+        "the snapshot holds only {owners} fully-active owners; the bulk kinds have to \
+leave it before this is a product"
     );
 }
