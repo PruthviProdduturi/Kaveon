@@ -3,7 +3,7 @@ use sqlparser::ast::Statement;
 use sqlparser::ast::{
     AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
 };
-use sqlparser::dialect::{BigQueryDialect, DuckDbDialect, MsSqlDialect};
+use sqlparser::dialect::{BigQueryDialect, DuckDbDialect, GenericDialect, MsSqlDialect};
 use sqlparser::parser::Parser;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
@@ -56,8 +56,47 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
             Parser::parse_sql(&MsSqlDialect {}, &normalized)
                 .map_err(|_| KaveonError::Sql(primary.to_string()))
         }
-        Err(error) => Err(KaveonError::Sql(error.to_string())),
+        Err(primary) => {
+            // DuckDB treats MAP(...) as custom type modifiers and cannot
+            // parse the parentheses/comma inside DECIMAL(p, s). The generic
+            // grammar exposes a typed MAP AST, which uses the existing
+            // Decimal128 precision/scale validation in the logical planner.
+            // Admit only scalar-member decimal maps through this fallback.
+            if let Some(statements) = parse_decimal_map_casts(&normalized) {
+                return Ok(statements);
+            }
+            Err(KaveonError::Sql(primary.to_string()))
+        }
     }
+}
+
+fn parse_decimal_map_casts(sql: &str) -> Option<Vec<Statement>> {
+    use sqlparser::ast::{DataType, visit_expressions};
+    use std::ops::ControlFlow;
+
+    if !sql.to_ascii_uppercase().contains("MAP") {
+        return None;
+    }
+    let statements = Parser::parse_sql(&GenericDialect {}, sql).ok()?;
+    let mut found_decimal_map = false;
+    let bounded = visit_expressions(&statements, |expr| {
+        if let Expr::Cast {
+            data_type: DataType::Map(key, value),
+            ..
+        } = expr
+        {
+            if matches!(key.as_ref(), DataType::Array(_) | DataType::Map(_, _))
+                || matches!(value.as_ref(), DataType::Array(_) | DataType::Map(_, _))
+            {
+                return ControlFlow::Break(());
+            }
+            found_decimal_map |=
+                matches!(key.as_ref(), DataType::Decimal(_) | DataType::Numeric(_))
+                    || matches!(value.as_ref(), DataType::Decimal(_) | DataType::Numeric(_));
+        }
+        ControlFlow::Continue(())
+    });
+    (bounded.is_continue() && found_decimal_map).then_some(statements)
 }
 
 /// Lower the bounded SQL/JSON `JSON_EXISTS ... ON ERROR` actions to explicit

@@ -6628,6 +6628,67 @@ mod tests {
     }
 
     #[test]
+    fn parses_decimal_map_cast_members_with_precision_and_scale() {
+        let plan = sql_to_logical_plan(
+            "SELECT CAST(NULL AS MAP(DECIMAL(10, 2), NUMERIC(8, 3))) FROM events",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Cast { data_type, .. } = &columns[0] else {
+            panic!("expected Cast");
+        };
+        assert_eq!(
+            data_type,
+            &CastTarget::Map {
+                key: Box::new(CastTarget::Decimal128 {
+                    precision: 10,
+                    scale: 2,
+                }),
+                value: Box::new(CastTarget::Decimal128 {
+                    precision: 8,
+                    scale: 3,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn decimal_map_cast_members_reject_invalid_precision_and_scale() {
+        for member in [
+            "DECIMAL(0, 0)",
+            "DECIMAL(39, 2)",
+            "DECIMAL(10, 11)",
+            "NUMERIC(256, 2)",
+        ] {
+            for target in [
+                format!("MAP({member}, BIGINT)"),
+                format!("MAP(VARCHAR, {member})"),
+            ] {
+                let error =
+                    sql_to_logical_plan(&format!("SELECT CAST(NULL AS {target}) FROM events"))
+                        .unwrap_err()
+                        .to_string();
+                assert!(error.contains("DECIMAL"), "{target}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn decimal_map_cast_fallback_keeps_nested_complex_members_unsupported() {
+        for target in [
+            "MAP(DECIMAL(10, 2), ARRAY<BIGINT>)",
+            "MAP(VARCHAR, MAP(DECIMAL(10, 2), BIGINT))",
+        ] {
+            assert!(
+                sql_to_logical_plan(&format!("SELECT CAST(NULL AS {target}) FROM events")).is_err(),
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_cast_to_timestamp_with_timezone() {
         let plan =
             sql_to_logical_plan("SELECT CAST(event_time AS TIMESTAMP WITH TIME ZONE) FROM events")
