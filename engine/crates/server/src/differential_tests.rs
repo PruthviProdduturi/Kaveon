@@ -2198,6 +2198,32 @@ fn distributed_map_lookup_missing_key_matches_trino_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Comparable ROW keys are valid Trino map keys. Lookup must use recursive
+/// complex-value equality on every worker instead of the scalar-key fast path.
+#[test]
+fn distributed_map_lookup_row_key_matches_local_rows() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-map-row-key-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT MAP_CONTAINS_KEY(MAP(ARRAY[ROW(7, 'alpha')], ARRAY[99]), ROW(7, 'alpha')) AS has_key, MAP_ELEMENT_AT(MAP(ARRAY[ROW(7, 'alpha')], ARRAY[99]), ROW(7, 'alpha')) AS value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-row-key", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["true\u{1f}99"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// MAP_VALUES is a row-producing map projection and must retain value order
 /// and values through the distributed UNNEST path, just like MAP_KEYS.
 #[test]
