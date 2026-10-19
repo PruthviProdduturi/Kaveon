@@ -542,6 +542,112 @@ mod tests {
     /// `UseDevelopmentStorage=true` is Azure's own name for the emulator's
     /// well-known account, so no key is written to this repository or to a
     /// shell history.
+    /// Concurrent writers against a real Azure endpoint.
+    ///
+    /// The in-memory and filesystem backends both settle a conditional write
+    /// locally and instantly. Blob storage settles it over HTTP, against an
+    /// ETag it issued, and reports a loss as a 412 whose meaning has to be
+    /// read back out of an XML body. Writers contending there behave
+    /// differently from writers contending in a map, and the deployment only
+    /// ever meets the former.
+    ///
+    /// Same property as the in-process test: every writer increments, so with
+    /// no lost update the counter must finish at exactly the number of
+    /// writers. Fewer writers here than in-process, because each attempt is a
+    /// round trip rather than a map lookup.
+    ///
+    /// Runs with the same setup as the contract test above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires Azurite: docker compose up -d azurite"]
+    async fn azurite_concurrent_writers_never_lose_an_update() {
+        const WRITERS: u64 = 6;
+
+        let container =
+            std::env::var("KAVEON_AZURITE_CONTAINER").unwrap_or_else(|_| "kaveon-product".into());
+        let store = emulator_adls_commit(&container).expect("emulator store");
+
+        let key = format!(
+            "azurite-race/{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        store
+            .create_immutable(&key, b"0".to_vec())
+            .await
+            .expect("seed");
+
+        // tokio::sync::Barrier, not std::sync::Barrier. These writers are async
+        // tasks, and #[tokio::test] gives them a single-threaded runtime, so a
+        // blocking wait parks the only worker and no other task ever arrives at
+        // the barrier. The first version of this deadlocked for exactly that
+        // reason; the in-process test gets away with the blocking one because
+        // it runs its writers on spawn_blocking.
+        let gate = Arc::new(tokio::sync::Barrier::new(WRITERS as usize));
+        let conflicts = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..WRITERS {
+            let store = store.clone();
+            let key = key.clone();
+            let gate = Arc::clone(&gate);
+            let conflicts = Arc::clone(&conflicts);
+            tasks.push(tokio::spawn(async move {
+                gate.wait().await;
+                for _ in 0..200 {
+                    let Ok(current) = store.read(&key).await else {
+                        continue;
+                    };
+                    let value: u64 = String::from_utf8_lossy(&current.bytes)
+                        .trim()
+                        .parse()
+                        .expect("counter stays numeric");
+                    match store
+                        .compare_and_swap(
+                            &key,
+                            &current.version,
+                            (value + 1).to_string().into_bytes(),
+                        )
+                        .await
+                    {
+                        Ok(_) => return true,
+                        Err(error) if error.kind == CommitErrorKind::Conflict => {
+                            conflicts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        Err(error) => panic!("unexpected failure against Azurite: {error:?}"),
+                    }
+                }
+                false
+            }));
+        }
+
+        for task in tasks {
+            assert!(
+                task.await.unwrap(),
+                "a writer never succeeded against Azurite"
+            );
+        }
+
+        let observed = conflicts.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            observed > 0,
+            "no writer ever lost a race against Azurite, so nothing was contended and the \
+counter below proves nothing"
+        );
+
+        let final_value: u64 = String::from_utf8_lossy(&store.read(&key).await.unwrap().bytes)
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            final_value, WRITERS,
+            "{WRITERS} writers each reported success against Azurite but the counter reached \
+{final_value}; a conditional write was allowed to publish from a version it did not hold"
+        );
+        println!("azurite: {WRITERS} contended writers, {observed} conflicts, no lost update");
+    }
+
     #[tokio::test]
     #[ignore = "requires Azurite: docker compose up -d azurite"]
     async fn azurite_conditional_commit_matches_the_contract() {
