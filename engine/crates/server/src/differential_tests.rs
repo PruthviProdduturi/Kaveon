@@ -3795,6 +3795,76 @@ fn distributed_unnest_typed_null_date_map_is_empty_with_schema() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Decimal MAP members retain their precision/scale in empty UNNEST output
+/// and in NULL-padded rows emitted alongside a non-empty sibling array.
+#[test]
+fn distributed_unnest_typed_null_decimal_map_preserves_schema_and_padding() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-unnest-null-decimal-map-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    for (statement, expected_types, expected_rows) in [
+        (
+            "SELECT key, value FROM UNNEST(CAST(NULL AS MAP(DECIMAL(10, 2), DECIMAL(8, 3)))) AS t(key, value)",
+            vec![DataType::Decimal128(10, 2), DataType::Decimal128(8, 3)],
+            vec![],
+        ),
+        (
+            "SELECT key, value, id, ord FROM UNNEST(CAST(NULL AS MAP(DECIMAL(10, 2), DECIMAL(8, 3))), ARRAY[1, 2]) WITH ORDINALITY AS t(key, value, id, ord) ORDER BY ord",
+            vec![
+                DataType::Decimal128(10, 2),
+                DataType::Decimal128(8, 3),
+                DataType::Int64,
+                DataType::Int64,
+            ],
+            vec![
+                "NULL\u{1f}NULL\u{1f}1\u{1f}1",
+                "NULL\u{1f}NULL\u{1f}2\u{1f}2",
+            ],
+        ),
+    ] {
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-unnest-null-decimal-map", 16 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+        let local_types = local
+            .operator
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(local_types, expected_types, "{statement} local schema");
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        assert_eq!(expected, expected_rows, "{statement} local rows");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}"));
+        for batch in &batches {
+            let actual_types = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.data_type().clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_types, expected_types,
+                "{statement} distributed schema"
+            );
+        }
+        assert_eq!(
+            canonical_rows(&batches, true),
+            expected,
+            "{statement} distributed rows"
+        );
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A correlated array must be evaluated for each left row on the worker, not
 /// once as a coordinator-side constant relation.
 #[test]
