@@ -33,6 +33,15 @@ pub struct WindowOperator {
     memory: Option<kaveon_core::OperatorMemoryAccount>,
 }
 
+/// Immutable sort inputs shared by window expressions with the same
+/// partition/order layout.  Keeping the evaluated key arrays alongside the
+/// permutation avoids reevaluating those expressions once per function.
+struct WindowSortContext {
+    sorted: Arc<Vec<usize>>,
+    partition_cols: Vec<ArrayRef>,
+    order_cols: Vec<ArrayRef>,
+}
+
 impl WindowOperator {
     pub fn new(source: Box<dyn BatchOperator>, expressions: Vec<Expr>) -> Result<Self> {
         let empty = RecordBatch::new_empty(source.schema().clone());
@@ -127,20 +136,20 @@ impl BatchOperator for WindowOperator {
             // ORDER BY while differing only in frame or function. Reuse the
             // expensive lexsort permutation for that exact layout; each
             // expression still evaluates its own frame and output values.
-            let mut sorted_cache = HashMap::<String, Arc<Vec<usize>>>::new();
+            let mut sorted_cache = HashMap::<String, Arc<WindowSortContext>>::new();
             let sorted_expressions = self
                 .expressions
                 .iter()
                 .map(|expr| {
                     let sort_key = window_sort_key(expr);
-                    let sorted = if let Some(sorted) = sorted_cache.get(&sort_key) {
-                        Arc::clone(sorted)
+                    let context = if let Some(context) = sorted_cache.get(&sort_key) {
+                        Arc::clone(context)
                     } else {
-                        let sorted = Arc::new(window_sort_indices(expr, &batch)?);
-                        sorted_cache.insert(sort_key, Arc::clone(&sorted));
-                        sorted
+                        let context = Arc::new(window_sort_context(expr, &batch)?);
+                        sorted_cache.insert(sort_key, Arc::clone(&context));
+                        context
                     };
-                    Ok((expr, sorted))
+                    Ok((expr, context))
                 })
                 .collect::<Result<Vec<_>>>()?;
             let evaluated = if sorted_expressions.len() > 1 {
@@ -151,11 +160,11 @@ impl BatchOperator for WindowOperator {
                 std::thread::scope(|scope| {
                     sorted_expressions
                         .iter()
-                        .map(|(expr, sorted)| {
+                        .map(|(expr, context)| {
                             scope.spawn(|| {
                                 crate::expr_eval::with_expression_memory(
                                     expression_memory.as_ref(),
-                                    || evaluate_window_with_sorted(expr, &batch, Some(sorted)),
+                                    || evaluate_window_with_context(expr, &batch, context),
                                 )
                             })
                         })
@@ -171,7 +180,7 @@ impl BatchOperator for WindowOperator {
             } else {
                 sorted_expressions
                     .iter()
-                    .map(|(expr, sorted)| evaluate_window_with_sorted(expr, &batch, Some(sorted)))
+                    .map(|(expr, context)| evaluate_window_with_context(expr, &batch, context))
                     .collect::<Result<Vec<_>>>()?
             };
             for output in evaluated {
@@ -207,6 +216,36 @@ fn compare(col: &ArrayRef, left: usize, right: usize) -> Result<Ordering> {
         },
     )?;
     Ok(comparator(left, right))
+}
+
+fn window_sort_context(expr: &Expr, batch: &RecordBatch) -> Result<WindowSortContext> {
+    let Expr::WindowFunction {
+        partition_by,
+        order_by,
+        ..
+    } = expr
+    else {
+        return Err(error("window operator requires window expressions"));
+    };
+    let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
+    let order_cols = normalize_dictionary_columns(columns(
+        &order_by
+            .iter()
+            .map(|(e, _, _)| e.clone())
+            .collect::<Vec<_>>(),
+        batch,
+    )?)?;
+    let sorted = Arc::new(window_sort_indices_from_columns(
+        &partition_cols,
+        &order_cols,
+        order_by,
+        batch.num_rows(),
+    )?);
+    Ok(WindowSortContext {
+        sorted,
+        partition_cols,
+        order_cols,
+    })
 }
 
 fn normalize_dictionary_columns(columns: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
@@ -251,26 +290,6 @@ fn window_sort_key(expr: &Expr) -> String {
         return format!("{expr:?}");
     };
     format!("{partition_by:?}|{order_by:?}")
-}
-
-fn window_sort_indices(expr: &Expr, batch: &RecordBatch) -> Result<Vec<usize>> {
-    let Expr::WindowFunction {
-        partition_by,
-        order_by,
-        ..
-    } = expr
-    else {
-        return Err(error("window operator requires window expressions"));
-    };
-    let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
-    let order_cols = normalize_dictionary_columns(columns(
-        &order_by
-            .iter()
-            .map(|(e, _, _)| e.clone())
-            .collect::<Vec<_>>(),
-        batch,
-    )?)?;
-    window_sort_indices_from_columns(&partition_cols, &order_cols, order_by, batch.num_rows())
 }
 
 fn window_sort_indices_from_columns(
@@ -321,12 +340,43 @@ fn evaluate_window_with_sorted(
     batch: &RecordBatch,
     sorted_override: Option<&[usize]>,
 ) -> Result<ArrayRef> {
+    let context = if let Some(sorted) = sorted_override {
+        let Expr::WindowFunction {
+            partition_by,
+            order_by,
+            ..
+        } = expr
+        else {
+            return Err(error("window operator requires window expressions"));
+        };
+        WindowSortContext {
+            sorted: Arc::new(sorted.to_vec()),
+            partition_cols: normalize_dictionary_columns(columns(partition_by, batch)?)?,
+            order_cols: normalize_dictionary_columns(columns(
+                &order_by
+                    .iter()
+                    .map(|(e, _, _)| e.clone())
+                    .collect::<Vec<_>>(),
+                batch,
+            )?)?,
+        }
+    } else {
+        window_sort_context(expr, batch)?
+    };
+    evaluate_window_with_context(expr, batch, &context)
+}
+
+fn evaluate_window_with_context(
+    expr: &Expr,
+    batch: &RecordBatch,
+    context: &WindowSortContext,
+) -> Result<ArrayRef> {
     let Expr::WindowFunction {
         name,
         args,
-        partition_by,
         order_by,
         frame,
+        ..
     } = expr
     else {
         return Err(error("window operator requires window expressions"));
@@ -337,7 +387,7 @@ fn evaluate_window_with_sorted(
         .strip_suffix("_IGNORE_NULLS")
         .unwrap_or(&name)
         .to_owned();
-    let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
+    let partition_cols = &context.partition_cols;
     let partition_comparators = partition_cols
         .iter()
         .map(|column| {
@@ -352,22 +402,8 @@ fn evaluate_window_with_sorted(
             .map_err(|failure| error(failure.to_string()))
         })
         .collect::<Result<Vec<_>>>()?;
-    let order_cols = normalize_dictionary_columns(columns(
-        &order_by
-            .iter()
-            .map(|(e, _, _)| e.clone())
-            .collect::<Vec<_>>(),
-        batch,
-    )?)?;
-    let sorted =
-        sorted_override
-            .map(|rows| rows.to_vec())
-            .unwrap_or(window_sort_indices_from_columns(
-                &partition_cols,
-                &order_cols,
-                order_by,
-                batch.num_rows(),
-            )?);
+    let order_cols = &context.order_cols;
+    let sorted = context.sorted.as_ref().clone();
     let mut partitions: Vec<Vec<usize>> = Vec::new();
     for (index, row) in sorted.into_iter().enumerate() {
         if index % 1024 == 0 {
