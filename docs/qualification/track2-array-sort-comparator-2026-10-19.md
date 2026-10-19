@@ -24,6 +24,7 @@ cargo test -p kaveon-sql lowers_array_sort_comparator_as_a_serializable_lambda_e
 cargo test -p kaveon-exec array_sort_comparator_uses_lambda_body_and_preserves_result_type -- --nocapture
 cargo test -p kaveon-exec array_sort_comparator_orders_nulls_explicitly -- --nocapture
 cargo test -p kaveon-exec array_sort_comparator_can_capture_the_outer_row -- --nocapture
+cargo test -p kaveon-core expression_dependency_tests -- --nocapture
 ```
 
 The full server differential corpus includes the comparator query and compares
@@ -37,6 +38,10 @@ cargo test -p kaveon-server --bin kaveon-server differential_tests::the_differen
 Result on the final comparator implementation: **1 passed, 0 failed**
 in 434.08 seconds. The evaluator qualification also covers explicit NULL
 ordering in the comparator unit test above.
+
+The core dependency-scope tests pass **2 passed, 0 failed**: lambda parameter
+names are excluded from relation dependencies, while a captured outer column
+remains visible to projection and scan planning.
 
 ## Boundary
 
