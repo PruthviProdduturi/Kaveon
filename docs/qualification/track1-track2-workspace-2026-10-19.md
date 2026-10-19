@@ -1,7 +1,8 @@
 # Track 1/2 workspace qualification — 2026-10-19
 
-This qualification covers pushed source commit `6d2c6c7c`, including the
-empty-fragment `MAP_ZIP_WITH` schema fix and its focused regression.
+This qualification covers pushed source commit `40ca5ed6`, including the
+empty-map type inference fixes for `TRANSFORM_VALUES` and `TRANSFORM_KEYS`
+and their focused regressions.
 
 ## Validation
 
@@ -10,15 +11,15 @@ The complete workspace test gate passed with no failures:
 | Suite | Result |
 | --- | ---: |
 | SQL | 259 passed, 0 failed |
-| Exec | 581 passed, 0 failed, 4 ignored |
+| Exec | 584 passed, 0 failed, 4 ignored |
 | Server | 611 passed, 0 failed; full differential included |
 | Storage | 154 passed, 0 failed, 2 ignored |
 | Other workspace crates | passed |
 
 The complete server suite, including the local/distributed differential, took
-533.98 seconds. `cargo clippy --workspace --all-targets -- -D warnings`,
+528.02 seconds. `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo fmt --all -- --check`, `git diff --check`, and documentation validation
-also passed. Documentation validation reported 550 Markdown files, 39 routes,
+also passed. Documentation validation reported 552 Markdown files, 39 routes,
 and 9 SVGs.
 
 ## Scope
