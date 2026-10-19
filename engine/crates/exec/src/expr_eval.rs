@@ -4240,7 +4240,14 @@ fn compare_lambda_entries(
             "ARRAY_SORT comparator must return an integer".into(),
         ));
     };
-    Ok(sign.cmp(&0))
+    match sign {
+        -1 => Ok(std::cmp::Ordering::Less),
+        0 => Ok(std::cmp::Ordering::Equal),
+        1 => Ok(std::cmp::Ordering::Greater),
+        _ => Err(KaveonError::Execution(
+            "ARRAY_SORT comparator must return -1, 0, or 1".into(),
+        )),
+    }
 }
 
 fn array_slice_generic<L: OffsetSizeTrait>(
@@ -18547,6 +18554,43 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(1), Some(2), None]
+        );
+    }
+
+    #[test]
+    fn array_sort_comparator_rejects_values_outside_trino_contract() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let compare = Expr::Function {
+            name: "__KAVEON_LAMBDA".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("x".into())),
+                Expr::Literal(ScalarValue::Utf8("y".into())),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        let error = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(2)),
+                            Expr::Literal(ScalarValue::Int64(1)),
+                        ],
+                    },
+                    compare,
+                ],
+            },
+            &batch,
+        )
+        .expect_err("comparator result outside -1/0/1 must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("ARRAY_SORT comparator must return -1, 0, or 1")
         );
     }
 
