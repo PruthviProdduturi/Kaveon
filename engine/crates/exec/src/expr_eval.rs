@@ -235,6 +235,18 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_array_transform(&args[0], lambda_args, batch);
             }
+            if matches!(
+                name.to_ascii_uppercase().as_str(),
+                "ALL_MATCH" | "ANY_MATCH" | "NONE_MATCH"
+            ) && args.len() == 2
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[1]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_array_match(name, &args[0], lambda_args, batch);
+            }
             if name.eq_ignore_ascii_case("MAP_FILTER")
                 && args.len() == 2
                 && let Expr::Function {
@@ -3121,6 +3133,97 @@ fn eval_array_filter(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
+}
+
+/// Evaluate Trino's three-valued higher-order array predicates. `ANY_MATCH`
+/// returns true on the first true predicate, `ALL_MATCH` returns false on the
+/// first false predicate, and `NONE_MATCH` returns false on the first true
+/// predicate. A NULL predicate is retained only when no decisive value exists.
+fn eval_array_match(
+    function_name: &str,
+    array_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 2 {
+        return Err(KaveonError::Execution(format!(
+            "{function_name} lambda must have exactly one parameter"
+        )));
+    }
+    let name = match &lambda_args[0] {
+        Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => name.clone(),
+        _ => {
+            return Err(KaveonError::Execution(format!(
+                "{function_name} lambda parameter must be an identifier"
+            )));
+        }
+    };
+    let array = normalize_large_list(&decode_dictionary(&evaluate(array_expr, outer_batch)?)?)?;
+    let list = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+        KaveonError::Execution(format!("{function_name} requires an ARRAY/List value"))
+    })?;
+    let any = function_name.eq_ignore_ascii_case("ANY_MATCH");
+    let none = function_name.eq_ignore_ascii_case("NONE_MATCH");
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) {
+                return Ok(None);
+            }
+            let inner = list.value(row);
+            let mut saw_null = false;
+            for index in 0..inner.len() {
+                let value = if inner.is_null(index) {
+                    arrow::array::new_null_array(&list.value_type(), 1)
+                } else {
+                    inner.slice(index, 1)
+                };
+                let mut fields = vec![Field::new(&name, value.data_type().clone(), true)];
+                let mut columns = vec![value];
+                for (field, column) in outer_batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .zip(outer_batch.columns())
+                {
+                    if field.name() == &name {
+                        continue;
+                    }
+                    fields.push(field.as_ref().clone());
+                    columns.push(column.slice(row, 1));
+                }
+                let element_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+                let predicate = evaluate(&lambda_args[1], &element_batch)?;
+                let predicate = predicate
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .ok_or_else(|| {
+                        KaveonError::Execution(format!(
+                            "{function_name} lambda must return BOOLEAN"
+                        ))
+                    })?;
+                if predicate.len() != 1 {
+                    return Err(KaveonError::Execution(format!(
+                        "{function_name} lambda must return one value per element"
+                    )));
+                }
+                if predicate.is_null(0) {
+                    saw_null = true;
+                } else if predicate.value(0) {
+                    return Ok(Some(!none));
+                } else if !any && !none {
+                    return Ok(Some(false));
+                }
+            }
+            if saw_null {
+                Ok(None)
+            } else if any {
+                Ok(Some(false))
+            } else {
+                Ok(Some(true))
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(BooleanArray::from(result)))
 }
 
 /// Evaluate Trino's `TRANSFORM(array, lambda)` higher-order function. Every
@@ -18350,6 +18453,69 @@ mod tests {
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true), Some(false)]
         );
+    }
+
+    #[test]
+    fn array_match_lambdas_follow_three_valued_results() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let lambda = |body| Expr::Function {
+            name: "__KAVEON_LAMBDA".into(),
+            args: vec![Expr::Literal(ScalarValue::Utf8("x".into())), body],
+        };
+        let greater_than_two = Expr::BinaryOp {
+            left: Box::new(Expr::Column("x".into())),
+            op: BinaryOp::Gt,
+            right: Box::new(Expr::Literal(ScalarValue::Int64(2))),
+        };
+        for (name, expected) in [
+            ("ALL_MATCH", false),
+            ("ANY_MATCH", true),
+            ("NONE_MATCH", false),
+        ] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![
+                        Expr::Function {
+                            name: "ARRAY".into(),
+                            args: vec![
+                                Expr::Literal(ScalarValue::Int64(1)),
+                                Expr::Literal(ScalarValue::Null),
+                                Expr::Literal(ScalarValue::Int64(3)),
+                            ],
+                        },
+                        lambda(greater_than_two.clone()),
+                    ],
+                },
+                &batch,
+            )
+            .unwrap();
+            assert_eq!(result.as_boolean().value(0), expected);
+        }
+        let none_with_unknown = evaluate(
+            &Expr::Function {
+                name: "NONE_MATCH".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(1)),
+                            Expr::Literal(ScalarValue::Null),
+                        ],
+                    },
+                    lambda(Expr::BinaryOp {
+                        left: Box::new(Expr::Column("x".into())),
+                        op: BinaryOp::Gt,
+                        right: Box::new(Expr::Literal(ScalarValue::Int64(3))),
+                    }),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(none_with_unknown.as_boolean().is_null(0));
     }
 
     #[test]
