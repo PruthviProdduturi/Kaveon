@@ -1,8 +1,8 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
     Decimal128Array, Decimal128Builder, Float32Array, Float32Builder, Float64Array, Float64Builder,
-    GenericListArray, GenericListBuilder, Int8Array, Int16Array, Int32Array, Int32Builder,
-    Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray, LargeListBuilder,
+    GenericListArray, GenericListBuilder, GenericStringBuilder, Int8Array, Int16Array, Int32Array,
+    Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray, LargeListBuilder,
     LargeStringArray, LargeStringBuilder, ListArray, ListBuilder, MapArray, NullBuilder,
     OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
@@ -5453,48 +5453,55 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
             array_histogram_primitive::<L, TimestampNanosecondType>(list)
         }
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let mut keys = ListBuilder::new(StringBuilder::new());
-            let mut counts = ListBuilder::new(Int64Builder::new());
-            for row in 0..list.len() {
-                if list.is_null(row) {
-                    keys.append(false);
-                    counts.append(false);
-                    continue;
-                }
-                let values = list.value(row);
-                let mut histogram = std::collections::BTreeMap::<String, i64>::new();
-                for index in 0..values.len() {
-                    if values.is_null(index) {
-                        continue;
-                    }
-                    let value = match values.data_type() {
-                        DataType::Utf8 => values.as_string::<i32>().value(index),
-                        DataType::LargeUtf8 => values.as_string::<i64>().value(index),
-                        _ => unreachable!(),
-                    };
-                    let count = histogram.entry(value.to_owned()).or_default();
-                    *count = count.checked_add(1).ok_or_else(|| {
-                        KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into())
-                    })?;
-                }
-                for (value, count) in histogram {
-                    keys.values().append_value(value);
-                    counts.values().append_value(count);
-                }
-                keys.append(true);
-                counts.append(true);
-            }
-            eval_scalar_function(
-                "MAP",
-                &[Arc::new(keys.finish()), Arc::new(counts.finish())],
-                list.len(),
-            )
-        }
+        DataType::Utf8 => array_histogram_text::<L, i32>(list),
+        DataType::LargeUtf8 => array_histogram_text::<L, i64>(list),
         other => Err(KaveonError::Execution(format!(
             "ARRAY_HISTOGRAM does not support list element type {other}"
         ))),
     }
+}
+
+fn array_histogram_text<L, O>(list: &GenericListArray<L>) -> Result<ArrayRef>
+where
+    L: OffsetSizeTrait,
+    O: OffsetSizeTrait,
+{
+    let mut keys = ListBuilder::new(GenericStringBuilder::<O>::new());
+    let mut counts = ListBuilder::new(Int64Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            keys.append(false);
+            counts.append(false);
+            continue;
+        }
+        let values = list.value(row);
+        let mut histogram = std::collections::BTreeMap::<String, i64>::new();
+        for index in 0..values.len() {
+            if values.is_null(index) {
+                continue;
+            }
+            let value = match values.data_type() {
+                DataType::Utf8 => values.as_string::<i32>().value(index),
+                DataType::LargeUtf8 => values.as_string::<i64>().value(index),
+                _ => unreachable!(),
+            };
+            let count = histogram.entry(value.to_owned()).or_default();
+            *count = count
+                .checked_add(1)
+                .ok_or_else(|| KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into()))?;
+        }
+        for (value, count) in histogram {
+            keys.values().append_value(value);
+            counts.values().append_value(count);
+        }
+        keys.append(true);
+        counts.append(true);
+    }
+    eval_scalar_function(
+        "MAP",
+        &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+        list.len(),
+    )
 }
 
 fn array_histogram_primitive<L, T>(list: &GenericListArray<L>) -> Result<ArrayRef>
@@ -17186,6 +17193,24 @@ mod tests {
         .unwrap();
         let map = value.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map.keys().as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn array_histogram_preserves_large_utf8_key_type() {
+        let mut list = LargeListBuilder::new(LargeStringBuilder::new());
+        list.values().append_value("beta");
+        list.values().append_value("alpha");
+        list.values().append_value("beta");
+        list.values().append_null();
+        list.append(true);
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list.finish())], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().data_type(), &DataType::LargeUtf8);
+        assert_eq!(
+            map.keys().as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("beta")]
+        );
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
     }
 
