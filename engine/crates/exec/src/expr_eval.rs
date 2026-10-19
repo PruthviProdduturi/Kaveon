@@ -9953,20 +9953,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         }
                         let inner = list.value(row);
                         let values = inner.as_string::<i64>();
-                        let mut sorted = (0..values.len())
-                            .map(|index| {
-                                values
-                                    .is_valid(index)
-                                    .then(|| values.value(index).to_owned())
-                            })
-                            .collect::<Vec<_>>();
-                        sorted.sort_by(|left, right| match (left, right) {
-                            (None, None) => std::cmp::Ordering::Equal,
-                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                            (Some(_), None) => std::cmp::Ordering::Less,
-                            (Some(left), Some(right)) => left.cmp(right),
-                        });
-                        for value in sorted {
+                        let mut seen = Vec::<Option<String>>::new();
+                        for index in 0..values.len() {
+                            let value = values
+                                .is_valid(index)
+                                .then(|| values.value(index).to_owned());
+                            if !seen.iter().any(|existing| existing == &value) {
+                                seen.push(value.clone());
+                            }
+                        }
+                        for value in seen {
                             builder.values().append_option(value.as_deref());
                         }
                         builder.append(true);
@@ -18352,6 +18348,29 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some("b"), Some("a")]
+        );
+    }
+
+    #[test]
+    fn array_distinct_large_utf8_keeps_first_occurrence_and_one_null() {
+        let mut input = ListBuilder::new(LargeStringBuilder::new());
+        input.values().append_value("b");
+        input.values().append_value("a");
+        input.values().append_value("b");
+        input.values().append_null();
+        input.values().append_value("a");
+        input.values().append_null();
+        input.append(true);
+        let result =
+            eval_scalar_function("ARRAY_DISTINCT", &[Arc::new(input.finish()) as ArrayRef], 1)
+                .unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::LargeUtf8);
+        let inner = list.value(0);
+        let values = inner.as_string::<i64>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("b"), Some("a"), None]
         );
     }
 
