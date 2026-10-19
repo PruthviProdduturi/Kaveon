@@ -617,6 +617,253 @@ This is the classifier drifting from the provider's wording.",
         println!("azurite: conditional commit contract holds against real Azure errors");
     }
 
+    /// A temporary directory that cleans itself up, for the local backend.
+    struct TempRoot(std::path::PathBuf);
+
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "kaveon-cas-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Run a scenario against both compare-and-swap implementations.
+    ///
+    /// `local_file_commit` documents itself as preserving the blob store's
+    /// commit semantics. These are different code paths -- the blob one issues
+    /// a conditional PUT, the local one takes a lock file and renames -- so the
+    /// claim only holds as far as it is checked.
+    async fn on_both_backends<F, Fut>(tag: &str, scenario: F)
+    where
+        F: Fn(&'static str, AdlsConditionalCommit) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        scenario(
+            "blob",
+            AdlsConditionalCommit::new(Arc::new(InMemory::new())),
+        )
+        .await;
+        let root = TempRoot::new(tag);
+        scenario("local", local_file_commit(&root.0).unwrap()).await;
+    }
+
+    /// Concurrent writers must not lose a write.
+    ///
+    /// Each task reads the current value, adds one, and swaps; a task that
+    /// loses the race re-reads and tries again. With every write preserved the
+    /// counter must finish at exactly the number of tasks. A lost update --
+    /// two writers reading the same version and both being allowed to publish
+    /// -- lands it lower, and nothing else does.
+    #[tokio::test]
+    async fn concurrent_writers_never_lose_an_update() {
+        const WRITERS: u64 = 12;
+
+        on_both_backends("lost-update", |backend, store| async move {
+            let key = "races/counter.json";
+            store
+                .create_immutable(key, b"0".to_vec())
+                .await
+                .unwrap_or_else(|error| panic!("{backend}: seed failed: {error:?}"));
+
+            // Every writer's first attempt happens at once. Without this the
+            // tasks can run one after another, and a counter that reaches
+            // WRITERS then says nothing -- it would do so even against a
+            // compare-and-swap that ignored its expectation.
+            let gate = Arc::new(std::sync::Barrier::new(WRITERS as usize));
+            let conflicts = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+            let mut tasks = Vec::new();
+            for _ in 0..WRITERS {
+                let store = store.clone();
+                let gate = Arc::clone(&gate);
+                let conflicts = Arc::clone(&conflicts);
+                tasks.push(tokio::task::spawn_blocking(move || {
+                    gate.wait();
+                    // Bounded so a genuine livelock fails the test instead of
+                    // hanging it. Twelve writers on one key need far fewer.
+                    for _ in 0..2_000 {
+                        let current = match futures::executor::block_on(store.read(key)) {
+                            Ok(value) => value,
+                            Err(_) => continue,
+                        };
+                        let value: u64 = String::from_utf8_lossy(&current.bytes)
+                            .trim()
+                            .parse()
+                            .expect("counter stays numeric");
+                        let next = (value + 1).to_string().into_bytes();
+                        match futures::executor::block_on(store.compare_and_swap(
+                            key,
+                            &current.version,
+                            next,
+                        )) {
+                            Ok(_) => return true,
+                            Err(error) if error.kind == CommitErrorKind::Conflict => {
+                                conflicts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                continue;
+                            }
+                            Err(error) => panic!("{backend}: unexpected failure {error:?}"),
+                        }
+                    }
+                    false
+                }));
+            }
+
+            for task in tasks {
+                assert!(task.await.unwrap(), "{backend}: a writer never succeeded");
+            }
+
+            assert!(
+                conflicts.load(std::sync::atomic::Ordering::Relaxed) > 0,
+                "{backend}: {WRITERS} writers started together and none ever lost a race, so \
+nothing here was actually contended and the counter below proves nothing"
+            );
+
+            let final_value: u64 = String::from_utf8_lossy(&store.read(key).await.unwrap().bytes)
+                .trim()
+                .parse()
+                .unwrap();
+            assert_eq!(
+                final_value,
+                WRITERS,
+                "{backend}: {WRITERS} writers each reported success but the counter reached \
+{final_value}; {} update(s) were lost, which means two writers were allowed to publish from \
+the same version",
+                WRITERS - final_value
+            );
+        })
+        .await;
+    }
+
+    /// Only one writer may win a given version.
+    ///
+    /// Every task swaps from the same starting version, so exactly one must be
+    /// allowed to publish and the rest must be told it conflicted. Two winners
+    /// would mean the later silently discarded the earlier.
+    #[tokio::test]
+    async fn exactly_one_writer_wins_a_contested_version() {
+        const WRITERS: usize = 8;
+
+        on_both_backends("contested", |backend, store| async move {
+            let key = "races/contested.json";
+            store.create_immutable(key, b"seed".to_vec()).await.unwrap();
+            let start = store.read(key).await.unwrap().version;
+
+            let mut tasks = Vec::new();
+            for writer in 0..WRITERS {
+                let store = store.clone();
+                let start = start.clone();
+                tasks.push(tokio::task::spawn_blocking(move || {
+                    futures::executor::block_on(store.compare_and_swap(
+                        key,
+                        &start,
+                        format!("writer-{writer}").into_bytes(),
+                    ))
+                    .map(|_| writer)
+                }));
+            }
+
+            let mut winners = Vec::new();
+            for task in tasks {
+                match task.await.unwrap() {
+                    Ok(writer) => winners.push(writer),
+                    Err(error) => assert_eq!(
+                        error.kind,
+                        CommitErrorKind::Conflict,
+                        "{backend}: a loser must be told it conflicted, not {:?}",
+                        error.kind
+                    ),
+                }
+            }
+
+            assert_eq!(
+                winners.len(),
+                1,
+                "{backend}: {} writers published from the same version; all but one of those \
+writes were overwritten without their author being told",
+                winners.len()
+            );
+
+            let stored = store.read(key).await.unwrap().bytes;
+            assert_eq!(
+                String::from_utf8_lossy(&stored),
+                format!("writer-{}", winners[0]),
+                "{backend}: the stored value must be the one the winner wrote"
+            );
+        })
+        .await;
+    }
+
+    /// Where the two backends genuinely differ, recorded rather than assumed.
+    ///
+    /// The local store derives its version from a hash of the content, so a
+    /// value that returns to an earlier one returns to that earlier version
+    /// too, and a writer holding the old version is allowed to publish as
+    /// though nothing had happened. Blob storage issues a fresh ETag per
+    /// write, so the same sequence conflicts.
+    ///
+    /// This is the ABA problem, and the head object avoids it in practice
+    /// because every snapshot carries a distinct generation and id. That makes
+    /// it a property worth pinning rather than a bug worth fixing here: if the
+    /// local version scheme ever changes, this test says what it was relied on
+    /// to do.
+    #[tokio::test]
+    async fn the_backends_differ_on_a_value_that_returns_to_itself() {
+        let blob = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let root = TempRoot::new("aba");
+        let local = local_file_commit(&root.0).unwrap();
+        let key = "races/aba.json";
+
+        for (backend, store) in [("blob", &blob), ("local", &local)] {
+            store.create_immutable(key, b"A".to_vec()).await.unwrap();
+            let original = store.read(key).await.unwrap().version;
+
+            let to_b = store
+                .compare_and_swap(key, &original, b"B".to_vec())
+                .await
+                .unwrap();
+            store
+                .compare_and_swap(key, &to_b, b"A".to_vec())
+                .await
+                .unwrap();
+
+            // The content is what it was; the question is whether the version is.
+            let replayed = store.compare_and_swap(key, &original, b"C".to_vec()).await;
+
+            match backend {
+                "blob" => assert!(
+                    matches!(
+                        replayed,
+                        Err(CommitError {
+                            kind: CommitErrorKind::Conflict
+                        })
+                    ),
+                    "blob storage issues a version per write, so a stale one must still conflict \
+after the content returns to its earlier value"
+                ),
+                _ => assert!(
+                    replayed.is_ok(),
+                    "the local store derives its version from the content, so a stale version \
+becomes current again when the content does -- if this now conflicts, the local version scheme \
+has changed and the comment describing it is stale"
+                ),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn immutable_create_rejects_a_second_writer() {
         let store = store();
