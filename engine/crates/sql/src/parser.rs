@@ -1826,6 +1826,21 @@ mod tests {
     }
 
     #[test]
+    fn json_path_surrogate_pairs_remain_in_path_literals() {
+        let statements = parse_sql(
+            r#"SELECT JSON_VALUE(payload, '$."\uD83D\uDE00".value' RETURNING BIGINT), JSON_QUERY(payload, '$["\ud83d\ude00"]') FROM t"#,
+        )
+        .expect("quoted SQL/JSON surrogate escapes should remain path text");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains(r#"'$."\uD83D\uDE00".value'"#),
+            "{rendered}"
+        );
+        assert!(rendered.contains(r#"'$["\ud83d\ude00"]'"#), "{rendered}");
+        assert!(rendered.contains("AS BIGINT"), "{rendered}");
+    }
+
+    #[test]
     fn json_path_mode_prefixes_accept_whitespace_separators() {
         let statements = parse_sql(
             "SELECT JSON_VALUE(payload, 'lax   $.x'), JSON_QUERY(payload, 'strict\t$.items') FROM t",

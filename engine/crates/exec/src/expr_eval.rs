@@ -11934,6 +11934,25 @@ fn parse_quoted_json_path_key(input: &str, quote: char) -> Option<(String, usize
                     digits.push(iter.next()?.1);
                 }
                 let codepoint = u32::from_str_radix(&digits, 16).ok()?;
+                let codepoint = if (0xd800..=0xdbff).contains(&codepoint) {
+                    // A supplementary character is encoded as two adjacent
+                    // UTF-16 escapes. Reject missing or invalid low surrogates
+                    // instead of replacing them or consuming a path delimiter.
+                    if iter.next()?.1 != '\\' || iter.next()?.1 != 'u' {
+                        return None;
+                    }
+                    digits.clear();
+                    for _ in 0..4 {
+                        digits.push(iter.next()?.1);
+                    }
+                    let low = u32::from_str_radix(&digits, 16).ok()?;
+                    if !(0xdc00..=0xdfff).contains(&low) {
+                        return None;
+                    }
+                    0x10000 + ((codepoint - 0xd800) << 10) + (low - 0xdc00)
+                } else {
+                    codepoint
+                };
                 key.push(char::from_u32(codepoint)?);
             }
             other => key.push(other),
@@ -23338,6 +23357,58 @@ mod tests {
                 .value(0),
             "12"
         );
+    }
+
+    #[test]
+    fn evaluates_json_path_surrogate_pairs_and_rejects_malformed_pairs() {
+        let document = "{\"\u{1f600}\":{\"value\":17},\"\u{10000}\":18,\"\u{10ffff}\":19}";
+        for documents in [
+            Arc::new(StringArray::from(vec![Some(document)])) as ArrayRef,
+            Arc::new(LargeStringArray::from(vec![Some(document)])) as ArrayRef,
+        ] {
+            let batch = RecordBatch::try_from_iter([("document", documents)]).unwrap();
+            for (path, expected) in [
+                (r#"$."\uD83D\uDE00".value"#, "17"),
+                (r#"$['\ud83d\ude00'].value"#, "17"),
+                (r#"$."\uD800\uDC00""#, "18"),
+                (r#"$."\uDBFF\uDFFF""#, "19"),
+            ] {
+                let expr = Expr::Function {
+                    name: "JSON_VALUE".into(),
+                    args: vec![
+                        Expr::Column("document".into()),
+                        Expr::Literal(ScalarValue::Utf8(path.into())),
+                    ],
+                };
+                let result = evaluate(&expr, &batch).unwrap();
+                assert_eq!(result.as_string::<i32>().value(0), expected, "{path}");
+            }
+            for path in [
+                r#"$."\uD83D""#,
+                r#"$."\uDE00""#,
+                r#"$."\uDE00\uD83D""#,
+                r#"$."\uD83D\u0041""#,
+                r#"$."\uD83D\uD83D""#,
+                r#"$."\uD83Dx""#,
+                r#"$."\uD83D\uDE0""#,
+                r#"$."\uD83D\uDE0G""#,
+            ] {
+                let args = vec![
+                    Expr::Column("document".into()),
+                    Expr::Literal(ScalarValue::Utf8(path.into())),
+                ];
+                let expr = Expr::Function {
+                    name: "JSON_VALUE".into(),
+                    args: args.clone(),
+                };
+                assert!(evaluate(&expr, &batch).unwrap().is_null(0), "{path}");
+                let strict = Expr::Function {
+                    name: "JSON_VALUE_STRICT".into(),
+                    args,
+                };
+                assert!(evaluate(&strict, &batch).is_err(), "{path}");
+            }
+        }
     }
 
     #[test]
