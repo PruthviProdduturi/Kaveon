@@ -4037,6 +4037,7 @@ fn cast_target_name(target: CastTarget) -> String {
         CastTarget::UInt16 => "UINT16".into(),
         CastTarget::UInt32 => "UINT32".into(),
         CastTarget::UInt64 => "UINT64".into(),
+        CastTarget::Float32 => "FLOAT32".into(),
         CastTarget::Float64 => "FLOAT64".into(),
         CastTarget::Utf8 => "UTF8".into(),
         CastTarget::Date32 => "DATE32".into(),
@@ -4236,8 +4237,8 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         ast::DataType::Float(_)
         | ast::DataType::Double
         | ast::DataType::DoublePrecision
-        | ast::DataType::Real
         | ast::DataType::Float8 => Ok(CastTarget::Float64),
+        ast::DataType::Real => Ok(CastTarget::Float32),
         ast::DataType::Varchar(_)
         | ast::DataType::Text
         | ast::DataType::String(_)
@@ -4322,7 +4323,8 @@ fn custom_cast_target(name: &str) -> Result<CastTarget> {
         "SMALLINT" | "INT2" => Ok(CastTarget::Int16),
         "INTEGER" | "INT" | "INT4" => Ok(CastTarget::Int32),
         "BIGINT" | "INT8SIGNED" => Ok(CastTarget::Int64),
-        "REAL" | "FLOAT" | "DOUBLE" | "DOUBLE PRECISION" => Ok(CastTarget::Float64),
+        "REAL" => Ok(CastTarget::Float32),
+        "FLOAT" | "DOUBLE" | "DOUBLE PRECISION" => Ok(CastTarget::Float64),
         "VARCHAR" | "TEXT" | "STRING" => Ok(CastTarget::Utf8),
         "DATE" => Ok(CastTarget::Date32),
         "TIMESTAMP" => Ok(CastTarget::TimestampMicros {
@@ -6848,6 +6850,21 @@ mod tests {
             columns[0],
             Expr::Cast {
                 data_type: CastTarget::Date32,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_real_as_single_precision() {
+        let plan = sql_to_logical_plan("SELECT CAST(event_value AS REAL) FROM events").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        assert!(matches!(
+            columns[0],
+            Expr::Cast {
+                data_type: CastTarget::Float32,
                 ..
             }
         ));

@@ -2894,6 +2894,36 @@ fn distributed_json_value_returning_double_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Trino REAL is single precision, so JSON_VALUE RETURNING REAL must round at
+/// the Float32 boundary while preserving JSON null. Verify that type and
+/// coercion semantics are identical in local and three-worker execution.
+#[test]
+fn distributed_json_value_returning_real_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-value-returning-real-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"amount\":1.23456789}'), '$.amount' RETURNING REAL) AS amount, JSON_VALUE(JSON_PARSE('{\"amount\":null}'), '$.amount' RETURNING REAL) AS missing FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-value-returning-real", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["1.2345679\u{1f}NULL"; 3]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A partitioned value window with IGNORE NULLS must skip null predecessors
 /// identically in local execution and in the three-worker fragment path.
 #[test]
