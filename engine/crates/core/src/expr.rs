@@ -71,6 +71,45 @@ pub fn expression_contains_column(expr: &Expr) -> bool {
     expression_contains_column_scoped(expr, &[])
 }
 
+#[cfg(test)]
+mod expression_dependency_tests {
+    use super::{BinaryOp, Expr, expression_contains_column};
+    use crate::predicate::ScalarValue;
+
+    fn lambda(body: Expr) -> Expr {
+        Expr::Function {
+            name: "__KAVEON_LAMBDA".to_owned(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("left".to_owned())),
+                Expr::Literal(ScalarValue::Utf8("right".to_owned())),
+                body,
+            ],
+        }
+    }
+
+    #[test]
+    fn lambda_parameters_are_not_relation_dependencies() {
+        let comparator = lambda(Expr::BinaryOp {
+            left: Box::new(Expr::Column("left".to_owned())),
+            op: BinaryOp::Lt,
+            right: Box::new(Expr::Column("right".to_owned())),
+        });
+
+        assert!(!expression_contains_column(&comparator));
+    }
+
+    #[test]
+    fn lambda_captured_column_remains_a_relation_dependency() {
+        let comparator = lambda(Expr::BinaryOp {
+            left: Box::new(Expr::Column("left".to_owned())),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::Column("outer_key".to_owned())),
+        });
+
+        assert!(expression_contains_column(&comparator));
+    }
+}
+
 fn expression_contains_column_scoped(expr: &Expr, bound: &[String]) -> bool {
     match expr {
         Expr::Column(name) => !bound.iter().any(|bound| bound == name),
