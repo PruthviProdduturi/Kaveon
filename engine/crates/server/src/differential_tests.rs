@@ -2617,6 +2617,35 @@ fn distributed_json_value_returning_boolean_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Typed JSON floating-point extraction must preserve fractional values and
+/// JSON null through local and three-worker execution.
+#[test]
+fn distributed_json_value_returning_double_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-value-returning-double-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"amount\":12.34}'), '$.amount' RETURNING DOUBLE) AS amount, JSON_VALUE(JSON_PARSE('{\"amount\":null}'), '$.amount' RETURNING DOUBLE) AS missing FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-value-returning-double", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual, vec!["12.34\u{1f}NULL"; 3]);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A partitioned value window with IGNORE NULLS must skip null predecessors
 /// identically in local execution and in the three-worker fragment path.
 #[test]
