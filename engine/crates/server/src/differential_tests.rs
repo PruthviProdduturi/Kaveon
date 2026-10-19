@@ -5276,6 +5276,35 @@ fn distributed_partitioned_window_all_empty_preserves_schema() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A distributed left join must retain the left rows and typed NULL columns
+/// when the build-side partition is empty.
+#[test]
+fn distributed_left_join_empty_build_preserves_schema_and_null_extension() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-empty-build-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT l.country, r.country AS matched_country FROM events l LEFT JOIN (SELECT country, user_id FROM events WHERE country = '__no_such_country__') r ON l.user_id = r.user_id WHERE l.event_date = '2026-07-04' ORDER BY l.country, matched_country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-join-empty-build", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+    assert!(actual.iter().all(|row| row.ends_with("\u{1f}NULL")));
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// QUALIFY must filter a partitioned window after ranking, on the same
 /// worker-combined result that the local planner produces.
 #[test]
