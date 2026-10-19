@@ -4404,6 +4404,47 @@ fn distributed_grouping_sets_match_the_local_result() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// `GROUPING` distinguishes a real NULL dimension from the NULL introduced by
+/// a rolled-up grouping set.  `GROUPING_ID` combines those branch markers in
+/// Trino's left-to-right bit order.  Compare the complete CUBE through the
+/// local and fragment paths so both the masks and the nullable keys survive
+/// the UNION/aggregate merge.
+#[test]
+fn distributed_grouping_id_preserves_null_dimensions_and_masks() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-grouping-id-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT industry, region, GROUPING(industry), GROUPING(region), GROUPING_ID(industry, region), COUNT(*) AS n FROM events GROUP BY CUBE (industry, region)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-grouping-id", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let masks = actual
+        .iter()
+        .filter_map(|row| row.rsplit('\u{1f}').nth(1))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(masks, ["0", "1", "2", "3"].into_iter().collect());
+    assert!(actual.iter().any(|row| row.starts_with("NULL\u{1f}")));
+    assert!(
+        actual
+            .iter()
+            .any(|row| row.starts_with("NULL\u{1f}NULL\u{1f}1\u{1f}1\u{1f}3\u{1f}"))
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// `JOIN ... USING` must reach the same qualified equality keys through the
 /// fragment planner as it does through the node-local planner.
 /// Correlated scalar ORDER BY/OFFSET/LIMIT must page per correlated key before
