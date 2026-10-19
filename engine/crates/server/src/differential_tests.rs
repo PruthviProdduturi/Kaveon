@@ -375,6 +375,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_filter_lambda",
+        "SELECT MAP_FILTER(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), (key, value) -> value > 1) AS filtered FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,
