@@ -310,6 +310,23 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
             ))))
         }
         Expr::Function { name, args }
+            if (name.eq_ignore_ascii_case("EUCLIDEAN_DISTANCE")
+                || name.eq_ignore_ascii_case("DOT_PRODUCT"))
+                && args.len() == 2 =>
+        {
+            let (DataType::List(_) | DataType::LargeList(_)) =
+                expression_data_type(&args[0], schema)?
+            else {
+                return None;
+            };
+            let (DataType::List(_) | DataType::LargeList(_)) =
+                expression_data_type(&args[1], schema)?
+            else {
+                return None;
+            };
+            Some(DataType::Float64)
+        }
+        Expr::Function { name, args }
             if name.eq_ignore_ascii_case("COMBINATIONS") && args.len() == 2 =>
         {
             let (DataType::List(field) | DataType::LargeList(field)) =

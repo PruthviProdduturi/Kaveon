@@ -4488,6 +4488,22 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Return consecutive array n-grams",
         ),
         (
+            "euclidean_distance",
+            "double",
+            "[array(double), array(double)]",
+            "scalar",
+            true,
+            "Calculate Euclidean distance between vectors",
+        ),
+        (
+            "dot_product",
+            "double",
+            "[array(double), array(double)]",
+            "scalar",
+            true,
+            "Calculate the dot product of vectors",
+        ),
+        (
             "combinations",
             "array(array)",
             "[array, bigint]",
@@ -24294,6 +24310,8 @@ mod streamed_root_tests {
         assert!(rows.iter().any(|row| row[0] == "array_average"));
         assert!(rows.iter().any(|row| row[0] == "array_cum_sum"));
         assert!(rows.iter().any(|row| row[0] == "array_ngrams"));
+        assert!(rows.iter().any(|row| row[0] == "euclidean_distance"));
+        assert!(rows.iter().any(|row| row[0] == "dot_product"));
         assert!(rows.iter().any(|row| row[0] == "bitwise_and"));
         let from_base = rows
             .iter()
