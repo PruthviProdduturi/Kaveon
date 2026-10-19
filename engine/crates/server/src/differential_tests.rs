@@ -2953,6 +2953,39 @@ fn distributed_partitioned_lag_ignore_nulls_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Partitioned LAG/LEAD must preserve literal defaults and NULL treatment
+/// after the hash exchange.  The explicit ROWS frame is accepted as part of
+/// the window specification; offset functions retain their Trino positional
+/// semantics while remaining partition-local.
+#[test]
+fn distributed_partitioned_lag_lead_defaults_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-partitioned-lag-lead-defaults-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, user_id, actions, LAG(industry, 2, 'missing') OVER (PARTITION BY region ORDER BY actions, industry NULLS LAST, user_id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS previous_industry, LEAD(industry, 2, 'missing') IGNORE NULLS OVER (PARTITION BY region ORDER BY actions, industry NULLS LAST, user_id ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) AS next_industry FROM events WHERE event_date = '2026-07-04' ORDER BY region, actions, industry NULLS LAST, user_id LIMIT 18";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-partitioned-lag-lead-defaults", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 18);
+    assert!(actual.iter().any(|row| row.contains("missing")));
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Partitioned value windows must keep their frame-local value semantics after
 /// the hash exchange.  Exercise all three Trino value-window functions with
 /// explicit ROWS frames, NULLS ordering, and IGNORE NULLS; the global
