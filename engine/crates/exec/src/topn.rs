@@ -683,7 +683,22 @@ fn try_integer_multi_batch_top_n(
         return Ok(None);
     }
 
-    let mut cursors = vec![0usize; keys.len()];
+    // Match the single-key merge's logarithmic head selection. Keep the
+    // source batch order for equal keys, as the previous linear scan did.
+    let compare_heads = |left: &(usize, usize), right: &(usize, usize)| {
+        compare(*left, *right).then_with(|| left.0.cmp(&right.0))
+    };
+    let mut heap = keys
+        .iter()
+        .enumerate()
+        .filter_map(|(batch, columns)| {
+            columns
+                .first()
+                .is_some_and(|values| !values.is_empty())
+                .then_some((batch, 0))
+        })
+        .collect::<Vec<_>>();
+    heap_build(&mut heap, compare_heads);
     let mut references = Vec::with_capacity(
         limit.min(
             keys.iter()
@@ -692,17 +707,14 @@ fn try_integer_multi_batch_top_n(
         ),
     );
     while references.len() < limit {
-        let next = keys
-            .iter()
-            .enumerate()
-            .filter_map(|(batch, columns)| {
-                let row = cursors[batch];
-                (columns.first().is_some_and(|values| row < values.len())).then_some((batch, row))
-            })
-            .min_by(|left, right| compare(*left, *right));
-        let Some(next) = next else { break };
-        cursors[next.0] += 1;
-        references.push(next);
+        let Some((batch, row)) = heap_pop(&mut heap, compare_heads) else {
+            break;
+        };
+        references.push((batch, row));
+        let next_row = row + 1;
+        if next_row < keys[batch][0].len() {
+            heap_push(&mut heap, (batch, next_row), compare_heads);
+        }
     }
     Ok(Some(take_batch_references(schema, batches, &references)?))
 }
@@ -2014,6 +2026,128 @@ mod tests {
                 Some("a7-low"),
                 Some("a7-high")
             ]
+        );
+    }
+
+    #[test]
+    fn multi_integer_heap_merge_matches_arrow_across_many_workers() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("payload", DataType::Utf8, false),
+        ]));
+        let workers = (0..33)
+            .map(|worker| {
+                let ids = (0..worker % 9 + 1)
+                    .map(|row| worker * 10 + row)
+                    .collect::<Vec<_>>();
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int64Array::from(
+                            ids.iter()
+                                .map(|id| match id % 5 {
+                                    0 => i64::MIN,
+                                    1 => i64::MAX,
+                                    _ => id % 5 - 3,
+                                })
+                                .collect::<Vec<_>>(),
+                        )),
+                        Arc::new(UInt64Array::from(
+                            ids.iter()
+                                .map(|id| u64::MAX - *id as u64)
+                                .collect::<Vec<_>>(),
+                        )),
+                        Arc::new(StringArray::from(
+                            ids.iter()
+                                .map(|id| format!("payload-{id}"))
+                                .collect::<Vec<_>>(),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let all = concat_batches(&schema, &workers).unwrap();
+        for ascending in [false, true] {
+            for sequence_ascending in [false, true] {
+                let ordering = vec![
+                    SortExpr::new(Expr::Column("score".into()), ascending),
+                    SortExpr::new(Expr::Column("sequence".into()), sequence_ascending),
+                ];
+                let arrow_sort = |batch: &RecordBatch, limit| {
+                    let columns = [0, 1]
+                        .into_iter()
+                        .zip(&ordering)
+                        .map(|(column, expr)| SortColumn {
+                            values: batch.column(column).clone(),
+                            options: Some(SortOptions {
+                                descending: !expr.ascending,
+                                nulls_first: false,
+                            }),
+                        })
+                        .collect::<Vec<_>>();
+                    let indices = lexsort_to_indices(&columns, limit).unwrap();
+                    RecordBatch::try_new(
+                        schema.clone(),
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|column| take(column.as_ref(), &indices, None).unwrap())
+                            .collect(),
+                    )
+                    .unwrap()
+                };
+                let sorted = workers
+                    .iter()
+                    .map(|batch| arrow_sort(batch, None))
+                    .collect::<Vec<_>>();
+                for limit in [1, 17, all.num_rows(), all.num_rows() + 10] {
+                    // Call the specialization directly so a fallback cannot
+                    // hide a failure to merge sorted typed candidates.
+                    let actual = try_integer_multi_batch_top_n(&schema, &sorted, &ordering, limit)
+                        .unwrap()
+                        .expect("typed sorted candidates");
+                    assert_eq!(actual, arrow_sort(&all, Some(limit)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multi_integer_heap_merge_preserves_source_order_for_equal_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let workers = (0..17)
+            .map(|worker| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int64Array::from(vec![9; 3])),
+                        Arc::new(UInt64Array::from(vec![u64::MAX; 3])),
+                        Arc::new(Int64Array::from(vec![
+                            worker * 3,
+                            worker * 3 + 1,
+                            worker * 3 + 2,
+                        ])),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let ordering = vec![
+            SortExpr::new(Expr::Column("score".into()), false),
+            SortExpr::new(Expr::Column("sequence".into()), true),
+        ];
+        let result = merge_top_n(&schema, &workers, &ordering, 37)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.column(2).as_ref(),
+            &Int64Array::from_iter_values(0..37)
         );
     }
 
