@@ -584,4 +584,25 @@ mod tests {
         bad[9] = 3;
         assert!(decode(&bad).is_err());
     }
+
+    #[test]
+    fn compact_decoder_rejects_malformed_typed_distinct_payloads() {
+        let good = encode(&[AggregateState::CountDistinct(DistinctSet::from([
+            AggregateValue::Int64(3),
+        ]))])
+        .unwrap();
+
+        // The payload starts after MAGIC, state count, tag and payload length:
+        // count (8), item length (8), then the typed value tag. Replacing the
+        // tag with NULL while retaining the integer bytes must fail closed.
+        let mut invalid_value = good.clone();
+        invalid_value[29] = VALUE_NULL;
+        assert!(decode(&invalid_value).is_err());
+
+        // A declared payload larger than the remaining frame must never cause
+        // the decoder to allocate or read past the compact-state boundary.
+        let mut truncated = good;
+        truncated[9..13].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode(&truncated).is_err());
+    }
 }
