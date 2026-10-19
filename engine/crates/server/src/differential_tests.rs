@@ -5484,6 +5484,35 @@ fn distributed_float32_join_runtime_filter_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// TIME joins use their native Arrow integer representation for the bounded
+/// runtime filter. The unit is part of the type check, so a millisecond value
+/// cannot be reinterpreted as a nanosecond value by a distributed fragment.
+#[test]
+fn distributed_time_join_runtime_filter_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-time-runtime-filter-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT l.at, r.label FROM (VALUES (TIME '01:00:00'), (TIME '02:00:00'), (TIME '03:00:00')) AS l(at) JOIN (VALUES (TIME '01:00:00', 'first'), (TIME '03:00:00', 'third')) AS r(at, label) ON l.at = r.at ORDER BY l.at, r.label";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-time-runtime-filter", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// An identity projection on the probe side must not hide an exact build-key
 /// runtime predicate from the underlying scan. The local/distributed
 /// differential keeps the rewrite scoped to direct columns; computed

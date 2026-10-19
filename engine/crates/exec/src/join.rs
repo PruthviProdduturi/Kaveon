@@ -268,6 +268,52 @@ impl BuildKeyFilter {
                 .into());
         }
         if let (
+            JoinIndex::Time32 {
+                first_rows,
+                duplicate_rows,
+                data_type,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let column = batch.column(*left);
+            if column.data_type() != data_type {
+                return Err(exec_err("runtime filter key type changed after planning"));
+            }
+            let values = time32_values(column)?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    column.is_valid(row)
+                        && (first_rows.contains_key(&values[row])
+                            || duplicate_rows.contains_key(&values[row]))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
+            JoinIndex::Time64 {
+                first_rows,
+                duplicate_rows,
+                data_type,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let column = batch.column(*left);
+            if column.data_type() != data_type {
+                return Err(exec_err("runtime filter key type changed after planning"));
+            }
+            let values = time64_values(column)?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    column.is_valid(row)
+                        && (first_rows.contains_key(&values[row])
+                            || duplicate_rows.contains_key(&values[row]))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
             JoinIndex::Timestamp {
                 first_rows,
                 data_type,
@@ -400,6 +446,18 @@ impl BuildKeyFilter {
                     .collect(),
             ),
             JoinIndex::Date64 { first_rows, .. } => Some(
+                first_rows
+                    .keys()
+                    .map(|value| ScalarValue::Int64(*value))
+                    .collect(),
+            ),
+            JoinIndex::Time32 { first_rows, .. } => Some(
+                first_rows
+                    .keys()
+                    .map(|value| ScalarValue::Int64(i64::from(*value)))
+                    .collect(),
+            ),
+            JoinIndex::Time64 { first_rows, .. } => Some(
                 first_rows
                     .keys()
                     .map(|value| ScalarValue::Int64(*value))
@@ -1291,6 +1349,16 @@ enum JoinIndex {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
     },
+    Time32 {
+        first_rows: AHashMap<i32, usize>,
+        duplicate_rows: AHashMap<i32, Vec<usize>>,
+        data_type: DataType,
+    },
+    Time64 {
+        first_rows: AHashMap<i64, usize>,
+        duplicate_rows: AHashMap<i64, Vec<usize>>,
+        data_type: DataType,
+    },
     Timestamp {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
@@ -1553,6 +1621,62 @@ impl JoinIndex {
             });
         }
         if let [(.., index)] = keys
+            && matches!(right.column(*index).data_type(), DataType::Time32(_))
+        {
+            let column = right.column(*index);
+            let values = time32_values(column)?;
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<i32, Vec<usize>> = AHashMap::new();
+            for (row, key) in values.iter().copied().enumerate() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if column.is_valid(row) {
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Time32 {
+                first_rows,
+                duplicate_rows,
+                data_type: column.data_type().clone(),
+            });
+        }
+        if let [(.., index)] = keys
+            && matches!(right.column(*index).data_type(), DataType::Time64(_))
+        {
+            let column = right.column(*index);
+            let values = time64_values(column)?;
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<i64, Vec<usize>> = AHashMap::new();
+            for (row, key) in values.iter().copied().enumerate() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if column.is_valid(row) {
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Time64 {
+                first_rows,
+                duplicate_rows,
+                data_type: column.data_type().clone(),
+            });
+        }
+        if let [(.., index)] = keys
             && right.column(*index).data_type() == &DataType::Int64
         {
             let values = right
@@ -1787,6 +1911,46 @@ impl JoinIndex {
                     }
                 }
             }
+            Self::Time32 {
+                first_rows,
+                duplicate_rows,
+                data_type,
+            } => {
+                let column = left.column(keys[0].0);
+                if column.data_type() != data_type {
+                    return Err(exec_err("join key type changed after planning"));
+                }
+                let values = time32_values(column)?;
+                if column.is_null(row) {
+                    None
+                } else {
+                    let key = values[row];
+                    duplicate_rows
+                        .get(&key)
+                        .map(Vec::as_slice)
+                        .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                }
+            }
+            Self::Time64 {
+                first_rows,
+                duplicate_rows,
+                data_type,
+            } => {
+                let column = left.column(keys[0].0);
+                if column.data_type() != data_type {
+                    return Err(exec_err("join key type changed after planning"));
+                }
+                let values = time64_values(column)?;
+                if column.is_null(row) {
+                    None
+                } else {
+                    let key = values[row];
+                    duplicate_rows
+                        .get(&key)
+                        .map(Vec::as_slice)
+                        .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                }
+            }
             Self::Timestamp {
                 first_rows,
                 duplicate_rows,
@@ -1906,6 +2070,44 @@ fn timestamp_values(column: &ArrayRef) -> Result<&[i64]> {
         _ => None,
     }
     .ok_or_else(|| exec_err("expected a timestamp join key"))
+}
+
+/// Borrow native TIME values without converting them to an intermediate
+/// array. Arrow stores TIME32 as i32 and TIME64 as i64, while preserving the
+/// unit in the data type checked by the caller.
+fn time32_values(column: &ArrayRef) -> Result<&[i32]> {
+    use arrow::array::{Time32MillisecondArray, Time32SecondArray};
+    let values = match column.data_type() {
+        DataType::Time32(TimeUnit::Second) => column
+            .as_any()
+            .downcast_ref::<Time32SecondArray>()
+            .map(|array| array.values().as_ref()),
+        DataType::Time32(TimeUnit::Millisecond) => column
+            .as_any()
+            .downcast_ref::<Time32MillisecondArray>()
+            .map(|array| array.values().as_ref()),
+        _ => None,
+    };
+    values.ok_or_else(|| exec_err("expected a TIME32 join key"))
+}
+
+/// Borrow native TIME64 values without converting them to an intermediate
+/// array. The data type check prevents mixing microsecond and nanosecond
+/// values, whose integer magnitudes have different SQL meanings.
+fn time64_values(column: &ArrayRef) -> Result<&[i64]> {
+    use arrow::array::{Time64MicrosecondArray, Time64NanosecondArray};
+    let values = match column.data_type() {
+        DataType::Time64(TimeUnit::Microsecond) => column
+            .as_any()
+            .downcast_ref::<Time64MicrosecondArray>()
+            .map(|array| array.values().as_ref()),
+        DataType::Time64(TimeUnit::Nanosecond) => column
+            .as_any()
+            .downcast_ref::<Time64NanosecondArray>()
+            .map(|array| array.values().as_ref()),
+        _ => None,
+    };
+    values.ok_or_else(|| exec_err("expected a TIME64 join key"))
 }
 
 fn row_key(
@@ -3401,6 +3603,69 @@ mod tests {
                     assert!(filter.matches(&changed, 0).is_err());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn time_runtime_filter_uses_native_typed_index_and_exact_storage_predicate() {
+        let cases = [
+            (
+                DataType::Time32(TimeUnit::Millisecond),
+                Arc::new(Time32MillisecondArray::from(vec![
+                    Some(1_000),
+                    Some(2_000),
+                    Some(2_000),
+                    None,
+                ])) as ArrayRef,
+                Arc::new(Time32MillisecondArray::from(vec![
+                    Some(0),
+                    Some(1_000),
+                    Some(2_000),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                DataType::Time64(TimeUnit::Nanosecond),
+                Arc::new(Time64NanosecondArray::from(vec![
+                    Some(1_000_000),
+                    Some(2_000_000),
+                    Some(2_000_000),
+                    None,
+                ])) as ArrayRef,
+                Arc::new(Time64NanosecondArray::from(vec![
+                    Some(0),
+                    Some(1_000_000),
+                    Some(2_000_000),
+                    None,
+                ])) as ArrayRef,
+            ),
+        ];
+        for (data_type, build_values, probe_values) in cases {
+            let schema = Arc::new(Schema::new(vec![Field::new("at", data_type.clone(), true)]));
+            let build = RecordBatch::try_new(Arc::clone(&schema), vec![build_values]).unwrap();
+            let probe = RecordBatch::try_new(Arc::clone(&schema), vec![probe_values]).unwrap();
+            let built =
+                BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+            assert!(matches!(
+                built.index,
+                Some(JoinIndex::Time32 { .. } | JoinIndex::Time64 { .. })
+            ));
+            let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+            let StoragePredicate::In { column, values } =
+                filter.storage_predicate(&schema).unwrap()
+            else {
+                panic!("expected native TIME IN predicate");
+            };
+            assert_eq!(column, "at");
+            assert_eq!(values.len(), 2);
+            assert_eq!(
+                filter
+                    .filter_batch(&probe)
+                    .unwrap()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                vec![Some(false), Some(true), Some(true), Some(false)]
+            );
         }
     }
 
