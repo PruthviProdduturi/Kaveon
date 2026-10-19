@@ -3735,6 +3735,35 @@ fn distributed_unnest_nested_typed_null_array_is_empty_with_schema() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A typed NULL MAP cast is normalized to MAP_ENTRIES for row-producing
+/// UNNEST, preserving key/value output schema while producing no rows.
+#[test]
+fn distributed_unnest_typed_null_map_is_empty_with_schema() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-unnest-null-map-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT key, value FROM UNNEST(CAST(NULL AS MAP(VARCHAR, BIGINT))) AS t(key, value)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-unnest-null-map", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert!(expected.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert!(actual.is_empty());
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A correlated array must be evaluated for each left row on the worker, not
 /// once as a coordinator-side constant relation.
 #[test]
