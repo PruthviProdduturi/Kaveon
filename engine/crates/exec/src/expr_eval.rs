@@ -225,6 +225,16 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_array_filter(&args[0], lambda_args, batch);
             }
+            if name.eq_ignore_ascii_case("TRANSFORM")
+                && args.len() == 2
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[1]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_array_transform(&args[0], lambda_args, batch);
+            }
             if let Some(result) = eval_function_through_dictionary(name, args, batch)? {
                 return Ok(result);
             }
@@ -3042,6 +3052,102 @@ fn eval_array_filter(
     }
     let values = if selected.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    Ok(Arc::new(ListArray::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
+/// Evaluate Trino's `TRANSFORM(array, lambda)` higher-order function. Every
+/// input element is passed through the scalar lambda, including typed NULL
+/// elements, and the output array preserves the lambda result type.
+fn eval_array_transform(
+    array_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 2 {
+        return Err(KaveonError::Execution(
+            "TRANSFORM lambda must have exactly one parameter".into(),
+        ));
+    }
+    let name = match &lambda_args[0] {
+        Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => name.clone(),
+        _ => {
+            return Err(KaveonError::Execution(
+                "TRANSFORM lambda parameter must be an identifier".into(),
+            ));
+        }
+    };
+    let body = &lambda_args[1];
+    let array = normalize_large_list(&decode_dictionary(&evaluate(array_expr, outer_batch)?)?)?;
+    let list = array
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution("TRANSFORM requires an ARRAY/List value".into()))?;
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![0_i32];
+    let mut valid = Vec::with_capacity(list.len());
+    let mut result_type = None;
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(
+                i32::try_from(selected.len()).map_err(|_| {
+                    KaveonError::Execution("TRANSFORM result offset overflow".into())
+                })?,
+            );
+            continue;
+        }
+        valid.push(true);
+        let inner = list.value(row);
+        for index in 0..inner.len() {
+            let value = if inner.is_null(index) {
+                arrow::array::new_null_array(&list.value_type(), 1)
+            } else {
+                inner.slice(index, 1)
+            };
+            let mut fields = vec![Field::new(&name, value.data_type().clone(), true)];
+            let mut columns = vec![value];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if field.name() == &name {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let pair_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            let mapped = decode_dictionary(&evaluate(body, &pair_batch)?)?;
+            if mapped.len() != 1 {
+                return Err(KaveonError::Execution(
+                    "TRANSFORM lambda must return one value per element".into(),
+                ));
+            }
+            result_type.get_or_insert_with(|| mapped.data_type().clone());
+            selected.push(mapped);
+        }
+        offsets.push(
+            i32::try_from(selected.len())
+                .map_err(|_| KaveonError::Execution("TRANSFORM result offset overflow".into()))?,
+        );
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(result_type.as_ref().unwrap_or(&DataType::Null))
     } else {
         let chunks = selected
             .iter()
@@ -16131,6 +16237,48 @@ mod tests {
         let inner = list.value(0);
         let values = inner.as_primitive::<Int64Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2), Some(3)]);
+    }
+
+    #[test]
+    fn transform_applies_one_parameter_lambda_and_preserves_nulls() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "TRANSFORM".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(1)),
+                            Expr::Literal(ScalarValue::Null),
+                            Expr::Literal(ScalarValue::Int64(3)),
+                        ],
+                    },
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("value".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("value".into())),
+                                op: BinaryOp::Plus,
+                                right: Box::new(Expr::Literal(ScalarValue::Int64(1))),
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_primitive::<Int64Type>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(2), None, Some(4)]
+        );
     }
 
     #[test]

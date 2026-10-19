@@ -365,6 +365,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_transform_lambda",
+        "SELECT TRANSFORM(ARRAY[1, NULL, 3], x -> x + 1) AS transformed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,
