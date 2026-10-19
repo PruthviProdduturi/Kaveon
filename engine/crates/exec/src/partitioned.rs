@@ -3775,7 +3775,7 @@ mod tests {
 
     #[test]
     fn runtime_join_filter_uses_typed_unsigned_and_date_indexes() {
-        use arrow::array::{Date32Array, UInt64Array};
+        use arrow::array::{Date32Array, Date64Array, UInt64Array};
 
         for (build, probe) in [
             (
@@ -3788,6 +3788,12 @@ mod tests {
                 Arc::new(Date32Array::from(vec![Some(2), Some(4), Some(4)]))
                     as Arc<dyn arrow::array::Array>,
                 Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(4), None]))
+                    as Arc<dyn arrow::array::Array>,
+            ),
+            (
+                Arc::new(Date64Array::from(vec![Some(2), Some(4), Some(4)]))
+                    as Arc<dyn arrow::array::Array>,
+                Arc::new(Date64Array::from(vec![Some(1), Some(2), Some(4), None]))
                     as Arc<dyn arrow::array::Array>,
             ),
             (
