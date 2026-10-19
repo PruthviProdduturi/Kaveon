@@ -4263,6 +4263,13 @@ fn custom_cast_target(name: &str) -> Result<CastTarget> {
         "BIGINT" | "INT8SIGNED" => Ok(CastTarget::Int64),
         "REAL" | "FLOAT" | "DOUBLE" | "DOUBLE PRECISION" => Ok(CastTarget::Float64),
         "VARCHAR" | "TEXT" | "STRING" => Ok(CastTarget::Utf8),
+        "DATE" => Ok(CastTarget::Date32),
+        "TIMESTAMP" => Ok(CastTarget::TimestampMicros {
+            with_timezone: false,
+        }),
+        "TIMESTAMP WITH TIME ZONE" | "TIMESTAMPTZ" => Ok(CastTarget::TimestampMicros {
+            with_timezone: true,
+        }),
         other => Err(sql_err(format!(
             "unsupported MAP cast member type: {other}"
         ))),
