@@ -91,6 +91,34 @@ class EngineLabQueryTests(unittest.IsolatedAsyncioTestCase):
             "SELECT * FROM kavedb.silver.orders LIMIT 1000",
             "kavedb", "analyst@example.com", "Analyst", "silver")
 
+    async def test_bare_star_cap_keeps_tsql_valid_for_registered_sql_sources(self):
+        """The interactive cap must not send LIMIT syntax to T-SQL sources.
+
+        The pool applies the bound in a dialect-aware way: SQL Server uses the
+        driver's fetch bound, while PostgreSQL/MySQL use their own wrapper.
+        The Engine path above intentionally keeps its LIMIT statement.
+        """
+        class ConnectedRequest:
+            async def is_disconnected(self):
+                return False
+
+        ctx = UserContext("analyst@example.com", "Analyst")
+        body = LabQueryBody(query="SELECT * FROM dbo.orders", database="warehouse")
+        with patch("routers.sql._engine_source_for_catalog", return_value=None), \
+             patch.object(lab.sql_execute_limiter, "check"), \
+             patch.object(lab.pool, "execute_query_cancellable", return_value={
+                 "columns": ["order_id"], "rows": [[1]], "row_count": 1,
+             }) as execute, \
+             patch.object(lab.history_svc, "create_history"):
+            response = await lab.run_query(ConnectedRequest(), body, ctx)
+
+        self.assertEqual(response["rows"], [[1]])
+        execute.assert_called_once_with(
+            "SELECT * FROM dbo.orders", "warehouse",
+            cancel_event=execute.call_args.kwargs["cancel_event"],
+            max_rows=lab.LAB_DEFAULT_ROW_CAP,
+        )
+
 
 class DatasetPreviewResolutionTests(unittest.IsolatedAsyncioTestCase):
     """The dataset page's preview names a catalog, not a source id, so the
