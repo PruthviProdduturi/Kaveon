@@ -183,6 +183,96 @@ reference-only record -- has a document body started being inlined into the snap
     println!();
 }
 
+/// What the eviction buys, measured the same way the ceiling was.
+///
+/// The bulk kinds move to one content-addressed object each and the snapshot
+/// keeps only what it still has to resolve: the artifacts, and the references
+/// that make deletion restrict. If the snapshot does not get dramatically
+/// smaller here, the change is not worth making.
+#[test]
+fn evicting_the_bulk_kinds_moves_the_ceiling() {
+    use crate::product_manifest::{merge_product_records, partition_product_records};
+
+    const QUERY_HISTORY_PER_OWNER: usize = 800;
+    const CHAT_MESSAGES_PER_OWNER: usize = 900;
+    const RECENTS_PER_OWNER: usize = 20;
+
+    let owner_records = |owner: usize| {
+        let mut records = Vec::new();
+        for (kind, count) in [
+            (ProductRecordKind::QueryHistory, QUERY_HISTORY_PER_OWNER),
+            (ProductRecordKind::ChatMessage, CHAT_MESSAGES_PER_OWNER),
+            (ProductRecordKind::UserRecent, RECENTS_PER_OWNER),
+        ] {
+            for n in 0..count {
+                records.push(record(kind, owner * 100_000 + n));
+            }
+        }
+        // The artifacts an owner actually curates, which stay inline.
+        for (kind, count) in [
+            (ProductRecordKind::Dataset, 3),
+            (ProductRecordKind::Chart, 12),
+            (ProductRecordKind::Dashboard, 3),
+            (ProductRecordKind::SavedQuery, 6),
+        ] {
+            for n in 0..count {
+                records.push(record(kind, owner * 100_000 + 90_000 + n));
+            }
+        }
+        records
+    };
+
+    let build = |owners: usize| {
+        let mut records = Vec::new();
+        for owner in 0..owners {
+            records.extend(owner_records(owner));
+        }
+        snapshot_with(records.into_iter())
+    };
+
+    let whole = |owners: usize| encoded_len(&build(owners));
+    let split = |owners: usize| {
+        let snapshot = build(owners);
+        let (inline, _evicted) = partition_product_records(&snapshot.product_records);
+        encoded_len(&snapshot_with(inline.into_iter()))
+    };
+
+    let empty = encoded_len(&snapshot_with(std::iter::empty()));
+    let before_per_owner = (whole(3) - whole(1)) as f64 / 2.0;
+    let after_per_owner = (split(3) - split(1)) as f64 / 2.0;
+
+    let owners_before = ((MAX_SNAPSHOT_BYTES - empty) as f64 / before_per_owner) as u64;
+    let owners_after = ((MAX_SNAPSHOT_BYTES - empty) as f64 / after_per_owner) as u64;
+
+    println!();
+    println!("bytes an owner costs the snapshot");
+    println!("  inline today      {before_per_owner:.0}");
+    println!("  after eviction    {after_per_owner:.0}");
+    println!("owners at the ceiling");
+    println!("  inline today      {owners_before}");
+    println!("  after eviction    {owners_after}");
+    println!(
+        "  improvement       {:.0}x",
+        owners_after as f64 / owners_before as f64
+    );
+    println!();
+
+    // The split has to be lossless, not merely smaller.
+    let snapshot = build(2);
+    let (inline, evicted) = partition_product_records(&snapshot.product_records);
+    let merged = merge_product_records(inline, evicted).expect("the split rejoins");
+    assert_eq!(
+        merged, snapshot.product_records,
+        "a snapshot split and rejoined must hold exactly what it held before"
+    );
+
+    assert!(
+        owners_after > owners_before * 10,
+        "eviction moved the ceiling from {owners_before} owners to {owners_after}, which is \
+not enough to justify changing the published format"
+    );
+}
+
 /// The number that actually decides the architecture: how many people can use
 /// this deployment before writes stop.
 ///
