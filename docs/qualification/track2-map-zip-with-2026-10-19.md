@@ -8,8 +8,9 @@ The lambda is serialized in the logical plan and evaluated with typed key and
 value bindings. Keys are emitted in left-map order, followed by keys present
 only in the right map. A missing value is a typed NULL; a NULL input map
 produces a NULL output map for that row. The result map preserves row
-boundaries and rejects mismatched key types, duplicate lambda parameters, and
-non-scalar lambda results.
+boundaries and infers the lambda result type even for empty/all-NULL maps. It
+rejects mismatched key types, duplicate lambda parameters, and non-scalar
+lambda results.
 
 This is a bounded scalar higher-order function. It does not claim complete
 Trino map-function coverage or external/cloud qualification.
