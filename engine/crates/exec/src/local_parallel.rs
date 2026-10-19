@@ -1328,6 +1328,11 @@ fn run_pump(
         return Err(error("parallel source schema differs between sources"));
     }
     let account = pool.operator("parallel-source")?;
+    // A source can reach the admission boundary just after all workers have
+    // answered a pressure request but before their queued batches have been
+    // merged into spillable groups.  Give that in-flight work a bounded
+    // opportunity to make progress before declaring the refusal final.
+    let mut no_relief_retries = 0u8;
     loop {
         // What the threads had given up before this attempt: a refusal
         // that predates a release is not the last word.
@@ -1338,11 +1343,17 @@ fn run_pump(
             Err(KaveonError::MemoryLimit(message)) => {
                 match pressure.request(since, &account, stopped)? {
                     Relief::Released => continue,
+                    Relief::Nothing if no_relief_retries < 100 => {
+                        no_relief_retries = no_relief_retries.saturating_add(1);
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
                     Relief::Nothing => return Err(KaveonError::MemoryLimit(message)),
                 }
             }
             Err(error) => return Err(error),
         };
+        no_relief_retries = 0;
         let batch = reserved.batch;
         if batch.schema() != *schema {
             return Err(error(
