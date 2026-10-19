@@ -6970,3 +6970,76 @@ fn distributed_array_repeat_decimal_matches_local() {
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Multi-key integer candidates must stay exact when the final TopN merges
+/// many worker streams, including workers with no assigned files.
+#[test]
+fn distributed_global_topn_multi_integer_heap_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-global-topn-multi-integer-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("score", DataType::Int64, false),
+        Field::new("sequence", DataType::UInt64, false),
+        Field::new("payload", DataType::Utf8, false),
+    ]));
+    let rows = 33 * 16;
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from_iter_values((0..rows).map(|id| {
+                match id % 5 {
+                    0 => i64::MIN,
+                    1 => i64::MAX,
+                    _ => id % 5 - 3,
+                }
+            }))),
+            Arc::new(UInt64Array::from_iter_values(
+                (0..rows).map(|id| u64::MAX - id as u64),
+            )),
+            Arc::new(StringArray::from(
+                (0..rows)
+                    .map(|id| format!("payload-{id}"))
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: directory.clone(),
+        },
+    )
+    .with_schema("events");
+    let meta = write_directory(&directory, "ranked", &batch, 33);
+    catalog.register_table("events", meta).unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    for score_direction in ["ASC", "DESC"] {
+        for sequence_direction in ["ASC", "DESC"] {
+            let statement = format!(
+                "SELECT score, sequence, payload FROM ranked ORDER BY score {score_direction}, sequence {sequence_direction} LIMIT 73 OFFSET 19"
+            );
+            let plan = bound_plan(&statement, &manager);
+            let pool = QueryMemoryPool::new("global-topn-multi-integer", 64 << 20).unwrap();
+            let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+            let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+            drop(local);
+            assert_eq!(expected.len(), 73);
+            for workers in [3, 17, 40] {
+                let actual =
+                    execute_distributed(&statement, &plan, &manager, workers, &pool).unwrap();
+                assert_eq!(
+                    canonical_rows(&actual, true),
+                    expected,
+                    "{statement}, workers={workers}"
+                );
+                assert_eq!(pool.snapshot().current_bytes, 0);
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
