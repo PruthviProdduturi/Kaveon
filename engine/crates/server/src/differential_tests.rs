@@ -2587,6 +2587,34 @@ fn distributed_json_array_contains_non_array_is_false() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Explicit JSON_EXISTS ON ERROR actions distinguish malformed documents
+/// from a valid document whose requested path is absent on every worker.
+#[test]
+fn distributed_json_exists_error_actions_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-exists-error-actions-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_EXISTS('not-json', '$.missing' TRUE ON ERROR) AS true_error, JSON_EXISTS('not-json', '$.missing' UNKNOWN ON ERROR) AS unknown_error, JSON_EXISTS('{\"missing\":1}', '$.absent' TRUE ON ERROR) AS missing_path FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-exists-error-actions", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["true\u{1f}NULL\u{1f}false"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// JSON_QUERY keeps array-range selection and typed JSON materialization
 /// identical through local planning and the three-worker fragment path.
 #[test]
