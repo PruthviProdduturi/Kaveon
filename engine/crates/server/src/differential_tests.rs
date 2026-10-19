@@ -5863,6 +5863,40 @@ fn distributed_partitioned_window_ntile_ties_and_nulls_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Percent-rank and cumulative-distribution are peer-aware window functions:
+/// ties share a rank, while CUME_DIST advances at the end of the peer group.
+/// Keep the nullable ordering column and repeated values in the partitioned
+/// sort so local and three-worker execution exercise the same NULL and peer
+/// boundaries as Trino. The final ordering is explicit for comparison only;
+/// unpartitioned global window exchange remains centralized.
+#[test]
+fn distributed_partitioned_window_percent_rank_and_cume_dist_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-percent-cume-ties-nulls-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, industry, actions, PERCENT_RANK() OVER (PARTITION BY region ORDER BY industry NULLS FIRST, actions DESC) AS percent_rank, CUME_DIST() OVER (PARTITION BY region ORDER BY industry NULLS FIRST, actions DESC) AS cume_dist FROM events ORDER BY region, industry NULLS FIRST, actions DESC, country, user_id LIMIT 48";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-window-percent-cume-ties-nulls", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Window expressions with different partition keys must remain gathered at
 /// one final stage.  A single hash exchange cannot make both `region` and
 /// `country` complete at the same worker, so compare the conservative
