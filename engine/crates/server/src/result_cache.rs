@@ -398,6 +398,11 @@ impl ResultCache {
             Self::remove(&mut inner, &oldest);
             self.evictions.fetch_add(1, Ordering::Relaxed);
         }
+        // If the cache was restored with an inflated byte counter, removing
+        // its last entry repairs the empty-cache invariant before admission.
+        if inner.entries.is_empty() && inner.order.is_empty() {
+            inner.bytes = 0;
+        }
         inner.tick += 1;
         let tick = inner.tick;
         inner.order.insert(tick, Arc::clone(&key));
