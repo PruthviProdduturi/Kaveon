@@ -68,47 +68,68 @@ pub enum Expr {
 /// Whether an expression reads a relation column. This is used by planners
 /// to distinguish constant table functions from input-bound lateral ones.
 pub fn expression_contains_column(expr: &Expr) -> bool {
+    expression_contains_column_scoped(expr, &[])
+}
+
+fn expression_contains_column_scoped(expr: &Expr, bound: &[String]) -> bool {
     match expr {
-        Expr::Column(_) => true,
+        Expr::Column(name) => !bound.iter().any(|bound| bound == name),
         Expr::Literal(_) | Expr::Star => false,
         Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
-            expression_contains_column(left) || expression_contains_column(right)
+            expression_contains_column_scoped(left, bound)
+                || expression_contains_column_scoped(right, bound)
         }
         Expr::IsNull(inner)
         | Expr::IsNotNull(inner)
         | Expr::Not(inner)
         | Expr::Cast { expr: inner, .. }
-        | Expr::Extract { expr: inner, .. } => expression_contains_column(inner),
-        // Comparator lambdas bind their parameter names inside the body. The
-        // bounded Engine closure path deliberately does not capture outer
-        // relation columns, so do not expose the bound names as scan inputs.
-        // Any attempted outer capture fails when the body is evaluated.
-        Expr::Function { name, .. } if name == "__KAVEON_LAMBDA" => false,
-        Expr::Function { args, .. } => args.iter().any(expression_contains_column),
-        Expr::Alias { expr, .. } => expression_contains_column(expr),
+        | Expr::Extract { expr: inner, .. } => expression_contains_column_scoped(inner, bound),
+        Expr::Function { name, args } if name == "__KAVEON_LAMBDA" => {
+            let mut lambda_bound = bound.to_vec();
+            for parameter in args.iter().take(2) {
+                if let Expr::Literal(ScalarValue::Utf8(name)) = parameter {
+                    lambda_bound.push(name.clone());
+                }
+            }
+            args.get(2)
+                .is_some_and(|body| expression_contains_column_scoped(body, &lambda_bound))
+        }
+        Expr::Function { args, .. } => args
+            .iter()
+            .any(|arg| expression_contains_column_scoped(arg, bound)),
+        Expr::Alias { expr, .. } => expression_contains_column_scoped(expr, bound),
         Expr::Case {
             operand,
             when_then,
             else_expr,
         } => {
-            operand.as_deref().is_some_and(expression_contains_column)
+            operand
+                .as_deref()
+                .is_some_and(|expr| expression_contains_column_scoped(expr, bound))
                 || when_then.iter().any(|(when, then)| {
-                    expression_contains_column(when) || expression_contains_column(then)
+                    expression_contains_column_scoped(when, bound)
+                        || expression_contains_column_scoped(then, bound)
                 })
-                || else_expr.as_deref().is_some_and(expression_contains_column)
+                || else_expr
+                    .as_deref()
+                    .is_some_and(|expr| expression_contains_column_scoped(expr, bound))
         }
         Expr::Like { expr, pattern, .. } => {
-            expression_contains_column(expr) || expression_contains_column(pattern)
+            expression_contains_column_scoped(expr, bound)
+                || expression_contains_column_scoped(pattern, bound)
         }
         Expr::Between {
             expr, low, high, ..
         } => {
-            expression_contains_column(expr)
-                || expression_contains_column(low)
-                || expression_contains_column(high)
+            expression_contains_column_scoped(expr, bound)
+                || expression_contains_column_scoped(low, bound)
+                || expression_contains_column_scoped(high, bound)
         }
         Expr::InList { expr, list, .. } => {
-            expression_contains_column(expr) || list.iter().any(expression_contains_column)
+            expression_contains_column_scoped(expr, bound)
+                || list
+                    .iter()
+                    .any(|item| expression_contains_column_scoped(item, bound))
         }
         Expr::WindowFunction {
             args,
@@ -116,11 +137,14 @@ pub fn expression_contains_column(expr: &Expr) -> bool {
             order_by,
             ..
         } => {
-            args.iter().any(expression_contains_column)
-                || partition_by.iter().any(expression_contains_column)
+            args.iter()
+                .any(|arg| expression_contains_column_scoped(arg, bound))
+                || partition_by
+                    .iter()
+                    .any(|expr| expression_contains_column_scoped(expr, bound))
                 || order_by
                     .iter()
-                    .any(|(expr, _, _)| expression_contains_column(expr))
+                    .any(|(expr, _, _)| expression_contains_column_scoped(expr, bound))
         }
     }
 }

@@ -377,13 +377,19 @@ fn projected_names(plan: &LogicalPlan) -> HashSet<String> {
 }
 
 fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
+    collect_columns_scoped(expression, columns, &[]);
+}
+
+fn collect_columns_scoped(expression: &Expr, columns: &mut HashSet<String>, bound: &[String]) {
     match expression {
         Expr::Column(name) => {
-            columns.insert(name.to_owned());
+            if !bound.iter().any(|bound| bound == name) {
+                columns.insert(name.to_owned());
+            }
         }
         Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
-            collect_columns(left, columns);
-            collect_columns(right, columns);
+            collect_columns_scoped(left, columns, bound);
+            collect_columns_scoped(right, columns, bound);
         }
         Expr::IsNull(expression)
         | Expr::IsNotNull(expression)
@@ -393,11 +399,21 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
         }
         | Expr::Cast {
             expr: expression, ..
-        } => collect_columns(expression, columns),
-        Expr::Function { name, .. } if name == "__KAVEON_LAMBDA" => {}
+        } => collect_columns_scoped(expression, columns, bound),
+        Expr::Function { name, args } if name == "__KAVEON_LAMBDA" => {
+            let mut lambda_bound = bound.to_vec();
+            for parameter in args.iter().take(2) {
+                if let Expr::Literal(ScalarValue::Utf8(name)) = parameter {
+                    lambda_bound.push(name.clone());
+                }
+            }
+            if let Some(body) = args.get(2) {
+                collect_columns_scoped(body, columns, &lambda_bound);
+            }
+        }
         Expr::Function { args, .. } => {
             for argument in args {
-                collect_columns(argument, columns);
+                collect_columns_scoped(argument, columns, bound);
             }
         }
         Expr::Case {
@@ -406,31 +422,31 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
             else_expr,
         } => {
             if let Some(op) = operand {
-                collect_columns(op, columns);
+                collect_columns_scoped(op, columns, bound);
             }
             for (when, then) in when_then {
-                collect_columns(when, columns);
-                collect_columns(then, columns);
+                collect_columns_scoped(when, columns, bound);
+                collect_columns_scoped(then, columns, bound);
             }
             if let Some(e) = else_expr {
-                collect_columns(e, columns);
+                collect_columns_scoped(e, columns, bound);
             }
         }
         Expr::Like { expr, pattern, .. } => {
-            collect_columns(expr, columns);
-            collect_columns(pattern, columns);
+            collect_columns_scoped(expr, columns, bound);
+            collect_columns_scoped(pattern, columns, bound);
         }
         Expr::Between {
             expr, low, high, ..
         } => {
-            collect_columns(expr, columns);
-            collect_columns(low, columns);
-            collect_columns(high, columns);
+            collect_columns_scoped(expr, columns, bound);
+            collect_columns_scoped(low, columns, bound);
+            collect_columns_scoped(high, columns, bound);
         }
         Expr::InList { expr, list, .. } => {
-            collect_columns(expr, columns);
+            collect_columns_scoped(expr, columns, bound);
             for item in list {
-                collect_columns(item, columns);
+                collect_columns_scoped(item, columns, bound);
             }
         }
         Expr::WindowFunction {
@@ -440,16 +456,16 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
             ..
         } => {
             for arg in args {
-                collect_columns(arg, columns);
+                collect_columns_scoped(arg, columns, bound);
             }
             for expr in partition_by {
-                collect_columns(expr, columns);
+                collect_columns_scoped(expr, columns, bound);
             }
             for (expr, _, _) in order_by {
-                collect_columns(expr, columns);
+                collect_columns_scoped(expr, columns, bound);
             }
         }
-        Expr::Extract { expr, .. } => collect_columns(expr, columns),
+        Expr::Extract { expr, .. } => collect_columns_scoped(expr, columns, bound),
         Expr::Literal(_) | Expr::Star => {}
     }
 }
