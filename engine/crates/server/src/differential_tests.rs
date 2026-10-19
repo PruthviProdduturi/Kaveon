@@ -6020,7 +6020,7 @@ fn distributed_timestamp_range_interval_second_matches_local() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let manager = events_catalog(&directory);
-    let statement = "SELECT event_date, SUM(actions) OVER (ORDER BY CAST(event_date AS TIMESTAMP) RANGE BETWEEN INTERVAL '86400' SECOND PRECEDING AND INTERVAL '86400' SECOND FOLLOWING) AS rolling_actions FROM events WHERE event_date BETWEEN DATE '2026-07-01' AND DATE '2026-07-10' ORDER BY event_date, user_id LIMIT 18";
+    let statement = "SELECT event_date, SUM(actions) OVER (ORDER BY CAST(event_date AS TIMESTAMP) RANGE BETWEEN INTERVAL '86400.500' SECOND PRECEDING AND INTERVAL '86400.500' SECOND FOLLOWING) AS rolling_actions FROM events WHERE event_date BETWEEN DATE '2026-07-01' AND DATE '2026-07-10' ORDER BY event_date, user_id LIMIT 18";
     let plan = bound_plan(statement, &manager);
     let pool =
         QueryMemoryPool::new("distributed-window-timestamp-range-interval", 256 << 20).unwrap();

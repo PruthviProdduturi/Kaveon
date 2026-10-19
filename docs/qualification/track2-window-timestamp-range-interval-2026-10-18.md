@@ -2,7 +2,7 @@
 
 Date: 2026-10-18
 
-Timestamp ordering now accepts fixed-unit `INTERVAL '<n>' SECOND` offsets in
+Timestamp ordering now accepts fixed-unit `INTERVAL '<n>' SECOND` offsets, including fractional seconds in
 `RANGE` window frames. The parser records the interval as a temporal bound,
 and the executor converts seconds to the physical Arrow timestamp precision
 (`SECOND`, `MILLISECOND`, `MICROSECOND`, or `NANOSECOND`) with checked
@@ -29,7 +29,7 @@ cargo test -p kaveon-server --bin kaveon-server distributed_timestamp_range_inte
 test result: ok. 1 passed; 0 failed
 ```
 
-The scope is intentionally bounded to integer `SECOND` intervals over
+The scope is intentionally bounded to nonnegative `SECOND` intervals with at most nine fractional digits over
 `TIMESTAMP` ordering. Fractional intervals, `MILLISECOND`/`MICROSECOND`/
 `NANOSECOND` interval grammar, calendar month/year intervals, expression
 valued bounds, and full distributed window exchange remain open.

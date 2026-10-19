@@ -681,9 +681,9 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
     }
     let position = |b| match b {
         UnboundedPreceding => i128::MIN,
-        Preceding(n) | PrecedingDays(n) | PrecedingSeconds(n) => -(n as i128),
+        Preceding(n) | PrecedingDays(n) | PrecedingSeconds(n) | PrecedingNanos(n) => -(n as i128),
         CurrentRow => 0,
-        Following(n) | FollowingDays(n) | FollowingSeconds(n) => n as i128,
+        Following(n) | FollowingDays(n) | FollowingSeconds(n) | FollowingNanos(n) => n as i128,
         UnboundedFollowing => i128::MAX,
     };
     if position(frame.start) > position(frame.end) {
@@ -701,6 +701,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
                 | FollowingDays(_)
                 | PrecedingSeconds(_)
                 | FollowingSeconds(_)
+                | PrecedingNanos(_)
+                | FollowingNanos(_)
         )
         || matches!(frame.units, WindowFrameUnits::Range)
             && matches!(
@@ -711,6 +713,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
                     | FollowingDays(_)
                     | PrecedingSeconds(_)
                     | FollowingSeconds(_)
+                    | PrecedingNanos(_)
+                    | FollowingNanos(_)
             )
     {
         if order_count != 1 {
@@ -724,6 +728,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
             || matches!(frame.end, PrecedingDays(_) | FollowingDays(_));
         let has_seconds = matches!(frame.start, PrecedingSeconds(_) | FollowingSeconds(_))
             || matches!(frame.end, PrecedingSeconds(_) | FollowingSeconds(_));
+        let has_nanos = matches!(frame.start, PrecedingNanos(_) | FollowingNanos(_))
+            || matches!(frame.end, PrecedingNanos(_) | FollowingNanos(_));
         let numeric_order = matches!(
             cols[0].data_type(),
             DataType::Int8
@@ -739,7 +745,7 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
         let timestamp_order = matches!(cols[0].data_type(), DataType::Timestamp(_, _));
         if (has_numeric && !numeric_order)
             || (has_days && !matches!(cols[0].data_type(), DataType::Date32))
-            || (has_seconds && !timestamp_order)
+            || ((has_seconds || has_nanos) && !timestamp_order)
         {
             return Err(error(
                 "RANGE offsets support numeric ordering; INTERVAL DAY requires DATE ordering; INTERVAL SECOND requires TIMESTAMP ordering",
@@ -759,102 +765,114 @@ fn frame_bounds(
     order: &[(Expr, bool, bool)],
 ) -> Result<(usize, usize)> {
     use WindowFrameBound::*;
-    let bound = |b: WindowFrameBound, end: bool| -> Result<usize> {
-        if matches!(b, UnboundedPreceding) {
-            return Ok(0);
-        }
-        if matches!(b, UnboundedFollowing) {
-            return Ok(rows.len());
-        }
-        if matches!(
-            frame.units,
-            WindowFrameUnits::Rows | WindowFrameUnits::Groups
-        ) {
-            let base = if matches!(frame.units, WindowFrameUnits::Rows) {
-                pos
-            } else {
-                groups[pos]
-            } as i128;
-            let target =
-                base + match b {
-                    Preceding(n) | PrecedingDays(n) | PrecedingSeconds(n) => -(n as i128),
-                    Following(n) | FollowingDays(n) | FollowingSeconds(n) => n as i128,
-                    _ => 0,
-                } + i128::from(end);
-            let count = if matches!(frame.units, WindowFrameUnits::Rows) {
-                rows.len()
-            } else {
-                starts.len() - 1
-            };
-            let index = target.clamp(0, count as i128) as usize;
-            return Ok(if matches!(frame.units, WindowFrameUnits::Rows) {
-                index
-            } else {
-                starts[index]
-            });
-        }
-        if matches!(b, CurrentRow) || cols.first().is_some_and(|c| c.is_null(rows[pos])) {
-            return Ok(starts[groups[pos] + usize::from(end)]);
-        }
-        let amount = match b {
-            Preceding(n) | Following(n) => {
-                if let Preceding(_) = b {
-                    -(n as i128)
+    let bound =
+        |b: WindowFrameBound, end: bool| -> Result<usize> {
+            if matches!(b, UnboundedPreceding) {
+                return Ok(0);
+            }
+            if matches!(b, UnboundedFollowing) {
+                return Ok(rows.len());
+            }
+            if matches!(
+                frame.units,
+                WindowFrameUnits::Rows | WindowFrameUnits::Groups
+            ) {
+                let base = if matches!(frame.units, WindowFrameUnits::Rows) {
+                    pos
                 } else {
-                    n as i128
+                    groups[pos]
+                } as i128;
+                let target =
+                    base + match b {
+                        Preceding(n) | PrecedingDays(n) | PrecedingSeconds(n)
+                        | PrecedingNanos(n) => -(n as i128),
+                        Following(n) | FollowingDays(n) | FollowingSeconds(n)
+                        | FollowingNanos(n) => n as i128,
+                        _ => 0,
+                    } + i128::from(end);
+                let count = if matches!(frame.units, WindowFrameUnits::Rows) {
+                    rows.len()
+                } else {
+                    starts.len() - 1
+                };
+                let index = target.clamp(0, count as i128) as usize;
+                return Ok(if matches!(frame.units, WindowFrameUnits::Rows) {
+                    index
+                } else {
+                    starts[index]
+                });
+            }
+            if matches!(b, CurrentRow) || cols.first().is_some_and(|c| c.is_null(rows[pos])) {
+                return Ok(starts[groups[pos] + usize::from(end)]);
+            }
+            let amount = match b {
+                Preceding(n) | Following(n) => {
+                    if let Preceding(_) = b {
+                        -(n as i128)
+                    } else {
+                        n as i128
+                    }
+                }
+                PrecedingDays(n) => -(n as i128),
+                FollowingDays(n) => n as i128,
+                PrecedingSeconds(n) => -timestamp_seconds_in_units(&cols[0], n)?,
+                FollowingSeconds(n) => timestamp_seconds_in_units(&cols[0], n)?,
+                PrecedingNanos(n) => -timestamp_nanos_in_units(&cols[0], n)?,
+                FollowingNanos(n) => timestamp_nanos_in_units(&cols[0], n)?,
+                _ => unreachable!(),
+            };
+            let ascending = order[0].1;
+            for (i, &row) in rows.iter().enumerate() {
+                // NULLS LAST independently of direction; a finite boundary never includes NULL.
+                if cols[0].is_null(row) {
+                    // With NULLS FIRST, null rows precede every finite value. They
+                    // must be skipped while finding a finite RANGE boundary; a
+                    // null current row was handled above as its peer group.
+                    if order[0].2 {
+                        continue;
+                    }
+                    return Ok(i);
+                }
+                let mut cmp = compare_offset(
+                    &cols[0],
+                    row,
+                    rows[pos],
+                    if ascending { amount } else { -amount },
+                )?;
+                if !ascending {
+                    cmp = cmp.reverse();
+                }
+                if cmp == Ordering::Greater || (!end && cmp == Ordering::Equal) {
+                    return Ok(i);
                 }
             }
-            PrecedingDays(n) => -(n as i128),
-            FollowingDays(n) => n as i128,
-            PrecedingSeconds(n) => -timestamp_seconds_in_units(&cols[0], n)?,
-            FollowingSeconds(n) => timestamp_seconds_in_units(&cols[0], n)?,
-            _ => unreachable!(),
+            Ok(rows.len())
         };
-        let ascending = order[0].1;
-        for (i, &row) in rows.iter().enumerate() {
-            // NULLS LAST independently of direction; a finite boundary never includes NULL.
-            if cols[0].is_null(row) {
-                // With NULLS FIRST, null rows precede every finite value. They
-                // must be skipped while finding a finite RANGE boundary; a
-                // null current row was handled above as its peer group.
-                if order[0].2 {
-                    continue;
-                }
-                return Ok(i);
-            }
-            let mut cmp = compare_offset(
-                &cols[0],
-                row,
-                rows[pos],
-                if ascending { amount } else { -amount },
-            )?;
-            if !ascending {
-                cmp = cmp.reverse();
-            }
-            if cmp == Ordering::Greater || (!end && cmp == Ordering::Equal) {
-                return Ok(i);
-            }
-        }
-        Ok(rows.len())
-    };
     let start = bound(frame.start, false)?;
     let end = bound(frame.end, true)?;
     Ok((start.min(end), end))
 }
 
 fn timestamp_seconds_in_units(col: &ArrayRef, seconds: u64) -> Result<i128> {
+    timestamp_nanos_in_units(
+        col,
+        seconds
+            .checked_mul(1_000_000_000)
+            .ok_or_else(|| error("timestamp RANGE interval overflows nanoseconds"))?,
+    )
+}
+
+fn timestamp_nanos_in_units(col: &ArrayRef, nanos: u64) -> Result<i128> {
     let DataType::Timestamp(unit, _) = col.data_type() else {
         return Err(error("INTERVAL SECOND RANGE requires TIMESTAMP ordering"));
     };
-    let multiplier = match unit {
-        TimeUnit::Second => 1,
-        TimeUnit::Millisecond => 1_000,
-        TimeUnit::Microsecond => 1_000_000,
-        TimeUnit::Nanosecond => 1_000_000_000,
+    let divisor = match unit {
+        TimeUnit::Second => 1_000_000_000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Microsecond => 1_000,
+        TimeUnit::Nanosecond => 1,
     };
-    i128::from(seconds)
-        .checked_mul(multiplier)
-        .ok_or_else(|| error("timestamp RANGE interval overflows timestamp precision"))
+    Ok(i128::from(nanos / divisor))
 }
 
 fn compare_offset(col: &ArrayRef, row: usize, current: usize, offset: i128) -> Result<Ordering> {
@@ -1075,7 +1093,7 @@ mod tests {
     use super::*;
     use arrow::array::{
         Date32Array, DictionaryArray, Float32Array, Int8Array, Int16Array, Int32Array, StringArray,
-        TimestampSecondArray, UInt32Array,
+        TimestampMillisecondArray, TimestampSecondArray, UInt32Array,
     };
     use arrow::datatypes::Int32Type;
     use kaveon_core::predicate::ScalarValue;
@@ -1602,6 +1620,33 @@ mod tests {
         assert_eq!(
             output.as_primitive::<Int64Type>().values().as_ref(),
             &[2, 2, 3, 2]
+        );
+    }
+
+    #[test]
+    fn timestamp_range_fractional_second_offsets_scale_to_milliseconds() {
+        let timestamps = TimestampMillisecondArray::from(vec![1000, 2000, 2250, 3000]);
+        let values = Int64Array::from(vec![1, 1, 1, 1]);
+        let batch = RecordBatch::try_from_iter([
+            ("ts", Arc::new(timestamps) as ArrayRef),
+            ("v", Arc::new(values) as ArrayRef),
+        ])
+        .unwrap();
+        let expr = Expr::WindowFunction {
+            name: "SUM".into(),
+            args: vec![Expr::Column("v".into())],
+            partition_by: vec![],
+            order_by: vec![(Expr::Column("ts".into()), true, false)],
+            frame: Some(WindowFrame {
+                units: WindowFrameUnits::Range,
+                start: WindowFrameBound::PrecedingNanos(1_250_000_000),
+                end: WindowFrameBound::FollowingNanos(500_000_000),
+            }),
+        };
+        let output = evaluate_window(&expr, &batch).unwrap();
+        assert_eq!(
+            output.as_primitive::<Int64Type>().values().as_ref(),
+            &[1, 3, 3, 3]
         );
     }
 
