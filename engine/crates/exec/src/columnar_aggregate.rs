@@ -448,10 +448,13 @@ impl AccColumn {
                     .ok_or_else(|| exec_err("COUNT overflow"))?;
             }
             (Self::IntegerSum { sums, counts }, AggregateState::IntegerSum { sum, count }) => {
+                let merged_count = counts[slot]
+                    .checked_add(*count)
+                    .ok_or_else(|| exec_err("integer SUM count overflow"))?;
                 sums[slot] = sums[slot]
                     .checked_add(*sum)
                     .ok_or_else(|| exec_err("integer SUM overflow"))?;
-                counts[slot] += count;
+                counts[slot] = merged_count;
             }
             (Self::IntegerMin { values, present }, AggregateState::IntegerMin(value)) => {
                 if let Some(value) = value
@@ -473,8 +476,11 @@ impl AccColumn {
                 Self::Float { sums, counts, .. },
                 AggregateState::Sum { sum, count } | AggregateState::Avg { sum, count },
             ) => {
+                let merged_count = counts[slot]
+                    .checked_add(*count)
+                    .ok_or_else(|| exec_err("floating aggregate count overflow"))?;
                 sums[slot] += sum;
-                counts[slot] += count;
+                counts[slot] = merged_count;
             }
             (Self::FloatMin { values, present }, AggregateState::Min(value)) => {
                 if let Some(value) = value
@@ -534,10 +540,13 @@ impl AccColumn {
             Self::IntegerSum { sums, counts } if tag == TAG_INTEGER_SUM => {
                 let sum = i128::from_le_bytes(input.fixed()?);
                 let count = u64::from_le_bytes(input.fixed()?);
+                let merged_count = counts[slot]
+                    .checked_add(count)
+                    .ok_or_else(|| exec_err("integer SUM count overflow"))?;
                 sums[slot] = sums[slot]
                     .checked_add(sum)
                     .ok_or_else(|| exec_err("integer SUM overflow"))?;
-                counts[slot] += count;
+                counts[slot] = merged_count;
             }
             Self::IntegerMin { values, present } if tag == TAG_INTEGER_MIN => {
                 if input.flag()? {
@@ -560,8 +569,11 @@ impl AccColumn {
             Self::Float { sums, counts, .. } if tag == TAG_SUM || tag == TAG_AVG => {
                 let sum = f64::from_le_bytes(input.fixed()?);
                 let count = u64::from_le_bytes(input.fixed()?);
+                let merged_count = counts[slot]
+                    .checked_add(count)
+                    .ok_or_else(|| exec_err("floating aggregate count overflow"))?;
                 sums[slot] += sum;
-                counts[slot] += count;
+                counts[slot] = merged_count;
             }
             Self::FloatMin { values, present } if tag == TAG_MIN => {
                 if input.flag()? {

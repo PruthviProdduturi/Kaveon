@@ -949,10 +949,17 @@ impl AggregateState {
                     count: other_count,
                 },
             ) => {
+                let merged_count = count
+                    .checked_add(*other_count)
+                    .ok_or_else(|| exec_err("floating aggregate count overflow"))?;
                 *sum += other_sum;
-                *count += other_count;
+                *count = merged_count;
             }
-            (Self::Count(count), Self::Count(other)) => *count += other,
+            (Self::Count(count), Self::Count(other)) => {
+                *count = count
+                    .checked_add(*other)
+                    .ok_or_else(|| exec_err("COUNT merge overflow"))?;
+            }
             (Self::Min(value), Self::Min(other)) => {
                 if let Some(other) = other {
                     *value = Some(value.map_or(*other, |current| current.min(*other)));
@@ -6764,6 +6771,41 @@ mod tests {
         left.merge(&right).unwrap();
 
         assert_eq!(left.numeric_result().unwrap(), Some(130.0 / 3.0));
+    }
+
+    #[test]
+    fn floating_partial_merge_rejects_count_overflow_without_mutating_state() {
+        let mut sum = AggregateState::Sum {
+            sum: 4.5,
+            count: u64::MAX,
+        };
+        let sum_partial = AggregateState::Sum { sum: 1.0, count: 1 };
+        assert!(sum.merge(&sum_partial).is_err());
+        assert_eq!(
+            sum,
+            AggregateState::Sum {
+                sum: 4.5,
+                count: u64::MAX,
+            }
+        );
+
+        let mut avg = AggregateState::Avg {
+            sum: 8.0,
+            count: u64::MAX,
+        };
+        let avg_partial = AggregateState::Avg { sum: 2.0, count: 1 };
+        assert!(avg.merge(&avg_partial).is_err());
+        assert_eq!(
+            avg,
+            AggregateState::Avg {
+                sum: 8.0,
+                count: u64::MAX,
+            }
+        );
+
+        let mut count = AggregateState::Count(u64::MAX);
+        assert!(count.merge(&AggregateState::Count(1)).is_err());
+        assert_eq!(count, AggregateState::Count(u64::MAX));
     }
 
     #[test]
