@@ -13878,12 +13878,11 @@ async fn execute_distributed_top_n(
     }
 
     let mut schema = None;
-    // Keep only the current global TopN candidate while workers complete.
-    // TopN is associative here: each worker returns at most `limit` rows, and
-    // merging that bounded candidate with the next worker cannot discard a
-    // row that could enter the final result. This avoids retaining every
-    // worker batch until the last task completes.
-    let mut global_candidate = None;
+    // Keep one bounded candidate per worker. The final merge is performed as
+    // a deterministic, bounded tree after all workers complete. This avoids
+    // making completion order observable for equal sort keys and lets wide
+    // fan-out queries merge candidate pairs concurrently.
+    let mut worker_candidates = Vec::with_capacity(partition_count);
     let mut task_metrics = Vec::with_capacity(partition_count);
     while let Some(result) = tasks.join_next().await {
         match result {
@@ -13895,24 +13894,6 @@ async fn execute_distributed_top_n(
                     return Some(Err("workers returned incompatible TopN schemas".into()));
                 }
                 schema.get_or_insert(worker_schema.clone());
-                let mut merge_inputs = Vec::with_capacity(batches.len() + 1);
-                if let Some(candidate) = global_candidate.take() {
-                    merge_inputs.push(candidate);
-                }
-                merge_inputs.extend(batches);
-                global_candidate = match merge_top_n_candidate_async(
-                    worker_schema.clone(),
-                    merge_inputs,
-                    sort_exprs.clone(),
-                    limit,
-                )
-                .await
-                {
-                    Ok(candidate) => Some(candidate),
-                    Err(error) => {
-                        return Some(Err(format!("cannot merge distributed TopN: {error}")));
-                    }
-                };
                 publish_task_completion(
                     query_id,
                     0,
@@ -13921,7 +13902,9 @@ async fn execute_distributed_top_n(
                     telemetry.clone(),
                 )
                 .await;
+                let partition_index = telemetry.partition_index;
                 task_metrics.push(telemetry);
+                worker_candidates.push((partition_index, batches));
             }
             Ok(Err(error)) => return Some(Err(error)),
             Err(error) => return Some(Err(format!("worker task failed: {error}"))),
@@ -13936,8 +13919,22 @@ async fn execute_distributed_top_n(
     // Every worker can legitimately return zero rows after a selective
     // predicate. Preserve the worker schema and return an empty result rather
     // than turning an otherwise valid positive-limit query into a 500.
-    let merged = global_candidate
-        .unwrap_or_else(|| arrow::record_batch::RecordBatch::new_empty(schema.clone()));
+    worker_candidates.sort_unstable_by_key(|(partition, _)| *partition);
+    let merge_inputs = worker_candidates
+        .into_iter()
+        .flat_map(|(_, batches)| batches)
+        .collect::<Vec<_>>();
+    let merged = match merge_top_n_candidates_parallel(
+        schema.clone(),
+        merge_inputs,
+        sort_exprs,
+        limit,
+    )
+    .await
+    {
+        Ok(candidate) => candidate,
+        Err(error) => return Some(Err(format!("cannot merge distributed TopN: {error}"))),
+    };
     let total_elapsed_us = elapsed_us(started);
     task_metrics.sort_unstable_by_key(|task| task.partition_index);
     let batches = vec![merged];
@@ -13968,30 +13965,66 @@ fn merge_top_n_candidate(
         .unwrap_or_else(|| arrow::record_batch::RecordBatch::new_empty(schema.clone())))
 }
 
-/// Run the coordinator's bounded candidate merge outside the Tokio executor.
-///
-/// The merge remains associative and bounded to `limit` rows, but its Arrow
-/// comparisons and payload selection are CPU work. Keeping that work on the
-/// async runtime thread can delay worker completion handling and unrelated
-/// queries while a wide candidate is ranked. The blocking pool lets those
-/// network and control-plane tasks continue making progress; the ordered
-/// candidate itself is still merged serially so result semantics and memory
-/// bounds do not change.
-async fn merge_top_n_candidate_async(
+/// Merge worker TopN candidates in a bounded tree when a query fans out to
+/// many workers. Each worker contributes at most `limit` rows, so the tree
+/// never materializes the full input. Pair merges run on the blocking pool,
+/// with a small semaphore keeping CPU use bounded while the coordinator
+/// remains available for task and cancellation handling.
+async fn merge_top_n_candidates_parallel(
     schema: arrow::datatypes::SchemaRef,
-    batches: Vec<arrow::record_batch::RecordBatch>,
+    mut candidates: Vec<arrow::record_batch::RecordBatch>,
     sort_exprs: Vec<SortExpr>,
     limit: usize,
 ) -> kaveon_core::Result<arrow::record_batch::RecordBatch> {
-    tokio::task::spawn_blocking(move || {
-        merge_top_n_candidate(&schema, &batches, &sort_exprs, limit)
-    })
-    .await
-    .map_err(|error| {
-        kaveon_core::KaveonError::Execution(format!(
-            "distributed TopN merge worker panicked: {error}"
-        ))
-    })?
+    const MAX_PARALLEL_MERGES: usize = 4;
+    if candidates.is_empty() {
+        return Ok(arrow::record_batch::RecordBatch::new_empty(schema));
+    }
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_PARALLEL_MERGES));
+    while candidates.len() > 1 {
+        let current = std::mem::take(&mut candidates);
+        let pair_count = current.len().div_ceil(2);
+        let mut joins = tokio::task::JoinSet::new();
+        let mut next = (0..pair_count).map(|_| None).collect::<Vec<_>>();
+        for (pair_index, pair) in current.chunks(2).enumerate() {
+            if pair.len() == 1 {
+                next[pair_index] = Some(pair[0].clone());
+                continue;
+            }
+            let left = pair[0].clone();
+            let right = pair[1].clone();
+            let schema = schema.clone();
+            let sort_exprs = sort_exprs.clone();
+            let semaphore = semaphore.clone();
+            joins.spawn(async move {
+                let _permit = semaphore.acquire_owned().await.map_err(|error| {
+                    kaveon_core::KaveonError::Execution(format!(
+                        "TopN merge concurrency permit closed: {error}"
+                    ))
+                })?;
+                let merged = tokio::task::spawn_blocking(move || {
+                    merge_top_n_candidate(&schema, &[left, right], &sort_exprs, limit)
+                })
+                .await
+                .map_err(|error| {
+                    kaveon_core::KaveonError::Execution(format!(
+                        "distributed TopN merge worker panicked: {error}"
+                    ))
+                })??;
+                Ok::<_, kaveon_core::KaveonError>((pair_index, merged))
+            });
+        }
+        while let Some(result) = joins.join_next().await {
+            let (pair_index, merged) = result.map_err(|error| {
+                kaveon_core::KaveonError::Execution(format!(
+                    "distributed TopN merge task panicked: {error}"
+                ))
+            })??;
+            next[pair_index] = Some(merged);
+        }
+        candidates = next.into_iter().flatten().collect();
+    }
+    Ok(candidates.pop().expect("nonempty TopN candidate tree"))
 }
 
 fn top_n_merge_contract(plan: &LogicalPlan) -> Option<(Vec<SortExpr>, usize)> {
@@ -15836,9 +15869,10 @@ mod tests {
         await_task_memory, capabilities, catalog_test_state, collect_join_statistics_tables,
         decode_arrow_stream, encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
         general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, merge_top_n_candidate,
-        mutation_actor, parse_analyze_statement, parse_explain_statement,
-        parse_statistics_statement, statistics_diagnostics, task_request_from_dispatch,
-        top_n_merge_contract, transaction_api_guidance, validate_replacement,
+        merge_top_n_candidates_parallel, mutation_actor, parse_analyze_statement,
+        parse_explain_statement, parse_statistics_statement, statistics_diagnostics,
+        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
+        validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -22329,6 +22363,49 @@ mod tests {
 
         assert_eq!(empty.schema(), schema);
         assert_eq!(empty.num_rows(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn distributed_top_n_parallel_tree_keeps_global_order_and_bound() {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let candidates = (0..8_i64)
+            .map(|partition| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int64Array::from(vec![
+                            100 - partition * 10,
+                            99 - partition * 10,
+                        ])),
+                        Arc::new(Int64Array::from(vec![partition, partition])),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+        let ordering = vec![kaveon_exec::sort::SortExpr::new(
+            kaveon_core::Expr::Column("id".into()),
+            false,
+        )];
+
+        let result = merge_top_n_candidates_parallel(schema.clone(), candidates, ordering, 5)
+            .await
+            .unwrap();
+        assert_eq!(result.schema(), schema);
+        assert_eq!(result.num_rows(), 5);
+        let ids = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[100, 99, 90, 89, 80]);
     }
 
     #[test]
