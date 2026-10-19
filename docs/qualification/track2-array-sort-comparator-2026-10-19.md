@@ -7,8 +7,8 @@ exactly two parameters. The lambda is lowered into the serialized logical plan
 and evaluated for each pair of elements using the normal vectorized expression
 semantics for comparisons, `CASE`, casts, and scalar functions. Null elements
 are passed to the comparator as typed nullable values, so a comparator can
-choose its own null ordering. The comparator must return a non-NULL integer;
-the sign determines the ordering.
+choose its own null ordering. The comparator must return exactly `-1`, `0`, or
+`1`; other integer values fail closed with an actionable error.
 
 The two declared parameters are bound locally. The comparator may also capture
 columns from the outer row; those values are carried into each one-row
@@ -24,6 +24,7 @@ cargo test -p kaveon-sql lowers_array_sort_comparator_as_a_serializable_lambda_e
 cargo test -p kaveon-exec array_sort_comparator_uses_lambda_body_and_preserves_result_type -- --nocapture
 cargo test -p kaveon-exec array_sort_comparator_orders_nulls_explicitly -- --nocapture
 cargo test -p kaveon-exec array_sort_comparator_can_capture_the_outer_row -- --nocapture
+cargo test -p kaveon-exec array_sort_comparator_rejects_values_outside_trino_contract -- --nocapture
 cargo test -p kaveon-core expression_dependency_tests -- --nocapture
 ```
 
