@@ -86,6 +86,18 @@ temporal timestamp-key replacement through `MAP_CONCAT`. It also exercises
 multi-fragment execution paths, including timestamp values carrying timezone
 metadata.
 
+## GROUPING metadata qualification — 2026-10-18
+
+The distributed differential suite now compares `GROUPING()` and
+`GROUPING_ID()` over a bounded two-column `CUBE` through both the node-local
+planner and the three-worker fragment path. The fixture includes nullable
+dimension values, so a source `NULL` remains distinct from the `NULL` emitted
+by a rolled-up subtotal or grand-total branch. The regression checks all four
+Trino bit masks (`0` through `3`), exact row equality, and zero query-memory
+residue after both executions. This qualifies the bounded column-key
+`GROUPING SETS`/`CUBE` metadata path; larger expansions, expression grouping
+keys, and an unbounded grouping-set plan remain outside the contract.
+
 ## Correlated subquery boundary — 2026-10-15
 
 The server differential sweep exercises the bounded correlated shapes that the
