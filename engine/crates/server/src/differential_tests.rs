@@ -390,6 +390,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_zip_with_lambda",
+        "SELECT MAP_ZIP_WITH(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), MAP(ARRAY['b', 'c'], ARRAY[10, 20]), (key, left_value, right_value) -> COALESCE(left_value, 0) + COALESCE(right_value, 0)) AS merged FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,

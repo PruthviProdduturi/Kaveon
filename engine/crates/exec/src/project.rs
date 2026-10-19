@@ -657,6 +657,88 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 sorted,
             ))
         }
+        Expr::Function { name, args }
+            if name.eq_ignore_ascii_case("MAP_ZIP_WITH") && args.len() == 3 =>
+        {
+            let DataType::Map(left_entry, left_sorted) = expression_data_type(&args[0], schema)?
+            else {
+                return None;
+            };
+            let DataType::Map(right_entry, right_sorted) = expression_data_type(&args[1], schema)?
+            else {
+                return None;
+            };
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[2]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 4 {
+                return None;
+            }
+            let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
+                (left_entry.data_type(), right_entry.data_type())
+            else {
+                return None;
+            };
+            if left_fields.len() != 2
+                || right_fields.len() != 2
+                || left_fields[0].data_type() != right_fields[0].data_type()
+            {
+                return None;
+            }
+            let (
+                Expr::Literal(ScalarValue::Utf8(key_name)),
+                Expr::Literal(ScalarValue::Utf8(left_name)),
+                Expr::Literal(ScalarValue::Utf8(right_name)),
+            ) = (&lambda_args[0], &lambda_args[1], &lambda_args[2])
+            else {
+                return None;
+            };
+            if [key_name, left_name, right_name]
+                .iter()
+                .enumerate()
+                .any(|(index, name)| [key_name, left_name, right_name][..index].contains(name))
+            {
+                return None;
+            }
+            let mut fields = vec![
+                Field::new(key_name, left_fields[0].data_type().clone(), false),
+                Field::new(left_name, left_fields[1].data_type().clone(), true),
+                Field::new(right_name, right_fields[1].data_type().clone(), true),
+            ];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|field| {
+                        ![key_name, left_name, right_name]
+                            .iter()
+                            .any(|name| field.name() == *name)
+                    })
+                    .map(|field| field.as_ref().clone()),
+            );
+            let result_type =
+                expression_data_type(&lambda_args[3], &Arc::new(Schema::new(fields)))?;
+            if result_type == DataType::Null {
+                return None;
+            }
+            let result_fields: arrow::datatypes::Fields = vec![
+                Arc::new(left_fields[0].as_ref().clone()),
+                Arc::new(Field::new("value", result_type, true)),
+            ]
+            .into();
+            Some(DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(result_fields),
+                    false,
+                )),
+                left_sorted && right_sorted,
+            ))
+        }
         Expr::Function { name, args } if name.eq_ignore_ascii_case("REDUCE") && args.len() == 4 => {
             let state_type = expression_data_type(&args[1], schema)?;
             let Expr::Function {

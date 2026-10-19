@@ -265,6 +265,16 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_transform_keys(&args[0], lambda_args, batch);
             }
+            if name.eq_ignore_ascii_case("MAP_ZIP_WITH")
+                && args.len() == 3
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[2]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_map_zip_with(&args[0], &args[1], lambda_args, batch);
+            }
             if name.eq_ignore_ascii_case("REDUCE")
                 && args.len() == 4
                 && let Expr::Function {
@@ -3675,6 +3685,176 @@ fn eval_transform_keys(
     let entry_fields: arrow::datatypes::Fields = vec![
         Arc::new(Field::new("key", keys.data_type().clone(), false)),
         Arc::new(Field::new("value", value_type, true)),
+    ]
+    .into();
+    let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
+    let entry_field = Arc::new(Field::new("entries", DataType::Struct(entry_fields), false));
+    Ok(Arc::new(MapArray::try_new(
+        entry_field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        entries,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+        sorted,
+    )?))
+}
+
+/// Evaluate Trino's bounded `MAP_ZIP_WITH(left, right, (key, left_value,
+/// right_value) -> value)` form.  Keys retain first-map order, followed by
+/// keys that occur only in the second map; missing values are typed NULLs.
+fn eval_map_zip_with(
+    left_expr: &Expr,
+    right_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 4 {
+        return Err(KaveonError::Execution(
+            "MAP_ZIP_WITH requires a three-parameter lambda".into(),
+        ));
+    }
+    let parameter_names = lambda_args[..3]
+        .iter()
+        .map(|arg| match arg {
+            Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => Ok(name.clone()),
+            _ => Err(KaveonError::Execution(
+                "MAP_ZIP_WITH lambda parameters must be identifiers".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if parameter_names
+        .iter()
+        .enumerate()
+        .any(|(index, name)| parameter_names[..index].iter().any(|prior| prior == name))
+    {
+        return Err(KaveonError::Execution(
+            "MAP_ZIP_WITH lambda parameters must be distinct".into(),
+        ));
+    }
+    let left = evaluate(left_expr, outer_batch)?;
+    let right = evaluate(right_expr, outer_batch)?;
+    let left = left
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| KaveonError::Execution("MAP_ZIP_WITH requires MAP arguments".into()))?;
+    let right = right
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| KaveonError::Execution("MAP_ZIP_WITH requires MAP arguments".into()))?;
+    if left.len() != right.len() {
+        return Err(KaveonError::Execution(
+            "MAP_ZIP_WITH map arguments must have the same row count".into(),
+        ));
+    }
+    let left_key_type = left.keys().data_type().clone();
+    if left_key_type != *right.keys().data_type() {
+        return Err(KaveonError::Execution(
+            "MAP_ZIP_WITH map keys must have the same type".into(),
+        ));
+    }
+    let left_value_type = left.values().data_type().clone();
+    let right_value_type = right.values().data_type().clone();
+    let sorted = matches!(left.data_type(), DataType::Map(_, true))
+        && matches!(right.data_type(), DataType::Map(_, true));
+    let mut keys_out = Vec::<ArrayRef>::new();
+    let mut values_out = Vec::<ArrayRef>::new();
+    let mut offsets = vec![0_i32];
+    let mut valid = Vec::with_capacity(left.len());
+    for row in 0..left.len() {
+        if left.is_null(row) || right.is_null(row) {
+            valid.push(false);
+            offsets.push(i32::try_from(keys_out.len()).map_err(|_| {
+                KaveonError::Execution("MAP_ZIP_WITH result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let left_start = left.value_offsets()[row] as usize;
+        let left_end = left.value_offsets()[row + 1] as usize;
+        let right_start = right.value_offsets()[row] as usize;
+        let right_end = right.value_offsets()[row + 1] as usize;
+        let mut key_indices = Vec::<(ArrayRef, Option<usize>, Option<usize>)>::new();
+        for index in left_start..left_end {
+            let key = left.keys().slice(index, 1);
+            key_indices.push((key, Some(index), None));
+        }
+        for index in right_start..right_end {
+            let key = right.keys().slice(index, 1);
+            let mut matching = None;
+            for (position, (existing, _, _)) in key_indices.iter().enumerate() {
+                let equal = comparison(existing, &key, CompareKind::Eq)?;
+                if equal.is_valid(0) && equal.value(0) {
+                    matching = Some(position);
+                    break;
+                }
+            }
+            if let Some(position) = matching {
+                key_indices[position].2 = Some(index);
+            } else {
+                key_indices.push((key, None, Some(index)));
+            }
+        }
+        for (key, left_index, right_index) in key_indices {
+            let left_value = left_index
+                .map(|index| left.values().slice(index, 1))
+                .unwrap_or_else(|| arrow::array::new_null_array(&left_value_type, 1));
+            let right_value = right_index
+                .map(|index| right.values().slice(index, 1))
+                .unwrap_or_else(|| arrow::array::new_null_array(&right_value_type, 1));
+            let mut fields = vec![
+                Field::new(&parameter_names[0], left_key_type.clone(), false),
+                Field::new(&parameter_names[1], left_value_type.clone(), true),
+                Field::new(&parameter_names[2], right_value_type.clone(), true),
+            ];
+            let mut columns = vec![key.clone(), left_value, right_value];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if parameter_names.iter().any(|name| name == field.name()) {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let entry_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            let result = decode_dictionary(&evaluate(&lambda_args[3], &entry_batch)?)?;
+            if result.len() != 1 {
+                return Err(KaveonError::Execution(
+                    "MAP_ZIP_WITH lambda must return one value per key".into(),
+                ));
+            }
+            keys_out.push(key);
+            values_out.push(result);
+        }
+        offsets.push(
+            i32::try_from(keys_out.len()).map_err(|_| {
+                KaveonError::Execution("MAP_ZIP_WITH result offset overflow".into())
+            })?,
+        );
+    }
+    let keys = if keys_out.is_empty() {
+        left.keys().slice(0, 0)
+    } else {
+        let chunks = keys_out
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let values = if values_out.is_empty() {
+        left.values().slice(0, 0)
+    } else {
+        let chunks = values_out
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let entry_fields: arrow::datatypes::Fields = vec![
+        Arc::new(Field::new("key", keys.data_type().clone(), false)),
+        Arc::new(Field::new("value", values.data_type().clone(), true)),
     ]
     .into();
     let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
@@ -17066,6 +17246,73 @@ mod tests {
         assert_eq!(map.keys().as_string::<i32>().value(0), "a_x");
         assert_eq!(map.keys().as_string::<i32>().value(1), "b_x");
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn map_zip_with_unions_keys_and_null_pads_values() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let map_expr = |keys: &[&str], values: &[i64]| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: keys
+                        .iter()
+                        .map(|key| Expr::Literal(ScalarValue::Utf8((*key).into())))
+                        .collect(),
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: values
+                        .iter()
+                        .map(|value| Expr::Literal(ScalarValue::Int64(*value)))
+                        .collect(),
+                },
+            ],
+        };
+        let coalesce = |column: &str| Expr::Function {
+            name: "COALESCE".into(),
+            args: vec![
+                Expr::Column(column.into()),
+                Expr::Literal(ScalarValue::Int64(0)),
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_ZIP_WITH".into(),
+                args: vec![
+                    map_expr(&["a", "b"], &[1, 2]),
+                    map_expr(&["b", "c"], &[10, 20]),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("key".into())),
+                            Expr::Literal(ScalarValue::Utf8("left_value".into())),
+                            Expr::Literal(ScalarValue::Utf8("right_value".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(coalesce("left_value")),
+                                op: BinaryOp::Plus,
+                                right: Box::new(coalesce("right_value")),
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 3]);
+        assert_eq!(
+            map.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]
+        );
+        assert_eq!(
+            map.values().as_primitive::<Int64Type>().values(),
+            &[1, 12, 20]
+        );
     }
 
     #[test]
