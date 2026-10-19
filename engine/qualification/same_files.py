@@ -37,6 +37,30 @@ EXTENDED_QUERIES = {
 }
 
 
+def rows_match(actual, expected):
+    """Compare result rows without treating IEEE-754 reduction order as data loss.
+
+    Integer, string, boolean, and null values remain exact. Floating-point
+    aggregates use a tight relative/absolute tolerance because distributed
+    partial aggregation can legally round at a different order than DuckDB.
+    """
+    if len(actual) != len(expected):
+        return False
+    for actual_row, expected_row in zip(actual, expected):
+        if len(actual_row) != len(expected_row):
+            return False
+        for actual_value, expected_value in zip(actual_row, expected_row):
+            if isinstance(actual_value, float) or isinstance(expected_value, float):
+                if actual_value is None or expected_value is None:
+                    if actual_value != expected_value:
+                        return False
+                elif not math.isclose(float(actual_value), float(expected_value), rel_tol=1e-12, abs_tol=1e-12):
+                    return False
+            elif actual_value != expected_value:
+                return False
+    return True
+
+
 def workspace_provenance():
     """Record source state at invocation, without pretending it proves image provenance."""
     root = Path(__file__).resolve().parents[2]
@@ -124,6 +148,7 @@ def main():
     data.mkdir(parents=True)
     report = {"same_file_correctness": True, "fair_performance_comparison": False,
               "limitation": "Kaveon runs natively; Trino runs in Docker with 4 CPUs/8 GiB. Timings cannot establish a relative performance score.",
+              "correctness_comparison": "exact for non-floating values; float values use rel_tol=1e-12 and abs_tol=1e-12 to account for distributed reduction order",
               "workers": args.workers, "local_parallelism": args.local_parallelism, "rows": args.rows, "run": run, "cases": [],
               "suite": args.suite, "warmups_per_query": args.warmups,
               "query_corpus": {"names": list(queries), "sha256": corpus_sha256},
@@ -281,7 +306,7 @@ def main():
                             case["stages"] = len(history.get("stages", []))
                             if args.workers and not case["stages"]:
                                 raise AssertionError("Distributed query silently fell back to local")
-                        if actual != expected:
+                        if not rows_match(actual, expected):
                             raise AssertionError(f"{engine} rows disagree with DuckDB reading the same Parquet files")
                         if repetition >= args.warmups:
                             case[engine + "_ms"].append(elapsed)
@@ -343,7 +368,7 @@ def main():
                                 actual.extend(page["data"])
                                 next_uri = page.get("next_uri")
                             session.delete(base + "/v1/query/" + result["id"], headers=headers, timeout=30).raise_for_status()
-                    if actual != expected_rows[name]:
+                    if not rows_match(actual, expected_rows[name]):
                         raise AssertionError("Rows disagree with DuckDB")
                     return {"name": name, "passed": True, "ms": (time.perf_counter() - started) * 1000}
                 except Exception as error:
