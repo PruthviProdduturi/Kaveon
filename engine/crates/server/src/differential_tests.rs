@@ -315,6 +315,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_first_last_predicates",
+        "SELECT ARRAY_FIRST(ARRAY[1, 4, 2, 5], x -> x > 2) AS first_match, ARRAY_LAST(ARRAY[1, 4, 2, 5], x -> x > 2) AS last_match FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_histogram",
         "SELECT ARRAY_HISTOGRAM(ARRAY[2, 1, NULL, 2]) AS histogram FROM {T} LIMIT 1",
         true,
