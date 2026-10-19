@@ -1689,6 +1689,13 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
 }
 
 fn cast_nested_container(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
+    // A typed NULL container has no child buffers to downcast.  Construct the
+    // target-typed null array directly so CAST(NULL AS ARRAY<...>) and
+    // CAST(NULL AS MAP<...>) preserve the declared nested schema for UNNEST,
+    // MAP_CONCAT, and exchange metadata.
+    if matches!(array.data_type(), DataType::Null) {
+        return Ok(arrow::array::new_null_array(target, array.len()));
+    }
     match target {
         DataType::List(target_field) => {
             let (offsets, nulls, values) = match array.data_type() {
