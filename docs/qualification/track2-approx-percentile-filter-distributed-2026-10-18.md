@@ -29,3 +29,6 @@ query memory reservation is released. Scalar and constant percentile-array forms
 
 
 The same differential gate also covers APPROX_PERCENTILE(latency_p75_ms, ARRAY[0.5, 0.95]) FILTER (WHERE actions > 5) with exact array results across all layouts and three-worker execution.
+
+
+Grouped constant percentile-array filters are also covered by the differential corpus, including one result per region with exact local and three-worker agreement.
