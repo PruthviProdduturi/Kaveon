@@ -3774,6 +3774,80 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_join_applies_timestamp_runtime_filter_without_precision_loss() {
+        use arrow::datatypes::TimeUnit;
+
+        let low = -9_007_199_254_740_993;
+        let high = 9_007_199_254_740_993;
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for timezone in [None, Some("UTC".into())] {
+                let data_type = DataType::Timestamp(unit, timezone);
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "event_time",
+                    data_type.clone(),
+                    true,
+                )]));
+                let make_input = |values: Vec<Option<i64>>| {
+                    let batches = values
+                        .chunks(2)
+                        .map(|chunk| {
+                            RecordBatch::try_new(
+                                schema.clone(),
+                                vec![
+                                    arrow::compute::cast(
+                                        &Int64Array::from(chunk.to_vec()),
+                                        &data_type,
+                                    )
+                                    .unwrap(),
+                                ],
+                            )
+                            .unwrap()
+                        })
+                        .collect();
+                    Box::new(Input {
+                        schema: schema.clone(),
+                        batches,
+                    }) as Box<dyn BatchOperator>
+                };
+                let pool =
+                    QueryMemoryPool::new("timestamp-runtime-filter", 4 * 1024 * 1024).unwrap();
+                let mut join = PartitionedHashJoin::new(
+                    make_input(vec![Some(0), Some(low), Some(high), None]),
+                    make_input(vec![Some(low), Some(high), Some(high), None]),
+                    JoinType::Inner,
+                    vec![("event_time".into(), "event_time".into())],
+                    None,
+                    None,
+                    pool.operator("join").unwrap(),
+                    spill(),
+                    3,
+                )
+                .unwrap();
+                let mut rows = Vec::new();
+                while let Some(batch) = join.next_batch().unwrap() {
+                    assert_eq!(batch.column(0).data_type(), &data_type);
+                    assert_eq!(batch.column(1).data_type(), &data_type);
+                    let left = arrow::compute::cast(batch.column(0), &DataType::Int64).unwrap();
+                    let right = arrow::compute::cast(batch.column(1), &DataType::Int64).unwrap();
+                    let left = left.as_any().downcast_ref::<Int64Array>().unwrap();
+                    let right = right.as_any().downcast_ref::<Int64Array>().unwrap();
+                    rows.extend(
+                        (0..batch.num_rows()).map(|row| (left.value(row), right.value(row))),
+                    );
+                }
+                rows.sort();
+                assert_eq!(rows, vec![(low, low), (high, high), (high, high)]);
+                assert_eq!(pool.snapshot().current_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
     fn runtime_join_filter_uses_typed_unsigned_and_date_indexes() {
         use arrow::array::{Date32Array, Date64Array, UInt64Array};
 

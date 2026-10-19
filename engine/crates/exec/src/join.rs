@@ -268,6 +268,25 @@ impl BuildKeyFilter {
                 .into());
         }
         if let (
+            JoinIndex::Timestamp {
+                first_rows,
+                data_type,
+                ..
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let column = batch.column(*left);
+            if column.data_type() != data_type {
+                return Err(exec_err("runtime filter key type changed after planning"));
+            }
+            let values = timestamp_values(column)?;
+            return Ok((0..batch.num_rows())
+                .map(|row| column.is_valid(row) && first_rows.contains_key(&values[row]))
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
             JoinIndex::Int64 {
                 first_rows,
                 duplicate_rows,
@@ -386,6 +405,23 @@ impl BuildKeyFilter {
                     .map(|value| ScalarValue::Int64(*value))
                     .collect(),
             ),
+            JoinIndex::Timestamp {
+                first_rows,
+                data_type,
+                ..
+            } => {
+                // Integer literals retain the timestamp's native unit. Never
+                // push them into a probe column with different metadata.
+                if schema.field(self.keys[0].0).data_type() != data_type {
+                    return None;
+                }
+                Some(
+                    first_rows
+                        .keys()
+                        .map(|value| ScalarValue::Int64(*value))
+                        .collect(),
+                )
+            }
             JoinIndex::Int64 { first_rows, .. } => Some(
                 first_rows
                     .keys()
@@ -1255,6 +1291,11 @@ enum JoinIndex {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
     },
+    Timestamp {
+        first_rows: AHashMap<i64, usize>,
+        duplicate_rows: AHashMap<i64, Vec<usize>>,
+        data_type: DataType,
+    },
     Int64 {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
@@ -1481,6 +1522,34 @@ impl JoinIndex {
             return Ok(Self::Date64 {
                 first_rows,
                 duplicate_rows,
+            });
+        }
+        if let [(.., index)] = keys
+            && matches!(right.column(*index).data_type(), DataType::Timestamp(_, _))
+        {
+            let column = right.column(*index);
+            let values = timestamp_values(column)?;
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<i64, Vec<usize>> = AHashMap::new();
+            for (row, key) in values.iter().copied().enumerate() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if column.is_valid(row) {
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Timestamp {
+                first_rows,
+                duplicate_rows,
+                data_type: column.data_type().clone(),
             });
         }
         if let [(.., index)] = keys
@@ -1718,6 +1787,26 @@ impl JoinIndex {
                     }
                 }
             }
+            Self::Timestamp {
+                first_rows,
+                duplicate_rows,
+                data_type,
+            } => {
+                let column = left.column(keys[0].0);
+                if column.data_type() != data_type {
+                    return Err(exec_err("join key type changed after planning"));
+                }
+                let values = timestamp_values(column)?;
+                if column.is_null(row) {
+                    None
+                } else {
+                    let key = values[row];
+                    duplicate_rows
+                        .get(&key)
+                        .map(Vec::as_slice)
+                        .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                }
+            }
             Self::Int64 {
                 first_rows,
                 duplicate_rows,
@@ -1792,6 +1881,31 @@ fn check_cancelled(memory: Option<&OperatorMemoryAccount>) -> Result<()> {
         memory.check_cancelled()?;
     }
     Ok(())
+}
+
+/// Borrow native timestamp values without casting or allocating row keys.
+/// Arrow stores all timestamp units as exact i64 values.
+fn timestamp_values(column: &ArrayRef) -> Result<&[i64]> {
+    use arrow::array::{
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
+    };
+    macro_rules! values {
+        ($array:ty) => {
+            column
+                .as_any()
+                .downcast_ref::<$array>()
+                .map(|array| array.values().as_ref())
+        };
+    }
+    match column.data_type() {
+        DataType::Timestamp(TimeUnit::Second, _) => values!(TimestampSecondArray),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => values!(TimestampMillisecondArray),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => values!(TimestampMicrosecondArray),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => values!(TimestampNanosecondArray),
+        _ => None,
+    }
+    .ok_or_else(|| exec_err("expected a timestamp join key"))
 }
 
 fn row_key(
@@ -3187,6 +3301,107 @@ mod tests {
             mask.iter().collect::<Vec<_>>(),
             vec![Some(false), Some(true), Some(true), Some(false)]
         );
+    }
+
+    #[test]
+    fn timestamp_runtime_filter_uses_typed_index_and_exact_storage_predicate() {
+        use arrow::array::Int64Array;
+
+        let low = -9_007_199_254_740_993;
+        let high = 9_007_199_254_740_993;
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for timezone in [None, Some("UTC".into())] {
+                let data_type = DataType::Timestamp(unit, timezone);
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "event_time",
+                    data_type.clone(),
+                    true,
+                )]));
+                let timestamp = |values: Vec<Option<i64>>| {
+                    arrow::compute::cast(&Int64Array::from(values), &data_type).unwrap()
+                };
+                let build = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![timestamp(vec![Some(low), Some(high), Some(high), None])],
+                )
+                .unwrap();
+                let probe = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![timestamp(vec![Some(0), Some(low), Some(high), None])],
+                )
+                .unwrap();
+                let built =
+                    BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+                assert!(matches!(built.index, Some(JoinIndex::Timestamp { .. })));
+                let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+                let StoragePredicate::In { column, values } =
+                    filter.storage_predicate(&schema).unwrap()
+                else {
+                    panic!("expected timestamp IN predicate");
+                };
+                assert_eq!(column, "event_time");
+                let mut keys = values
+                    .iter()
+                    .map(|value| match value {
+                        ScalarValue::Int64(value) => *value,
+                        _ => panic!("timestamp keys must remain exact integers"),
+                    })
+                    .collect::<Vec<_>>();
+                keys.sort();
+                assert_eq!(keys, vec![low, high]);
+                assert_eq!(
+                    filter
+                        .filter_batch(&probe)
+                        .unwrap()
+                        .iter()
+                        .collect::<Vec<_>>(),
+                    vec![Some(false), Some(true), Some(true), Some(false)]
+                );
+                assert_eq!(
+                    built
+                        .index
+                        .as_ref()
+                        .unwrap()
+                        .matches(&probe, 2, &[(0, 0)])
+                        .unwrap()
+                        .unwrap(),
+                    &[1, 2]
+                );
+
+                // A metadata change cannot silently reinterpret native values.
+                let changed_unit = if unit == TimeUnit::Second {
+                    TimeUnit::Millisecond
+                } else {
+                    TimeUnit::Second
+                };
+                for changed_type in [
+                    DataType::Timestamp(unit, Some("+01:00".into())),
+                    DataType::Timestamp(changed_unit, None),
+                ] {
+                    let changed_schema = Arc::new(Schema::new(vec![Field::new(
+                        "event_time",
+                        changed_type.clone(),
+                        true,
+                    )]));
+                    let changed = RecordBatch::try_new(
+                        changed_schema.clone(),
+                        vec![
+                            arrow::compute::cast(&Int64Array::from(vec![high]), &changed_type)
+                                .unwrap(),
+                        ],
+                    )
+                    .unwrap();
+                    assert!(filter.storage_predicate(&changed_schema).is_none());
+                    assert!(filter.filter_batch(&changed).is_err());
+                    assert!(filter.matches(&changed, 0).is_err());
+                }
+            }
+        }
     }
 
     #[test]
