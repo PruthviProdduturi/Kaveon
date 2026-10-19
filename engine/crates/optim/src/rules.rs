@@ -394,6 +394,7 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
         | Expr::Cast {
             expr: expression, ..
         } => collect_columns(expression, columns),
+        Expr::Function { name, .. } if name == "__KAVEON_LAMBDA" => {}
         Expr::Function { args, .. } => {
             for argument in args {
                 collect_columns(argument, columns);

@@ -15,7 +15,7 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, Schema, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
     UInt32Type, UInt64Type,
@@ -195,6 +195,16 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         } => eval_in_list(expr, list, *negated, batch),
         Expr::Cast { expr, data_type } => eval_cast(expr, data_type.clone(), batch),
         Expr::Function { name, args } => {
+            if name.eq_ignore_ascii_case("ARRAY_SORT")
+                && args.len() == 2
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[1]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_array_sort_comparator(&args[0], lambda_args, batch);
+            }
             if let Some(result) = eval_function_through_dictionary(name, args, batch)? {
                 return Ok(result);
             }
@@ -251,6 +261,7 @@ pub fn column_references(expr: &Expr, into: &mut Vec<String>) {
             column_references(left, into);
             column_references(right, into);
         }
+        Expr::Function { name, .. } if name == "__KAVEON_LAMBDA" => {}
         Expr::Function { args, .. } => {
             for arg in args {
                 column_references(arg, into);
@@ -2749,6 +2760,151 @@ fn array_sort_generic_directed<L: OffsetSizeTrait>(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
+}
+
+/// Evaluate Trino's two-argument ARRAY_SORT form. The comparator is represented
+/// in the logical plan as `__KAVEON_LAMBDA(param1, param2, body)` so the body
+/// crosses fragment serialization as ordinary Expr data. Each comparison gets
+/// a one-row batch containing the two element values; this keeps the normal
+/// expression evaluator (including CASE, IF, casts, and comparisons) as the
+/// single semantic implementation.
+fn eval_array_sort_comparator(
+    array_expr: &Expr,
+    lambda_args: &[Expr],
+    batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 3 {
+        return Err(KaveonError::Execution(
+            "ARRAY_SORT comparator lambda must have exactly two parameters".into(),
+        ));
+    }
+    let names = lambda_args[..2]
+        .iter()
+        .map(|arg| match arg {
+            Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => Ok(name.clone()),
+            _ => Err(KaveonError::Execution(
+                "ARRAY_SORT comparator parameters must be identifiers".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if names[0] == names[1] {
+        return Err(KaveonError::Execution(
+            "ARRAY_SORT comparator parameters must be distinct".into(),
+        ));
+    }
+    let body = &lambda_args[2];
+    let array = evaluate(array_expr, batch).and_then(|array| decode_dictionary(&array))?;
+    if let Some(list) = array.as_any().downcast_ref::<LargeListArray>() {
+        return array_sort_comparator_generic(list, &names, body);
+    }
+    let list = array
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution("ARRAY_SORT requires an ARRAY/List value".into()))?;
+    array_sort_comparator_generic(list, &names, body)
+}
+
+fn array_sort_comparator_generic<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    names: &[String],
+    body: &Expr,
+) -> Result<ArrayRef> {
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_SORT comparator result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let inner = list.value(row);
+        let mut entries = (0..inner.len())
+            .map(|index| {
+                if inner.is_null(index) {
+                    arrow::array::new_null_array(&list.value_type(), 1)
+                } else {
+                    inner.slice(index, 1)
+                }
+            })
+            .collect::<Vec<_>>();
+        // Insertion sort propagates comparator errors to the SQL caller and
+        // avoids relying on sort_by's infallible comparator contract.
+        for index in 1..entries.len() {
+            let mut cursor = index;
+            while cursor > 0
+                && compare_lambda_entries(&entries[cursor - 1], &entries[cursor], names, body)?
+                    == std::cmp::Ordering::Greater
+            {
+                entries.swap(cursor - 1, cursor);
+                cursor -= 1;
+            }
+        }
+        selected.extend(entries);
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_SORT comparator result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
+fn compare_lambda_entries(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    names: &[String],
+    body: &Expr,
+) -> Result<std::cmp::Ordering> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(&names[0], left.data_type().clone(), true),
+        Field::new(&names[1], right.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::clone(left), Arc::clone(right)])?;
+    let result = evaluate(body, &batch)?;
+    if result.len() != 1 || result.is_null(0) {
+        return Err(KaveonError::Execution(
+            "ARRAY_SORT comparator must return a non-null integer".into(),
+        ));
+    }
+    let sign = if let Some(value) = result.as_any().downcast_ref::<Int8Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<Int16Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<Int32Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<Int64Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<UInt8Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<UInt16Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<UInt32Array>() {
+        i128::from(value.value(0))
+    } else if let Some(value) = result.as_any().downcast_ref::<UInt64Array>() {
+        i128::from(value.value(0))
+    } else {
+        return Err(KaveonError::Execution(
+            "ARRAY_SORT comparator must return an integer".into(),
+        ));
+    };
+    Ok(sign.cmp(&0))
 }
 
 fn array_slice_generic<L: OffsetSizeTrait>(
@@ -16021,6 +16177,69 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some("pear"), Some("fig"), Some("apple")]
+        );
+    }
+
+    #[test]
+    fn array_sort_comparator_uses_lambda_body_and_preserves_result_type() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let compare = Expr::Function {
+            name: "__KAVEON_LAMBDA".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("x".into())),
+                Expr::Literal(ScalarValue::Utf8("y".into())),
+                Expr::Case {
+                    operand: None,
+                    when_then: vec![
+                        (
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("x".into())),
+                                op: BinaryOp::Lt,
+                                right: Box::new(Expr::Column("y".into())),
+                            },
+                            Expr::Literal(ScalarValue::Int64(-1)),
+                        ),
+                        (
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("x".into())),
+                                op: BinaryOp::Gt,
+                                right: Box::new(Expr::Column("y".into())),
+                            },
+                            Expr::Literal(ScalarValue::Int64(1)),
+                        ),
+                    ],
+                    else_expr: Some(Box::new(Expr::Literal(ScalarValue::Int64(0)))),
+                },
+            ],
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SORT".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(3)),
+                            Expr::Literal(ScalarValue::Int64(1)),
+                            Expr::Literal(ScalarValue::Int64(2)),
+                        ],
+                    },
+                    compare,
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::Int64);
+        assert_eq!(
+            list.value(0)
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
         );
     }
 

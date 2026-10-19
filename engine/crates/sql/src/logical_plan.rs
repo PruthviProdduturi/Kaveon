@@ -3665,6 +3665,27 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
+        ast::Expr::Lambda(lambda) => {
+            if lambda.params.len() != 2 {
+                return Err(sql_err(
+                    "ARRAY_SORT comparator lambda must have exactly two parameters",
+                ));
+            }
+            // Keep the closure as an expression node so it is serialized with
+            // the logical plan and evaluated at the array operator boundary.
+            // Parameter names are literal metadata; the body remains an Expr
+            // and therefore retains normal SQL operator/function semantics.
+            let mut args = lambda
+                .params
+                .iter()
+                .map(|param| Expr::Literal(ScalarValue::Utf8(param.value.clone())))
+                .collect::<Vec<_>>();
+            args.push(ast_expr_to_expr(&lambda.body)?);
+            Ok(Expr::Function {
+                name: "__KAVEON_LAMBDA".into(),
+                args,
+            })
+        }
         ast::Expr::CompositeAccess { expr, key } => Ok(Expr::Function {
             name: "ROW_FIELD".into(),
             args: vec![
@@ -8158,6 +8179,26 @@ mod tests {
             &columns[0],
             Expr::Function { name, args }
                 if name == "ARRAY" && args.len() == 2
+        ));
+    }
+
+    #[test]
+    fn lowers_array_sort_comparator_as_a_serializable_lambda_expression() {
+        let plan = sql_to_logical_plan(
+            "SELECT ARRAY_SORT(ARRAY[3, 1, 2], (x, y) -> CASE WHEN x < y THEN -1 WHEN x > y THEN 1 ELSE 0 END) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected ARRAY_SORT");
+        };
+        assert_eq!(name, "ARRAY_SORT");
+        assert!(matches!(
+            args.get(1),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 3
         ));
     }
 
