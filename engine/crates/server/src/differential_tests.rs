@@ -370,6 +370,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_reduce_lambda",
+        "SELECT REDUCE(ARRAY[1, 2, 3], 0, (state, value) -> state + value, state -> state * 2) AS reduced FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,

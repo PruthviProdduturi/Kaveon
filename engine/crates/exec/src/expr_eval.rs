@@ -235,6 +235,21 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_array_transform(&args[0], lambda_args, batch);
             }
+            if name.eq_ignore_ascii_case("REDUCE")
+                && args.len() == 4
+                && let Expr::Function {
+                    name: input_name,
+                    args: input_lambda,
+                } = &args[2]
+                && let Expr::Function {
+                    name: output_name,
+                    args: output_lambda,
+                } = &args[3]
+                && input_name == "__KAVEON_LAMBDA"
+                && output_name == "__KAVEON_LAMBDA"
+            {
+                return eval_array_reduce(&args[0], &args[1], input_lambda, output_lambda, batch);
+            }
             if let Some(result) = eval_function_through_dictionary(name, args, batch)? {
                 return Ok(result);
             }
@@ -3162,6 +3177,124 @@ fn eval_array_transform(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
+}
+
+/// Evaluate the bounded scalar form of Trino's `REDUCE` higher-order
+/// function. The input lambda receives `(state, element)` and the output
+/// lambda receives `(state)`; each is evaluated through the normal expression
+/// engine with outer-row columns available.
+fn eval_array_reduce(
+    array_expr: &Expr,
+    initial_expr: &Expr,
+    input_lambda: &[Expr],
+    output_lambda: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if input_lambda.len() != 3 || output_lambda.len() != 2 {
+        return Err(KaveonError::Execution(
+            "REDUCE requires a two-parameter input lambda and one-parameter output lambda".into(),
+        ));
+    }
+    let input_names = input_lambda[..2]
+        .iter()
+        .map(|arg| match arg {
+            Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => Ok(name.clone()),
+            _ => Err(KaveonError::Execution(
+                "REDUCE input lambda parameters must be identifiers".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let output_name = match &output_lambda[0] {
+        Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => name.clone(),
+        _ => {
+            return Err(KaveonError::Execution(
+                "REDUCE output lambda parameter must be an identifier".into(),
+            ));
+        }
+    };
+    if input_names[0] == input_names[1] {
+        return Err(KaveonError::Execution(
+            "REDUCE lambda parameters must be distinct".into(),
+        ));
+    }
+    let array = normalize_large_list(&decode_dictionary(&evaluate(array_expr, outer_batch)?)?)?;
+    let list = array
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution("REDUCE requires an ARRAY/List value".into()))?;
+    let initial = decode_dictionary(&evaluate(initial_expr, outer_batch)?)?;
+    if initial.len() != outer_batch.num_rows() {
+        return Err(KaveonError::Execution(
+            "REDUCE initial state must produce one value per row".into(),
+        ));
+    }
+    let mut results = Vec::<ArrayRef>::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            results.push(arrow::array::new_null_array(initial.data_type(), 1));
+            continue;
+        }
+        let inner = list.value(row);
+        let mut state = initial.slice(row, 1);
+        for index in 0..inner.len() {
+            let element = if inner.is_null(index) {
+                arrow::array::new_null_array(&list.value_type(), 1)
+            } else {
+                inner.slice(index, 1)
+            };
+            let mut fields = vec![
+                Field::new(&input_names[0], state.data_type().clone(), true),
+                Field::new(&input_names[1], element.data_type().clone(), true),
+            ];
+            let mut columns = vec![Arc::clone(&state), element];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if input_names.iter().any(|name| name == field.name()) {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let pair_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            state = decode_dictionary(&evaluate(&input_lambda[2], &pair_batch)?)?;
+            if state.len() != 1 {
+                return Err(KaveonError::Execution(
+                    "REDUCE input lambda must return one state value per element".into(),
+                ));
+            }
+        }
+        let mut fields = vec![Field::new(&output_name, state.data_type().clone(), true)];
+        let mut columns = vec![state];
+        for (field, column) in outer_batch
+            .schema()
+            .fields()
+            .iter()
+            .zip(outer_batch.columns())
+        {
+            if field.name() == &output_name {
+                continue;
+            }
+            fields.push(field.as_ref().clone());
+            columns.push(column.slice(row, 1));
+        }
+        let final_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        let result = decode_dictionary(&evaluate(&output_lambda[1], &final_batch)?)?;
+        if result.len() != 1 {
+            return Err(KaveonError::Execution(
+                "REDUCE output lambda must return one value per row".into(),
+            ));
+        }
+        results.push(result);
+    }
+    let chunks = results
+        .iter()
+        .map(|value| value.as_ref() as &dyn Array)
+        .collect::<Vec<_>>();
+    Ok(compute::concat(&chunks)?)
 }
 
 fn array_sort_comparator_generic<L: OffsetSizeTrait>(
@@ -16278,6 +16411,62 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some(2), None, Some(4)]
+        );
+    }
+
+    #[test]
+    fn reduce_applies_input_and_output_lambdas() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REDUCE".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(1)),
+                            Expr::Literal(ScalarValue::Int64(2)),
+                            Expr::Literal(ScalarValue::Int64(3)),
+                        ],
+                    },
+                    Expr::Literal(ScalarValue::Int64(0)),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("state".into())),
+                            Expr::Literal(ScalarValue::Utf8("value".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("state".into())),
+                                op: BinaryOp::Plus,
+                                right: Box::new(Expr::Column("value".into())),
+                            },
+                        ],
+                    },
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("state".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("state".into())),
+                                op: BinaryOp::Multiply,
+                                right: Box::new(Expr::Literal(ScalarValue::Int64(2))),
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[12]
         );
     }
 

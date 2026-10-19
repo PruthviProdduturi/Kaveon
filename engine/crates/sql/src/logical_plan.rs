@@ -8254,6 +8254,31 @@ mod tests {
     }
 
     #[test]
+    fn lowers_reduce_input_and_output_lambdas() {
+        let plan = sql_to_logical_plan(
+            "SELECT REDUCE(ARRAY[1, 2], 0, (state, value) -> state + value, state -> state * 2) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected REDUCE");
+        };
+        assert_eq!(name, "REDUCE");
+        assert!(matches!(
+            args.get(2),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 3
+        ));
+        assert!(matches!(
+            args.get(3),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 2
+        ));
+    }
+
+    #[test]
     fn parses_cardinality_over_an_array_literal() {
         let plan = sql_to_logical_plan("SELECT CARDINALITY(ARRAY[1, 2.5]) FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
