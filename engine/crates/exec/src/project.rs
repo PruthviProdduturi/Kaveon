@@ -235,6 +235,11 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
             {
                 return Ok((Field::new(output_name, data_type, true), None));
             }
+            if name.eq_ignore_ascii_case("TRANSFORM")
+                && let Some(data_type) = expression_data_type(expr, schema)
+            {
+                return Ok((Field::new(output_name, data_type, true), None));
+            }
             let data_type = evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
                 .data_type()
                 .clone();
@@ -436,6 +441,43 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
             Some(DataType::List(Arc::new(Field::new(
                 "item",
                 element_type,
+                true,
+            ))))
+        }
+        Expr::Function { name, args }
+            if name.eq_ignore_ascii_case("TRANSFORM") && args.len() == 2 =>
+        {
+            let data_type = expression_data_type(&args[0], schema)?;
+            let element_type = match data_type {
+                DataType::List(field) | DataType::LargeList(field) => field.data_type().clone(),
+                _ => return None,
+            };
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[1]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 2 {
+                return None;
+            }
+            let Expr::Literal(ScalarValue::Utf8(parameter)) = &lambda_args[0] else {
+                return None;
+            };
+            let mut fields = vec![Field::new(parameter, element_type, true)];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|field| field.name() != parameter)
+                    .map(|field| field.as_ref().clone()),
+            );
+            let result_type =
+                expression_data_type(&lambda_args[1], &Arc::new(Schema::new(fields)))?;
+            Some(DataType::List(Arc::new(Field::new(
+                "item",
+                result_type,
                 true,
             ))))
         }
