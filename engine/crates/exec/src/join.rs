@@ -1,5 +1,7 @@
 use ahash::{AHashMap, AHashSet};
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, StringViewArray, UInt64Array,
+};
 #[cfg(test)]
 use arrow::array::{Float32Array, Float64Array, UInt32Array};
 use arrow::compute::{concat_batches, take};
@@ -377,6 +379,22 @@ impl BuildKeyFilter {
                 }
                 arrow::datatypes::DataType::LargeUtf8 => {
                     let values = column.as_string::<i64>();
+                    Ok((0..batch.num_rows())
+                        .map(|row| {
+                            values.is_valid(row)
+                                && (first_rows.contains_key(values.value(row))
+                                    || duplicate_rows.contains_key(values.value(row)))
+                        })
+                        .collect::<Vec<_>>()
+                        .into())
+                }
+                arrow::datatypes::DataType::Utf8View => {
+                    let values = column
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .ok_or_else(|| {
+                            exec_err("UTF-8 view runtime filter key has an invalid type")
+                        })?;
                     Ok((0..batch.num_rows())
                         .map(|row| {
                             values.is_valid(row)
@@ -1708,7 +1726,7 @@ impl JoinIndex {
         if let [(.., index)] = keys
             && matches!(
                 right.column(*index).data_type(),
-                DataType::Utf8 | DataType::LargeUtf8
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             )
         {
             let column = right.column(*index);
@@ -1727,6 +1745,19 @@ impl JoinIndex {
                         .as_string::<i64>()
                         .is_valid(row)
                         .then(|| column.as_string::<i64>().value(row).to_owned()),
+                    DataType::Utf8View => column
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .ok_or_else(|| exec_err("UTF-8 view join key has an invalid type"))?
+                        .is_valid(row)
+                        .then(|| {
+                            column
+                                .as_any()
+                                .downcast_ref::<StringViewArray>()
+                                .expect("UTF-8 view type checked above")
+                                .value(row)
+                                .to_owned()
+                        }),
                     _ => unreachable!("the key type was checked above"),
                 };
                 if let Some(key) = key {
@@ -2030,6 +2061,25 @@ impl JoinIndex {
                             }
                         }
                     }
+                    DataType::Utf8View => {
+                        let values = column
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .ok_or_else(|| exec_err("UTF-8 view join key has an invalid type"))?;
+                        if values.is_null(row) {
+                            None
+                        } else {
+                            let key = values.value(row);
+                            if duplicate_rows.is_empty() {
+                                first_rows.get(key).map(std::slice::from_ref)
+                            } else {
+                                duplicate_rows
+                                    .get(key)
+                                    .map(Vec::as_slice)
+                                    .or_else(|| first_rows.get(key).map(std::slice::from_ref))
+                            }
+                        }
+                    }
                     _ => return Err(exec_err("join key type changed after planning")),
                 }
             }
@@ -2260,6 +2310,14 @@ fn row_key(
                 }
                 DataType::Utf8 => Key::Utf8(column.as_string::<i32>().value(row).to_owned()),
                 DataType::LargeUtf8 => Key::Utf8(column.as_string::<i64>().value(row).to_owned()),
+                DataType::Utf8View => Key::Utf8(
+                    column
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .ok_or_else(|| exec_err("UTF-8 view join key has an invalid type"))?
+                        .value(row)
+                        .to_owned(),
+                ),
                 DataType::Dictionary(key_type, value_type)
                     if matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
                 {
