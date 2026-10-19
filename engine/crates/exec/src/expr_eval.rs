@@ -2965,7 +2965,7 @@ fn eval_zip_with(
     let mut selected = Vec::<ArrayRef>::new();
     let mut offsets = vec![0_i32];
     let mut valid = Vec::with_capacity(left.len());
-    let mut result_type = None;
+    let mut result_type: Option<DataType> = None;
     for row in 0..left.len() {
         if left.is_null(row) || right.is_null(row) {
             valid.push(false);
@@ -3738,7 +3738,47 @@ fn eval_transform_values(
     }
     let keys = compute::take(map.keys().as_ref(), &UInt32Array::from(selected), None)?;
     let values = if transformed.is_empty() {
-        map.values().slice(0, 0)
+        // Empty and all-NULL maps still need the lambda's result type. Evaluate
+        // the body once against typed NULLs so the output schema reflects the
+        // transform rather than the input value type.
+        let mut fields = vec![
+            Field::new(&parameter_names[0], key_type.clone(), true),
+            Field::new(&parameter_names[1], value_type.clone(), true),
+        ];
+        let mut columns = vec![
+            arrow::array::new_null_array(&key_type, 1),
+            arrow::array::new_null_array(&value_type, 1),
+        ];
+        for (field, column) in outer_batch
+            .schema()
+            .fields()
+            .iter()
+            .zip(outer_batch.columns())
+        {
+            if parameter_names.iter().any(|name| name == field.name()) {
+                continue;
+            }
+            let empty_outer_column = column.is_empty();
+            fields.push(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_nullable(field.is_nullable() || empty_outer_column),
+            );
+            columns.push(if empty_outer_column {
+                arrow::array::new_null_array(field.data_type(), 1)
+            } else {
+                column.slice(0, 1)
+            });
+        }
+        let hint_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        let hint = decode_dictionary(&evaluate(&lambda_args[2], &hint_batch)?)?;
+        if hint.len() != 1 {
+            return Err(KaveonError::Execution(
+                "TRANSFORM_VALUES lambda must return one value per entry".into(),
+            ));
+        }
+        arrow::array::new_empty_array(hint.data_type())
     } else {
         let chunks = transformed
             .iter()
@@ -17695,6 +17735,68 @@ mod tests {
         assert_eq!(map.keys().as_string::<i32>().value(0), "a");
         assert_eq!(map.keys().as_string::<i32>().value(1), "b");
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 3]);
+    }
+
+    #[test]
+    fn transform_values_empty_map_preserves_lambda_result_type() {
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let empty_map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(entry_fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 0_i32])),
+                StructArray::new(
+                    entry_fields,
+                    vec![
+                        Arc::new(StringArray::from(Vec::<&str>::new())),
+                        Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    ],
+                    None,
+                ),
+                Some(arrow::buffer::NullBuffer::from(vec![true])),
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("input_map", empty_map.data_type().clone(), false),
+            ])),
+            vec![Arc::new(Int64Array::from(vec![1])), empty_map],
+        )
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "TRANSFORM_VALUES".into(),
+                args: vec![
+                    Expr::Column("input_map".into()),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("key".into())),
+                            Expr::Literal(ScalarValue::Utf8("value".into())),
+                            Expr::Cast {
+                                expr: Box::new(Expr::Column("value".into())),
+                                data_type: CastTarget::Utf8,
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 0]);
+        assert_eq!(map.values().data_type(), &DataType::Utf8);
     }
 
     #[test]
