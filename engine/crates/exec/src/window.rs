@@ -681,9 +681,9 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
     }
     let position = |b| match b {
         UnboundedPreceding => i128::MIN,
-        Preceding(n) => -(n as i128),
+        Preceding(n) | PrecedingDays(n) => -(n as i128),
         CurrentRow => 0,
-        Following(n) => n as i128,
+        Following(n) | FollowingDays(n) => n as i128,
         UnboundedFollowing => i128::MAX,
     };
     if position(frame.start) > position(frame.end) {
@@ -693,16 +693,26 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
         return Err(error("GROUPS frame requires ORDER BY"));
     }
     if matches!(frame.units, WindowFrameUnits::Range)
-        && matches!(frame.start, Preceding(_) | Following(_))
+        && matches!(
+            frame.start,
+            Preceding(_) | Following(_) | PrecedingDays(_) | FollowingDays(_)
+        )
         || matches!(frame.units, WindowFrameUnits::Range)
-            && matches!(frame.end, Preceding(_) | Following(_))
+            && matches!(
+                frame.end,
+                Preceding(_) | Following(_) | PrecedingDays(_) | FollowingDays(_)
+            )
     {
         if order_count != 1 {
             return Err(error(
                 "RANGE with offsets requires exactly one ORDER BY expression",
             ));
         }
-        if !matches!(
+        let has_numeric = matches!(frame.start, Preceding(_) | Following(_))
+            || matches!(frame.end, Preceding(_) | Following(_));
+        let has_days = matches!(frame.start, PrecedingDays(_) | FollowingDays(_))
+            || matches!(frame.end, PrecedingDays(_) | FollowingDays(_));
+        let numeric_order = matches!(
             cols[0].data_type(),
             DataType::Int8
                 | DataType::Int16
@@ -713,9 +723,12 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
                 | DataType::Float32
                 | DataType::Float64
                 | DataType::Decimal128(_, _)
-        ) {
+        );
+        if (has_numeric && !numeric_order)
+            || (has_days && !matches!(cols[0].data_type(), DataType::Date32))
+        {
             return Err(error(
-                "RANGE offsets support integer, decimal, and Float64 ordering",
+                "RANGE offsets support numeric ordering; INTERVAL DAY requires DATE ordering",
             ));
         }
     }
@@ -750,8 +763,8 @@ fn frame_bounds(
             } as i128;
             let target =
                 base + match b {
-                    Preceding(n) => -(n as i128),
-                    Following(n) => n as i128,
+                    Preceding(n) | PrecedingDays(n) => -(n as i128),
+                    Following(n) | FollowingDays(n) => n as i128,
                     _ => 0,
                 } + i128::from(end);
             let count = if matches!(frame.units, WindowFrameUnits::Rows) {
@@ -770,8 +783,8 @@ fn frame_bounds(
             return Ok(starts[groups[pos] + usize::from(end)]);
         }
         let amount = match b {
-            Preceding(n) => -(n as i128),
-            Following(n) => n as i128,
+            Preceding(n) | PrecedingDays(n) => -(n as i128),
+            Following(n) | FollowingDays(n) => n as i128,
             _ => unreachable!(),
         };
         let ascending = order[0].1;
@@ -838,6 +851,13 @@ fn compare_offset(col: &ArrayRef, row: usize, current: usize, offset: i128) -> R
         DataType::UInt64 => (
             col.as_primitive::<UInt64Type>().value(row) as i128,
             col.as_primitive::<UInt64Type>().value(current) as i128,
+            offset,
+        ),
+        DataType::Date32 => (
+            col.as_primitive::<arrow::datatypes::Date32Type>()
+                .value(row) as i128,
+            col.as_primitive::<arrow::datatypes::Date32Type>()
+                .value(current) as i128,
             offset,
         ),
         DataType::Decimal128(_, scale) => {
@@ -998,7 +1018,8 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::array::{
-        DictionaryArray, Float32Array, Int8Array, Int16Array, Int32Array, StringArray, UInt32Array,
+        Date32Array, DictionaryArray, Float32Array, Int8Array, Int16Array, Int32Array, StringArray,
+        UInt32Array,
     };
     use arrow::datatypes::Int32Type;
     use kaveon_core::predicate::ScalarValue;
@@ -1472,6 +1493,33 @@ mod tests {
             order_by[0].2 = true;
         }
         assert_eq!(ints(expr, &input), vec![Some(2), Some(1), Some(3)]);
+    }
+
+    #[test]
+    fn date_range_interval_day_offsets_use_calendar_day_values() {
+        let dates = Date32Array::from(vec![10, 11, 13, 14]);
+        let values = Int64Array::from(vec![1, 1, 1, 1]);
+        let batch = RecordBatch::try_from_iter([
+            ("d", Arc::new(dates) as ArrayRef),
+            ("v", Arc::new(values) as ArrayRef),
+        ])
+        .unwrap();
+        let expr = Expr::WindowFunction {
+            name: "SUM".into(),
+            args: vec![Expr::Column("v".into())],
+            partition_by: vec![],
+            order_by: vec![(Expr::Column("d".into()), true, false)],
+            frame: Some(WindowFrame {
+                units: WindowFrameUnits::Range,
+                start: WindowFrameBound::PrecedingDays(2),
+                end: WindowFrameBound::FollowingDays(1),
+            }),
+        };
+        let output = evaluate_window(&expr, &batch).unwrap();
+        assert_eq!(
+            output.as_primitive::<Int64Type>().values().as_ref(),
+            &[2, 2, 3, 2]
+        );
     }
 
     #[test]

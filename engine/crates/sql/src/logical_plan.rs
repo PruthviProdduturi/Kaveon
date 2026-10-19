@@ -5204,10 +5204,35 @@ fn ast_window_frame(frame: &ast::WindowFrame) -> Result<WindowFrame> {
 }
 
 fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBound> {
+    fn interval_days(expr: &ast::Expr) -> Result<Option<u64>> {
+        let ast::Expr::Interval(interval) = expr else {
+            return Ok(None);
+        };
+        if interval.leading_field != Some(ast::DateTimeField::Day) || interval.last_field.is_some()
+        {
+            return Err(sql_err(
+                "temporal RANGE offsets currently support INTERVAL DAY only",
+            ));
+        }
+        let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = interval.value.as_ref()
+        else {
+            return Err(sql_err(
+                "INTERVAL DAY RANGE offset must be a string literal",
+            ));
+        };
+        let days = value
+            .parse::<u64>()
+            .map_err(|_| sql_err(format!("invalid INTERVAL DAY RANGE offset: {value}")))?;
+        Ok(Some(days))
+    }
+
     match bound {
         ast::WindowFrameBound::CurrentRow => Ok(WindowFrameBound::CurrentRow),
         ast::WindowFrameBound::Preceding(None) => Ok(WindowFrameBound::UnboundedPreceding),
         ast::WindowFrameBound::Preceding(Some(expr)) => match expr.as_ref() {
+            expr if interval_days(expr)?.is_some() => Ok(WindowFrameBound::PrecedingDays(
+                interval_days(expr)?.unwrap(),
+            )),
             ast::Expr::Value(v) => match v {
                 ast::Value::Number(n, _) => n
                     .parse::<u64>()
@@ -5219,6 +5244,9 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
         },
         ast::WindowFrameBound::Following(None) => Ok(WindowFrameBound::UnboundedFollowing),
         ast::WindowFrameBound::Following(Some(expr)) => match expr.as_ref() {
+            expr if interval_days(expr)?.is_some() => Ok(WindowFrameBound::FollowingDays(
+                interval_days(expr)?.unwrap(),
+            )),
             ast::Expr::Value(v) => match v {
                 ast::Value::Number(n, _) => n
                     .parse::<u64>()
@@ -7718,6 +7746,26 @@ mod tests {
         assert_eq!(frame.units, WindowFrameUnits::Rows);
         assert_eq!(frame.start, WindowFrameBound::Preceding(2));
         assert_eq!(frame.end, WindowFrameBound::CurrentRow);
+    }
+
+    #[test]
+    fn parses_temporal_range_interval_day_bounds() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(v) OVER (ORDER BY d RANGE BETWEEN INTERVAL '2' DAY PRECEDING AND INTERVAL '1' DAY FOLLOWING) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected window expression");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.start, WindowFrameBound::PrecedingDays(2));
+        assert_eq!(frame.end, WindowFrameBound::FollowingDays(1));
     }
 
     #[test]
