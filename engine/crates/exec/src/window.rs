@@ -8,8 +8,8 @@ use arrow::{
     array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
     compute::{SortColumn, SortOptions, cast, concat_batches, lexsort_to_indices, take},
     datatypes::{
-        DataType, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Schema,
-        SchemaRef, UInt64Type,
+        DataType, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+        Schema, SchemaRef, UInt64Type,
     },
 };
 use kaveon_core::{
@@ -704,7 +704,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
         }
         if !matches!(
             cols[0].data_type(),
-            DataType::Int16
+            DataType::Int8
+                | DataType::Int16
                 | DataType::Int32
                 | DataType::UInt32
                 | DataType::Int64
@@ -807,6 +808,11 @@ fn frame_bounds(
 
 fn compare_offset(col: &ArrayRef, row: usize, current: usize, offset: i128) -> Result<Ordering> {
     let pair = match col.data_type() {
+        DataType::Int8 => (
+            col.as_primitive::<Int8Type>().value(row) as i128,
+            col.as_primitive::<Int8Type>().value(current) as i128,
+            offset,
+        ),
         DataType::Int16 => (
             col.as_primitive::<Int16Type>().value(row) as i128,
             col.as_primitive::<Int16Type>().value(current) as i128,
@@ -976,7 +982,7 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::array::{
-        DictionaryArray, Float32Array, Int16Array, Int32Array, StringArray, UInt32Array,
+        DictionaryArray, Float32Array, Int8Array, Int16Array, Int32Array, StringArray, UInt32Array,
     };
     use arrow::datatypes::Int32Type;
     use kaveon_core::predicate::ScalarValue;
@@ -1280,6 +1286,54 @@ mod tests {
         let input = uint32_batch(vec![Some(1), Some(2), Some(3), None]);
         let expr = expression("COUNT", frame(Range, Preceding(1), CurrentRow));
         assert_eq!(ints(expr, &input), vec![Some(1), Some(2), Some(2), Some(1)]);
+    }
+
+    #[test]
+    fn range_offsets_support_int8_extremes_and_null_peers() {
+        use WindowFrameBound::*;
+        use WindowFrameUnits::*;
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Int8, true)])),
+            vec![Arc::new(Int8Array::from(vec![
+                Some(i8::MIN),
+                Some(i8::MIN + 1),
+                Some(0),
+                Some(i8::MAX - 1),
+                Some(i8::MAX),
+                Some(i8::MAX),
+                None,
+                None,
+            ]))],
+        )
+        .unwrap();
+        for (ascending, start, end, expected) in [
+            (true, Preceding(1), CurrentRow, vec![1, 2, 1, 1, 3, 3, 2, 2]),
+            (true, CurrentRow, Following(1), vec![2, 1, 1, 3, 2, 2, 2, 2]),
+            (
+                false,
+                Preceding(1),
+                CurrentRow,
+                vec![2, 1, 1, 3, 2, 2, 2, 2],
+            ),
+            (
+                false,
+                CurrentRow,
+                Following(1),
+                vec![1, 2, 1, 1, 3, 3, 2, 2],
+            ),
+        ] {
+            for nulls_first in [true, false] {
+                let mut expr = expression("COUNT", frame(Range, start, end));
+                if let Expr::WindowFunction { order_by, .. } = &mut expr {
+                    order_by[0].1 = ascending;
+                    order_by[0].2 = nulls_first;
+                }
+                assert_eq!(
+                    ints(expr, &input),
+                    expected.iter().copied().map(Some).collect::<Vec<_>>()
+                );
+            }
+        }
     }
 
     #[test]
