@@ -5023,6 +5023,139 @@ fn array_ngrams<L: OffsetSizeTrait>(
     )?))
 }
 
+/// Return every `n`-element combination from each input array in input order.
+///
+/// Trino bounds `COMBINATIONS` to a small `n` and a bounded result size.  Keep
+/// those limits explicit here so a single expression cannot allocate an
+/// unbounded nested array inside a query batch.
+fn array_combinations<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    sizes: &Int64Array,
+) -> Result<ArrayRef> {
+    const MAX_N: usize = 5;
+    const MAX_OUTPUT_VALUES: usize = 100_000;
+    if list.len() != sizes.len() {
+        return Err(KaveonError::Execution(
+            "COMBINATIONS requires one n value per row".into(),
+        ));
+    }
+
+    let mut combinations = Vec::<ArrayRef>::new();
+    let mut inner_offsets = vec![0i32];
+    let mut outer_offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) || sizes.is_null(row) {
+            valid.push(false);
+            outer_offsets.push(L::from_usize(combinations.len()).ok_or_else(|| {
+                KaveonError::Execution("COMBINATIONS result offset overflow".into())
+            })?);
+            continue;
+        }
+        let n = usize::try_from(sizes.value(row))
+            .map_err(|_| KaveonError::Execution("COMBINATIONS n must be between 0 and 5".into()))?;
+        if n > MAX_N {
+            return Err(KaveonError::Execution(
+                "COMBINATIONS n must be between 0 and 5".into(),
+            ));
+        }
+
+        let values = list.value(row);
+        let row_start = combinations.len();
+        let mut row_output_values = 0usize;
+        if n == 0 {
+            combinations.push(arrow::array::new_empty_array(values.data_type()));
+            inner_offsets.push(*inner_offsets.last().unwrap_or(&0));
+        } else if n <= values.len() {
+            let mut selected = Vec::with_capacity(n);
+            emit_combinations(0, n, values.len(), &mut selected, &mut |indices| {
+                if combinations.len().saturating_sub(row_start) >= MAX_OUTPUT_VALUES
+                    || row_output_values
+                        .checked_add(indices.len())
+                        .is_none_or(|size| size > MAX_OUTPUT_VALUES)
+                {
+                    return Err(KaveonError::Execution(
+                        "COMBINATIONS result exceeds the 100000 element limit".into(),
+                    ));
+                }
+                let indices = UInt32Array::from(
+                    indices
+                        .iter()
+                        .map(|index| u32::try_from(*index))
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(|_| {
+                            KaveonError::Execution("COMBINATIONS index overflow".into())
+                        })?,
+                );
+                let combination = compute::take(values.as_ref(), &indices, None)?;
+                combinations.push(combination);
+                let end = inner_offsets
+                    .last()
+                    .copied()
+                    .unwrap_or_default()
+                    .checked_add(i32::try_from(indices.len()).map_err(|_| {
+                        KaveonError::Execution("COMBINATIONS inner offset overflow".into())
+                    })?)
+                    .ok_or_else(|| {
+                        KaveonError::Execution("COMBINATIONS inner offset overflow".into())
+                    })?;
+                inner_offsets.push(end);
+                row_output_values += indices.len();
+                Ok(())
+            })?;
+        }
+        valid.push(true);
+        outer_offsets.push(
+            L::from_usize(combinations.len()).ok_or_else(|| {
+                KaveonError::Execution("COMBINATIONS result offset overflow".into())
+            })?,
+        );
+    }
+
+    let values = if combinations.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let arrays = combinations
+            .iter()
+            .map(|combination| combination.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&arrays)?
+    };
+    let inner_field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    let inner = Arc::new(ListArray::try_new(
+        inner_field,
+        OffsetBuffer::new(ScalarBuffer::from(inner_offsets)),
+        values,
+        None,
+    )?) as ArrayRef;
+    let outer_field = Arc::new(Field::new("item", inner.data_type().clone(), true));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        outer_field,
+        OffsetBuffer::new(ScalarBuffer::from(outer_offsets)),
+        inner,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
+fn emit_combinations(
+    start: usize,
+    remaining: usize,
+    len: usize,
+    selected: &mut Vec<usize>,
+    emit: &mut impl FnMut(&[usize]) -> Result<()>,
+) -> Result<()> {
+    if remaining == 0 {
+        return emit(selected);
+    }
+    let max_start = len.saturating_sub(remaining);
+    for index in start..=max_start {
+        selected.push(index);
+        emit_combinations(index + 1, remaining - 1, len, selected, emit)?;
+        selected.pop();
+    }
+    Ok(())
+}
+
 fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     match list.value_type() {
         DataType::Int8 => array_histogram_primitive::<L, Int8Type>(list),
@@ -6294,6 +6427,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         return Err(KaveonError::Execution(
             "ARRAY_NGRAMS requires an ARRAY/List value".into(),
+        ));
+    }
+    if upper == "COMBINATIONS" {
+        check_arity(name, args, 2)?;
+        let sizes = compute::cast(&args[1], &DataType::Int64)?;
+        let sizes = sizes.as_primitive::<Int64Type>();
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_combinations(list, sizes);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_combinations(list, sizes);
+        }
+        return Err(KaveonError::Execution(
+            "COMBINATIONS requires an ARRAY/List value".into(),
         ));
     }
     if upper == "ARRAY_HISTOGRAM" {
@@ -21518,6 +21665,61 @@ mod tests {
         let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
         let empty = outer.value(0);
         assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn combinations_emits_ordered_nested_arrays_and_empty_zero_combinations() {
+        let mut input = ListBuilder::new(Int64Builder::new());
+        for value in [1_i64, 2, 3] {
+            input.values().append_value(value);
+        }
+        input.append(true);
+        input.append(false);
+        input.values().append_value(9);
+        input.append(true);
+
+        let result = eval_scalar_function(
+            "COMBINATIONS",
+            &[
+                Arc::new(input.finish()) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2, 2, 0])) as ArrayRef,
+            ],
+            3,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let first_array = outer.value(0);
+        let first = first_array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(first.len(), 3);
+        assert_eq!(first.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(first.value(1).as_primitive::<Int64Type>().values(), &[1, 3]);
+        assert_eq!(first.value(2).as_primitive::<Int64Type>().values(), &[2, 3]);
+        assert!(outer.is_null(1));
+        let zero_array = outer.value(2);
+        let zero = zero_array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(zero.len(), 1);
+        assert_eq!(zero.value(0).len(), 0);
+    }
+
+    #[test]
+    fn combinations_rejects_n_above_trino_bound() {
+        let mut input = ListBuilder::new(Int64Builder::new());
+        input.values().append_value(1);
+        input.append(true);
+        let error = eval_scalar_function(
+            "COMBINATIONS",
+            &[
+                Arc::new(input.finish()) as ArrayRef,
+                Arc::new(Int64Array::from(vec![6])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("COMBINATIONS n must be between 0 and 5")
+        );
     }
 
     #[test]
