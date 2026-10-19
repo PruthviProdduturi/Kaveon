@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::scan_predicate::{RowFilterPlan, rescale_decimal128, rescale_decimal256};
+use crate::scan_predicate::{
+    CompiledPredicate, RowFilterPlan, rescale_decimal128, rescale_decimal256,
+};
 use crate::{ScanMetrics, ScanPartition};
 
 // Larger batches amortize parquet decoder and aggregate dispatch overhead on
@@ -53,6 +55,7 @@ pub struct ParquetBatchIterator {
     row_groups: Option<Vec<usize>>,
     partition: Option<ScanPartition>,
     filter_dirty: bool,
+    late_filter: Option<CompiledPredicate>,
 }
 
 enum ParquetBatchInner {
@@ -90,22 +93,28 @@ struct DirectoryFiles {
 }
 
 impl DirectoryFiles {
-    fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> bool {
-        if self.current.is_some() || values.is_empty() || self.file_schema.index_of(column).is_err()
+    fn apply_runtime_filter(&mut self, column: &str, values: &[ScalarValue]) -> Result<bool> {
+        if values.is_empty() || self.file_schema.index_of(column).is_err() {
+            return Ok(false);
+        }
+        // An already-open file can filter its remaining decoded batches.
+        // Future files still receive the predicate before their decoder starts.
+        if let Some((current, _)) = &mut self.current
+            && !current.apply_runtime_filter(column, values)?
         {
-            return false;
+            return Ok(false);
         }
         let predicate = StoragePredicate::In {
             column: column.to_owned(),
             values: values.to_vec(),
         };
-        for file in &mut self.files {
+        for file in &mut self.files[self.next..] {
             file.residual = Some(match file.residual.take() {
                 Some(existing) => StoragePredicate::And(vec![existing, predicate.clone()]),
                 None => predicate.clone(),
             });
         }
-        true
+        Ok(true)
     }
 
     fn open_next(&mut self, metrics: &ScanMetrics) -> Result<bool> {
@@ -158,24 +167,38 @@ impl Iterator for ParquetBatchIterator {
             return Some(Err(error));
         }
         match &mut self.inner {
-            ParquetBatchInner::File(inner) => {
+            ParquetBatchInner::File(inner) => loop {
                 let started = Instant::now();
                 let result = inner.next();
                 self.metrics.read_time(started.elapsed());
-                result.map(|result| {
-                    result
-                        .inspect(|batch| {
-                            self.metrics.emitted(batch.num_rows());
-                        })
-                        .map_err(|error| storage_error(error.to_string()))
-                        .and_then(|batch| match &self.output_projection {
-                            Some(indices) => batch
-                                .project(indices)
-                                .map_err(|e| storage_error(e.to_string())),
-                            None => Ok(batch),
-                        })
-                })
-            }
+                let batch = result?
+                    .map_err(|error| storage_error(error.to_string()))
+                    .and_then(|batch| match &self.output_projection {
+                        Some(indices) => batch
+                            .project(indices)
+                            .map_err(|e| storage_error(e.to_string())),
+                        None => Ok(batch),
+                    })
+                    .and_then(|batch| {
+                        if let Some(predicate) = &self.late_filter {
+                            let mask = predicate.selection(&batch)?;
+                            self.metrics.row_filter_examined(batch.num_rows());
+                            let filtered = arrow::compute::filter_record_batch(&batch, &mask)?;
+                            self.metrics.row_filter_admitted(filtered.num_rows());
+                            Ok(filtered)
+                        } else {
+                            Ok(batch)
+                        }
+                    });
+                match batch {
+                    Ok(batch) if batch.num_rows() == 0 && self.late_filter.is_some() => continue,
+                    Ok(batch) => {
+                        self.metrics.emitted(batch.num_rows());
+                        return Some(Ok(batch));
+                    }
+                    Err(error) => return Some(Err(error)),
+                }
+            },
             ParquetBatchInner::Directory(directory) => loop {
                 if let Some((current, position)) = directory.current.as_mut() {
                     match current.next() {
@@ -217,19 +240,34 @@ impl BatchSource for ParquetBatchIterator {
             return Ok(false);
         }
         if let ParquetBatchInner::Directory(directory) = &mut self.inner {
-            let accepted = directory.apply_runtime_filter(column, values);
-            if accepted {
+            let current_counts_filter = directory.current.is_some();
+            let accepted = directory.apply_runtime_filter(column, values)?;
+            if accepted && !current_counts_filter {
                 self.metrics.runtime_filter_applied(values.len());
             }
             return Ok(accepted);
-        }
-        if !matches!(self.inner, ParquetBatchInner::Deferred(_)) {
-            return Ok(false);
         }
         let predicate = StoragePredicate::In {
             column: column.to_owned(),
             values: values.to_vec(),
         };
+        if matches!(self.inner, ParquetBatchInner::File(_)) {
+            // A running decoder cannot be rebuilt without replaying rows.
+            // Filter only future batches, using projected columns whose exact
+            // comparison is supported; decline hidden/unsupported columns.
+            let Some(compiled) = CompiledPredicate::compile(&predicate, &self.schema) else {
+                return Ok(false);
+            };
+            self.late_filter = Some(match self.late_filter.take() {
+                Some(existing) => CompiledPredicate::And(vec![existing, compiled]),
+                None => compiled,
+            });
+            self.metrics.runtime_filter_applied(values.len());
+            return Ok(true);
+        }
+        if !matches!(self.inner, ParquetBatchInner::Deferred(_)) {
+            return Ok(false);
+        }
         self.predicate = Some(match self.predicate.take() {
             Some(existing) => StoragePredicate::And(vec![existing, predicate]),
             None => predicate,
@@ -408,6 +446,7 @@ impl ParquetReader {
             row_groups: self.row_groups.clone(),
             partition: self.partition,
             filter_dirty: false,
+            late_filter: None,
         })
     }
 
@@ -434,6 +473,7 @@ impl ParquetReader {
             row_groups: self.row_groups.clone(),
             partition: self.partition,
             filter_dirty: false,
+            late_filter: None,
         })
     }
 
@@ -514,6 +554,7 @@ impl ParquetReader {
             row_groups: self.row_groups.clone(),
             partition: self.partition,
             filter_dirty: false,
+            late_filter: None,
         })
     }
 
@@ -1907,6 +1948,82 @@ mod tests {
     }
 
     #[test]
+    fn late_runtime_filter_intersects_remaining_parquet_batches() {
+        let file = fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_batch_size(1)
+            .with_columns(vec!["label".into(), "id".into()])
+            .read()
+            .unwrap();
+        let metrics = source.metrics();
+        assert_eq!(source.next().unwrap().unwrap().num_rows(), 1);
+        assert!(
+            source
+                .apply_runtime_filter(
+                    "id",
+                    &[
+                        ScalarValue::Int64(1),
+                        ScalarValue::Int64(4),
+                        ScalarValue::Int64(5),
+                    ]
+                )
+                .unwrap()
+        );
+        assert!(
+            source
+                .apply_runtime_filter("label", &[ScalarValue::Utf8("e".into())])
+                .unwrap()
+        );
+        let batches = source.collect::<Result<Vec<_>>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(
+            batches[0]
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[4]
+        );
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.runtime_filters_applied, 2);
+        assert_eq!(snapshot.runtime_filter_values, 4);
+        assert_eq!(snapshot.row_filter_rows_examined, 5);
+        assert_eq!(snapshot.row_filter_rows_admitted, 1);
+        assert_eq!(snapshot.rows_emitted, 2);
+    }
+
+    #[test]
+    fn late_runtime_filter_declines_hidden_or_incompatible_columns() {
+        let file = fixture();
+        let mut source = ParquetReader::new(&file.0)
+            .with_batch_size(1)
+            .with_columns(vec!["label".into()])
+            .read()
+            .unwrap();
+        assert!(source.next().unwrap().is_ok());
+        assert!(
+            !source
+                .apply_runtime_filter("id", &[ScalarValue::Int64(4)])
+                .unwrap()
+        );
+        assert!(
+            !source
+                .apply_runtime_filter("label", &[ScalarValue::Int64(4)])
+                .unwrap()
+        );
+        assert_eq!(
+            source
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            5
+        );
+    }
+
+    #[test]
     fn runtime_filter_accepts_date64_columns() {
         assert!(scalar_matches_data_type(
             &ScalarValue::Int64(1_704_067_200_000),
@@ -2994,6 +3111,65 @@ mod tests {
         }
         ids.sort_unstable();
         ids
+    }
+
+    #[test]
+    fn late_runtime_filter_prunes_unopened_directory_row_groups() {
+        let (directory, _) = directory_fixture();
+        let mut source = ParquetReader::new(&directory.0)
+            .with_batch_size(1)
+            .read()
+            .unwrap();
+        let metrics = source.metrics();
+        assert_eq!(source.next().unwrap().unwrap().num_rows(), 1);
+        assert!(
+            source
+                .apply_runtime_filter("id", &[ScalarValue::Int64(2), ScalarValue::Int64(104)])
+                .unwrap()
+        );
+        assert_eq!(ids(source), vec![2, 104]);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.runtime_filters_applied, 1);
+        assert_eq!(snapshot.runtime_filter_values, 2);
+        assert_eq!(snapshot.row_groups_considered, 14);
+        assert_eq!(snapshot.row_groups_selected, 3);
+        assert_eq!(snapshot.rows_emitted, 3);
+    }
+
+    #[test]
+    fn late_runtime_filter_preserves_partitioned_directory_scan_results() {
+        let (directory, _) = directory_fixture();
+        let mut matches = Vec::new();
+        for index in 0..2 {
+            let mut source = ParquetReader::new(&directory.0)
+                .with_batch_size(1)
+                .with_partition(ScanPartition::new(index, 2).unwrap())
+                .read()
+                .unwrap();
+            let first = source.next().unwrap().unwrap();
+            let first = first
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0);
+            assert!(![2, 4, 104].contains(&first));
+            assert!(
+                source
+                    .apply_runtime_filter(
+                        "id",
+                        &[
+                            ScalarValue::Int64(2),
+                            ScalarValue::Int64(4),
+                            ScalarValue::Int64(104)
+                        ]
+                    )
+                    .unwrap()
+            );
+            matches.extend(ids(source));
+        }
+        matches.sort_unstable();
+        assert_eq!(matches, vec![2, 4, 104]);
     }
 
     #[test]
