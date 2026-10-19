@@ -874,6 +874,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "count_distinct_grouped_multiple",
+        "SELECT region, COUNT(DISTINCT country) AS countries, COUNT(DISTINCT surface) AS surfaces FROM {T} GROUP BY region ORDER BY region",
+        true,
+    ),
+    (
         "date_range_and_dim",
         "SELECT country, SUM(queries_run) AS q FROM {T} WHERE event_date BETWEEN '2026-07-10' AND '2026-07-12' AND platform = 'Web' GROUP BY country ORDER BY q DESC, country LIMIT 5",
         true,
