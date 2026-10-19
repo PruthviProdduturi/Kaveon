@@ -23,9 +23,14 @@ Trino map-function coverage or external/cloud qualification.
   `engine/crates/server/src/differential_tests.rs`, which compares local and
   distributed execution across the corpus layouts.
 
-The focused evaluator regression verifies union order and typed NULL padding:
+The focused evaluator regressions verify union order and typed NULL padding:
 `MAP({'a': 1, 'b': 2}, {'b': 10, 'c': 20})` with a three-parameter lambda
 returns keys `a,b,c` and values `1,12,20`.
+An additional empty-outer-batch regression keeps a non-nullable source field
+valid while the lambda type is inferred from a zero-row batch; the result is
+an empty map with the inferred UTF-8 value type. This protects distributed
+fragments whose schema is non-nullable even when a filtered partition has no
+rows.
 
 ## Boundary
 
