@@ -8299,6 +8299,26 @@ mod tests {
     }
 
     #[test]
+    fn lowers_transform_values_lambda() {
+        let plan = sql_to_logical_plan(
+            "SELECT TRANSFORM_VALUES(MAP(ARRAY['a'], ARRAY[1]), (key, value) -> value + 1) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected TRANSFORM_VALUES");
+        };
+        assert_eq!(name, "TRANSFORM_VALUES");
+        assert!(matches!(
+            args.get(1),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 3
+        ));
+    }
+
+    #[test]
     fn parses_cardinality_over_an_array_literal() {
         let plan = sql_to_logical_plan("SELECT CARDINALITY(ARRAY[1, 2.5]) FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
