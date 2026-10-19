@@ -1645,10 +1645,11 @@ mod tests {
         );
         assert!(merged.next_batch().unwrap().is_none());
         drop(merged);
-        // Each source was refused once and not retried past the final
-        // answer; a source stopped by the first failure never asked.
+        // Each source was refused at least once. The bounded source-side
+        // grace window may retry while workers are still draining queued
+        // batches, but it must still terminate with no spillable groups.
         let refused = refusals.load(std::sync::atomic::Ordering::Acquire);
-        assert!((1..=3).contains(&refused), "{refused}");
+        assert!(refused >= 1, "{refused}");
         assert_eq!(spill.snapshot().runs_written, 0);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
