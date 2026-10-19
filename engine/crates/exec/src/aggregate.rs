@@ -4607,9 +4607,20 @@ fn prepare_keys(array: &ArrayRef) -> PreparedKeys<'_> {
                 .downcast_ref::<Int32DictionaryArray>()
                 .expect("dictionary key type must match schema");
             let values = dictionary.values();
+            // A dictionary may contain values that are not referenced by this
+            // batch (for example after a filter).  Keep the code-to-key table
+            // dense so row lookup remains an index operation, but defer the
+            // Arc<str> allocation for those values.  Unused entries can only
+            // be reached by malformed dictionary keys, which Arrow rejects;
+            // the Null sentinel is therefore safe and preserves the existing
+            // logical null behavior for valid rows.
+            let mut used = vec![false; values.len()];
+            for key in dictionary.keys().iter().flatten() {
+                used[key as usize] = true;
+            }
             let table: Vec<GroupKey> = (0..values.len())
                 .map(|index| {
-                    if values.is_null(index) {
+                    if !used[index] || values.is_null(index) {
                         GroupKey::Null
                     } else {
                         match values.data_type() {
@@ -7229,6 +7240,13 @@ mod tests {
             Int32Array::from(vec![Some(2), Some(2)]),
             Arc::new(StringArray::from(vec!["Cloud", "Hybrid", "On-Premise"])),
         ));
+        let prepared = prepare_keys(&unused);
+        let PreparedKeys::Coded { table, .. } = &prepared else {
+            panic!("dictionary strings are coded");
+        };
+        assert!(matches!(table[0], GroupKey::Null));
+        assert!(matches!(table[1], GroupKey::Null));
+        assert_eq!(prepared.key(0), GroupKey::Utf8(Arc::from("On-Premise")));
         let batch = RecordBatch::try_from_iter(vec![
             ("deployment", unused),
             (
