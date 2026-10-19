@@ -13900,12 +13900,14 @@ async fn execute_distributed_top_n(
                     merge_inputs.push(candidate);
                 }
                 merge_inputs.extend(batches);
-                global_candidate = match merge_top_n_candidate(
-                    &worker_schema,
-                    &merge_inputs,
-                    &sort_exprs,
+                global_candidate = match merge_top_n_candidate_async(
+                    worker_schema.clone(),
+                    merge_inputs,
+                    sort_exprs.clone(),
                     limit,
-                ) {
+                )
+                .await
+                {
                     Ok(candidate) => Some(candidate),
                     Err(error) => {
                         return Some(Err(format!("cannot merge distributed TopN: {error}")));
@@ -13964,6 +13966,32 @@ fn merge_top_n_candidate(
 ) -> kaveon_core::Result<arrow::record_batch::RecordBatch> {
     Ok(merge_top_n(schema, batches, sort_exprs, limit)?
         .unwrap_or_else(|| arrow::record_batch::RecordBatch::new_empty(schema.clone())))
+}
+
+/// Run the coordinator's bounded candidate merge outside the Tokio executor.
+///
+/// The merge remains associative and bounded to `limit` rows, but its Arrow
+/// comparisons and payload selection are CPU work. Keeping that work on the
+/// async runtime thread can delay worker completion handling and unrelated
+/// queries while a wide candidate is ranked. The blocking pool lets those
+/// network and control-plane tasks continue making progress; the ordered
+/// candidate itself is still merged serially so result semantics and memory
+/// bounds do not change.
+async fn merge_top_n_candidate_async(
+    schema: arrow::datatypes::SchemaRef,
+    batches: Vec<arrow::record_batch::RecordBatch>,
+    sort_exprs: Vec<SortExpr>,
+    limit: usize,
+) -> kaveon_core::Result<arrow::record_batch::RecordBatch> {
+    tokio::task::spawn_blocking(move || {
+        merge_top_n_candidate(&schema, &batches, &sort_exprs, limit)
+    })
+    .await
+    .map_err(|error| {
+        kaveon_core::KaveonError::Execution(format!(
+            "distributed TopN merge worker panicked: {error}"
+        ))
+    })?
 }
 
 fn top_n_merge_contract(plan: &LogicalPlan) -> Option<(Vec<SortExpr>, usize)> {
