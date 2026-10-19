@@ -28,6 +28,15 @@ use crate::product_manifest::{
 /// at the end of this file rather than by hoping.
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
+/// The owner every record is attributed to. Sized like a corporate address,
+/// because that is what ends up in the snapshot.
+fn owner_of(index: usize) -> String {
+    format!(
+        "person.surname{:04}@organisation.example.com",
+        index % 1_000
+    )
+}
+
 /// A 36-character identifier, as the product issues.
 fn id_at(index: usize) -> String {
     format!("{:08x}-1f4b-4c2a-9e7d-{:012x}", index, index)
@@ -78,9 +87,27 @@ fn record(kind: ProductRecordKind, index: usize) -> (String, ProductRecordRef) {
         ProductRecordKind::SavedQuery | ProductRecordKind::DlmDefinition => {
             unique_values.insert("name".to_owned(), format!("Saved analysis {index}"));
         }
-        // The bulk kinds: one row per user action, no name to be unique on.
+        ProductRecordKind::UserRecent => {
+            // Keyed "<owner>:<item>" and pointing at what it is a recent view
+            // of, per `user_recent_is_owner_unique_and_references_target`.
+            unique_values.insert(
+                "recent_owner_item".to_owned(),
+                format!("{}:{}", owner_of(index), id_at(index % 64)),
+            );
+            references.insert(ProductRecordReference {
+                kind: ProductRecordKind::Dashboard,
+                id: id_at(index % 64),
+            });
+        }
+        // The remaining bulk kinds have no name to be unique on beyond the
+        // owner every record carries.
         _ => {}
     }
+
+    // Seeded on every record before anything derived is added, so no record is
+    // ever as small as an empty map would suggest. A principal is an email
+    // address, and JSON stores it literally.
+    unique_values.insert("owner_principal".to_owned(), owner_of(index));
 
     (
         format!("{}/{}", kind_name(kind), id),
