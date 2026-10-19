@@ -6933,26 +6933,35 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "TRANSLATE" => {
             check_arity(name, args, 3)?;
-            let sources = as_string_array(&args[0])?;
-            let from = as_string_array(&args[1])?;
-            let to = as_string_array(&args[2])?;
-            let bytes = sources.values().len() as u64;
+            let bytes = (0..num_rows).try_fold(0_u64, |total, row| {
+                let Some(source) = text_value(&args[0], row)? else {
+                    return Ok(total);
+                };
+                total
+                    .checked_add(source.len() as u64)
+                    .ok_or_else(|| KaveonError::Execution("TRANSLATE input size overflow".into()))
+            })?;
             reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|row| {
-                    if sources.is_null(row) || from.is_null(row) || to.is_null(row) {
-                        return None;
-                    }
-                    let source = sources.value(row);
-                    let from_chars = from.value(row).chars().collect::<Vec<_>>();
-                    let to_chars = to.value(row).chars().collect::<Vec<_>>();
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    let (Some(source), Some(from), Some(to)) = (
+                        text_value(&args[0], row)?,
+                        text_value(&args[1], row)?,
+                        text_value(&args[2], row)?,
+                    ) else {
+                        result.append_null();
+                        continue;
+                    };
+                    let from_chars = from.chars().collect::<Vec<_>>();
+                    let to_chars = to.chars().collect::<Vec<_>>();
                     let mut mapping = std::collections::HashMap::new();
                     for (index, character) in from_chars.into_iter().enumerate() {
                         mapping
                             .entry(character)
                             .or_insert(to_chars.get(index).copied());
                     }
-                    Some(
+                    result.append_value(
                         source
                             .chars()
                             .filter_map(|character| match mapping.get(&character) {
@@ -6961,10 +6970,41 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 None => Some(character),
                             })
                             .collect::<String>(),
-                    )
-                })
-                .collect();
-            Ok(Arc::new(result))
+                    );
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    let (Some(source), Some(from), Some(to)) = (
+                        text_value(&args[0], row)?,
+                        text_value(&args[1], row)?,
+                        text_value(&args[2], row)?,
+                    ) else {
+                        result.append_null();
+                        continue;
+                    };
+                    let from_chars = from.chars().collect::<Vec<_>>();
+                    let to_chars = to.chars().collect::<Vec<_>>();
+                    let mut mapping = std::collections::HashMap::new();
+                    for (index, character) in from_chars.into_iter().enumerate() {
+                        mapping
+                            .entry(character)
+                            .or_insert(to_chars.get(index).copied());
+                    }
+                    result.append_value(
+                        source
+                            .chars()
+                            .filter_map(|character| match mapping.get(&character) {
+                                Some(Some(mapped)) => Some(*mapped),
+                                Some(None) => None,
+                                None => Some(character),
+                            })
+                            .collect::<String>(),
+                    );
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "LEFT" => {
             check_arity(name, args, 2)?;
@@ -24443,5 +24483,39 @@ mod tests {
         assert_eq!(values.value(0), "user=12 user=34");
         assert_eq!(values.value(1), "unchanged");
         assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_translate_for_large_utf8() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(LargeStringArray::from(vec![Some("Kaveon 2026"), None])) as ArrayRef,
+            ),
+            (
+                "from",
+                Arc::new(LargeStringArray::from(vec![Some("ae"), Some("a")])) as ArrayRef,
+            ),
+            (
+                "to",
+                Arc::new(LargeStringArray::from(vec![Some("AE"), Some("b")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "TRANSLATE".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Column("from".into()),
+                    Expr::Column("to".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "KAvEon 2026");
+        assert!(values.is_null(1));
     }
 }
