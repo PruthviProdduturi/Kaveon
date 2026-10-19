@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use arrow::array::{
     Array, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
@@ -239,7 +239,7 @@ pub fn merge_top_n(
         return Ok(Some(result));
     }
 
-    // Multi-key integer/Decimal128 ordering can retain bounded row references
+    // Multi-key integer/Decimal128/UTF-8 ordering can retain bounded row references
     // without concatenating every payload column. Unsupported expressions
     // retain the generic Arrow path below.
     if sort_exprs.len() > 1
@@ -623,7 +623,7 @@ fn try_integer_batch_top_n(
 }
 
 /// Uses a bounded k-way merge when every ordering expression is a non-null
-/// Int64, UInt64, or Decimal128 key and each input batch is already sorted.
+/// Int64, UInt64, Decimal128, or UTF-8 key and each input batch is already sorted.
 /// Decimal keys retain their exact unscaled values; each key position has the
 /// same precision/scale across batches because the input schemas must match.
 /// Distributed workers emit this shape for local TopN results, so the
@@ -640,24 +640,31 @@ fn try_exact_multi_batch_top_n(
 ) -> Result<Option<RecordBatch>> {
     let mut keys = Vec::with_capacity(batches.len());
     for batch in batches {
-        let mut batch_keys: Vec<Vec<i128>> = Vec::with_capacity(sort_exprs.len());
+        let mut batch_keys = Vec::with_capacity(sort_exprs.len());
         for sort_expr in sort_exprs {
             let values = evaluate(&sort_expr.expr, batch)?;
             if values.null_count() != 0 {
                 return Ok(None);
             }
             let values = if let Some(values) = values.as_any().downcast_ref::<Int64Array>() {
-                values
-                    .iter()
-                    .map(|value| value.expect("non-null key") as i128)
-                    .collect()
+                MultiSortKey::Number(
+                    values
+                        .iter()
+                        .map(|value| value.expect("non-null key") as i128)
+                        .collect(),
+                )
             } else if let Some(values) = values.as_any().downcast_ref::<UInt64Array>() {
-                values
-                    .iter()
-                    .map(|value| value.expect("non-null key") as i128)
-                    .collect()
+                MultiSortKey::Number(
+                    values
+                        .iter()
+                        .map(|value| value.expect("non-null key") as i128)
+                        .collect(),
+                )
             } else if let Some(values) = values.as_any().downcast_ref::<Decimal128Array>() {
-                values.values().to_vec()
+                MultiSortKey::Number(values.values().to_vec())
+            } else if let Some(values) = values.as_any().downcast_ref::<StringArray>() {
+                // Clone Arrow's shared buffers rather than copying every string.
+                MultiSortKey::Utf8(values.clone())
             } else {
                 return Ok(None);
             };
@@ -668,7 +675,7 @@ fn try_exact_multi_batch_top_n(
 
     let compare = |left: (usize, usize), right: (usize, usize)| {
         for (column, sort_expr) in sort_exprs.iter().enumerate() {
-            let ordering = keys[left.0][column][left.1].cmp(&keys[right.0][column][right.1]);
+            let ordering = keys[left.0][column].compare(left.1, &keys[right.0][column], right.1);
             if ordering != std::cmp::Ordering::Equal {
                 return if sort_expr.ascending {
                     ordering
@@ -680,7 +687,7 @@ fn try_exact_multi_batch_top_n(
         std::cmp::Ordering::Equal
     };
     let batches_are_sorted = keys.iter().enumerate().all(|(batch, columns)| {
-        let rows = columns.first().map_or(0, Vec::len);
+        let rows = columns.first().map_or(0, MultiSortKey::len);
         (0..rows.saturating_sub(1))
             .all(|row| compare((batch, row), (batch, row + 1)) != std::cmp::Ordering::Greater)
     });
@@ -699,7 +706,7 @@ fn try_exact_multi_batch_top_n(
         .filter_map(|(batch, columns)| {
             columns
                 .first()
-                .is_some_and(|values| !values.is_empty())
+                .is_some_and(|values| values.len() != 0)
                 .then_some((batch, 0))
         })
         .collect::<Vec<_>>();
@@ -707,7 +714,7 @@ fn try_exact_multi_batch_top_n(
     let mut references = Vec::with_capacity(
         limit.min(
             keys.iter()
-                .map(|columns| columns.first().map_or(0, Vec::len))
+                .map(|columns| columns.first().map_or(0, MultiSortKey::len))
                 .sum(),
         ),
     );
@@ -722,6 +729,29 @@ fn try_exact_multi_batch_top_n(
         }
     }
     Ok(Some(take_batch_references(schema, batches, &references)?))
+}
+
+enum MultiSortKey {
+    Number(Vec<i128>),
+    Utf8(StringArray),
+}
+
+impl MultiSortKey {
+    fn len(&self) -> usize {
+        match self {
+            Self::Number(values) => values.len(),
+            Self::Utf8(values) => values.len(),
+        }
+    }
+
+    fn compare(&self, left: usize, other: &Self, right: usize) -> std::cmp::Ordering {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => a[left].cmp(&b[right]),
+            (Self::Utf8(a), Self::Utf8(b)) => a.value(left).cmp(b.value(right)),
+            // Each expression has the same type across schema-compatible batches.
+            _ => unreachable!("TopN ordering expression changed type between batches"),
+        }
+    }
 }
 
 fn take_batch_references(
@@ -2348,6 +2378,156 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn multi_utf8_heap_merge_matches_arrow() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("suffix", DataType::Utf8, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let names = ["", "a", "a\0", "aa", "e\u{301}", "é", "中", "🙂"];
+        for nullable in [false, true] {
+            let workers = (0..33)
+                .map(|worker| {
+                    // Slice a larger array to exercise nonzero UTF-8 offsets.
+                    let ids = (0..worker % 9 + 2)
+                        .map(|row| worker * 10 + row)
+                        .collect::<Vec<_>>();
+                    RecordBatch::try_new(
+                        schema.clone(),
+                        vec![
+                            Arc::new(StringArray::from_iter(ids.iter().map(|id| {
+                                (!(nullable && id % 7 == 0))
+                                    .then_some(names[*id as usize % names.len()])
+                            }))),
+                            Arc::new(StringArray::from_iter_values(ids.iter().map(|id| {
+                                format!("{}{}", "shared-prefix".repeat(16), names[*id as usize % 3])
+                            }))),
+                            Arc::new(UInt64Array::from_iter_values(
+                                ids.iter().map(|id| u64::MAX - *id as u64),
+                            )),
+                            Arc::new(Int64Array::from(ids)),
+                        ],
+                    )
+                    .unwrap()
+                    .slice(1, worker as usize % 9 + 1)
+                })
+                .collect::<Vec<_>>();
+            let all = concat_batches(&schema, &workers).unwrap();
+            for ascending in [false, true] {
+                for suffix_ascending in [false, true] {
+                    for nulls_first in [false, true] {
+                        let mut first = SortExpr::new(Expr::Column("name".into()), ascending);
+                        first.nulls_first = nulls_first;
+                        let ordering = vec![
+                            first,
+                            SortExpr::new(Expr::Column("suffix".into()), suffix_ascending),
+                            SortExpr::new(Expr::Column("sequence".into()), false),
+                        ];
+                        let arrow_sort = |batch: &RecordBatch, limit| {
+                            let columns = ordering
+                                .iter()
+                                .enumerate()
+                                .map(|(column, expr)| SortColumn {
+                                    values: batch.column(column).clone(),
+                                    options: Some(SortOptions {
+                                        descending: !expr.ascending,
+                                        nulls_first: expr.nulls_first,
+                                    }),
+                                })
+                                .collect::<Vec<_>>();
+                            let indices = lexsort_to_indices(&columns, limit).unwrap();
+                            RecordBatch::try_new(
+                                schema.clone(),
+                                batch
+                                    .columns()
+                                    .iter()
+                                    .map(|column| take(column.as_ref(), &indices, None).unwrap())
+                                    .collect(),
+                            )
+                            .unwrap()
+                        };
+                        let sorted = workers
+                            .iter()
+                            .map(|batch| arrow_sort(batch, None))
+                            .collect::<Vec<_>>();
+                        for limit in [1, 73, all.num_rows(), all.num_rows() + 10] {
+                            let typed =
+                                try_exact_multi_batch_top_n(&schema, &sorted, &ordering, limit)
+                                    .unwrap();
+                            assert_eq!(typed.is_some(), !nullable);
+                            let expected = arrow_sort(&all, Some(limit));
+                            if let Some(typed) = typed {
+                                assert_eq!(typed, expected);
+                            }
+                            assert_eq!(
+                                merge_top_n(&schema, &sorted, &ordering, limit)
+                                    .unwrap()
+                                    .unwrap(),
+                                expected
+                            );
+                        }
+                        // Unsorted candidates must retain Arrow's lexsort fallback.
+                        assert!(
+                            try_exact_multi_batch_top_n(&schema, &workers, &ordering, 73)
+                                .unwrap()
+                                .is_none()
+                        );
+                        assert_eq!(
+                            merge_top_n(&schema, &workers, &ordering, 73)
+                                .unwrap()
+                                .unwrap(),
+                            arrow_sort(&all, Some(73))
+                        );
+                        assert!(
+                            merge_top_n(&schema, &sorted, &ordering, 0)
+                                .unwrap()
+                                .is_none()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multi_utf8_heap_merge_preserves_equal_key_source_order() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("score", DataType::Decimal128(38, 6), false),
+            Field::new("payload", DataType::Int64, false),
+        ]));
+        let workers = (0..17)
+            .map(|worker| {
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(StringArray::from(vec!["🙂"; 3])),
+                        Arc::new(
+                            Decimal128Array::from(vec![10_i128.pow(37) + 1; 3])
+                                .with_precision_and_scale(38, 6)
+                                .unwrap(),
+                        ),
+                        Arc::new(Int64Array::from_iter_values(worker * 3..worker * 3 + 3)),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let ordering = vec![
+            SortExpr::new(Expr::Column("name".into()), false),
+            SortExpr::new(Expr::Column("score".into()), true),
+        ];
+        let actual = try_exact_multi_batch_top_n(&schema, &workers, &ordering, 37)
+            .unwrap()
+            .expect("typed UTF-8/decimal peers");
+        assert_eq!(
+            actual.column(2).as_ref(),
+            &Int64Array::from_iter_values(0..37)
+        );
     }
 
     #[test]
