@@ -817,6 +817,47 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_runtime_filter_compiles_exact_native_unit_in_predicates() {
+        let low = -9_007_199_254_740_993;
+        let high = 9_007_199_254_740_993;
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for timezone in [None, Some("UTC".into())] {
+                let data_type = DataType::Timestamp(unit, timezone);
+                let column = arrow::compute::cast(
+                    &Int64Array::from(vec![Some(0), Some(low), Some(high), Some(high - 1), None]),
+                    &data_type,
+                )
+                .unwrap();
+                let batch = RecordBatch::try_from_iter([("event_time", column)]).unwrap();
+                let predicate = StoragePredicate::In {
+                    column: "event_time".into(),
+                    values: vec![ScalarValue::Int64(low), ScalarValue::Int64(high)],
+                };
+                let compiled = CompiledPredicate::compile(&predicate, &batch.schema()).unwrap();
+                assert_eq!(
+                    compiled
+                        .selection(&batch)
+                        .unwrap()
+                        .iter()
+                        .collect::<Vec<_>>(),
+                    vec![
+                        Some(false),
+                        Some(true),
+                        Some(true),
+                        Some(false),
+                        Some(false)
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn compares_date64_columns_with_integer_day_millis_literals() {
         let batch = RecordBatch::try_from_iter([(
             "day",
