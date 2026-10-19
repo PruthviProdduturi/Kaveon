@@ -886,7 +886,7 @@ pub enum ProductRecordKind {
 }
 
 impl ProductRecordKind {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Dataset => "dataset",
             Self::Chart => "chart",

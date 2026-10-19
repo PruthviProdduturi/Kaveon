@@ -1,5 +1,10 @@
 #![deny(clippy::all)]
 
+/// A measurement harness, not a feature: it reports how many records fit
+/// under the snapshot ceiling. Test-only, so it ships in no binary.
+#[cfg(test)]
+mod snapshot_sizing;
+
 pub mod product_commit;
 pub mod product_manifest;
 pub mod product_metrics;
