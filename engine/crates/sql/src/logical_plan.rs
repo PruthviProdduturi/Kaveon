@@ -3666,8 +3666,8 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
         ast::Expr::Lambda(lambda) => {
-            if !(1..=2).contains(&lambda.params.len()) {
-                return Err(sql_err("lambda must have one or two parameters"));
+            if !(1..=3).contains(&lambda.params.len()) {
+                return Err(sql_err("lambda must have one, two, or three parameters"));
             }
             // Keep the closure as an expression node so it is serialized with
             // the logical plan and evaluated at the array operator boundary.
@@ -8335,6 +8335,26 @@ mod tests {
             args.get(1),
             Some(Expr::Function { name, args })
                 if name == "__KAVEON_LAMBDA" && args.len() == 3
+        ));
+    }
+
+    #[test]
+    fn lowers_map_zip_with_three_parameter_lambda() {
+        let plan = sql_to_logical_plan(
+            "SELECT MAP_ZIP_WITH(MAP(ARRAY['a'], ARRAY[1]), MAP(ARRAY['a'], ARRAY[2]), (key, left_value, right_value) -> left_value + right_value) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected MAP_ZIP_WITH");
+        };
+        assert_eq!(name, "MAP_ZIP_WITH");
+        assert!(matches!(
+            args.get(2),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 4
         ));
     }
 
