@@ -327,6 +327,41 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 true,
             ))))
         }
+        Expr::Function { name, args }
+            if (name.eq_ignore_ascii_case("ARRAY_FIRST")
+                || name.eq_ignore_ascii_case("ARRAY_LAST"))
+                && args.len() == 2 =>
+        {
+            let (DataType::List(field) | DataType::LargeList(field)) =
+                expression_data_type(&args[0], schema)?
+            else {
+                return None;
+            };
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[1]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 2 {
+                return None;
+            }
+            let Expr::Literal(ScalarValue::Utf8(parameter)) = &lambda_args[0] else {
+                return None;
+            };
+            let mut fields = vec![Field::new(parameter, field.data_type().clone(), true)];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|candidate| candidate.name() != parameter)
+                    .map(|field| field.as_ref().clone()),
+            );
+            (expression_data_type(&lambda_args[1], &Arc::new(Schema::new(fields)))?
+                == DataType::Boolean)
+                .then_some(field.data_type().clone())
+        }
         Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") && args.len() == 2 => {
             let (DataType::List(keys) | DataType::LargeList(keys)) =
                 expression_data_type(&args[0], schema)?

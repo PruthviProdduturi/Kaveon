@@ -235,6 +235,21 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_array_transform(&args[0], lambda_args, batch);
             }
+            if (name.eq_ignore_ascii_case("ARRAY_FIRST") || name.eq_ignore_ascii_case("ARRAY_LAST"))
+                && args.len() == 2
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[1]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_array_first_last_predicate(
+                    &args[0],
+                    lambda_args,
+                    batch,
+                    name.eq_ignore_ascii_case("ARRAY_LAST"),
+                );
+            }
             if matches!(
                 name.to_ascii_uppercase().as_str(),
                 "ALL_MATCH" | "ANY_MATCH" | "NONE_MATCH"
@@ -3133,6 +3148,91 @@ fn eval_array_filter(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
+}
+
+fn eval_array_first_last_predicate(
+    array_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+    last: bool,
+) -> Result<ArrayRef> {
+    let function_name = if last { "ARRAY_LAST" } else { "ARRAY_FIRST" };
+    if lambda_args.len() != 2 {
+        return Err(KaveonError::Execution(format!(
+            "{function_name} predicate must have exactly one parameter"
+        )));
+    }
+    let name = match &lambda_args[0] {
+        Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => name.clone(),
+        _ => {
+            return Err(KaveonError::Execution(format!(
+                "{function_name} predicate parameter must be an identifier"
+            )));
+        }
+    };
+    let body = &lambda_args[1];
+    let array = normalize_large_list(&decode_dictionary(&evaluate(array_expr, outer_batch)?)?)?;
+    let list = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+        KaveonError::Execution(format!("{function_name} requires an ARRAY/List value"))
+    })?;
+    let mut selected = Vec::<ArrayRef>::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            selected.push(arrow::array::new_null_array(&list.value_type(), 1));
+            continue;
+        }
+        let inner = list.value(row);
+        let mut match_value = None;
+        let indexes: Box<dyn Iterator<Item = usize>> = if last {
+            Box::new((0..inner.len()).rev())
+        } else {
+            Box::new(0..inner.len())
+        };
+        for index in indexes {
+            let value = if inner.is_null(index) {
+                arrow::array::new_null_array(&list.value_type(), 1)
+            } else {
+                inner.slice(index, 1)
+            };
+            let mut fields = vec![Field::new(&name, value.data_type().clone(), true)];
+            let mut columns = vec![value.clone()];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if field.name() == &name {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let pair_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            let predicate = evaluate(body, &pair_batch)?;
+            let predicate = predicate
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!("{function_name} predicate must return BOOLEAN"))
+                })?;
+            if predicate.is_valid(0) && predicate.value(0) {
+                match_value = Some(value);
+                break;
+            }
+        }
+        selected.push(
+            match_value.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1)),
+        );
+    }
+    if selected.is_empty() {
+        return Ok(arrow::array::new_empty_array(&list.value_type()));
+    }
+    let chunks = selected
+        .iter()
+        .map(|value| value.as_ref() as &dyn Array)
+        .collect::<Vec<_>>();
+    Ok(compute::concat(&chunks)?)
 }
 
 /// Evaluate Trino's three-valued higher-order array predicates. `ANY_MATCH`
@@ -21720,6 +21820,53 @@ mod tests {
                 .to_string()
                 .contains("COMBINATIONS n must be between 0 and 5")
         );
+    }
+
+    #[test]
+    fn array_first_last_predicates_select_matching_values() {
+        let mut input = ListBuilder::new(Int64Builder::new());
+        for value in [1_i64, 4, 2, 5] {
+            input.values().append_value(value);
+        }
+        input.append(true);
+        let values = input.finish();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "values",
+                values.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(values)],
+        )
+        .unwrap();
+        let array_expr = Expr::Column("values".into());
+        let predicate = Expr::BinaryOp {
+            left: Box::new(Expr::Column("x".into())),
+            op: BinaryOp::Gt,
+            right: Box::new(Expr::Literal(ScalarValue::Int64(2))),
+        };
+        let lambda = Expr::Function {
+            name: "__KAVEON_LAMBDA".into(),
+            args: vec![Expr::Literal(ScalarValue::Utf8("x".into())), predicate],
+        };
+        let first = evaluate(
+            &Expr::Function {
+                name: "ARRAY_FIRST".into(),
+                args: vec![array_expr.clone(), lambda.clone()],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(first.as_primitive::<Int64Type>().value(0), 4);
+        let last = evaluate(
+            &Expr::Function {
+                name: "ARRAY_LAST".into(),
+                args: vec![array_expr, lambda],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(last.as_primitive::<Int64Type>().value(0), 5);
     }
 
     #[test]
