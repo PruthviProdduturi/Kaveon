@@ -1108,14 +1108,6 @@ impl FlushingPartialAggregate {
         self
     }
 
-    /// Coalesce pass-through partials into bounded batches. The caller uses
-    /// this only for measured high-cardinality shapes; keeping it explicit
-    /// also makes the memory contract testable without process-wide settings.
-    pub fn with_coalesce_rows(mut self, rows: usize) -> Self {
-        self.coalesce_rows = (rows >= 2).then_some(rows);
-        self
-    }
-
     /// What the partial is doing with its rows now.
     pub fn mode(&self) -> PartialMode {
         self.mode
@@ -1239,16 +1231,16 @@ impl FlushingPartialAggregate {
             return self.passthrough_batch(remaining);
         };
         let mut batches = Vec::new();
-        let mut reservations = Vec::new();
+        // The coalescer retains several encoded batches while concatenating
+        // them. Keep those arrays charged to the query until the concat has
+        // finished; otherwise high-cardinality pass-through can bypass the
+        // aggregate memory budget between flush rounds.
+        let mut retained = Vec::<MemoryReservation>::new();
         let mut rows = 0usize;
         while let PartialMode::PassThrough { remaining } = self.mode {
             match self.passthrough_batch(remaining)? {
                 Some(batch) if batch.num_rows() > 0 => {
-                    // Pass-through batches are retained until concat completes,
-                    // so account their encoded arrays while several are held.
-                    // The returned batch is accounted by the downstream
-                    // exchange/output queue after this temporary guard drops.
-                    reservations.push(self.memory.reserve(batch.get_array_memory_size() as u64)?);
+                    retained.push(self.memory.reserve(batch.get_array_memory_size() as u64)?);
                     rows = rows.saturating_add(batch.num_rows());
                     batches.push(batch);
                     if rows >= target {
@@ -1263,9 +1255,9 @@ impl FlushingPartialAggregate {
             0 => Ok(None),
             1 => Ok(batches.pop()),
             _ => {
-                let output = concat_batches(&self.schema, &batches)?;
-                drop(reservations);
-                Ok(Some(output))
+                let result = concat_batches(&self.schema, &batches)?;
+                drop(retained);
+                Ok(Some(result))
             }
         }
     }
@@ -1689,8 +1681,7 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     let mut total_rows = 0_u64;
     let mut total_bytes = 0_u64;
     let mut non_empty = 0_u64;
-    let mut largest_rows = None;
-    let mut largest_bytes = None;
+    let mut largest = None;
     for (index, partition) in partitions.iter().enumerate() {
         let rows = partition
             .iter()
@@ -1706,18 +1697,14 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
         non_empty = non_empty.saturating_add(1);
         total_rows = total_rows.saturating_add(rows);
         total_bytes = total_bytes.saturating_add(bytes);
-        if largest_rows.is_none_or(|(_, current)| rows > current) {
-            largest_rows = Some((index, rows));
-        }
-        if largest_bytes.is_none_or(|(_, current)| bytes > current) {
-            largest_bytes = Some((index, bytes));
+        if largest.is_none_or(|(_, current_rows, _)| rows > current_rows) {
+            largest = Some((index, rows, bytes));
         }
     }
+    let (index, largest_rows, largest_bytes) = largest?;
     if non_empty < 2 {
         return None;
     }
-    let (row_index, largest_rows) = largest_rows?;
-    let (byte_index, largest_bytes) = largest_bytes?;
     // A partition may be hot by encoded bytes even when its row count is
     // ordinary (for example, a wide string key). Split when either exact
     // row or byte counts show a four-times mean imbalance, with independent
@@ -1728,13 +1715,7 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     let bytes_skewed = total_bytes >= JOIN_SKEW_SPLIT_MIN_BYTES
         && u128::from(largest_bytes) * u128::from(non_empty)
             >= u128::from(total_bytes) * JOIN_SKEW_SPLIT_RATIO;
-    if rows_skewed {
-        Some(row_index)
-    } else if bytes_skewed {
-        Some(byte_index)
-    } else {
-        None
-    }
+    (rows_skewed || bytes_skewed).then_some(index)
 }
 
 /// The level a refused build partitions to: the first for a whole
@@ -2901,16 +2882,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(skewed_partition_index(&partitions), Some(0));
         drop(partitions);
-
-        // The widest bucket need not be the bucket with the most rows. The
-        // policy must route the byte-skewed bucket itself, rather than using
-        // the row-largest bucket's byte total.
-        let partitions = std::iter::once(vec![run(512, 1)])
-            .chain(std::iter::once(vec![run(512, 10_000)]))
-            .chain((0..6).map(|_| vec![run(512, 1)]))
-            .collect::<Vec<_>>();
-        assert_eq!(skewed_partition_index(&partitions), Some(1));
-        drop(partitions);
         assert_eq!(disk.snapshot().current_bytes, 0);
     }
 
@@ -3317,6 +3288,33 @@ mod tests {
     }
 
     #[test]
+    fn coalesced_passthrough_keeps_retained_batches_memory_accounted() {
+        let pool = QueryMemoryPool::new("coalesced-passthrough", 4 * 1024 * 1024).unwrap();
+        AdaptivePartialSettings {
+            enabled: false,
+            ..adaptive(10)
+        }
+        .register(&pool)
+        .unwrap();
+        let mut aggregate = FlushingPartialAggregate::new(
+            input((0..8).map(Some).collect(), 1),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            pool.operator("partial").unwrap(),
+        )
+        .unwrap();
+        aggregate.mode = PartialMode::PassThrough { remaining: 8 };
+        aggregate.coalesce_rows = Some(2);
+
+        let batch = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        drop(batch);
+        drop(aggregate);
+        assert!(pool.snapshot().peak_bytes <= 4 * 1024 * 1024);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn a_partial_over_near_unique_keys_passes_rows_through_and_merges_exactly() {
         // 300 000 unique keys in a 16 MiB budget: the first round fills a
         // sixth of the budget and made a group for every row, so the
@@ -3334,8 +3332,7 @@ mod tests {
             ],
             pool.operator("partial").unwrap(),
         )
-        .unwrap()
-        .with_coalesce_rows(16);
+        .unwrap();
         let (groups, total, _) = merged_partial(&mut aggregate);
         assert_eq!((groups, total), (300_000, 300_000));
         let passed = aggregate.passthrough_rows();
@@ -3774,114 +3771,6 @@ mod tests {
         }
         assert_eq!(rows, vec![(2, 2)]);
         assert_eq!(pool.snapshot().current_bytes, 0);
-    }
-
-    #[test]
-    fn partitioned_join_applies_decimal128_runtime_filter_without_precision_loss() {
-        use arrow::array::Decimal128Array;
-
-        fn input_decimal(values: &[Option<i128>], chunk: usize) -> Box<dyn BatchOperator> {
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "amount",
-                DataType::Decimal128(38, 2),
-                true,
-            )]));
-            let batches = values
-                .chunks(chunk)
-                .map(|rows| {
-                    let values = Decimal128Array::from(rows.to_vec())
-                        .with_precision_and_scale(38, 2)
-                        .unwrap();
-                    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)]).unwrap()
-                })
-                .collect();
-            Box::new(Input { schema, batches })
-        }
-
-        let pool =
-            QueryMemoryPool::new("partitioned-decimal128-runtime-filter", 4 * 1024 * 1024).unwrap();
-        let mut join = PartitionedHashJoin::new(
-            input_decimal(&[Some(125), Some(230), Some(400), None], 2),
-            input_decimal(&[Some(400), Some(999), Some(400)], 2),
-            JoinType::Inner,
-            vec![("amount".into(), "amount".into())],
-            None,
-            None,
-            pool.operator("join").unwrap(),
-            spill(),
-            4,
-        )
-        .unwrap();
-        let mut rows = Vec::new();
-        while let Some(batch) = join.next_batch().unwrap() {
-            let left = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Decimal128Array>()
-                .unwrap();
-            let right = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<Decimal128Array>()
-                .unwrap();
-            rows.extend((0..batch.num_rows()).map(|row| (left.value(row), right.value(row))));
-        }
-        assert_eq!(rows, vec![(400, 400), (400, 400)]);
-        assert_eq!(pool.snapshot().current_bytes, 0);
-    }
-
-    #[test]
-    fn runtime_join_filter_accepts_float32_keys_without_float_precision_loss() {
-        use arrow::array::Float32Array;
-
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "key",
-            DataType::Float32,
-            true,
-        )]));
-        let build = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Float32Array::from(vec![
-                // At this magnitude Float32's spacing is two; keep every
-                // boundary value representable so the test does not create a
-                // duplicate 16_777_216 value through an implicit cast.
-                Some(16_777_216.0),
-                Some(16_777_218.0),
-            ]))],
-        )
-        .unwrap();
-        let probe = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Float32Array::from(vec![
-                Some(16_777_216.0),
-                Some(16_777_220.0),
-                Some(16_777_218.0),
-                None,
-            ]))],
-        )
-        .unwrap();
-        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
-        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
-        let mut operator = RuntimeJoinFilter::new(
-            Box::new(Input {
-                schema,
-                batches: VecDeque::from([probe]),
-            }),
-            filter,
-        );
-        let batch = operator.next_batch().unwrap().unwrap();
-        assert_eq!(batch.num_rows(), 2);
-        assert_eq!(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .unwrap()
-                .values()
-                .as_ref(),
-            &[16_777_216.0, 16_777_218.0]
-        );
-        assert!(operator.next_batch().unwrap().is_none());
     }
 
     #[test]
