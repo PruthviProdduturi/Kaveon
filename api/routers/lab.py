@@ -674,7 +674,12 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     sql_execute_limiter.check(user)
     user_id = user
     # A bare `SELECT *` with no bound is capped, and the caller is told.
-    sql, row_cap_applied = default_row_cap(data.query)
+    # Keep the original statement for the registered SQL-source path.  The
+    # Engine accepts LIMIT, but Fabric/Azure SQL use T-SQL and would reject a
+    # LIMIT that the interactive safety cap appended.  The relational pool
+    # applies the same cap in its driver/dialect-aware path below.
+    requested_sql = data.query
+    sql, row_cap_applied = default_row_cap(requested_sql)
     database = _resolve_db(data.database)
     engine_source_id = data.engineSourceId
     engine_schema = data.engineSchema
@@ -774,7 +779,12 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     loop = asyncio.get_event_loop()
     query_future = loop.run_in_executor(
         None,
-        lambda: pool.execute_query_cancellable(sql, database, cancel_event=cancel_event),
+        lambda: pool.execute_query_cancellable(
+            requested_sql if row_cap_applied else sql,
+            database,
+            cancel_event=cancel_event,
+            max_rows=LAB_DEFAULT_ROW_CAP if row_cap_applied else None,
+        ),
     )
 
     # Poll for client disconnect every 500ms while the query runs.
@@ -800,7 +810,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
 
         try:
             history_svc.create_history({
-                "sql_text": sql, "duration_ms": duration_ms,
+                "sql_text": requested_sql if row_cap_applied else sql, "duration_ms": duration_ms,
                 "database_name": database,
                 "row_count": result.get("row_count", 0), "status": "success",
                 "dataset_id": int(dataset_id) if dataset_id else None,
@@ -824,7 +834,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         duration_ms = int(time.time() * 1000) - start_time
         try:
             history_svc.create_history({
-                "sql_text": sql, "duration_ms": duration_ms,
+                "sql_text": requested_sql if row_cap_applied else sql, "duration_ms": duration_ms,
                 "database_name": database,
                 "row_count": 0, "status": "error",
                 "error_message": str(e),

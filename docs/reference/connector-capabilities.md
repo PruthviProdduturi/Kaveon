@@ -156,6 +156,13 @@ and the DLM. They are not KaveonDB catalogs; a query runs on the source. The
 API can route a selected source, but the Engine does not yet join across these
 sources or across multiple KaveonDB catalogs.
 
+SQL Lab's interactive bare `SELECT *` guard is dialect-safe for these sources:
+the API keeps the original statement and passes a bounded fetch to the driver
+instead of appending Engine-style `LIMIT` syntax to T-SQL sources. PostgreSQL
+and MySQL apply their own bounded wrapper, while Fabric SQL and Azure SQL use
+the driver's fetch limit. Queries that name columns or provide their own bound
+are left unchanged.
+
 | Source | Studio picker | API driver | Authentication | DLM notes |
 |---|---|---|---|---|
 | Fabric SQL analytics endpoint | Current | `pyodbc` | `DefaultAzureCredential` token | PostgreSQL-specific statistics and HLL profiling are unavailable |
