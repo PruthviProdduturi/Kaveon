@@ -4432,14 +4432,6 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
             "Find an array element",
         ),
         (
-            "array_positions",
-            "array(bigint)",
-            "[array, unknown]",
-            "scalar",
-            true,
-            "Find all matching array element positions",
-        ),
-        (
             "array_has_duplicates",
             "boolean",
             "[array]",
@@ -24298,7 +24290,6 @@ mod streamed_root_tests {
         assert_eq!(sum[2], serde_json::json!(["double"]));
         assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
         assert!(rows.iter().any(|row| row[0] == "array_sum"));
-        assert!(rows.iter().any(|row| row[0] == "array_positions"));
         assert!(rows.iter().any(|row| row[0] == "combinations"));
         assert!(rows.iter().any(|row| row[0] == "array_average"));
         assert!(rows.iter().any(|row| row[0] == "array_cum_sum"));

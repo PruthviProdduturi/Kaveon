@@ -2405,41 +2405,6 @@ fn array_position_large_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(Int64Array::from(result)))
 }
 
-fn array_positions<L: OffsetSizeTrait>(
-    list: &GenericListArray<L>,
-    needle: &ArrayRef,
-) -> Result<ArrayRef> {
-    let mut result = ListBuilder::new(Int64Builder::new());
-    for row in 0..list.len() {
-        if list.is_null(row) {
-            result.append(false);
-            continue;
-        }
-        let values = list.value(row);
-        let needle_is_null = needle.is_null(row);
-        let needle_value = (!needle_is_null).then(|| needle.slice(row, 1));
-        for index in 0..values.len() {
-            let matches = if values.is_null(index) {
-                needle_is_null
-            } else if let Some(needle_value) = needle_value.as_ref() {
-                comparison(&values.slice(index, 1), needle_value, CompareKind::Eq)
-                    .map(|equal| !equal.is_null(0) && equal.value(0))?
-            } else {
-                false
-            };
-            if matches {
-                result
-                    .values()
-                    .append_value(i64::try_from(index + 1).map_err(|_| {
-                        KaveonError::Execution("ARRAY_POSITIONS index overflow".into())
-                    })?);
-            }
-        }
-        result.append(true);
-    }
-    Ok(Arc::new(result.finish()))
-}
-
 fn contains_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -9516,18 +9481,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
             };
             Ok(Arc::new(Int64Array::from(result)))
-        }
-        "ARRAY_POSITIONS" => {
-            check_arity(name, args, 2)?;
-            if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
-                return array_positions(list, &args[1]);
-            }
-            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
-                return array_positions(list, &args[1]);
-            }
-            Err(KaveonError::Execution(
-                "ARRAY_POSITIONS requires an ARRAY/List value".into(),
-            ))
         }
         "ARRAY_HAS_DUPLICATES" => {
             check_arity(name, args, 1)?;
@@ -21767,31 +21720,6 @@ mod tests {
                 .to_string()
                 .contains("COMBINATIONS n must be between 0 and 5")
         );
-    }
-
-    #[test]
-    fn array_positions_returns_all_matching_indexes_and_null_rows() {
-        let mut input = ListBuilder::new(Int64Builder::new());
-        for value in [1_i64, 2, 1, 3] {
-            input.values().append_value(value);
-        }
-        input.append(true);
-        input.append(false);
-        let result = eval_scalar_function(
-            "ARRAY_POSITIONS",
-            &[
-                Arc::new(input.finish()) as ArrayRef,
-                Arc::new(Int64Array::from(vec![1, 1])) as ArrayRef,
-            ],
-            2,
-        )
-        .unwrap();
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(
-            result.value(0).as_primitive::<Int64Type>().values(),
-            &[1, 3]
-        );
-        assert!(result.is_null(1));
     }
 
     #[test]

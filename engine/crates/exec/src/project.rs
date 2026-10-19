@@ -327,15 +327,6 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 true,
             ))))
         }
-        Expr::Function { name, args }
-            if name.eq_ignore_ascii_case("ARRAY_POSITIONS") && args.len() == 2 =>
-        {
-            Some(DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Int64,
-                true,
-            ))))
-        }
         Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") && args.len() == 2 => {
             let (DataType::List(keys) | DataType::LargeList(keys)) =
                 expression_data_type(&args[0], schema)?
