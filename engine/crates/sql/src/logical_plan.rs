@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -758,12 +758,18 @@ fn scalar_to_ast_value(value: &ScalarValue) -> ast::Value {
 struct CteDefinition {
     query: ast::Query,
     columns: Vec<String>,
+    /// Stable identity for this definition while nested query levels are
+    /// lowered.  Names alone are insufficient because an inner WITH may
+    /// legally shadow an outer CTE.
+    id: usize,
 }
 
 #[derive(Clone, Default)]
 struct Lowering {
     ctes: HashMap<String, CteDefinition>,
     scalars: Rc<Cell<usize>>,
+    next_cte_id: Rc<Cell<usize>>,
+    active_ctes: Rc<RefCell<Vec<usize>>>,
     outer_references: bool,
     /// Plain distinct counts lower as sketches.
     approximate: bool,
@@ -795,6 +801,8 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         }
         for cte in &with.cte_tables {
             let cte_name = cte.alias.name.value.to_lowercase();
+            let cte_id = context.next_cte_id.get();
+            context.next_cte_id.set(cte_id + 1);
             context.ctes.insert(
                 cte_name,
                 CteDefinition {
@@ -805,6 +813,7 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
                         .iter()
                         .map(|column| column.name.value.clone())
                         .collect(),
+                    id: cte_id,
                 },
             );
         }
@@ -1490,7 +1499,16 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 // the query with `with: None` made an otherwise valid nested
                 // CTE resolve as a physical table instead of its local
                 // definition.
-                let mut plan = query_to_plan(&cte_query.query, ctes)?;
+                if ctes.active_ctes.borrow().contains(&cte_query.id) {
+                    return Err(sql_err(format!(
+                        "recursive reference to non-recursive CTE '{}'",
+                        table_name
+                    )));
+                }
+                ctes.active_ctes.borrow_mut().push(cte_query.id);
+                let lowered = query_to_plan(&cte_query.query, ctes);
+                ctes.active_ctes.borrow_mut().pop();
+                let mut plan = lowered?;
                 if !cte_query.columns.is_empty()
                     && let Some(columns) = plan_output_columns(&plan)
                 {
@@ -5365,6 +5383,27 @@ mod tests {
             sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").unwrap(),
             LogicalPlan::Except { all: true, .. }
         ));
+    }
+
+    #[test]
+    fn non_recursive_cte_self_reference_fails_closed() {
+        let error = sql_to_logical_plan("WITH rows AS (SELECT * FROM rows) SELECT * FROM rows")
+            .expect_err("a non-recursive CTE must not recurse during planning");
+        assert!(
+            error
+                .to_string()
+                .contains("recursive reference to non-recursive CTE 'rows'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn nested_cte_shadowing_does_not_trigger_outer_recursion_guard() {
+        let plan = sql_to_logical_plan(
+            "WITH rows AS (WITH rows AS (VALUES (1)) SELECT * FROM rows) SELECT * FROM rows",
+        )
+        .expect("an inner CTE may shadow an outer CTE without being recursive");
+        assert!(!format!("{plan:?}").is_empty());
     }
 
     #[test]

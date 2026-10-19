@@ -3209,6 +3209,30 @@ fn distributed_nested_cte_scope_matches_local_semantics() {
 }
 
 #[test]
+fn distributed_nested_cte_shadowing_matches_local_semantics() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-nested-cte-shadow-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "WITH rows AS (WITH rows AS (VALUES (1), (2)) SELECT column1 FROM rows) SELECT column1 FROM rows ORDER BY column1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-nested-cte-shadow", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["1", "2"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_nested_array_unnest_preserves_inner_lists() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-nested-array-unnest-{}",
