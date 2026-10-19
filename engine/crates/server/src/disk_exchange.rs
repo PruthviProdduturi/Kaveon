@@ -14,6 +14,7 @@ use std::{
 /// partial from every producing task, inside the 10 GiB exchange disk limit.
 const QUERY_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(900);
+const MAX_FINISHED_QUERIES: usize = 10_000;
 #[derive(Default)]
 struct QuotaState {
     total: u64,
@@ -252,9 +253,23 @@ impl DiskExchangeStore {
             state
                 .finished
                 .retain(|_, expires| *expires > Instant::now());
-            if state.finished.len() < 10000 {
-                state.finished.insert(query.into(), Instant::now() + TTL);
+            let now = Instant::now();
+            if state.finished.len() >= MAX_FINISHED_QUERIES && !state.finished.contains_key(query) {
+                // Keep the terminal fence for the newest query even when the
+                // bounded marker map is full. Silently dropping this marker
+                // would let a late upload recreate exchange state immediately
+                // after cancellation. The oldest expiry is the least useful
+                // marker because all markers have the same TTL.
+                if let Some((oldest_query, _)) = state
+                    .finished
+                    .iter()
+                    .min_by_key(|(_, expires)| *expires)
+                    .map(|(query, expires)| (query.clone(), *expires))
+                {
+                    state.finished.remove(&oldest_query);
+                }
             }
+            state.finished.insert(query.into(), now + TTL);
         }
     }
     pub fn cleanup(&self) {
@@ -462,6 +477,32 @@ mod tests {
         assert_eq!(store.quota.state.lock().unwrap().total, 0);
         assert!(store.body(&first.identity).unwrap().is_none());
         assert!(store.insert(first).is_err());
+    }
+
+    #[test]
+    fn finished_query_fence_keeps_newest_marker_when_bounded_map_is_full() {
+        let root =
+            std::env::temp_dir().join(format!("kaveon-finished-fence-{}", uuid::Uuid::new_v4()));
+        let store = DiskExchangeStore::new(&root, 1024).unwrap();
+        for index in 0..=MAX_FINISHED_QUERIES {
+            store.finish_query(&format!("query-{index}"));
+        }
+
+        let mut newest = chunk();
+        newest.identity.task_id.query_id = format!("query-{MAX_FINISHED_QUERIES}");
+        assert!(
+            store.insert(newest).is_err(),
+            "the newest cancellation must retain its late-upload fence"
+        );
+
+        let mut evicted = chunk();
+        evicted.identity.task_id.query_id = "query-0".into();
+        assert!(
+            store.insert(evicted).is_ok(),
+            "the oldest marker is the one eligible for bounded eviction"
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
