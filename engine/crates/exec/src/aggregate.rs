@@ -879,6 +879,8 @@ impl AggregateState {
                 return Err(exec_err("incompatible exact numeric partials"));
             }
             if let (Some(values), Some(other_values)) = (distinct, other_distinct) {
+                validate_distinct_values(values)?;
+                validate_distinct_values(other_values)?;
                 values.extend(other_values.iter().cloned());
             } else if let Some(number) = other_value {
                 *value = Some(match (*function, *value) {
@@ -979,6 +981,8 @@ impl AggregateState {
             | (Self::IntegerSumDistinct(values), Self::IntegerSumDistinct(other))
             | (Self::SumDistinct(values), Self::SumDistinct(other))
             | (Self::AvgDistinct(values), Self::AvgDistinct(other)) => {
+                validate_distinct_values(values)?;
+                validate_distinct_values(other)?;
                 values.extend(other.iter().cloned());
             }
             (Self::ApproxDistinct(sketch), Self::ApproxDistinct(other)) => {
@@ -2350,6 +2354,17 @@ fn encode_distinct_values(values: &DistinctSet) -> Result<Vec<u8>> {
         output.extend_from_slice(&value);
     }
     Ok(output)
+}
+
+/// Exact distinct states never carry NULL: SQL COUNT/SUM/AVG DISTINCT ignore
+/// NULL before state admission, and the wire decoder rejects it as well.
+/// Keep the merge boundary fail-closed if a caller hands it a malformed state
+/// assembled outside those paths.
+fn validate_distinct_values(values: &DistinctSet) -> Result<()> {
+    if values.contains(&AggregateValue::Null) {
+        return Err(exec_err("exact distinct state contains NULL"));
+    }
+    Ok(())
 }
 
 fn encode_aggregate_value(value: &AggregateValue) -> Result<Vec<u8>> {
@@ -6770,6 +6785,27 @@ mod tests {
         left.merge(&right).unwrap();
 
         assert_eq!(left.count_result().unwrap(), 3);
+    }
+
+    #[test]
+    fn distinct_state_merge_preserves_duplicates_ignores_empty_and_rejects_null_state() {
+        let mut left = AggregateState::CountDistinct(DistinctSet::from([
+            AggregateValue::Int64(7),
+            AggregateValue::Int64(11),
+        ]));
+        let right = AggregateState::CountDistinct(DistinctSet::from([
+            AggregateValue::Int64(7),
+            AggregateValue::Int64(13),
+        ]));
+        left.merge(&right).unwrap();
+        assert_eq!(left.count_result().unwrap(), 3);
+
+        let empty = AggregateState::CountDistinct(DistinctSet::new());
+        left.merge(&empty).unwrap();
+        assert_eq!(left.count_result().unwrap(), 3);
+
+        let malformed = AggregateState::CountDistinct(DistinctSet::from([AggregateValue::Null]));
+        assert!(left.merge(&malformed).is_err());
     }
 
     #[test]
