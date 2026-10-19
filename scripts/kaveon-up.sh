@@ -178,6 +178,20 @@ if [ -z "$DATA_PATH" ]; then
     DATA_PATH="$(read_existing KAVEON_DATA_PATH || true)"
 fi
 
+# A catalog can still be listed when the host bind mount is empty, which makes
+# the first real table query fail much later with an opaque "No such file or
+# directory" from inside a worker. Validate the mount before writing the
+# environment file so a local operator gets the actual fix at startup. An
+# empty directory is allowed for a metadata-only installation, but is called
+# out explicitly because it cannot answer reads until data is added.
+if [ -n "$DATA_PATH" ]; then
+    [ -d "$DATA_PATH" ] || fail "data path does not exist: $DATA_PATH (pass --data with a Parquet/Delta directory)"
+    if ! find "$DATA_PATH" -type f \( -name '*.parquet' -o -name '*.json' -o -name '*.jsonl' \) -print -quit 2>/dev/null | grep -q .; then
+        note "warning: data path has no Parquet/Delta files: $DATA_PATH"
+        note "catalogs may be visible, but table reads will fail until data is mounted"
+    fi
+fi
+
 # Lines the operator owns, in the order they were written, comments between
 # them dropped only where they introduced a managed key. Read before the file
 # is touched.

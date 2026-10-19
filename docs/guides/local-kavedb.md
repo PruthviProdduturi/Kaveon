@@ -46,6 +46,18 @@ catalog persists in the named `kaveon-db-catalog` volume. Stop the service with
 `kavedb.ps1 -Down` or `./scripts/kavedb.sh down`. Removing the volume deletes
 local product records and is an explicit Docker operation.
 
+When using the full Compose stack, start it with the data path set before
+creating the containers:
+
+```powershell
+$env:KAVEON_DATA_PATH = 'D:\data\kaveon\opensource'
+docker compose up -d --build
+```
+
+The startup script rejects a missing path and warns when the directory has no
+Parquet/Delta files. This prevents a catalog from appearing healthy while the
+first table read later fails because the host bind mount was empty.
+
 This local profile enables the Engine's development HTTP boundary and binds
 only to loopback. Use the existing TLS, Entra, workload identity, Helm, and
 Bicep deployment paths for any shared or cloud environment; do not reuse the
