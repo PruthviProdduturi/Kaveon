@@ -395,6 +395,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "contains_sequence",
+        "SELECT CONTAINS_SEQUENCE(ARRAY[1, NULL, 2], ARRAY[NULL, 2]) AS present, CONTAINS_SEQUENCE(ARRAY[1, 2, 3], ARRAY[3, 2]) AS absent FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,
