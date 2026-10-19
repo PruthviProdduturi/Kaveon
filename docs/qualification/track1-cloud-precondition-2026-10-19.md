@@ -19,4 +19,4 @@ are recorded in `track1-track2-workspace-2026-10-19.md`.
 
 This is an environment precondition, not a passing qualification result. The
 cloud request must be retried after the subscription is writable; no resource
-recreation or scaling was performed by this qualification.
+recreation or scaling was performed by this qualification.\r\nA recheck on 2026-10-19 confirmed the same control-plane state: `az account show` reports `Enabled`, but `az aks start --resource-group kaveon-rg --name kaveon-aks` still returns `ReadOnlyDisabledSubscription`. Read-only inspection reports `kaveon-aks` as `Deallocated` with provisioning state `Failed`; `kaveonacr.azurecr.io` remains present. No cluster write or qualification run was possible.\r\n
