@@ -6768,18 +6768,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REGEXP_LIKE" => {
             check_arity(name, args, 2)?;
-            let values = as_string_array(&args[0])?;
-            let patterns = as_string_array(&args[1])?;
             let result: BooleanArray = (0..num_rows)
-                .map(|row| {
-                    if values.is_null(row) || patterns.is_null(row) {
-                        return Ok(None);
-                    }
-                    Ok(Some(
-                        compiled_regex_for("REGEXP_LIKE", patterns.value(row))?
-                            .is_match(values.value(row)),
-                    ))
-                })
+                .map(
+                    |row| match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
+                        (Some(value), Some(pattern)) => Ok(Some(
+                            compiled_regex_for("REGEXP_LIKE", pattern)?.is_match(value),
+                        )),
+                        _ => Ok(None),
+                    },
+                )
                 .collect::<Result<Vec<_>>>()?
                 .into();
             Ok(Arc::new(result))
@@ -24517,5 +24514,30 @@ mod tests {
         let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
         assert_eq!(values.value(0), "KAvEon 2026");
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_regexp_like_for_large_utf8() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(LargeStringArray::from(vec![Some("Kaveon engine"), None])) as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(LargeStringArray::from(vec![Some("engine"), Some("engine")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REGEXP_LIKE".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("pattern".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(true), None]);
     }
 }
