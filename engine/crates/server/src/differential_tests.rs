@@ -735,6 +735,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "filtered_aggregate_null_distinct_and_extrema",
+        "SELECT region, COUNT(*) FILTER (WHERE industry IS NULL) AS null_industry, COUNT(DISTINCT country) FILTER (WHERE actions > 20) AS active_countries, AVG(CAST(actions AS DOUBLE)) FILTER (WHERE actions > 20) AS active_avg, MIN(actions) FILTER (WHERE actions > 20) AS active_min, MAX(actions) FILTER (WHERE actions > 20) AS active_max FROM {T} GROUP BY region ORDER BY region",
+        true,
+    ),
+    (
         "window_filtered_aggregate",
         "SELECT user_id, SUM(actions) FILTER (WHERE actions > 5) OVER (PARTITION BY region) AS active_actions FROM {T} ORDER BY user_id, active_actions LIMIT 20",
         true,
