@@ -6580,26 +6580,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "LTRIM" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: StringArray = arr
-                .iter()
-                .map(|v| v.map(|s| s.trim_start().to_owned()))
-                .collect();
-            Ok(Arc::new(result))
+            map_text_array(&args[0], num_rows, |value| value.trim_start().to_owned())
         }
         "RTRIM" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: StringArray = arr
-                .iter()
-                .map(|v| v.map(|s| s.trim_end().to_owned()))
-                .collect();
-            Ok(Arc::new(result))
+            map_text_array(&args[0], num_rows, |value| value.trim_end().to_owned())
         }
         "LENGTH" | "LEN" | "CHAR_LENGTH" | "CHARACTER_LENGTH" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: Int64Array = arr.iter().map(|v| v.map(|s| s.len() as i64)).collect();
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    text_value(&args[0], row).map(|value| value.map(|value| value.len() as i64))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
             Ok(Arc::new(result))
         }
         "SUBSTR" | "SUBSTRING" => {
@@ -24614,6 +24608,8 @@ mod tests {
             ("UPPER", "  KAVEON  "),
             ("LOWER", "  kaveon  "),
             ("TRIM", "Kaveon"),
+            ("LTRIM", "Kaveon  "),
+            ("RTRIM", "  Kaveon"),
         ] {
             let result = evaluate(
                 &Expr::Function {
@@ -24627,6 +24623,17 @@ mod tests {
             assert_eq!(values.value(0), expected, "{name}");
             assert!(values.is_null(1), "{name}");
         }
+
+        let length = evaluate(
+            &Expr::Function {
+                name: "LENGTH".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = length.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), None]);
 
         let single = RecordBatch::try_from_iter([(
             "value",
