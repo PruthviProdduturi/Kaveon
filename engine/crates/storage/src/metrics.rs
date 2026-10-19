@@ -43,8 +43,8 @@ pub struct ScanMetricsSnapshot {
     /// ran on) and admitted to the rest of the projection.
     pub row_filter_rows_examined: u64,
     pub row_filter_rows_admitted: u64,
-    /// Exact build-side runtime filters accepted before the source started
-    /// reading, and the number of values carried by those filters.
+    /// Exact build-side runtime filters accepted for future rows, and the
+    /// number of values carried by those filters.
     pub runtime_filters_applied: u64,
     pub runtime_filter_values: u64,
     pub batches_emitted: u64,

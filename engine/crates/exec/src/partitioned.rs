@@ -3774,6 +3774,111 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_join_applies_late_runtime_filter_to_running_parquet_directory() {
+        use kaveon_core::BatchSource;
+        use kaveon_storage::{
+            ClusteredParquetWriter, ClusteringLayout, FileNaming, LocalDirectorySink, ParquetReader,
+        };
+
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let directory = Directory(std::env::temp_dir().join(format!(
+            "kaveon-late-runtime-filter-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        for (name, values) in [
+            ("a.parquet", vec![Some(0), Some(2), Some(9), None]),
+            ("b.parquet", vec![Some(3), Some(4), Some(7)]),
+        ] {
+            let mut writer = ClusteredParquetWriter::new(
+                ClusteringLayout::new(vec![], vec![]).with_max_row_group_rows(1),
+                schema.clone(),
+                FileNaming::Single(name.into()),
+                Box::new(LocalDirectorySink::new(&directory.0).unwrap()),
+            )
+            .unwrap();
+            writer
+                .write(
+                    &RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(values))])
+                        .unwrap(),
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let probe = || {
+            let mut source = ParquetReader::new(&directory.0)
+                .with_batch_size(1)
+                .read()
+                .unwrap();
+            // Simulate a filter arriving after the first probe batch was consumed.
+            let first = source.next_batch().unwrap().unwrap();
+            assert_eq!(
+                first
+                    .column(0)
+                    .as_primitive::<arrow::datatypes::Int64Type>()
+                    .value(0),
+                0
+            );
+            let metrics = source.metrics();
+            (
+                Box::new(crate::scan::ScanOperator::new(Box::new(source), None).unwrap())
+                    as Box<dyn BatchOperator>,
+                metrics,
+            )
+        };
+        let (local_probe, _) = probe();
+        let local = HashJoin::try_new(
+            local_probe,
+            input(vec![Some(2), Some(4), Some(4), None], 2),
+            JoinType::Inner,
+            vec![("id".into(), "id".into())],
+        )
+        .unwrap();
+        let (partitioned_probe, metrics) = probe();
+        let pool = QueryMemoryPool::new("late-runtime-filter", 4 * 1024 * 1024).unwrap();
+        let partitioned = PartitionedHashJoin::new(
+            partitioned_probe,
+            input(vec![Some(2), Some(4), Some(4), None], 2),
+            JoinType::Inner,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill(),
+            3,
+        )
+        .unwrap();
+        let collect = |mut operator: Box<dyn BatchOperator>| {
+            let mut rows = Vec::new();
+            while let Some(batch) = operator.next_batch().unwrap() {
+                let left = batch
+                    .column(0)
+                    .as_primitive::<arrow::datatypes::Int64Type>();
+                let right = batch
+                    .column(1)
+                    .as_primitive::<arrow::datatypes::Int64Type>();
+                rows.extend((0..batch.num_rows()).map(|row| (left.value(row), right.value(row))));
+            }
+            rows.sort_unstable();
+            rows
+        };
+        let expected = vec![(2, 2), (4, 4), (4, 4)];
+        assert_eq!(collect(Box::new(local)), expected);
+        assert_eq!(collect(Box::new(partitioned)), expected);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.runtime_filters_applied, 1);
+        assert_eq!(snapshot.runtime_filter_values, 2);
+        assert!(snapshot.row_groups_pruned() > 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn partitioned_join_applies_timestamp_runtime_filter_without_precision_loss() {
         use arrow::datatypes::TimeUnit;
 
