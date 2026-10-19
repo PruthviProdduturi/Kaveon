@@ -4298,6 +4298,34 @@ fn distributed_correlated_scalar_ordered_offset_limit_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// An uncorrelated scalar subquery nested inside a scalar function must be
+/// lowered before expression binding.  Compare the function form through the
+/// local and three-worker fragment paths so the scalar relation cannot be
+/// dropped or evaluated once per worker with different results.
+#[test]
+fn distributed_scalar_subquery_inside_function_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-scalar-function-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, COALESCE((SELECT MAX(actions) FROM events), 0) AS max_actions, CASE WHEN (SELECT COUNT(*) FROM events) > 0 THEN 1 ELSE 0 END AS has_rows FROM events GROUP BY country ORDER BY country";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-scalar-function", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[test]
 fn distributed_join_using_matches_the_local_result() {
     let directory =

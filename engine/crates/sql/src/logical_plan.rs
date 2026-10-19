@@ -2191,6 +2191,49 @@ fn replace_scalar_subqueries(
             low: Box::new(replace_scalar_subqueries(low, ctes, sink)?),
             high: Box::new(replace_scalar_subqueries(high, ctes, sink)?),
         },
+        // Scalar subqueries are valid operands of scalar functions in Trino,
+        // for example COALESCE((SELECT max(v) FROM t), 0).  Lower every
+        // expression argument before the function reaches the ordinary
+        // expression binder; the existing single-row relation join then
+        // supplies the named scalar column to the function evaluator.
+        ast::Expr::Function(function) => {
+            let mut function = function.clone();
+            if let ast::FunctionArguments::List(list) = &mut function.args {
+                for argument in &mut list.args {
+                    if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(argument)) =
+                        argument
+                    {
+                        *argument = replace_scalar_subqueries(argument, ctes, sink)?;
+                    }
+                }
+            }
+            ast::Expr::Function(function)
+        }
+        ast::Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => ast::Expr::Case {
+            operand: operand
+                .as_ref()
+                .map(|operand| replace_scalar_subqueries(operand, ctes, sink))
+                .transpose()?
+                .map(Box::new),
+            conditions: conditions
+                .iter()
+                .map(|condition| replace_scalar_subqueries(condition, ctes, sink))
+                .collect::<Result<Vec<_>>>()?,
+            results: results
+                .iter()
+                .map(|result| replace_scalar_subqueries(result, ctes, sink))
+                .collect::<Result<Vec<_>>>()?,
+            else_result: else_result
+                .as_ref()
+                .map(|result| replace_scalar_subqueries(result, ctes, sink))
+                .transpose()?
+                .map(Box::new),
+        },
         other => other.clone(),
     })
 }
@@ -7021,6 +7064,24 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
         assert!(!debug.contains("Limit"), "{debug}");
+    }
+
+    #[test]
+    fn scalar_subqueries_inside_functions_are_lowered_before_binding() {
+        let plan =
+            sql_to_logical_plan("SELECT COALESCE((SELECT max(b) FROM t), 0) AS answer FROM t")
+                .expect("a scalar subquery is a valid COALESCE argument");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("COALESCE"), "{debug}");
+
+        let plan = sql_to_logical_plan(
+            "SELECT CASE WHEN (SELECT count(*) FROM t) > 0 THEN 1 ELSE 0 END AS has_rows FROM t",
+        )
+        .expect("a scalar subquery is a valid CASE operand");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_scalar_0"), "{debug}");
+        assert!(debug.contains("Case"), "{debug}");
     }
 
     #[test]
