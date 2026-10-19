@@ -5,11 +5,17 @@ on:
     branches: [dev]
     paths:
       - "engine/**"
+      - ".github/workflows/engine.yml"
   pull_request:
     branches: [dev]
     paths:
       - "engine/**"
+      - ".github/workflows/engine.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 concurrency:
   # Keep validation tied to the exact source revision. A hung or cancelled
@@ -143,3 +149,53 @@ jobs:
               --notes-file release-notes.md
           fi
           gh release upload engine-dev release/* --clobber
+
+  publish-engine-image:
+    name: Publish Engine server image
+    needs: build
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      KAVEON_ACR_NAME: ${{ vars.KAVEON_ACR_NAME || 'kaveonacr' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build the Engine server image in ACR
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${AZURE_SUBSCRIPTION_ID:-}" ]] || { echo 'Missing AZURE_SUBSCRIPTION_ID' >&2; exit 1; }
+          [[ -n "${AZURE_CLIENT_ID:-}" ]] || { echo 'Missing AZURE_CLIENT_ID' >&2; exit 1; }
+          az acr build --registry "$KAVEON_ACR_NAME" --only-show-errors \
+            --image "kaveon-engine:${GITHUB_SHA}" \
+            --file engine/Dockerfile engine
+
+      - name: Resolve and publish the immutable image digest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest="$(az acr repository show --name "$KAVEON_ACR_NAME" \
+            --image "kaveon-engine:${GITHUB_SHA}" --query digest -o tsv --only-show-errors)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] \
+            || { echo "Unusable Engine digest '$digest'" >&2; exit 1; }
+          echo "kaveon-engine:${GITHUB_SHA} -> ${digest}"
+          {
+            echo '### Engine image'
+            echo
+            echo "Registry: \`$KAVEON_ACR_NAME\`"
+            echo "Repository: \`kaveon-engine\`"
+            echo "Digest: \`$digest\`"
+            echo
+            echo 'The digest is deployable through deploy-aks-engine.yml; no rollout is performed by this job.'
+          } >> "$GITHUB_STEP_SUMMARY"
