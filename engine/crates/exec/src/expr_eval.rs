@@ -5918,9 +5918,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     (start..end).any(|index| !keys.is_null(index) && keys.value(index) == needle)
                 }
                 other => {
-                    return Err(KaveonError::Execution(format!(
-                        "MAP_CONTAINS_KEY does not support key type {other}"
-                    )));
+                    // Trino permits any comparable key type, including ROW
+                    // and ARRAY values. Keep the primitive path above fast,
+                    // but use the same recursive comparison semantics for
+                    // complex Arrow keys instead of rejecting them merely
+                    // because they cannot be represented by one scalar
+                    // accessor.
+                    let _ = other;
+                    map_key_match_by_comparison(map_keys, &requested, row, start, end)?.is_some()
                 }
             };
             result.append_value(found);
@@ -6043,9 +6048,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
                 }
                 other => {
-                    return Err(KaveonError::Execution(format!(
-                        "MAP_ELEMENT_AT does not support key type {other}"
-                    )));
+                    // See MAP_CONTAINS_KEY above. Complex comparable keys
+                    // need recursive Arrow comparison rather than a scalar
+                    // downcast; this preserves ROW/ARRAY null semantics.
+                    let _ = other;
+                    map_key_match_by_comparison(map_keys, &requested, row, start, end)?
                 }
             };
             positions.push(found.map(|index| index as i64));
@@ -12107,6 +12114,29 @@ fn map_element_at_primitive<T: ArrowPrimitiveType>(
     (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
 }
 
+/// Find a map entry whose complex key equals the requested key for one input
+/// row. Primitive keys use the specialized paths above; this fallback is for
+/// comparable nested keys such as ROW and ARRAY, whose Arrow representation
+/// has no scalar accessor. A NULL comparison is not a match, as map keys are
+/// non-null and Trino's lookup treats an unknown key comparison as absent.
+fn map_key_match_by_comparison(
+    map_keys: &ArrayRef,
+    requested: &ArrayRef,
+    row: usize,
+    start: usize,
+    end: usize,
+) -> Result<Option<usize>> {
+    let needle = requested.slice(row, 1);
+    for index in start..end {
+        let key = map_keys.slice(index, 1);
+        let equal = comparison(&key, &needle, CompareKind::Eq)?;
+        if equal.is_valid(0) && equal.value(0) {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
 fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Result<bool> {
     if left.is_null(left_index) || left.is_null(right_index) {
         return Ok(false);
@@ -16277,6 +16307,73 @@ mod tests {
         assert_eq!(element.as_primitive::<Int64Type>().value(0), 7);
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().value(0), 7);
+    }
+
+    #[test]
+    fn map_lookup_accepts_comparable_row_keys() {
+        let key_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("field0", DataType::Int64, false)),
+            Arc::new(Field::new("field1", DataType::Utf8, false)),
+        ]
+        .into();
+        let key = StructArray::new(
+            key_fields.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("alpha")])) as ArrayRef,
+            ],
+            None,
+        );
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Struct(key_fields), false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let entries = StructArray::new(
+            entry_fields.clone(),
+            vec![
+                Arc::new(key) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(99)])),
+            ],
+            None,
+        );
+        let map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new("entries", DataType::Struct(entry_fields), false)),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
+                entries,
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let needle = Arc::new(StructArray::new(
+            vec![
+                Arc::new(Field::new("field0", DataType::Int64, false)),
+                Arc::new(Field::new("field1", DataType::Utf8, false)),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("alpha")])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        let contains = eval_scalar_function(
+            "MAP_CONTAINS_KEY",
+            &[Arc::clone(&map), Arc::clone(&needle)],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            contains.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+        let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
+        assert_eq!(
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(99)]
+        );
     }
 
     #[test]
