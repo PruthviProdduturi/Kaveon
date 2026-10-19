@@ -18,7 +18,9 @@ parameters shadow same-named outer columns. NULL map rows remain NULL.
   The synthetic type-probe row preserves non-nullable outer-column schemas.
 - Distributed differential corpus case: `transform_values_lambda` in
   `engine/crates/server/src/differential_tests.rs`, compared across the local
-  and three-worker execution paths and the pinned Trino reference.
+  and three-worker execution paths and the pinned Trino reference. The focused
+  rerun on 2026-10-19 (`KAVEON_DIFF_ONLY=transform_values`) passed 1/1 with
+  610 cases filtered, covering the current distributed execution gate.
 
 ## Qualified boundary
 
