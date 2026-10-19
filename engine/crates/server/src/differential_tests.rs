@@ -5607,6 +5607,37 @@ fn distributed_partitioned_window_dense_rank_ties_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Window expressions with different partition keys must remain gathered at
+/// one final stage.  A single hash exchange cannot make both `region` and
+/// `country` complete at the same worker, so compare the conservative
+/// distributed plan with the local reference rather than claiming a partial
+/// per-worker result is correct.
+#[test]
+fn distributed_mixed_partitioned_windows_match_local_reference() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-mixed-partitions-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country, user_id) AS by_region, ROW_NUMBER() OVER (PARTITION BY country ORDER BY actions DESC, region, user_id) AS by_country FROM events WHERE event_date = '2026-07-04' ORDER BY region, country, user_id LIMIT 24";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-window-mixed-partitions", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A partitioned window whose scan partitions are all empty must preserve the
 /// projected input and window schema while returning no rows. This exercises
 /// the distributed exchange/final stage rather than only the local operator.
