@@ -3,7 +3,9 @@ use sqlparser::ast::Statement;
 use sqlparser::ast::{
     AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
 };
-use sqlparser::dialect::{BigQueryDialect, DuckDbDialect, GenericDialect, MsSqlDialect};
+use sqlparser::dialect::{
+    BigQueryDialect, ClickHouseDialect, DuckDbDialect, GenericDialect, MsSqlDialect,
+};
 use sqlparser::parser::Parser;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
@@ -58,11 +60,12 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         }
         Err(primary) => {
             // DuckDB treats MAP(...) as custom type modifiers and cannot
-            // parse the parentheses/comma inside DECIMAL(p, s). The generic
-            // grammar exposes a typed MAP AST, which uses the existing
+            // parse the parentheses/comma inside DECIMAL(p, s) or ARRAY(T).
+            // Alternate grammars expose a typed MAP AST, which uses the existing
             // Decimal128 precision/scale validation in the logical planner.
-            // Admit only scalar-member decimal maps through this fallback.
-            if let Some(statements) = parse_decimal_map_casts(&normalized) {
+            // Admit scalar-member decimal maps and maps whose values are
+            // one level of scalar ARRAY through this bounded fallback.
+            if let Some(statements) = parse_bounded_map_casts(&normalized) {
                 return Ok(statements);
             }
             Err(KaveonError::Sql(primary.to_string()))
@@ -70,33 +73,59 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     }
 }
 
-fn parse_decimal_map_casts(sql: &str) -> Option<Vec<Statement>> {
-    use sqlparser::ast::{DataType, visit_expressions};
+fn parse_bounded_map_casts(sql: &str) -> Option<Vec<Statement>> {
+    use sqlparser::ast::{ArrayElemTypeDef, DataType, visit_expressions};
     use std::ops::ControlFlow;
 
     if !sql.to_ascii_uppercase().contains("MAP") {
         return None;
     }
-    let statements = Parser::parse_sql(&GenericDialect {}, sql).ok()?;
-    let mut found_decimal_map = false;
+    // Generic accepts ARRAY<T>; ClickHouse supplies the Trino ARRAY(T)
+    // spelling. Both must pass the same bounded AST check below.
+    let statements = Parser::parse_sql(&GenericDialect {}, sql)
+        .or_else(|_| Parser::parse_sql(&ClickHouseDialect {}, sql))
+        .ok()?;
+    let scalar_member = |member: &DataType| {
+        !matches!(
+            member,
+            DataType::Array(_)
+                | DataType::Map(_, _)
+                | DataType::Struct(_, _)
+                | DataType::Tuple(_)
+                | DataType::Nested(_)
+                | DataType::Union(_)
+                | DataType::Nullable(_)
+                | DataType::LowCardinality(_)
+                | DataType::Custom(_, _)
+        )
+    };
+    let mut found_bounded_map = false;
     let bounded = visit_expressions(&statements, |expr| {
         if let Expr::Cast {
             data_type: DataType::Map(key, value),
             ..
         } = expr
         {
-            if matches!(key.as_ref(), DataType::Array(_) | DataType::Map(_, _))
-                || matches!(value.as_ref(), DataType::Array(_) | DataType::Map(_, _))
-            {
+            if !scalar_member(key) {
                 return ControlFlow::Break(());
             }
-            found_decimal_map |=
-                matches!(key.as_ref(), DataType::Decimal(_) | DataType::Numeric(_))
-                    || matches!(value.as_ref(), DataType::Decimal(_) | DataType::Numeric(_));
+            match value.as_ref() {
+                DataType::Array(
+                    ArrayElemTypeDef::AngleBracket(element)
+                    | ArrayElemTypeDef::Parenthesis(element)
+                    | ArrayElemTypeDef::SquareBracket(element, None),
+                ) if scalar_member(element) => found_bounded_map = true,
+                member if scalar_member(member) => {
+                    found_bounded_map |=
+                        matches!(key.as_ref(), DataType::Decimal(_) | DataType::Numeric(_))
+                            || matches!(member, DataType::Decimal(_) | DataType::Numeric(_));
+                }
+                _ => return ControlFlow::Break(()),
+            }
         }
         ControlFlow::Continue(())
     });
-    (bounded.is_continue() && found_decimal_map).then_some(statements)
+    (bounded.is_continue() && found_bounded_map).then_some(statements)
 }
 
 /// Lower the bounded SQL/JSON `JSON_EXISTS ... ON ERROR` actions to explicit
