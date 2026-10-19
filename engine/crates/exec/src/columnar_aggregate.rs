@@ -318,6 +318,26 @@ impl AccColumn {
             Self::TextMin(values) | Self::TextMax(values) => values.push(None),
         }
     }
+
+    fn accepts_tag(&self, tag: u8) -> bool {
+        match self {
+            Self::Count(_) => tag == compact_state::TAG_COUNT,
+            Self::IntegerSum { .. } => tag == compact_state::TAG_INTEGER_SUM,
+            Self::IntegerMin { .. } => tag == compact_state::TAG_INTEGER_MIN,
+            Self::IntegerMax { .. } => tag == compact_state::TAG_INTEGER_MAX,
+            Self::Float { avg, .. } => {
+                tag == if *avg {
+                    compact_state::TAG_AVG
+                } else {
+                    compact_state::TAG_SUM
+                }
+            }
+            Self::FloatMin { .. } => tag == compact_state::TAG_MIN,
+            Self::FloatMax { .. } => tag == compact_state::TAG_MAX,
+            Self::TextMin(_) => tag == compact_state::TAG_UTF8_MIN,
+            Self::TextMax(_) => tag == compact_state::TAG_UTF8_MAX,
+        }
+    }
     /// Bytes one slot occupies in this column.
     fn slot_bytes(&self) -> u64 {
         match self {
@@ -2271,6 +2291,22 @@ impl ColumnarGroups {
             if keys.is_null(row) || states.is_null(row) {
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
             }
+            // Validate the compact envelope before allocating any new group
+            // slots. A malformed layout must not leave a half-created group
+            // behind for a spill retry or a later batch.
+            let input = compact_state::begin(states.value(row))?;
+            if input.count != self.accumulators.len() {
+                return Err(exec_err(
+                    "partial group does not match the aggregate layout",
+                ));
+            }
+            if let Some(accumulator) = self.accumulators.first()
+                && !accumulator.accepts_tag(compact_state::first_tag(states.value(row))?)
+            {
+                return Err(exec_err(
+                    "partial group does not match the aggregate layout",
+                ));
+            }
             let words = &mut self.packed[row * stride..(row + 1) * stride];
             new_bytes += parse_key_words(&mut self.keys, &self.hasher, keys.value(row), words)?;
         }
@@ -2317,6 +2353,19 @@ impl ColumnarGroups {
             }
             if keys.is_null(row) || states.is_null(row) {
                 return Err(exec_err("grouped aggregate state row cannot contain nulls"));
+            }
+            let input = compact_state::begin(states.value(row))?;
+            if input.count != self.accumulators.len() {
+                return Err(exec_err(
+                    "partial group does not match the aggregate layout",
+                ));
+            }
+            if let Some(accumulator) = self.accumulators.first()
+                && !accumulator.accepts_tag(compact_state::first_tag(states.value(row))?)
+            {
+                return Err(exec_err(
+                    "partial group does not match the aggregate layout",
+                ));
             }
             let words = &mut self.packed[output_row * stride..(output_row + 1) * stride];
             new_bytes += parse_key_words(&mut self.keys, &self.hasher, keys.value(row), words)?;
@@ -3356,6 +3405,29 @@ mod tests {
             .downcast_ref::<BinaryArray>()
             .unwrap();
         assert!(merge(&mut groups, keys, wrong).is_err());
+
+        // A layout mismatch on a previously unseen key must not create that
+        // group before the exchange row is rejected.
+        let wrong_new = grouped_aggregate_states_to_typed_batch(
+            &[GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(2)],
+                states: vec![AggregateState::IntegerSum { sum: 2, count: 1 }],
+            }],
+            &types,
+        )
+        .unwrap();
+        let wrong_new_keys = wrong_new
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let wrong_new_states = wrong_new
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert!(merge(&mut groups, wrong_new_keys, wrong_new_states).is_err());
+        assert_eq!(groups.len(), 1);
 
         // Two states where the layout has one, and the count that says so.
         let two = grouped_aggregate_states_to_typed_batch(

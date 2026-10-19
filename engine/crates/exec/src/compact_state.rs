@@ -393,6 +393,12 @@ pub(crate) fn begin(bytes: &[u8]) -> Result<States<'_>> {
     })
 }
 
+/// Read the first state tag without decoding or allocating its payload.
+pub(crate) fn first_tag(bytes: &[u8]) -> Result<u8> {
+    let mut states = begin(bytes)?;
+    states.bytes.byte()
+}
+
 /// The text of a UTF-8 extremum payload: the typed value encoding, which
 /// must carry a string.
 pub(crate) fn utf8_extremum(payload: &[u8]) -> Result<&str> {
