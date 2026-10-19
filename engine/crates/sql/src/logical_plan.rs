@@ -6676,15 +6676,63 @@ mod tests {
     }
 
     #[test]
-    fn decimal_map_cast_fallback_keeps_nested_complex_members_unsupported() {
+    fn parses_map_cast_with_scalar_array_values() {
+        for (member, target) in [
+            ("ARRAY(BIGINT)", CastTarget::Int64),
+            ("ARRAY<BIGINT>", CastTarget::Int64),
+            (
+                "ARRAY(DECIMAL(10, 2))",
+                CastTarget::Decimal128 {
+                    precision: 10,
+                    scale: 2,
+                },
+            ),
+        ] {
+            let plan = sql_to_logical_plan(&format!(
+                "SELECT CAST(NULL AS MAP(VARCHAR, {member})) FROM events"
+            ))
+            .unwrap();
+            let LogicalPlan::Project { columns, .. } = plan else {
+                panic!("expected Project");
+            };
+            let Expr::Cast { data_type, .. } = &columns[0] else {
+                panic!("expected Cast");
+            };
+            assert_eq!(
+                data_type,
+                &CastTarget::Map {
+                    key: Box::new(CastTarget::Utf8),
+                    value: Box::new(CastTarget::Array(Box::new(target))),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_map_cast_fallback_rejects_deeper_complex_members() {
         for target in [
-            "MAP(DECIMAL(10, 2), ARRAY<BIGINT>)",
+            "MAP(ARRAY(BIGINT), ARRAY(BIGINT))",
+            "MAP(VARCHAR, ARRAY(ARRAY(BIGINT)))",
+            "MAP(VARCHAR, ARRAY(MAP(VARCHAR, BIGINT)))",
+            "MAP(VARCHAR, ARRAY(ROW(x BIGINT)))",
             "MAP(VARCHAR, MAP(DECIMAL(10, 2), BIGINT))",
         ] {
             assert!(
                 sql_to_logical_plan(&format!("SELECT CAST(NULL AS {target}) FROM events")).is_err(),
                 "{target}"
             );
+        }
+    }
+
+    #[test]
+    fn map_cast_scalar_array_values_validate_decimal_bounds() {
+        for member in ["DECIMAL(0, 0)", "DECIMAL(39, 2)", "DECIMAL(10, 11)"] {
+            let error = sql_to_logical_plan(&format!(
+                "SELECT CAST(NULL AS MAP(VARCHAR, ARRAY({member}))) FROM events"
+            ))
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("DECIMAL"), "{member}: {error}");
         }
     }
 

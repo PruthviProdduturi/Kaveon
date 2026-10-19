@@ -3865,6 +3865,72 @@ fn distributed_unnest_typed_null_decimal_map_preserves_schema_and_padding() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// SQL MAP casts recurse into one scalar ARRAY level, preserving null maps,
+/// null array values, empty arrays, and null elements through fragments.
+#[test]
+fn distributed_map_cast_scalar_array_values_matches_local() {
+    use kaveon_core::CastTarget;
+
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-map-cast-array-values-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let bigint_map = CastTarget::Map {
+        key: Box::new(CastTarget::Utf8),
+        value: Box::new(CastTarget::Array(Box::new(CastTarget::Int64))),
+    }
+    .to_arrow_type();
+    let decimal_map = CastTarget::Map {
+        key: Box::new(CastTarget::Utf8),
+        value: Box::new(CastTarget::Array(Box::new(CastTarget::Decimal128 {
+            precision: 10,
+            scale: 2,
+        }))),
+    }
+    .to_arrow_type();
+    for (statement, expected_type, expected_rows) in [
+        (
+            "SELECT CAST(MAP(ARRAY['numbers', 'nil', 'empty'], ARRAY[ARRAY[CAST(input.id AS INTEGER), CAST(NULL AS INTEGER)], CAST(NULL AS ARRAY<INTEGER>), TRIM_ARRAY(ARRAY[CAST(1 AS INTEGER)], 1)]) AS MAP(VARCHAR, ARRAY<BIGINT>)) AS nested FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id",
+            bigint_map.clone(),
+            vec![
+                "{numbers: [1, ], nil: , empty: []}",
+                "{numbers: [2, ], nil: , empty: []}",
+                "{numbers: [3, ], nil: , empty: []}",
+            ],
+        ),
+        (
+            "SELECT CAST(NULL AS MAP(VARCHAR, ARRAY(BIGINT))) AS nested FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id",
+            bigint_map,
+            vec!["NULL"; 3],
+        ),
+        (
+            "SELECT CAST(MAP(ARRAY['amounts'], ARRAY[ARRAY[CAST(1.25 AS DECIMAL(8, 2)), CAST(NULL AS DECIMAL(8, 2))]]) AS MAP(VARCHAR, ARRAY(DECIMAL(10, 2)))) AS nested FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id",
+            decimal_map,
+            vec!["{amounts: [1.25, ]}"; 3],
+        ),
+    ] {
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-map-cast-array-values", 16 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+        assert_eq!(local.operator.schema().field(0).data_type(), &expected_type);
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        assert_eq!(expected, expected_rows, "{statement} local rows");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        let batches = execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}"));
+        for batch in &batches {
+            assert_eq!(batch.schema().field(0).data_type(), &expected_type);
+        }
+        assert_eq!(canonical_rows(&batches, true), expected, "{statement}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A correlated array must be evaluated for each left row on the worker, not
 /// once as a coordinator-side constant relation.
 #[test]
