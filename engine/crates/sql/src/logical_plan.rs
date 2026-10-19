@@ -8203,6 +8203,25 @@ mod tests {
     }
 
     #[test]
+    fn lowers_zip_with_lambda_as_a_serializable_expression() {
+        let plan =
+            sql_to_logical_plan("SELECT ZIP_WITH(ARRAY[1, 2], ARRAY[10], (x, y) -> x + y) FROM t")
+                .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected ZIP_WITH");
+        };
+        assert_eq!(name, "ZIP_WITH");
+        assert!(matches!(
+            args.get(2),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 3
+        ));
+    }
+
+    #[test]
     fn parses_cardinality_over_an_array_literal() {
         let plan = sql_to_logical_plan("SELECT CARDINALITY(ARRAY[1, 2.5]) FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
