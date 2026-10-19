@@ -24,7 +24,7 @@ pub mod table_statistics;
 
 pub use adls_commit::{
     AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
-    VersionedObject, local_file_commit, workload_identity_adls_commit,
+    VersionedObject, emulator_adls_commit, local_file_commit, workload_identity_adls_commit,
 };
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use clustered_writer::{

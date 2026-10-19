@@ -285,18 +285,9 @@ fn classify_error(error: ObjectStoreError) -> CommitError {
 /// Builds an ADLS conditional store from AKS workload identity, falling back to
 /// Azure managed identity when no workload variables are present. This API does
 /// not read account keys, SAS tokens, bearer tokens, or client secrets.
-pub fn workload_identity_adls_commit(
-    account: &str,
-    container: &str,
-) -> Result<AdlsConditionalCommit, String> {
-    if account.trim() != account
-        || !(3..=24).contains(&account.len())
-        || !account
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-    {
-        return Err("ADLS account must contain only lowercase ASCII letters and digits".to_owned());
-    }
+/// An Azure container name, normalized. Shared so the emulator and the
+/// workload-identity store cannot drift into accepting different names.
+fn validate_container(container: &str) -> Result<(), String> {
     if container.trim() != container
         || container.len() < 3
         || container.len() > 63
@@ -309,6 +300,22 @@ pub fn workload_identity_adls_commit(
     {
         return Err("ADLS container must be a normalized Azure container name".to_owned());
     }
+    Ok(())
+}
+
+pub fn workload_identity_adls_commit(
+    account: &str,
+    container: &str,
+) -> Result<AdlsConditionalCommit, String> {
+    if account.trim() != account
+        || !(3..=24).contains(&account.len())
+        || !account
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        return Err("ADLS account must contain only lowercase ASCII letters and digits".to_owned());
+    }
+    validate_container(container)?;
     let mut builder = MicrosoftAzureBuilder::new()
         .with_account(account)
         .with_container_name(container);
@@ -342,6 +349,31 @@ pub fn workload_identity_adls_commit(
     let store = builder
         .build()
         .map_err(|error| format!("cannot configure ADLS object store: {error}"))?;
+    Ok(AdlsConditionalCommit::new(Arc::new(store)))
+}
+
+/// The same primitive against an Azure Storage emulator.
+///
+/// This exists for one reason the in-memory backend cannot serve: the blob
+/// path decides whether a failed conditional write is a conflict or an unknown
+/// outcome by reading the provider's rendered error text, and only a real
+/// Azure endpoint produces that text. Azurite speaks the Azure protocol and
+/// returns Azure's errors, so the classifier is exercised for real.
+///
+/// Credentials are not configured here and no key appears in this repository:
+/// `object_store`'s emulator mode supplies the well-known development account
+/// and key itself, allows plain HTTP, and takes the endpoint from
+/// `AZURITE_BLOB_STORAGE_URL` so the container can reach a sibling service.
+///
+/// Development and test only. It is reached by setting the product storage
+/// mode to `emulator`, which no deployed configuration does.
+pub fn emulator_adls_commit(container: &str) -> Result<AdlsConditionalCommit, String> {
+    validate_container(container)?;
+    let store = MicrosoftAzureBuilder::new()
+        .with_use_emulator(true)
+        .with_container_name(container)
+        .build()
+        .map_err(|error| format!("cannot configure the Azure emulator store: {error}"))?;
     Ok(AdlsConditionalCommit::new(Arc::new(store)))
 }
 
@@ -487,6 +519,102 @@ mod tests {
             b"generation-2"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The blob path against a real Azure endpoint.
+    ///
+    /// Every other test here drives the in-memory backend, which implements
+    /// conditional put but never produces Azure's error text -- and the text
+    /// is what `is_precondition_failure` reads to tell a retryable conflict
+    /// from an outcome it must treat as unknown. A provider that reworded its
+    /// errors would break that silently, and nothing in this suite would
+    /// notice. Azurite speaks the Azure protocol, so it does.
+    ///
+    /// Ignored because it needs a service. To run it:
+    ///
+    /// ```text
+    /// docker compose up -d azurite
+    /// az storage container create -n kaveon-product \
+    ///   --connection-string "UseDevelopmentStorage=true"
+    /// cargo test -p kaveon-storage azurite -- --ignored --nocapture
+    /// ```
+    ///
+    /// `UseDevelopmentStorage=true` is Azure's own name for the emulator's
+    /// well-known account, so no key is written to this repository or to a
+    /// shell history.
+    #[tokio::test]
+    #[ignore = "requires Azurite: docker compose up -d azurite"]
+    async fn azurite_conditional_commit_matches_the_contract() {
+        let container =
+            std::env::var("KAVEON_AZURITE_CONTAINER").unwrap_or_else(|_| "kaveon-product".into());
+        let store = match emulator_adls_commit(&container) {
+            Ok(store) => store,
+            Err(error) => panic!("emulator store not configurable: {error}"),
+        };
+
+        // A fresh key per run, so repeated runs do not collide on a leftover.
+        let key = format!(
+            "azurite-contract/{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        let first = store
+            .create_immutable(&key, b"{\"generation\":1}".to_vec())
+            .await
+            .expect("first write lands");
+
+        // A second create of the same immutable key must not overwrite it.
+        let second = store
+            .create_immutable(&key, b"{\"generation\":2}".to_vec())
+            .await;
+        assert!(
+            second.is_err() || second.is_ok(),
+            "create_immutable must resolve, not hang"
+        );
+
+        let read = store.read(&key).await.expect("read back");
+        assert_eq!(
+            read.version.e_tag(),
+            first.e_tag(),
+            "the stored object must still be the one the first write published"
+        );
+
+        // The point of the test: a stale expectation must come back as a
+        // conflict, classified from Azure's own error text rather than from a
+        // string this suite wrote.
+        let stale = ObjectVersion {
+            e_tag: "\"0x8DUMMYSTALEETAG00\"".to_owned(),
+            version: None,
+        };
+        let conflict = store
+            .compare_and_swap(&key, &stale, b"{\"generation\":3}".to_vec())
+            .await;
+        match conflict {
+            Err(error) if error.kind == CommitErrorKind::Conflict => {}
+            Err(error) => panic!(
+                "a stale ETag must classify as Conflict against real Azure errors, got {:?}. \
+This is the classifier drifting from the provider's wording.",
+                error.kind
+            ),
+            Ok(_) => panic!("a stale ETag must not be allowed to overwrite"),
+        }
+
+        // And the current expectation must still succeed afterwards.
+        let swapped = store
+            .compare_and_swap(&key, &read.version, b"{\"generation\":4}".to_vec())
+            .await
+            .expect("a current ETag still commits after a rejected one");
+        assert_ne!(
+            swapped.e_tag(),
+            read.version.e_tag(),
+            "a successful swap must publish a new version"
+        );
+
+        println!("azurite: conditional commit contract holds against real Azure errors");
     }
 
     #[tokio::test]

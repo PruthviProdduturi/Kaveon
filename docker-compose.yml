@@ -42,6 +42,24 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # An Azure Storage emulator, so the deployed blob commit path can be run
+  # locally. The default product storage mode is `local`, which is a
+  # filesystem: it cannot exercise conditional PUT, and it cannot produce the
+  # provider error text the conflict classifier reads to tell a retryable
+  # conflict from an unknown outcome. Set KAVEON_PRODUCT_STORAGE_MODE=emulator
+  # to route the catalog here instead.
+  #
+  # No credentials are configured: object_store's emulator mode carries the
+  # well-known development account and key itself, so none is stored here.
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: kaveon-azurite
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite-data:/data
+
   engine-coordinator:
     build:
       context: ./engine
@@ -87,6 +105,8 @@ services:
       KAVEON_PRODUCT_ADLS_ACCOUNT: ${KAVEON_PRODUCT_ADLS_ACCOUNT:-}
       KAVEON_PRODUCT_ADLS_CONTAINER: ${KAVEON_PRODUCT_ADLS_CONTAINER:-}
       KAVEON_PRODUCT_ADLS_PREFIX: ${KAVEON_PRODUCT_ADLS_PREFIX:-kaveon/product-catalog}
+      # Read by object_store's emulator mode; ignored in every other mode.
+      AZURITE_BLOB_STORAGE_URL: ${AZURITE_BLOB_STORAGE_URL:-http://azurite:10000}
       # Tunable for local qualification; keep the conservative default for
       # ordinary developer machines and raise it explicitly for ClickBench.
       KAVEON_QUERY_MEMORY_LIMIT_BYTES: ${KAVEON_QUERY_MEMORY_LIMIT_BYTES:-536870912}
@@ -235,6 +255,8 @@ services:
       KAVEON_PRODUCT_ADLS_ACCOUNT: ${KAVEON_PRODUCT_ADLS_ACCOUNT:-}
       KAVEON_PRODUCT_ADLS_CONTAINER: ${KAVEON_PRODUCT_ADLS_CONTAINER:-}
       KAVEON_PRODUCT_ADLS_PREFIX: ${KAVEON_PRODUCT_ADLS_PREFIX:-kaveon/product-catalog}
+      # Read by object_store's emulator mode; ignored in every other mode.
+      AZURITE_BLOB_STORAGE_URL: ${AZURITE_BLOB_STORAGE_URL:-http://azurite:10000}
       KAVEON_CREDENTIAL_KEYS: ${KAVEON_CREDENTIAL_KEYS:-}
       KAVEON_CREDENTIAL_ACTIVE_KEY: ${KAVEON_CREDENTIAL_ACTIVE_KEY:-}
     depends_on:
@@ -288,5 +310,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  azurite-data:
   postgres-data:
   catalog-data:
