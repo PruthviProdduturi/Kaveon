@@ -8387,6 +8387,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_contains_sequence_over_array_literals() {
+        let plan =
+            sql_to_logical_plan("SELECT CONTAINS_SEQUENCE(ARRAY[1, 2, 3], ARRAY[2, 3]) FROM t")
+                .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "CONTAINS_SEQUENCE"
+                    && args.len() == 2
+                    && matches!(&args[0], Expr::Function { name, .. } if name == "ARRAY")
+                    && matches!(&args[1], Expr::Function { name, .. } if name == "ARRAY")
+        ));
+    }
+
+    #[test]
     fn lowers_in_unnest_to_nullable_contains() {
         let plan = sql_to_logical_plan("SELECT 2 IN UNNEST(ARRAY[1, 2]) FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {

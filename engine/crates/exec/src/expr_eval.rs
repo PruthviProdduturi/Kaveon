@@ -8637,6 +8637,58 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(BooleanArray::from(result)))
         }
+        "CONTAINS_SEQUENCE" => {
+            check_arity(name, args, 2)?;
+            let values = args[0]
+                .as_any()
+                .downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("CONTAINS_SEQUENCE requires ARRAY/List arguments".into())
+                })?;
+            let sequence = args[1]
+                .as_any()
+                .downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("CONTAINS_SEQUENCE requires ARRAY/List arguments".into())
+                })?;
+            if values.len() != sequence.len() {
+                return Err(KaveonError::Execution(
+                    "CONTAINS_SEQUENCE arguments must have matching row counts".into(),
+                ));
+            }
+            let result = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) || sequence.is_null(row) {
+                        return Ok(None);
+                    }
+                    let input = values.value(row);
+                    let needle = sequence.value(row);
+                    if needle.is_empty() {
+                        return Ok(Some(true));
+                    }
+                    if needle.len() > input.len() {
+                        return Ok(Some(false));
+                    }
+                    for start in 0..=(input.len() - needle.len()) {
+                        let mut matches = true;
+                        for offset in 0..needle.len() {
+                            if !null_safe_equal_value(
+                                &input.slice(start + offset, 1),
+                                &needle.slice(offset, 1),
+                            )? {
+                                matches = false;
+                                break;
+                            }
+                        }
+                        if matches {
+                            return Ok(Some(true));
+                        }
+                    }
+                    Ok(Some(false))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(BooleanArray::from(result)))
+        }
         "CONTAINS" => {
             check_arity(name, args, 2)?;
             if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
@@ -18266,6 +18318,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(position.as_primitive::<Int64Type>().values(), &[2, 2]);
+    }
+
+    #[test]
+    fn contains_sequence_matches_consecutive_values_with_nulls() {
+        let mut values = ListBuilder::new(Int64Builder::new());
+        values.values().append_value(1);
+        values.values().append_null();
+        values.values().append_value(2);
+        values.append(true);
+        values.values().append_value(3);
+        values.values().append_value(4);
+        values.append(true);
+        let mut sequence = ListBuilder::new(Int64Builder::new());
+        sequence.values().append_null();
+        sequence.values().append_value(2);
+        sequence.append(true);
+        sequence.values().append_value(4);
+        sequence.values().append_value(3);
+        sequence.append(true);
+        let result = eval_scalar_function(
+            "CONTAINS_SEQUENCE",
+            &[
+                Arc::new(values.finish()) as ArrayRef,
+                Arc::new(sequence.finish()) as ArrayRef,
+            ],
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false)]
+        );
     }
 
     #[test]
