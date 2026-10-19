@@ -16471,6 +16471,57 @@ mod tests {
     }
 
     #[test]
+    fn reduce_keeps_outer_columns_and_null_array_rows() {
+        let batch = RecordBatch::try_from_iter([
+            ("id", Arc::new(Int64Array::from(vec![10, 20])) as ArrayRef),
+            (
+                "values",
+                Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>([
+                    Some(vec![Some(1), Some(2)]),
+                    None,
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REDUCE".into(),
+                args: vec![
+                    Expr::Column("values".into()),
+                    Expr::Literal(ScalarValue::Int64(0)),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("state".into())),
+                            Expr::Literal(ScalarValue::Utf8("value".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::BinaryOp {
+                                    left: Box::new(Expr::Column("state".into())),
+                                    op: BinaryOp::Plus,
+                                    right: Box::new(Expr::Column("value".into())),
+                                }),
+                                op: BinaryOp::Plus,
+                                right: Box::new(Expr::Column("id".into())),
+                            },
+                        ],
+                    },
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("state".into())),
+                            Expr::Column("state".into()),
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(23), None]);
+    }
+
+    #[test]
     fn sequence_infers_direction_and_validates_steps() {
         let batch =
             RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
