@@ -60,6 +60,7 @@ services:
     image: mcr.microsoft.com/azure-storage/azurite:latest
     container_name: kaveon-azurite
     command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data
+    restart: unless-stopped
     ports:
       - "10000:10000"
     volumes:
