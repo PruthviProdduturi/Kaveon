@@ -5349,6 +5349,32 @@ fn emit_combinations(
     Ok(())
 }
 
+fn array_distinct_large_utf8(list: &LargeListArray) -> Result<ArrayRef> {
+    let mut output = LargeListBuilder::new(LargeStringBuilder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            output.append(false);
+            continue;
+        }
+        let inner = list.value(row);
+        let values = inner.as_string::<i64>();
+        let mut seen = Vec::<Option<String>>::new();
+        for index in 0..values.len() {
+            let value = values
+                .is_valid(index)
+                .then(|| values.value(index).to_owned());
+            if !seen.iter().any(|existing| existing == &value) {
+                seen.push(value);
+            }
+        }
+        for value in seen {
+            output.values().append_option(value.as_deref());
+        }
+        output.append(true);
+    }
+    Ok(Arc::new(output.finish()))
+}
+
 fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     match list.value_type() {
         DataType::Int8 => array_histogram_primitive::<L, Int8Type>(list),
@@ -9762,6 +9788,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             | DataType::Map(_, _)
                     ) {
                         return array_distinct_nested(list);
+                    }
+                    if list.value_type() == DataType::LargeUtf8 {
+                        return array_distinct_large_utf8(list);
                     }
                     let element_type = list.value_type().clone();
                     let field = Field::new("item", element_type, true);
@@ -18397,7 +18426,7 @@ mod tests {
     }
 
     #[test]
-    fn array_distinct_large_list_large_utf8_preserves_child_type() {
+    fn array_distinct_large_list_large_utf8_preserves_offsets_and_child_type() {
         let mut input = LargeListBuilder::new(LargeStringBuilder::new());
         input.values().append_value("b");
         input.values().append_value("a");
@@ -18409,7 +18438,7 @@ mod tests {
         let result =
             eval_scalar_function("ARRAY_DISTINCT", &[Arc::new(input.finish()) as ArrayRef], 1)
                 .unwrap();
-        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let list = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(list.value_type(), DataType::LargeUtf8);
         let inner = list.value(0);
         assert_eq!(
@@ -21438,7 +21467,7 @@ mod tests {
             1,
         )
         .unwrap();
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(result.value_type(), DataType::LargeUtf8);
         let inner = result.value(0);
         let values = inner.as_string::<i64>();
