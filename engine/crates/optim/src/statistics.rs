@@ -162,6 +162,16 @@ pub fn optimize_with_statistics(
             // This is deliberately bounded: the rewrite needs exact
             // relation facts and leaves outer, USING, residual, and larger
             // join graphs to the existing conservative rules.
+            if let Some(reordered) = reorder_four_way_inner(
+                (*left).clone(),
+                (*right).clone(),
+                join_type,
+                condition.as_ref(),
+                using_columns.as_ref(),
+                statistics,
+            ) {
+                return reordered;
+            }
             if let Some(reordered) = reorder_three_way_inner(
                 (*left).clone(),
                 (*right).clone(),
@@ -324,6 +334,194 @@ pub fn optimize_with_statistics(
         scan @ LogicalPlan::Scan { .. } => scan,
         unnest @ LogicalPlan::Unnest { .. } => unnest,
     }
+}
+
+/// Reorder a four-relation left-deep inner equi-join chain when every leaf
+/// has exact source statistics.  The parser emits a left-deep tree, so the
+/// bounded search only considers connected left-deep build orders.  It keeps
+/// the existing conservative behavior for outer/USING/residual joins and
+/// restores the written output order with an explicit projection.
+fn reorder_four_way_inner(
+    left: LogicalPlan,
+    right: LogicalPlan,
+    join_type: JoinType,
+    condition: Option<&Expr>,
+    using_columns: Option<&Vec<String>>,
+    statistics: &mut impl FnMut(&str) -> Option<RelationStatistics>,
+) -> Option<LogicalPlan> {
+    if join_type != JoinType::Inner || condition.is_none() || using_columns.is_some() {
+        return None;
+    }
+    let mut leaves = Vec::with_capacity(4);
+    let mut conditions = Vec::with_capacity(3);
+    let mut current = left;
+    loop {
+        let LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+            using_columns,
+            ..
+        } = current
+        else {
+            leaves.push(current);
+            break;
+        };
+        if join_type != JoinType::Inner || condition.is_none() || using_columns.is_some() {
+            return None;
+        }
+        conditions.push(condition?);
+        current = *left;
+        leaves.push(*right);
+    }
+    // The loop collected the inner leaves in reverse nesting order.
+    // Reconstruct the written left-deep order, then append the top relation.
+    leaves.reverse();
+    leaves.push(right);
+    conditions.reverse();
+    conditions.push(condition?.clone());
+    if leaves.len() != 4 || conditions.len() != 3 {
+        return None;
+    }
+
+    let estimates = leaves
+        .iter()
+        .map(|leaf| relation(leaf, statistics))
+        .collect::<Option<Vec<_>>>()?;
+    let aliases = estimates
+        .iter()
+        .map(|estimate| estimate.alias.clone())
+        .collect::<Vec<_>>();
+    if aliases.iter().collect::<HashSet<_>>().len() != 4 {
+        return None;
+    }
+    let edges = conditions
+        .iter()
+        .map(|condition| {
+            let pair = condition_alias_pair(condition)?;
+            let left = aliases.iter().position(|alias| alias == &pair.0)?;
+            let right = aliases.iter().position(|alias| alias == &pair.1)?;
+            Some((condition, left, right))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if edges.iter().any(|(_, left, right)| left == right) {
+        return None;
+    }
+
+    // The recursive search carries immutable plan inputs plus the evolving
+    // state explicitly; keeping those arguments visible makes the bounded
+    // enumeration easier to audit than hiding them in mutable global state.
+    #[allow(clippy::too_many_arguments)]
+    fn search(
+        leaves: &[LogicalPlan],
+        estimates: &[Estimate],
+        aliases: &[String],
+        edges: &[(&Expr, usize, usize)],
+        selected: Vec<usize>,
+        plan: LogicalPlan,
+        cost: JoinCost,
+        best: &mut Option<(JoinCost, LogicalPlan)>,
+    ) {
+        if selected.len() == leaves.len() {
+            if best.as_ref().is_none_or(|(previous, _)| cost < *previous) {
+                *best = Some((cost, plan));
+            }
+            return;
+        }
+        let selected_set = selected.iter().copied().collect::<HashSet<_>>();
+        for (condition, left, right) in edges {
+            let new_index = if selected_set.contains(left) && !selected_set.contains(right) {
+                *right
+            } else if selected_set.contains(right) && !selected_set.contains(left) {
+                *left
+            } else {
+                continue;
+            };
+            if selected.contains(&new_index) {
+                continue;
+            }
+            let left_aliases = selected
+                .iter()
+                .map(|index| aliases[*index].as_str())
+                .collect::<Vec<_>>();
+            let oriented =
+                match orient_condition(condition, &left_aliases, &[aliases[new_index].as_str()]) {
+                    Some(oriented) => oriented,
+                    None => continue,
+                };
+            let next_cost = cost.then_attach(&estimates[new_index]);
+            let next_plan = LogicalPlan::Join {
+                left: Box::new(plan.clone()),
+                right: Box::new(leaves[new_index].clone()),
+                join_type: JoinType::Inner,
+                condition: Some(oriented),
+                using_columns: None,
+                distribution: join_distribution(
+                    JoinType::Inner,
+                    Some(&Estimate {
+                        rows: cost.rows,
+                        bytes: Some(cost.bytes),
+                        alias: "__join".into(),
+                        columns: selected
+                            .iter()
+                            .flat_map(|index| estimates[*index].columns.iter().cloned())
+                            .collect(),
+                    }),
+                    Some(&estimates[new_index]),
+                ),
+            };
+            let mut next_selected = selected.clone();
+            next_selected.push(new_index);
+            search(
+                leaves,
+                estimates,
+                aliases,
+                edges,
+                next_selected,
+                next_plan,
+                next_cost,
+                best,
+            );
+        }
+    }
+
+    let mut best = None;
+    for (condition, left, right) in &edges {
+        for (first, second) in [(*left, *right), (*right, *left)] {
+            let first_join = build_inner_join(
+                leaves[first].clone(),
+                leaves[second].clone(),
+                condition,
+                aliases[first].as_str(),
+                aliases[second].as_str(),
+                &estimates[first],
+                &estimates[second],
+            )?;
+            let selected = vec![first, second];
+            let cost = JoinCost::for_pair(&estimates[first], &estimates[second]);
+            search(
+                &leaves, &estimates, &aliases, &edges, selected, first_join, cost, &mut best,
+            );
+        }
+    }
+    let (_, plan) = best?;
+    let columns = estimates
+        .iter()
+        .flat_map(|estimate| {
+            estimate.columns.iter().map(|column| {
+                let name = format!("{}.{column}", estimate.alias);
+                Expr::Alias {
+                    expr: Box::new(Expr::Column(name.clone())),
+                    name,
+                }
+            })
+        })
+        .collect();
+    Some(LogicalPlan::Project {
+        input: Box::new(plan),
+        columns,
+    })
 }
 
 /// Prefer the relation with the smaller known serialized footprint when both
@@ -1166,6 +1364,45 @@ mod tests {
             right.as_ref(),
             LogicalPlan::Scan { table, .. } if table == "tiny"
         ));
+    }
+
+    #[test]
+    fn reorders_a_four_way_chain_with_exact_output_order() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM large l JOIN medium m ON l.id=m.id JOIN tiny t ON m.id=t.id JOIN micro u ON t.id=u.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut |table| {
+            let (rows, bytes) = match table {
+                "large" => (10_000_000, 100_000_000),
+                "medium" => (100_000, 10_000_000),
+                "tiny" => (10, 1_000),
+                "micro" => (5, 500),
+                _ => return None,
+            };
+            Some(RelationStatistics::exact_with_bytes(
+                rows,
+                vec!["id".into()],
+                bytes,
+            ))
+        });
+        let LogicalPlan::Project { input, columns } = optimized else {
+            panic!("four-way reorder must restore the written projection")
+        };
+        assert_eq!(columns.len(), 4);
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| match column {
+                    Expr::Alias { name, .. } => name.as_str(),
+                    _ => panic!("qualified output alias missing"),
+                })
+                .collect::<Vec<_>>(),
+            vec!["l.id", "m.id", "t.id", "u.id"]
+        );
+        let rendered = format!("{input:?}");
+        assert!(rendered.contains("table: \"micro\""));
+        assert!(rendered.contains("table: \"tiny\""));
     }
 
     #[test]
