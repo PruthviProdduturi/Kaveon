@@ -2732,6 +2732,36 @@ fn distributed_json_value_default_on_empty_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// SQL/JSON DEFAULT ON ERROR must remain distinct from DEFAULT ON EMPTY for
+/// malformed runtime paths in local and three-worker execution.
+#[test]
+fn distributed_json_value_default_on_malformed_path_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-value-default-malformed-path-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE(JSON_PARSE('{\"customer\":{}}'), '$.customer.id[' ON EMPTY DEFAULT 'empty-default' ON ERROR DEFAULT 'error-default') AS malformed_path, JSON_VALUE(JSON_PARSE('{\"customer\":{}}'), '$.customer.id' ON EMPTY DEFAULT 'empty-default' ON ERROR DEFAULT 'error-default') AS missing_path FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-json-value-default-malformed-path", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["error-default\u{1f}empty-default"; 3]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// A typed JSON scalar string must use the same VARCHAR coercion on the local
 /// evaluator and every worker fragment. This closes the prepared JSON
 /// RETURNING VARCHAR boundary without relying on a runtime row from storage.
