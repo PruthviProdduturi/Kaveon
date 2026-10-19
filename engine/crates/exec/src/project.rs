@@ -221,6 +221,15 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
                     None,
                 ));
             }
+            // A ZIP_WITH lambda can return a typed value even when the
+            // projection probe has zero rows. Infer its element type from
+            // the lambda's parameter columns instead of accepting the
+            // evaluator's empty-input Null array.
+            if name.eq_ignore_ascii_case("ZIP_WITH")
+                && let Some(data_type) = expression_data_type(expr, schema)
+            {
+                return Ok((Field::new(output_name, data_type, true), None));
+            }
             let data_type = evaluate(expr, &RecordBatch::new_empty(schema.clone()))?
                 .data_type()
                 .clone();
@@ -334,6 +343,80 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 return None;
             };
             fields.get(1).map(|field| field.data_type().clone())
+        }
+        Expr::Function { name, args }
+            if name.eq_ignore_ascii_case("ZIP_WITH") && args.len() == 3 =>
+        {
+            let left = expression_data_type(&args[0], schema)?;
+            let right = expression_data_type(&args[1], schema)?;
+            let left_type = match left {
+                DataType::List(field) | DataType::LargeList(field) => field.data_type().clone(),
+                _ => return None,
+            };
+            let right_type = match right {
+                DataType::List(field) | DataType::LargeList(field) => field.data_type().clone(),
+                _ => return None,
+            };
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[2]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 3 {
+                return None;
+            }
+            let (
+                Expr::Literal(ScalarValue::Utf8(left_name)),
+                Expr::Literal(ScalarValue::Utf8(right_name)),
+            ) = (&lambda_args[0], &lambda_args[1])
+            else {
+                return None;
+            };
+            if left_name == right_name {
+                return None;
+            }
+            let mut fields = vec![
+                Field::new(left_name, left_type, true),
+                Field::new(right_name, right_type, true),
+            ];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|field| field.name() != left_name && field.name() != right_name)
+                    .map(|field| field.as_ref().clone()),
+            );
+            let element_type =
+                expression_data_type(&lambda_args[2], &Arc::new(Schema::new(fields)))?;
+            Some(DataType::List(Arc::new(Field::new(
+                "item",
+                element_type,
+                true,
+            ))))
+        }
+        Expr::BinaryOp { left, op, right } => {
+            if matches!(
+                op,
+                kaveon_core::BinaryOp::Eq
+                    | kaveon_core::BinaryOp::Ne
+                    | kaveon_core::BinaryOp::Lt
+                    | kaveon_core::BinaryOp::Le
+                    | kaveon_core::BinaryOp::Gt
+                    | kaveon_core::BinaryOp::Ge
+            ) {
+                return Some(DataType::Boolean);
+            }
+            let left = expression_data_type(left, schema)?;
+            let right = expression_data_type(right, schema)?;
+            if left == right {
+                Some(left)
+            } else if matches!(left, DataType::Float64) || matches!(right, DataType::Float64) {
+                Some(DataType::Float64)
+            } else {
+                None
+            }
         }
         _ => None,
     }
