@@ -205,6 +205,16 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_array_sort_comparator(&args[0], lambda_args, batch);
             }
+            if name.eq_ignore_ascii_case("ZIP_WITH")
+                && args.len() == 3
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[2]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_zip_with(&args[0], &args[1], lambda_args, batch);
+            }
             if let Some(result) = eval_function_through_dictionary(name, args, batch)? {
                 return Ok(result);
             }
@@ -2802,6 +2812,143 @@ fn eval_array_sort_comparator(
         .downcast_ref::<ListArray>()
         .ok_or_else(|| KaveonError::Execution("ARRAY_SORT requires an ARRAY/List value".into()))?;
     array_sort_comparator_generic(list, &names, body, batch)
+}
+
+/// Evaluate Trino's `ZIP_WITH` form. The lambda is kept in the logical plan as
+/// `__KAVEON_LAMBDA(left, right, body)` and evaluated once per paired element.
+/// Shorter arrays are padded with typed NULLs, while a NULL outer array keeps
+/// the result NULL. Outer-row columns are carried into the one-row evaluation
+/// batch so the lambda has the same captured-column semantics as ARRAY_SORT.
+fn eval_zip_with(
+    left_expr: &Expr,
+    right_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 3 {
+        return Err(KaveonError::Execution(
+            "ZIP_WITH lambda must have exactly two parameters".into(),
+        ));
+    }
+    let names = lambda_args[..2]
+        .iter()
+        .map(|arg| match arg {
+            Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => Ok(name.clone()),
+            _ => Err(KaveonError::Execution(
+                "ZIP_WITH lambda parameters must be identifiers".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if names[0] == names[1] {
+        return Err(KaveonError::Execution(
+            "ZIP_WITH lambda parameters must be distinct".into(),
+        ));
+    }
+    let left = normalize_large_list(&decode_dictionary(&evaluate(left_expr, outer_batch)?)?)?;
+    let right = normalize_large_list(&decode_dictionary(&evaluate(right_expr, outer_batch)?)?)?;
+    let left = left
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution("ZIP_WITH requires an ARRAY/List value".into()))?;
+    let right = right
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution("ZIP_WITH requires an ARRAY/List value".into()))?;
+    if left.len() != right.len() {
+        return Err(KaveonError::Execution(
+            "ZIP_WITH requires arrays with matching row counts".into(),
+        ));
+    }
+    let body = &lambda_args[2];
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![0_i32];
+    let mut valid = Vec::with_capacity(left.len());
+    let mut result_type = None;
+    for row in 0..left.len() {
+        if left.is_null(row) || right.is_null(row) {
+            valid.push(false);
+            offsets.push(
+                i32::try_from(selected.len()).map_err(|_| {
+                    KaveonError::Execution("ZIP_WITH result offset overflow".into())
+                })?,
+            );
+            continue;
+        }
+        valid.push(true);
+        let left_inner = left.value(row);
+        let right_inner = right.value(row);
+        let width = left_inner.len().max(right_inner.len());
+        for index in 0..width {
+            let left_value = if index < left_inner.len() {
+                if left_inner.is_null(index) {
+                    arrow::array::new_null_array(&left.value_type(), 1)
+                } else {
+                    left_inner.slice(index, 1)
+                }
+            } else {
+                arrow::array::new_null_array(&left.value_type(), 1)
+            };
+            let right_value = if index < right_inner.len() {
+                if right_inner.is_null(index) {
+                    arrow::array::new_null_array(&right.value_type(), 1)
+                } else {
+                    right_inner.slice(index, 1)
+                }
+            } else {
+                arrow::array::new_null_array(&right.value_type(), 1)
+            };
+            let mut fields = vec![
+                Field::new(&names[0], left_value.data_type().clone(), true),
+                Field::new(&names[1], right_value.data_type().clone(), true),
+            ];
+            let mut columns = vec![left_value, right_value];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if names.iter().any(|name| name == field.name())
+                    || fields
+                        .iter()
+                        .any(|existing| existing.name() == field.name())
+                {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let pair_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            let value = decode_dictionary(&evaluate(body, &pair_batch)?)?;
+            if value.len() != 1 {
+                return Err(KaveonError::Execution(
+                    "ZIP_WITH lambda must return one value per pair".into(),
+                ));
+            }
+            result_type.get_or_insert_with(|| value.data_type().clone());
+            selected.push(value);
+        }
+        offsets.push(
+            i32::try_from(selected.len())
+                .map_err(|_| KaveonError::Execution("ZIP_WITH result offset overflow".into()))?,
+        );
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(result_type.as_ref().unwrap_or(&DataType::Null))
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    Ok(Arc::new(ListArray::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
 }
 
 fn array_sort_comparator_generic<L: OffsetSizeTrait>(
@@ -15796,6 +15943,47 @@ mod tests {
             rows.column(1).as_primitive::<Int64Type>().values().as_ref(),
             &[2]
         );
+    }
+
+    #[test]
+    fn zip_with_applies_lambda_and_null_pads_shorter_array() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ZIP_WITH".into(),
+                args: vec![
+                    array(vec![
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                    ]),
+                    array(vec![Expr::Literal(ScalarValue::Int64(10))]),
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("x".into())),
+                            Expr::Literal(ScalarValue::Utf8("y".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("x".into())),
+                                op: BinaryOp::Plus,
+                                right: Box::new(Expr::Column("y".into())),
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_primitive::<Int64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(11), None]);
     }
 
     #[test]
