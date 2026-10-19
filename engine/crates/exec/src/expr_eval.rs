@@ -255,6 +255,16 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_transform_values(&args[0], lambda_args, batch);
             }
+            if name.eq_ignore_ascii_case("TRANSFORM_KEYS")
+                && args.len() == 2
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[1]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_transform_keys(&args[0], lambda_args, batch);
+            }
             if name.eq_ignore_ascii_case("REDUCE")
                 && args.len() == 4
                 && let Expr::Function {
@@ -3526,6 +3536,145 @@ fn eval_transform_values(
     let entry_fields: arrow::datatypes::Fields = vec![
         Arc::new(Field::new("key", key_type, false)),
         Arc::new(Field::new("value", values.data_type().clone(), true)),
+    ]
+    .into();
+    let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
+    let entry_field = Arc::new(Field::new("entries", DataType::Struct(entry_fields), false));
+    Ok(Arc::new(MapArray::try_new(
+        entry_field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        entries,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+        sorted,
+    )?))
+}
+
+/// Evaluate Trino's bounded `TRANSFORM_KEYS(map, (key, value) -> new_key)`
+/// form. The transformed keys must remain non-NULL and unique within each
+/// map row, matching MAP construction invariants.
+fn eval_transform_keys(
+    map_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 3 {
+        return Err(KaveonError::Execution(
+            "TRANSFORM_KEYS requires a two-parameter lambda".into(),
+        ));
+    }
+    let parameter_names = lambda_args[..2]
+        .iter()
+        .map(|arg| match arg {
+            Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => Ok(name.clone()),
+            _ => Err(KaveonError::Execution(
+                "TRANSFORM_KEYS lambda parameters must be identifiers".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if parameter_names[0] == parameter_names[1] {
+        return Err(KaveonError::Execution(
+            "TRANSFORM_KEYS lambda parameters must be distinct".into(),
+        ));
+    }
+    let map = evaluate(map_expr, outer_batch)?;
+    let map = map
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| KaveonError::Execution("TRANSFORM_KEYS requires a MAP value".into()))?;
+    let key_type = map.keys().data_type().clone();
+    let value_type = map.values().data_type().clone();
+    let sorted = matches!(map.data_type(), DataType::Map(_, true));
+    let mut source_indices = Vec::<u32>::new();
+    let mut offsets = vec![0_i32];
+    let mut valid = Vec::with_capacity(map.len());
+    let mut transformed = Vec::<ArrayRef>::new();
+    for row in 0..map.len() {
+        if map.is_null(row) {
+            valid.push(false);
+            offsets.push(i32::try_from(source_indices.len()).map_err(|_| {
+                KaveonError::Execution("TRANSFORM_KEYS result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let start = map.value_offsets()[row] as usize;
+        let end = map.value_offsets()[row + 1] as usize;
+        for index in start..end {
+            let key = map.keys().slice(index, 1);
+            let value = map.values().slice(index, 1);
+            let mut fields = vec![
+                Field::new(&parameter_names[0], key_type.clone(), false),
+                Field::new(&parameter_names[1], value_type.clone(), true),
+            ];
+            let mut columns = vec![key, value];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if parameter_names.iter().any(|name| name == field.name()) {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let pair_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            let result = decode_dictionary(&evaluate(&lambda_args[2], &pair_batch)?)?;
+            if result.len() != 1 {
+                return Err(KaveonError::Execution(
+                    "TRANSFORM_KEYS lambda must return one value per entry".into(),
+                ));
+            }
+            if result.is_null(0) {
+                return Err(KaveonError::Execution(
+                    "TRANSFORM_KEYS lambda cannot return NULL keys".into(),
+                ));
+            }
+            transformed.push(result);
+            source_indices.push(u32::try_from(index).map_err(|_| {
+                KaveonError::Execution("TRANSFORM_KEYS has too many entries".into())
+            })?);
+        }
+        offsets.push(
+            i32::try_from(source_indices.len()).map_err(|_| {
+                KaveonError::Execution("TRANSFORM_KEYS result offset overflow".into())
+            })?,
+        );
+    }
+    let key_sources = transformed
+        .iter()
+        .map(|value| value.as_ref() as &dyn Array)
+        .collect::<Vec<_>>();
+    let keys = if key_sources.is_empty() {
+        map.keys().slice(0, 0)
+    } else {
+        compute::concat(&key_sources)?
+    };
+    for row in 0..map.len() {
+        if !valid[row] {
+            continue;
+        }
+        let start = offsets[row] as usize;
+        let end = offsets[row + 1] as usize;
+        for left in start..end {
+            for right in (left + 1)..end {
+                if map_keys_equal(&keys, left, right)? {
+                    return Err(KaveonError::Execution(
+                        "TRANSFORM_KEYS lambda produced duplicate keys".into(),
+                    ));
+                }
+            }
+        }
+    }
+    let values = compute::take(
+        map.values().as_ref(),
+        &UInt32Array::from(source_indices),
+        None,
+    )?;
+    let entry_fields: arrow::datatypes::Fields = vec![
+        Arc::new(Field::new("key", keys.data_type().clone(), false)),
+        Arc::new(Field::new("value", value_type, true)),
     ]
     .into();
     let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
@@ -16864,6 +17013,59 @@ mod tests {
         assert_eq!(map.keys().as_string::<i32>().value(0), "a");
         assert_eq!(map.keys().as_string::<i32>().value(1), "b");
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[2, 3]);
+    }
+
+    #[test]
+    fn transform_keys_rewrites_keys_and_preserves_values() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "TRANSFORM_KEYS".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "MAP".into(),
+                        args: vec![
+                            Expr::Function {
+                                name: "ARRAY".into(),
+                                args: vec![
+                                    Expr::Literal(ScalarValue::Utf8("a".into())),
+                                    Expr::Literal(ScalarValue::Utf8("b".into())),
+                                ],
+                            },
+                            Expr::Function {
+                                name: "ARRAY".into(),
+                                args: vec![
+                                    Expr::Literal(ScalarValue::Int64(1)),
+                                    Expr::Literal(ScalarValue::Int64(2)),
+                                ],
+                            },
+                        ],
+                    },
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("key".into())),
+                            Expr::Literal(ScalarValue::Utf8("value".into())),
+                            Expr::Function {
+                                name: "CONCAT".into(),
+                                args: vec![
+                                    Expr::Column("key".into()),
+                                    Expr::Literal(ScalarValue::Utf8("_x".into())),
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_string::<i32>().value(0), "a_x");
+        assert_eq!(map.keys().as_string::<i32>().value(1), "b_x");
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
     }
 
     #[test]

@@ -595,6 +595,68 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
                 sorted,
             ))
         }
+        Expr::Function { name, args }
+            if name.eq_ignore_ascii_case("TRANSFORM_KEYS") && args.len() == 2 =>
+        {
+            let DataType::Map(entry_field, sorted) = expression_data_type(&args[0], schema)? else {
+                return None;
+            };
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[1]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 3 {
+                return None;
+            }
+            let DataType::Struct(entry_fields) = entry_field.data_type() else {
+                return None;
+            };
+            if entry_fields.len() != 2 {
+                return None;
+            }
+            let (
+                Expr::Literal(ScalarValue::Utf8(key_name)),
+                Expr::Literal(ScalarValue::Utf8(value_name)),
+            ) = (&lambda_args[0], &lambda_args[1])
+            else {
+                return None;
+            };
+            if key_name == value_name {
+                return None;
+            }
+            let mut fields = vec![
+                Field::new(key_name, entry_fields[0].data_type().clone(), false),
+                Field::new(value_name, entry_fields[1].data_type().clone(), true),
+            ];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|field| field.name() != key_name && field.name() != value_name)
+                    .map(|field| field.as_ref().clone()),
+            );
+            let result_type =
+                expression_data_type(&lambda_args[2], &Arc::new(Schema::new(fields)))?;
+            if result_type == DataType::Null {
+                return None;
+            }
+            let result_fields: arrow::datatypes::Fields = vec![
+                Arc::new(Field::new("key", result_type, false)),
+                Arc::new(entry_fields[1].as_ref().clone()),
+            ]
+            .into();
+            Some(DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(result_fields),
+                    false,
+                )),
+                sorted,
+            ))
+        }
         Expr::Function { name, args } if name.eq_ignore_ascii_case("REDUCE") && args.len() == 4 => {
             let state_type = expression_data_type(&args[1], schema)?;
             let Expr::Function {
