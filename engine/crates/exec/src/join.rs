@@ -1250,6 +1250,15 @@ pub(crate) fn estimated_output_bytes(batch: &RecordBatch, indices: &[Option<u64>
                         column.as_string::<i64>().value(index as usize).len() as u64
                     })
                 }
+                DataType::Utf8View => {
+                    16 + index.map_or(0, |index| {
+                        column
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .map(|array| array.value(index as usize).len() as u64)
+                            .unwrap_or(0)
+                    })
+                }
                 // Taking one row gives Arrow's own estimate for nested/variable
                 // types without allocating a duplicate output array.
                 _ => index.map_or(8, |index| {
