@@ -7,7 +7,8 @@ Implementation history lives in Git; reproducible measurements live under
 evidence passes against exact-result references.
 
 The latest source/build gate record is retained in
-`docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
+`docs/qualification/track1-track2-workspace-2026-10-19.md`; the earlier CI and
+release workflow record remains in `docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
 
 ## Status vocabulary
 
