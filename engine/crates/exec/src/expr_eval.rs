@@ -235,6 +235,16 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             {
                 return eval_array_transform(&args[0], lambda_args, batch);
             }
+            if name.eq_ignore_ascii_case("MAP_FILTER")
+                && args.len() == 2
+                && let Expr::Function {
+                    name: lambda_name,
+                    args: lambda_args,
+                } = &args[1]
+                && lambda_name == "__KAVEON_LAMBDA"
+            {
+                return eval_map_filter(&args[0], lambda_args, batch);
+            }
             if name.eq_ignore_ascii_case("REDUCE")
                 && args.len() == 4
                 && let Expr::Function {
@@ -3295,6 +3305,116 @@ fn eval_array_reduce(
         .map(|value| value.as_ref() as &dyn Array)
         .collect::<Vec<_>>();
     Ok(compute::concat(&chunks)?)
+}
+
+/// Evaluate Trino's bounded `MAP_FILTER(map, (key, value) -> predicate)` form.
+/// Lambda parameters are bound as one-row columns for each entry, while other
+/// outer-row columns remain available for captured predicates.
+fn eval_map_filter(
+    map_expr: &Expr,
+    lambda_args: &[Expr],
+    outer_batch: &RecordBatch,
+) -> Result<ArrayRef> {
+    if lambda_args.len() != 3 {
+        return Err(KaveonError::Execution(
+            "MAP_FILTER requires a two-parameter lambda".into(),
+        ));
+    }
+    let parameter_names = lambda_args[..2]
+        .iter()
+        .map(|arg| match arg {
+            Expr::Literal(ScalarValue::Utf8(name)) if !name.is_empty() => Ok(name.clone()),
+            _ => Err(KaveonError::Execution(
+                "MAP_FILTER lambda parameters must be identifiers".into(),
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if parameter_names[0] == parameter_names[1] {
+        return Err(KaveonError::Execution(
+            "MAP_FILTER lambda parameters must be distinct".into(),
+        ));
+    }
+    let map = evaluate(map_expr, outer_batch)?;
+    let map = map
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| KaveonError::Execution("MAP_FILTER requires a MAP value".into()))?;
+    let key_type = map.keys().data_type().clone();
+    let value_type = map.values().data_type().clone();
+    let sorted = matches!(map.data_type(), DataType::Map(_, true));
+    let mut selected = Vec::<u32>::new();
+    let mut offsets = vec![0_i32];
+    let mut valid = Vec::with_capacity(map.len());
+    for row in 0..map.len() {
+        if map.is_null(row) {
+            valid.push(false);
+            offsets.push(
+                i32::try_from(selected.len()).map_err(|_| {
+                    KaveonError::Execution("MAP_FILTER result offset overflow".into())
+                })?,
+            );
+            continue;
+        }
+        valid.push(true);
+        let start = map.value_offsets()[row] as usize;
+        let end = map.value_offsets()[row + 1] as usize;
+        for index in start..end {
+            let key = map.keys().slice(index, 1);
+            let value = map.values().slice(index, 1);
+            let mut fields = vec![
+                Field::new(&parameter_names[0], key_type.clone(), false),
+                Field::new(&parameter_names[1], value_type.clone(), true),
+            ];
+            let mut columns = vec![key, value];
+            for (field, column) in outer_batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(outer_batch.columns())
+            {
+                if parameter_names.iter().any(|name| name == field.name()) {
+                    continue;
+                }
+                fields.push(field.as_ref().clone());
+                columns.push(column.slice(row, 1));
+            }
+            let pair_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+            let predicate = decode_dictionary(&evaluate(&lambda_args[2], &pair_batch)?)?;
+            let predicate = predicate
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("MAP_FILTER lambda must return BOOLEAN".into())
+                })?;
+            if predicate.len() != 1 {
+                return Err(KaveonError::Execution(
+                    "MAP_FILTER lambda must return one value per entry".into(),
+                ));
+            }
+            if predicate.value(0) {
+                selected.push(u32::try_from(index).map_err(|_| {
+                    KaveonError::Execution("MAP_FILTER has too many entries".into())
+                })?);
+            }
+        }
+        offsets.push(
+            i32::try_from(selected.len())
+                .map_err(|_| KaveonError::Execution("MAP_FILTER result offset overflow".into()))?,
+        );
+    }
+    let indices = UInt32Array::from(selected);
+    let keys = compute::take(map.keys().as_ref(), &indices, None)?;
+    let values = compute::take(map.values().as_ref(), &indices, None)?;
+    let entry_fields = map.entries().fields().clone();
+    let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
+    let entry_field = Arc::new(Field::new("entries", DataType::Struct(entry_fields), false));
+    Ok(Arc::new(MapArray::try_new(
+        entry_field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        entries,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+        sorted,
+    )?))
 }
 
 fn array_sort_comparator_generic<L: OffsetSizeTrait>(
@@ -16519,6 +16639,57 @@ mod tests {
         .unwrap();
         let values = result.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(23), None]);
+    }
+
+    #[test]
+    fn map_filter_applies_key_value_lambda() {
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_FILTER".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "MAP".into(),
+                        args: vec![
+                            Expr::Function {
+                                name: "ARRAY".into(),
+                                args: vec![
+                                    Expr::Literal(ScalarValue::Utf8("a".into())),
+                                    Expr::Literal(ScalarValue::Utf8("b".into())),
+                                ],
+                            },
+                            Expr::Function {
+                                name: "ARRAY".into(),
+                                args: vec![
+                                    Expr::Literal(ScalarValue::Int64(1)),
+                                    Expr::Literal(ScalarValue::Int64(2)),
+                                ],
+                            },
+                        ],
+                    },
+                    Expr::Function {
+                        name: "__KAVEON_LAMBDA".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Utf8("key".into())),
+                            Expr::Literal(ScalarValue::Utf8("value".into())),
+                            Expr::BinaryOp {
+                                left: Box::new(Expr::Column("value".into())),
+                                op: BinaryOp::Gt,
+                                right: Box::new(Expr::Literal(ScalarValue::Int64(1))),
+                            },
+                        ],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 1]);
+        assert_eq!(map.keys().as_string::<i32>().value(0), "b");
+        assert_eq!(map.values().as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]

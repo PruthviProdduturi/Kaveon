@@ -8279,6 +8279,26 @@ mod tests {
     }
 
     #[test]
+    fn lowers_map_filter_lambda() {
+        let plan = sql_to_logical_plan(
+            "SELECT MAP_FILTER(MAP(ARRAY['a', 'b'], ARRAY[1, 2]), (key, value) -> value > 1) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Function { name, args } = &columns[0] else {
+            panic!("expected MAP_FILTER");
+        };
+        assert_eq!(name, "MAP_FILTER");
+        assert!(matches!(
+            args.get(1),
+            Some(Expr::Function { name, args })
+                if name == "__KAVEON_LAMBDA" && args.len() == 3
+        ));
+    }
+
+    #[test]
     fn parses_cardinality_over_an_array_literal() {
         let plan = sql_to_logical_plan("SELECT CARDINALITY(ARRAY[1, 2.5]) FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
