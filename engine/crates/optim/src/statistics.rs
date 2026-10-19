@@ -10,7 +10,10 @@ use kaveon_core::{
 };
 use kaveon_sql::logical_plan::{JoinDistribution, JoinType, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, IcebergReader, ParquetReader, SourceStatistics};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 const BROADCAST_BUILD_MAX_ROWS: u64 = 1_000_000;
 /// A build side whose files exceed this many bytes as stored is not
@@ -153,6 +156,22 @@ pub fn optimize_with_statistics(
             using_columns,
             ..
         } => {
+            // The parser builds a left-deep tree for a join chain. Before
+            // optimizing each binary join independently, enumerate the two
+            // connected pairings in a three-relation inner equi-join chain.
+            // This is deliberately bounded: the rewrite needs exact
+            // relation facts and leaves outer, USING, residual, and larger
+            // join graphs to the existing conservative rules.
+            if let Some(reordered) = reorder_three_way_inner(
+                (*left).clone(),
+                (*right).clone(),
+                join_type,
+                condition.as_ref(),
+                using_columns.as_ref(),
+                statistics,
+            ) {
+                return reordered;
+            }
             let left = Box::new(optimize_with_statistics(*left, statistics));
             let right = Box::new(optimize_with_statistics(*right, statistics));
             let left_relation = relation(&left, statistics);
@@ -700,6 +719,287 @@ fn scalar_number(value: &ScalarValue) -> Option<f64> {
     }
 }
 
+/// Reorder one left-deep chain when all three leaves have exact source
+/// statistics.  The parser's join tree for `a JOIN b ... JOIN c` contains
+/// only two join edges, so there are two meaningful connected starting pairs:
+/// the written pair and the pair formed by the top edge.  Exhaustively
+/// comparing those two choices gives the useful part of a cost model without
+/// making statistics-based rewrites speculative for arbitrary join graphs.
+fn reorder_three_way_inner(
+    left: LogicalPlan,
+    right: LogicalPlan,
+    join_type: JoinType,
+    condition: Option<&Expr>,
+    using_columns: Option<&Vec<String>>,
+    statistics: &mut impl FnMut(&str) -> Option<RelationStatistics>,
+) -> Option<LogicalPlan> {
+    if join_type != JoinType::Inner || condition.is_none() || using_columns.is_some() {
+        return None;
+    }
+    let LogicalPlan::Join {
+        left: first,
+        right: second,
+        join_type: first_type,
+        condition: first_condition,
+        using_columns: first_using,
+        ..
+    } = left
+    else {
+        return None;
+    };
+    if first_type != JoinType::Inner || first_condition.is_none() || first_using.is_some() {
+        return None;
+    }
+
+    let leaves = vec![*first, *second, right];
+    let mut estimates = Vec::with_capacity(3);
+    for leaf in &leaves {
+        estimates.push(relation(leaf, statistics)?);
+    }
+    let aliases = estimates
+        .iter()
+        .map(|estimate| estimate.alias.clone())
+        .collect::<Vec<_>>();
+    if aliases.iter().collect::<HashSet<_>>().len() != 3 {
+        return None;
+    }
+    let first_edge = condition_alias_pair(first_condition.as_ref()?)?;
+    let second_edge = condition_alias_pair(condition?)?;
+    if !edge_is_between(&first_edge, &aliases[0], &aliases[1]) {
+        return None;
+    }
+    if !second_edge.0.eq(&aliases[2]) && !second_edge.1.eq(&aliases[2]) {
+        return None;
+    }
+    if !second_edge.0.eq(&aliases[0])
+        && !second_edge.1.eq(&aliases[0])
+        && !second_edge.0.eq(&aliases[1])
+        && !second_edge.1.eq(&aliases[1])
+    {
+        return None;
+    }
+
+    // Candidate 0 is the written pair. Candidate 1 starts with the pair on
+    // the top edge, then attaches the remaining leaf through the other edge.
+    let top_other = if second_edge.0 == aliases[2] {
+        aliases.iter().position(|alias| alias == &second_edge.1)?
+    } else if second_edge.1 == aliases[2] {
+        aliases.iter().position(|alias| alias == &second_edge.0)?
+    } else {
+        return None;
+    };
+    let remaining = (0..3).find(|index| *index != top_other && *index != 2)?;
+    let candidates = [
+        (0usize, 1usize, 2usize, first_condition.as_ref()?, condition),
+        (
+            top_other,
+            2,
+            remaining,
+            condition?,
+            first_condition.as_ref(),
+        ),
+    ];
+    let mut best: Option<(JoinCost, usize, LogicalPlan)> = None;
+    for (candidate_index, (pair_left, pair_right, remaining, pair_condition, attach_condition)) in
+        candidates.into_iter().enumerate()
+    {
+        if pair_left == pair_right || pair_left >= 3 || pair_right >= 3 || remaining >= 3 {
+            continue;
+        }
+        let pair_cost = JoinCost::for_pair(&estimates[pair_left], &estimates[pair_right]);
+        let cost = pair_cost.then_attach(&estimates[remaining]);
+        if best
+            .as_ref()
+            .is_some_and(|(previous, _, _)| *previous <= cost)
+        {
+            continue;
+        }
+        let first_join = build_inner_join(
+            leaves[pair_left].clone(),
+            leaves[pair_right].clone(),
+            pair_condition,
+            &estimates[pair_left].alias,
+            &estimates[pair_right].alias,
+            &estimates[pair_left],
+            &estimates[pair_right],
+        )?;
+        let intermediate = JoinCost::for_pair(&estimates[pair_left], &estimates[pair_right]);
+        let remaining_alias = &estimates[remaining].alias;
+        let left_aliases = [
+            estimates[pair_left].alias.as_str(),
+            estimates[pair_right].alias.as_str(),
+        ];
+        let oriented = orient_condition(attach_condition?, &left_aliases, &[remaining_alias])?;
+        let intermediate_estimate = Estimate {
+            rows: intermediate.rows,
+            bytes: Some(intermediate.bytes),
+            alias: "__join".into(),
+            columns: estimates[pair_left]
+                .columns
+                .iter()
+                .chain(estimates[pair_right].columns.iter())
+                .cloned()
+                .collect(),
+        };
+        let final_distribution = join_distribution(
+            JoinType::Inner,
+            Some(&intermediate_estimate),
+            Some(&estimates[remaining]),
+        );
+        let final_plan = LogicalPlan::Join {
+            left: Box::new(first_join),
+            right: Box::new(leaves[remaining].clone()),
+            join_type: JoinType::Inner,
+            condition: Some(oriented),
+            using_columns: None,
+            distribution: final_distribution,
+        };
+        best = Some((cost, candidate_index, final_plan));
+    }
+    let (_, _, plan) = best?;
+    // A reordered inner join changes physical field order. Keep the original
+    // SQL contract explicitly, just as the existing binary swap does.
+    let columns = estimates
+        .iter()
+        .flat_map(|estimate| {
+            estimate.columns.iter().map(|column| {
+                let name = format!("{}.{column}", estimate.alias);
+                Expr::Alias {
+                    expr: Box::new(Expr::Column(name.clone())),
+                    name,
+                }
+            })
+        })
+        .collect();
+    Some(LogicalPlan::Project {
+        input: Box::new(plan),
+        columns,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct JoinCost {
+    rows: u64,
+    bytes: u64,
+}
+
+impl JoinCost {
+    fn for_pair(left: &Estimate, right: &Estimate) -> Self {
+        Self {
+            // With no join-key NDV, a product is the same for every connected
+            // ordering. Use the larger input as the first-stage footprint;
+            // this keeps the estimate conservative without pretending to know
+            // join selectivity that the catalog does not provide.
+            rows: left.rows.max(right.rows),
+            bytes: match (left.bytes, right.bytes) {
+                (Some(left), Some(right)) => left.max(right),
+                _ => u64::MAX,
+            },
+        }
+    }
+
+    fn then_attach(self, relation: &Estimate) -> Self {
+        Self {
+            rows: self.rows.saturating_add(self.rows.max(relation.rows)),
+            bytes: self
+                .bytes
+                .saturating_add(self.bytes.max(relation.bytes.unwrap_or(u64::MAX))),
+        }
+    }
+}
+
+fn build_inner_join(
+    left: LogicalPlan,
+    right: LogicalPlan,
+    condition: &Expr,
+    left_alias: &str,
+    right_alias: &str,
+    left_estimate: &Estimate,
+    right_estimate: &Estimate,
+) -> Option<LogicalPlan> {
+    let condition = orient_condition(condition, &[left_alias], &[right_alias])?;
+    Some(LogicalPlan::Join {
+        left: Box::new(left),
+        right: Box::new(right),
+        join_type: JoinType::Inner,
+        condition: Some(condition),
+        using_columns: None,
+        distribution: join_distribution(JoinType::Inner, Some(left_estimate), Some(right_estimate)),
+    })
+}
+
+fn condition_alias_pair(condition: &Expr) -> Option<(String, String)> {
+    let mut aliases = Vec::new();
+    fn visit(expr: &Expr, aliases: &mut Vec<String>) -> Option<()> {
+        match expr {
+            Expr::And(left, right) => {
+                visit(left, aliases)?;
+                visit(right, aliases)?;
+            }
+            Expr::BinaryOp {
+                left,
+                op: BinaryOp::Eq,
+                right,
+            } => {
+                let (Expr::Column(left), Expr::Column(right)) = (left.as_ref(), right.as_ref())
+                else {
+                    return None;
+                };
+                let left = left.split_once('.')?.0.to_owned();
+                let right = right.split_once('.')?.0.to_owned();
+                aliases.push(left);
+                aliases.push(right);
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    visit(condition, &mut aliases)?;
+    aliases.sort();
+    aliases.dedup();
+    (aliases.len() == 2).then(|| (aliases[0].clone(), aliases[1].clone()))
+}
+
+fn edge_is_between(edge: &(String, String), left: &str, right: &str) -> bool {
+    (edge.0 == left && edge.1 == right) || (edge.0 == right && edge.1 == left)
+}
+
+fn orient_condition(condition: &Expr, left: &[&str], right: &[&str]) -> Option<Expr> {
+    let belongs = |column: &str, group: &[&str]| {
+        column
+            .split_once('.')
+            .is_some_and(|(alias, _)| group.contains(&alias))
+    };
+    match condition {
+        Expr::And(first, second) => Some(Expr::And(
+            Box::new(orient_condition(first, left, right)?),
+            Box::new(orient_condition(second, left, right)?),
+        )),
+        Expr::BinaryOp {
+            left: first,
+            op: BinaryOp::Eq,
+            right: second,
+        } => {
+            let (Expr::Column(first), Expr::Column(second)) = (first.as_ref(), second.as_ref())
+            else {
+                return None;
+            };
+            if belongs(first, left) && belongs(second, right) {
+                Some(condition.clone())
+            } else if belongs(first, right) && belongs(second, left) {
+                Some(Expr::BinaryOp {
+                    left: Box::new(Expr::Column(second.clone())),
+                    op: BinaryOp::Eq,
+                    right: Box::new(Expr::Column(first.clone())),
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn reverse_keys(condition: &Expr, left_alias: &str, right_alias: &str) -> Option<Expr> {
     match condition {
         Expr::BinaryOp {
@@ -824,6 +1124,71 @@ mod tests {
         assert!(matches!(*right,LogicalPlan::Scan {table,..} if table=="small"));
         assert!(format!("{condition:?}").contains("left: Column(\"b.id\")"));
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn reorders_a_three_way_chain_to_reduce_the_first_stage_footprint() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM large l JOIN medium m ON l.id=m.id JOIN tiny t ON m.id=t.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut |table| {
+            let (rows, bytes) = match table {
+                "large" => (10_000_000, 100_000_000),
+                "medium" => (100_000, 10_000_000),
+                "tiny" => (10, 1_000),
+                _ => return None,
+            };
+            Some(RelationStatistics::exact_with_bytes(
+                rows,
+                vec!["id".into()],
+                bytes,
+            ))
+        });
+        let LogicalPlan::Project { input, .. } = optimized else {
+            panic!("projection missing: {optimized:?}")
+        };
+        let LogicalPlan::Join { left, right, .. } = *input else {
+            panic!("reordered outer join missing")
+        };
+        assert!(matches!(
+            right.as_ref(),
+            LogicalPlan::Scan { table, .. } if table == "large"
+        ));
+        let LogicalPlan::Join { left, right, .. } = *left else {
+            panic!("small first-stage join missing")
+        };
+        assert!(matches!(
+            left.as_ref(),
+            LogicalPlan::Scan { table, .. } if table == "medium"
+        ));
+        assert!(matches!(
+            right.as_ref(),
+            LogicalPlan::Scan { table, .. } if table == "tiny"
+        ));
+    }
+
+    #[test]
+    fn three_way_reordering_is_fail_closed_for_outer_and_using_joins() {
+        for sql in [
+            "SELECT * FROM large l LEFT JOIN medium m ON l.id=m.id JOIN tiny t ON m.id=t.id",
+            "SELECT * FROM large l JOIN medium m USING (id) JOIN tiny t ON m.id=t.id",
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let before = format!("{plan:?}");
+            let after = optimize_with_statistics(plan, &mut |table| {
+                Some(RelationStatistics::exact_with_bytes(
+                    if table == "tiny" { 10 } else { 10_000 },
+                    vec!["id".into()],
+                    if table == "tiny" { 1_000 } else { 1_000_000 },
+                ))
+            });
+            // Existing binary build-side optimization may still change an
+            // inner child; the three-way associativity rewrite itself must not
+            // run for these shapes.
+            assert!(!format!("{after:?}").contains("__join"));
+            assert!(before.contains("Join"));
+        }
     }
 
     #[test]
