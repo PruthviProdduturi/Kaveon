@@ -1,6 +1,6 @@
 # Track 2 scalar `APPROX_PERCENTILE` `FILTER` qualification — 2026-10-18
 
-The bounded scalar-percentile form now preserves the percentile argument when
+The bounded scalar and percentile-array forms now preserve the percentile argument when
 lowering `FILTER (WHERE ...)` to a null-preserving input expression. This keeps
 the projection's aggregate name aligned with the aggregate state while rows
 that fail the predicate contribute NULL to the KLL sketch.
@@ -25,6 +25,7 @@ FROM events
 The local evaluator and in-process three-worker fragment path agree across
 dictionary, plain, multi-file, partitioned, and clustered Parquet layouts.
 The test uses the existing percentile rank tolerance and verifies that the
-query memory reservation is released. This qualification is limited to one
-numeric percentile; percentile arrays, multiple percentile arguments, and
-broader approximate aggregate semantics remain separate boundaries.
+query memory reservation is released. Scalar and constant percentile-array forms are qualified; dynamic percentile expressions and broader approximate aggregate semantics remain separate boundaries.
+
+
+The same differential gate also covers APPROX_PERCENTILE(latency_p75_ms, ARRAY[0.5, 0.95]) FILTER (WHERE actions > 5) with exact array results across all layouts and three-worker execution.
