@@ -1297,6 +1297,13 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
         )
         || matches!(
             expression,
+            Expr::Cast {
+                data_type: CastTarget::Map { .. },
+                ..
+            }
+        )
+        || matches!(
+            expression,
             Expr::Function { name, .. }
                 if name.eq_ignore_ascii_case("ARRAY")
                     // SEQUENCE is a first-class Trino array constructor.  It
@@ -1343,6 +1350,13 @@ fn normalize_unnest_expression(expression: Expr) -> Expr {
 
 fn normalize_unnest_expression_inner(expression: Expr) -> Expr {
     match expression {
+        Expr::Cast {
+            expr,
+            data_type: data_type @ CastTarget::Map { .. },
+        } => Expr::Function {
+            name: "MAP_ENTRIES".into(),
+            args: vec![Expr::Cast { expr, data_type }],
+        },
         Expr::Function { name, args } if name.eq_ignore_ascii_case("MAP") => Expr::Function {
             name: "MAP_ENTRIES".into(),
             args: vec![Expr::Function { name, args }],
