@@ -6,7 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant, SystemTime},
 };
 
 use arrow::{
@@ -21,6 +21,9 @@ use kaveon_core::{KaveonError, Result};
 
 static NEXT_SPILL_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
+
+const DEFAULT_STALE_SPILL_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+const STALE_SPILL_AFTER_ENV: &str = "KAVEON_SPILL_STALE_AFTER_SECS";
 
 /// Spill compression is opt-in while it is being qualified.  LZ4 can reduce
 /// the disk traffic of high-cardinality grouped-state runs, but it also adds
@@ -128,6 +131,7 @@ impl SpillManager {
         }
 
         fs::create_dir_all(root.as_ref())?;
+        cleanup_stale_spill_directories(root.as_ref(), stale_spill_before())?;
         let directory = loop {
             let directory_id = NEXT_SPILL_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let candidate = root.as_ref().join(format!(
@@ -227,6 +231,52 @@ impl SpillManager {
             rows: 0,
         })
     }
+}
+
+/// Remove private spill directories left by a process that died before its
+/// `SpillManager` could run `Drop`.  Spill directories are private to one
+/// manager and carry the `kaveon-spill-` prefix, so unrelated files under a
+/// configured root are never touched.  The age fence prevents a fresh manager
+/// from racing a long-running manager that happens to share the root.
+fn stale_spill_before() -> SystemTime {
+    let age = std::env::var(STALE_SPILL_AFTER_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .filter(|age| !age.is_zero())
+        .unwrap_or(DEFAULT_STALE_SPILL_AFTER);
+    SystemTime::now()
+        .checked_sub(age)
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn cleanup_stale_spill_directories(root: &Path, stale_before: SystemTime) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir()
+            || !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("kaveon-spill-")
+        {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()?
+            .modified()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        if modified <= stale_before {
+            match fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A run being written: an Arrow IPC stream on the spill directory whose
@@ -838,5 +888,46 @@ mod tests {
     #[test]
     fn rejects_zero_byte_limit() {
         assert!(SpillManager::new(test_root("zero"), 0).is_err());
+    }
+
+    #[test]
+    fn startup_reclaims_only_stale_private_spill_directories() {
+        let root = test_root("restart-cleanup");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let stale = root.join("kaveon-spill-dead-process-1");
+        let unrelated = root.join("keep-me");
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("run-0.arrow.partial"), b"unfinished").unwrap();
+        fs::write(&unrelated, b"unrelated").unwrap();
+
+        // A restart sweep receives the age fence calculated at startup.  A
+        // future cutoff makes the fixture's stale directory eligible without
+        // relying on platform-specific timestamp mutation APIs.
+        cleanup_stale_spill_directories(&root, SystemTime::now() + Duration::from_secs(1)).unwrap();
+        assert!(!stale.exists(), "dead-process spill must be reclaimed");
+        assert!(
+            unrelated.exists(),
+            "unrelated root entries must be preserved"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restart_age_fence_preserves_a_recent_spill_directory() {
+        let root = test_root("restart-age-fence");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let recent = root.join("kaveon-spill-recent-process-3");
+        fs::create_dir_all(&recent).unwrap();
+
+        cleanup_stale_spill_directories(&root, SystemTime::now() - Duration::from_secs(1)).unwrap();
+        assert!(
+            recent.exists(),
+            "a recent manager must survive the age fence"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }
