@@ -355,6 +355,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_zip_with_lambda",
+        "SELECT ZIP_WITH(ARRAY[1, 2], ARRAY[10], (x, y) -> x + y) AS summed FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_concat_variadic",
         "SELECT ARRAY_CONCAT(ARRAY[1, 2], ARRAY[3], ARRAY[4, 5]) AS values FROM {T} LIMIT 1",
         false,

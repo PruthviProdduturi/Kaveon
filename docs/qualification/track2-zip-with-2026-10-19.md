@@ -23,6 +23,14 @@ cargo test -p kaveon-exec zip_with_applies_lambda_and_null_pads_shorter_array --
 
 Both tests pass. Workspace Clippy also passes with `-D warnings`.
 
+The full differential sweep also passes **1 passed, 0 failed** in 438.83
+seconds. That sweep compares dictionary, plain, multi-file, partitioned, and
+clustered Parquet layouts plus the three-worker fragment path:
+
+```powershell
+cargo test -p kaveon-server --bin kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
+```
+
 ## Boundary
 
 This qualifies two-array `ZIP_WITH` with two-parameter scalar lambdas. Lambda
