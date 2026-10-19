@@ -6384,6 +6384,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 None => None,
                             });
                         };
+                        // A syntactically invalid SQL/JSON path is an
+                        // error, whereas a valid path with no match is an
+                        // empty result.  Keep DEFAULT ON ERROR distinct from
+                        // DEFAULT ON EMPTY instead of routing both through
+                        // the extractor's `None` result.
+                        if !json_path_is_valid(path) {
+                            return Ok(match &error_defaults {
+                                Some(array) => optional_string_value(array, row),
+                                None => None,
+                            });
+                        }
                         let Some(value) = json_extract_value(document, path) else {
                             return Ok(match &empty_defaults {
                                 Some(array) => optional_string_value(array, row),
@@ -23184,6 +23195,43 @@ mod tests {
         assert_eq!(values.value(0), "42");
         assert_eq!(values.value(1), "missing");
         assert_eq!(values.value(2), "invalid");
+    }
+
+    #[test]
+    fn json_default_literals_route_malformed_paths_to_error_default() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"{"customer":{}}"#),
+                Some(r#"{"customer":{}}"#),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = Expr::Function {
+            name: "JSON_VALUE_DEFAULT".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.customer.id[".into())),
+                Expr::Literal(ScalarValue::Utf8("empty-default".into())),
+                Expr::Literal(ScalarValue::Utf8("error-default".into())),
+            ],
+        };
+        let result = evaluate(&value, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "error-default");
+        assert_eq!(values.value(1), "error-default");
+
+        let valid_missing = Expr::Function {
+            name: "JSON_VALUE_DEFAULT".into(),
+            args: vec![
+                Expr::Column("document".into()),
+                Expr::Literal(ScalarValue::Utf8("$.customer.id".into())),
+                Expr::Literal(ScalarValue::Utf8("empty-default".into())),
+                Expr::Literal(ScalarValue::Utf8("error-default".into())),
+            ],
+        };
+        let result = evaluate(&valid_missing, &batch).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "empty-default");
     }
 
     #[test]
