@@ -1676,7 +1676,122 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
         return Ok(Arc::new(values));
     }
     let arrow_type = target.to_arrow_type();
+    // Arrow's generic cast kernel does not recursively cast the children of
+    // nested MAP/LIST values on every supported version.  Keep the complex
+    // cast contract explicit here: cast the key/value (or list element)
+    // arrays recursively, then rebuild the offsets and validity buffers.
+    // This is required for Trino shapes such as
+    // CAST(map(varchar, array(integer)) AS map(varchar, array(bigint))).
+    if matches!(target, CastTarget::Array(_) | CastTarget::Map { .. }) {
+        return cast_nested_container(&arr, &arrow_type);
+    }
     Ok(compute::cast(&arr, &arrow_type)?)
+}
+
+fn cast_nested_container(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
+    match target {
+        DataType::List(target_field) => {
+            let (offsets, nulls, values) = match array.data_type() {
+                DataType::List(_) => {
+                    let source = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+                        KaveonError::Execution("LIST cast source has invalid Arrow storage".into())
+                    })?;
+                    (
+                        source.offsets().clone(),
+                        source.nulls().cloned(),
+                        Arc::clone(source.values()),
+                    )
+                }
+                DataType::LargeList(_) => {
+                    let source =
+                        array
+                            .as_any()
+                            .downcast_ref::<LargeListArray>()
+                            .ok_or_else(|| {
+                                KaveonError::Execution(
+                                    "LARGE LIST cast source has invalid Arrow storage".into(),
+                                )
+                            })?;
+                    let offsets = source
+                        .offsets()
+                        .iter()
+                        .map(|offset| {
+                            i32::try_from(*offset).map_err(|_| {
+                                KaveonError::Execution(
+                                    "nested LIST cast offsets exceed Arrow i32 capacity".into(),
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (
+                        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                        source.nulls().cloned(),
+                        Arc::clone(source.values()),
+                    )
+                }
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "cannot cast {other} to nested LIST"
+                    )));
+                }
+            };
+            let values = cast_nested_or_scalar(&values, target_field.data_type())?;
+            Ok(Arc::new(ListArray::try_new(
+                target_field.clone(),
+                offsets,
+                values,
+                nulls,
+            )?))
+        }
+        DataType::Map(target_entry_field, _sorted) => {
+            let source = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                KaveonError::Execution("MAP cast source has invalid Arrow storage".into())
+            })?;
+            let DataType::Struct(target_fields) = target_entry_field.data_type() else {
+                return Err(KaveonError::Execution(
+                    "nested MAP cast target must contain key/value fields".into(),
+                ));
+            };
+            if target_fields.len() != 2 {
+                return Err(KaveonError::Execution(
+                    "nested MAP cast target must contain exactly key and value fields".into(),
+                ));
+            }
+            let source_entries = source.entries();
+            if source_entries.num_columns() != 2 {
+                return Err(KaveonError::Execution(
+                    "MAP cast source must contain exactly key and value fields".into(),
+                ));
+            }
+            let keys =
+                cast_nested_or_scalar(source_entries.column(0), target_fields[0].data_type())?;
+            let values =
+                cast_nested_or_scalar(source_entries.column(1), target_fields[1].data_type())?;
+            let entries = StructArray::new(
+                target_fields.clone(),
+                vec![keys, values],
+                source_entries.nulls().cloned(),
+            );
+            Ok(Arc::new(MapArray::try_new(
+                target_entry_field.clone(),
+                source.offsets().clone(),
+                entries,
+                source.nulls().cloned(),
+                *_sorted,
+            )?))
+        }
+        other => Err(KaveonError::Execution(format!(
+            "nested container cast target must be LIST or MAP, found {other}"
+        ))),
+    }
+}
+
+fn cast_nested_or_scalar(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
+    if matches!(target, DataType::List(_) | DataType::Map(_, _)) {
+        cast_nested_container(array, target)
+    } else {
+        Ok(compute::cast(array, target)?)
+    }
 }
 
 // ── Scalar functions ────────────────────────────────────────────────────────
@@ -15966,6 +16081,67 @@ mod tests {
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map.keys().as_string::<i64>().value(0), "wide");
         assert_eq!(map.values().as_primitive::<Int64Type>().value(0), 7);
+    }
+
+    #[test]
+    fn nested_map_cast_recursively_casts_list_values() {
+        let mut list_values = ListBuilder::new(Int32Builder::new());
+        list_values.values().append_value(7);
+        list_values.values().append_value(8);
+        list_values.append(true);
+        let list_values = list_values.finish();
+        let source_entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Utf8, false)),
+            Arc::new(Field::new("value", list_values.data_type().clone(), true)),
+        ]
+        .into();
+        let source_entries = StructArray::new(
+            source_entry_fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![Some("numbers")])) as ArrayRef,
+                Arc::new(list_values) as ArrayRef,
+            ],
+            None,
+        );
+        let source_map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(source_entry_fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
+                source_entries,
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "nested",
+            source_map.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![source_map]).unwrap();
+        let target = CastTarget::Map {
+            key: Box::new(CastTarget::Utf8),
+            value: Box::new(CastTarget::Array(Box::new(CastTarget::Int64))),
+        };
+        let casted = evaluate(
+            &Expr::Cast {
+                expr: Box::new(Expr::Column("nested".into())),
+                data_type: target,
+            },
+            &batch,
+        )
+        .unwrap();
+        let map = casted.as_any().downcast_ref::<MapArray>().unwrap();
+        let values = map.values().as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(values.value_type(), DataType::Int64);
+        assert_eq!(
+            values.value(0).as_primitive::<Int64Type>().values(),
+            &[7, 8]
+        );
     }
 
     #[test]
