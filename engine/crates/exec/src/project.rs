@@ -487,6 +487,42 @@ fn expression_data_type(expr: &Expr, schema: &SchemaRef) -> Option<DataType> {
             ))))
         }
         Expr::Function { name, args }
+            if matches!(
+                name.to_ascii_uppercase().as_str(),
+                "ALL_MATCH" | "ANY_MATCH" | "NONE_MATCH"
+            ) && args.len() == 2 =>
+        {
+            let data_type = expression_data_type(&args[0], schema)?;
+            let element_type = match data_type {
+                DataType::List(field) | DataType::LargeList(field) => field.data_type().clone(),
+                _ => return None,
+            };
+            let Expr::Function {
+                name: lambda_name,
+                args: lambda_args,
+            } = &args[1]
+            else {
+                return None;
+            };
+            if lambda_name != "__KAVEON_LAMBDA" || lambda_args.len() != 2 {
+                return None;
+            }
+            let Expr::Literal(ScalarValue::Utf8(parameter)) = &lambda_args[0] else {
+                return None;
+            };
+            let mut fields = vec![Field::new(parameter, element_type, true)];
+            fields.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|field| field.name() != parameter)
+                    .map(|field| field.as_ref().clone()),
+            );
+            (expression_data_type(&lambda_args[1], &Arc::new(Schema::new(fields)))?
+                == DataType::Boolean)
+                .then_some(DataType::Boolean)
+        }
+        Expr::Function { name, args }
             if name.eq_ignore_ascii_case("MAP_FILTER") && args.len() == 2 =>
         {
             let DataType::Map(entry_field, sorted) = expression_data_type(&args[0], schema)? else {

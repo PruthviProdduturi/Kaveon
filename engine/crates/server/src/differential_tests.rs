@@ -365,6 +365,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_match_lambdas",
+        "SELECT ALL_MATCH(ARRAY[1, 2, 3], x -> x > 0) AS all_positive, ANY_MATCH(ARRAY[1, NULL, 3], x -> x > 2) AS any_gt_two, NONE_MATCH(ARRAY[1, 2, NULL], x -> x > 3) AS none_gt_three FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_transform_lambda",
         "SELECT TRANSFORM(ARRAY[1, NULL, 3], x -> x + 1) AS transformed FROM {T} LIMIT 1",
         false,

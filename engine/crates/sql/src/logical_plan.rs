@@ -8254,6 +8254,26 @@ mod tests {
     }
 
     #[test]
+    fn lowers_array_match_lambdas() {
+        for function in ["ALL_MATCH", "ANY_MATCH", "NONE_MATCH"] {
+            let sql = format!("SELECT {function}(ARRAY[1, 2], x -> x > 0) FROM t");
+            let plan = sql_to_logical_plan(&sql).unwrap();
+            let LogicalPlan::Project { columns, .. } = plan else {
+                panic!("expected Project");
+            };
+            let Expr::Function { name, args } = &columns[0] else {
+                panic!("expected array predicate");
+            };
+            assert_eq!(name, function);
+            assert!(matches!(
+                args.get(1),
+                Some(Expr::Function { name, args })
+                    if name == "__KAVEON_LAMBDA" && args.len() == 2
+            ));
+        }
+    }
+
+    #[test]
     fn lowers_reduce_input_and_output_lambdas() {
         let plan = sql_to_logical_plan(
             "SELECT REDUCE(ARRAY[1, 2], 0, (state, value) -> state + value, state -> state * 2) FROM t",
