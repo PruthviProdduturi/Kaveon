@@ -5943,6 +5943,147 @@ fn distributed_partitioned_window_tinyint_range_matches_exact_rows() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// Decimal RANGE offsets retain scaled integer precision, including adjacent
+/// precision-38 values and NULL peers after a three-worker hash exchange.
+#[test]
+fn distributed_partitioned_window_decimal_range_matches_exact_rows() {
+    for (precision, scale) in [(38, 6), (20, 2)] {
+        let directory = std::env::temp_dir().join(format!(
+            "kaveon-window-decimal-range-{precision}-{scale}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let unit = 10_i128.pow(scale as u32);
+        let large = 10_i128.pow(u32::from(precision) - 1);
+        let a = [
+            Some(-large - unit - 1),
+            Some(-large - unit),
+            Some(-large),
+            Some(-large),
+            Some(-large + 1),
+            Some(0),
+            Some(large - 1),
+            Some(large),
+            Some(large + unit),
+            Some(large + unit + 1),
+            None,
+            None,
+        ];
+        let b = [
+            Some(-unit - 1),
+            Some(-unit),
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(3 * unit),
+            Some(5 * unit - 1),
+            Some(5 * unit),
+            Some(6 * unit),
+            Some(6 * unit + 1),
+            None,
+            None,
+        ];
+        // Interleave the partitions so every scan file contributes to both.
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("p", DataType::Utf8, false),
+                Field::new("id", DataType::Int64, false),
+                Field::new("x", DataType::Decimal128(precision, scale), true),
+            ])),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    (0..24).map(|id| if id % 2 == 0 { "a" } else { "b" }),
+                )),
+                Arc::new(Int64Array::from_iter_values(0..24)),
+                Arc::new(
+                    Decimal128Array::from_iter(a.into_iter().zip(b).flat_map(|(a, b)| [a, b]))
+                        .with_precision_and_scale(precision, scale)
+                        .unwrap(),
+                ),
+            ],
+        )
+        .unwrap();
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: directory.clone(),
+            },
+        )
+        .with_schema("events");
+        catalog
+            .register_table(
+                "events",
+                write_directory(&directory, "range_decimal", &input, 3),
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "events");
+        manager.register_catalog(Box::new(catalog));
+        // Independently specified counts in the original per-partition order.
+        // A one-unit boundary includes x +/- unit, but excludes its neighbor
+        // one unscaled integer beyond it, even when f64 would round them alike.
+        let preceding = [1, 2, 3, 3, 3, 1, 1, 2, 2, 2, 2, 2];
+        let following = [2, 3, 3, 3, 1, 1, 2, 2, 2, 1, 2, 2];
+        let surrounding = [2, 4, 4, 4, 3, 1, 2, 3, 3, 2, 2, 2];
+        for ascending in [true, false] {
+            for nulls in ["FIRST", "LAST"] {
+                for (bounds, counts) in [
+                    (
+                        "1 PRECEDING AND CURRENT ROW",
+                        if ascending { &preceding } else { &following },
+                    ),
+                    (
+                        "CURRENT ROW AND 1 FOLLOWING",
+                        if ascending { &following } else { &preceding },
+                    ),
+                    ("1 PRECEDING AND 1 FOLLOWING", &surrounding),
+                ] {
+                    let direction = if ascending { "ASC" } else { "DESC" };
+                    let statement = format!(
+                        "SELECT id, COUNT(*) OVER (PARTITION BY p ORDER BY x {direction} NULLS {nulls} RANGE BETWEEN {bounds}) AS n FROM range_decimal"
+                    );
+                    let plan = bound_plan(&statement, &manager);
+                    let graph = crate::planner::build_stage_graph(&statement, &plan, 3).unwrap();
+                    assert!(graph.exchanges.iter().any(|exchange| exchange.partitioning
+                        == Partitioning::Hash {
+                            columns: vec!["p".into()],
+                            partition_count: 3,
+                        }));
+                    let root = graph
+                        .stages
+                        .iter()
+                        .find(|stage| stage.id == graph.root_stage)
+                        .unwrap();
+                    assert_eq!(root.task_count, 3, "window must execute on three tasks");
+                    let mut exact = (0..24)
+                        .map(|id| format!("{id}\u{1f}{}", counts[id / 2]))
+                        .collect::<Vec<_>>();
+                    exact.sort();
+                    let pool =
+                        QueryMemoryPool::new("distributed-window-decimal-range", 32 << 20).unwrap();
+                    let mut local =
+                        crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+                    assert_eq!(
+                        canonical_rows(&drain(local.operator.as_mut()), false),
+                        exact,
+                        "local DECIMAL({precision},{scale}): {statement}"
+                    );
+                    drop(local);
+                    assert_eq!(pool.snapshot().current_bytes, 0);
+                    let actual =
+                        execute_distributed(&statement, &plan, &manager, 3, &pool).unwrap();
+                    assert_eq!(
+                        canonical_rows(&actual, false),
+                        exact,
+                        "distributed DECIMAL({precision},{scale}): {statement}"
+                    );
+                    assert_eq!(pool.snapshot().current_bytes, 0);
+                }
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
 /// An unpartitioned value window must apply IGNORE NULLS across the global
 /// ordering, rather than independently inside each worker's input fragment.
 #[test]
