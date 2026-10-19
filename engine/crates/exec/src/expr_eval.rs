@@ -810,19 +810,34 @@ fn eval_binary_op(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<Arr
 }
 
 fn eval_string_concat(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
-    let left_str = cast_to_string(left)?;
-    let right_str = cast_to_string(right)?;
-    reserve_string_expansion(
-        (left_str.value_data().len() as u64).saturating_add(right_str.value_data().len() as u64),
-        left_str.len(),
-    )?;
-    let result: StringArray = (0..left_str.len())
-        .map(|i| match (left_str.is_null(i), right_str.is_null(i)) {
-            (true, _) | (_, true) => None,
-            _ => Some(format!("{}{}", left_str.value(i), right_str.value(i))),
-        })
-        .collect();
-    Ok(Arc::new(result))
+    let large = matches!(left.data_type(), DataType::LargeUtf8)
+        || matches!(right.data_type(), DataType::LargeUtf8);
+    let target = if large {
+        DataType::LargeUtf8
+    } else {
+        DataType::Utf8
+    };
+    let left = compute::cast(left, &target)?;
+    let right = compute::cast(right, &target)?;
+    if large {
+        let mut result = LargeStringBuilder::with_capacity(left.len(), 0);
+        for row in 0..left.len() {
+            match (text_value(&left, row)?, text_value(&right, row)?) {
+                (Some(left), Some(right)) => result.append_value(format!("{left}{right}")),
+                _ => result.append_null(),
+            }
+        }
+        Ok(Arc::new(result.finish()))
+    } else {
+        let mut result = StringBuilder::with_capacity(left.len(), 0);
+        for row in 0..left.len() {
+            match (text_value(&left, row)?, text_value(&right, row)?) {
+                (Some(left), Some(right)) => result.append_value(format!("{left}{right}")),
+                _ => result.append_null(),
+            }
+        }
+        Ok(Arc::new(result.finish()))
+    }
 }
 
 fn cast_to_string(arr: &ArrayRef) -> Result<StringArray> {
@@ -6644,25 +6659,43 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             if args.is_empty() {
                 return Ok(Arc::new(StringArray::from(vec![""; num_rows])));
             }
-            let string_args: Vec<StringArray> =
-                args.iter().map(cast_to_string).collect::<Result<_>>()?;
-            let bytes = string_args.iter().fold(0_u64, |bytes, array| {
-                bytes.saturating_add(array.value_data().len() as u64)
-            });
-            reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    let mut s = String::new();
-                    for arr in &string_args {
-                        if arr.is_null(i) {
-                            continue;
+            let large = args
+                .iter()
+                .any(|arg| arg.data_type() == &DataType::LargeUtf8);
+            let target = if large {
+                DataType::LargeUtf8
+            } else {
+                DataType::Utf8
+            };
+            let mut string_args = Vec::with_capacity(args.len());
+            for arg in args {
+                string_args.push(compute::cast(arg, &target)?);
+            }
+            if large {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    let mut output = String::new();
+                    for array in &string_args {
+                        if let Some(value) = text_value(array, row)? {
+                            output.push_str(value);
                         }
-                        s.push_str(arr.value(i));
                     }
-                    Some(s)
-                })
-                .collect();
-            Ok(Arc::new(result))
+                    result.append_value(output);
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    let mut output = String::new();
+                    for array in &string_args {
+                        if let Some(value) = text_value(array, row)? {
+                            output.push_str(value);
+                        }
+                    }
+                    result.append_value(output);
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "CONCAT_WS" => {
             if args.len() < 2 {
@@ -6670,36 +6703,62 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "CONCAT_WS requires a separator and at least one value".into(),
                 ));
             }
-            let string_args: Vec<StringArray> = args[1..]
+            let large = args
                 .iter()
-                .map(cast_to_string)
-                .collect::<Result<_>>()?;
-            let separator = cast_to_string(&args[0])?;
-            let bytes = string_args.iter().fold(0_u64, |bytes, array| {
-                bytes.saturating_add(array.value_data().len() as u64)
-            });
-            reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|row| {
-                    if separator.is_null(row) {
-                        return None;
-                    }
+                .any(|arg| arg.data_type() == &DataType::LargeUtf8);
+            let target = if large {
+                DataType::LargeUtf8
+            } else {
+                DataType::Utf8
+            };
+            let separator = compute::cast(&args[0], &target)?;
+            let mut string_args = Vec::with_capacity(args.len() - 1);
+            for arg in &args[1..] {
+                string_args.push(compute::cast(arg, &target)?);
+            }
+            if large {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    let Some(separator) = text_value(&separator, row)? else {
+                        result.append_null();
+                        continue;
+                    };
                     let mut output = String::new();
                     let mut added = false;
                     for array in &string_args {
-                        if array.is_null(row) {
-                            continue;
+                        if let Some(value) = text_value(array, row)? {
+                            if added {
+                                output.push_str(separator);
+                            }
+                            output.push_str(value);
+                            added = true;
                         }
-                        if added {
-                            output.push_str(separator.value(row));
-                        }
-                        output.push_str(array.value(row));
-                        added = true;
                     }
-                    Some(output)
-                })
-                .collect();
-            Ok(Arc::new(result))
+                    result.append_value(output);
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    let Some(separator) = text_value(&separator, row)? else {
+                        result.append_null();
+                        continue;
+                    };
+                    let mut output = String::new();
+                    let mut added = false;
+                    for array in &string_args {
+                        if let Some(value) = text_value(array, row)? {
+                            if added {
+                                output.push_str(separator);
+                            }
+                            output.push_str(value);
+                            added = true;
+                        }
+                    }
+                    result.append_value(output);
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "REGEXP_REPLACE" => {
             check_arity(name, args, 3)?;
@@ -21342,6 +21401,50 @@ mod tests {
         assert_eq!(values.value(0), "a-b");
         assert_eq!(values.value(1), "b");
         assert!(values.is_null(2));
+
+        let wide = RecordBatch::try_from_iter([
+            (
+                "a",
+                Arc::new(LargeStringArray::from(vec![Some("λ"), None])) as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(LargeStringArray::from(vec![Some("μ"), Some("ν")])) as ArrayRef,
+            ),
+            (
+                "separator",
+                Arc::new(LargeStringArray::from(vec![Some("/"), Some("/")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let wide_concat = evaluate(
+            &Expr::Function {
+                name: "CONCAT".into(),
+                args: vec![Expr::Column("a".into()), Expr::Column("b".into())],
+            },
+            &wide,
+        )
+        .unwrap();
+        let wide_concat = wide_concat
+            .as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap();
+        assert_eq!(wide_concat.value(0), "λμ");
+        assert_eq!(wide_concat.value(1), "ν");
+        let wide_ws = evaluate(&expr, &wide).unwrap();
+        assert_eq!(wide_ws.data_type(), &DataType::LargeUtf8);
+        assert_eq!(wide_ws.as_string::<i64>().value(0), "λ/μ");
+        let wide_binary = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(Expr::Column("a".into())),
+                op: BinaryOp::StringConcat,
+                right: Box::new(Expr::Column("b".into())),
+            },
+            &wide,
+        )
+        .unwrap();
+        assert_eq!(wide_binary.data_type(), &DataType::LargeUtf8);
+        assert_eq!(wide_binary.as_string::<i64>().value(0), "λμ");
     }
 
     #[test]
