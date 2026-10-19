@@ -22150,6 +22150,8 @@ mod tests {
         .unwrap();
         assert!(aggregate_merge_contract(&supported).is_some());
         assert!(aggregate_merge_contract(&reordered).is_none());
+    }
+
     #[test]
     fn exact_distinct_aggregates_bypass_scalar_json_merge_contract() {
         for sql in [
@@ -22159,7 +22161,6 @@ mod tests {
             let plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
             assert!(aggregate_merge_contract(&plan).is_none(), "{sql}");
         }
-    }
     }
 
     #[test]
