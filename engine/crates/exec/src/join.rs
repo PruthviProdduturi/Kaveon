@@ -223,6 +223,28 @@ impl BuildKeyFilter {
                 .into());
         }
         if let (
+            JoinIndex::Date64 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let values = batch
+                .column(*left)
+                .as_any()
+                .downcast_ref::<arrow::array::Date64Array>()
+                .ok_or_else(|| exec_err("runtime filter key type changed after planning"))?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    values.is_valid(row)
+                        && (first_rows.contains_key(&values.value(row))
+                            || duplicate_rows.contains_key(&values.value(row)))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
             JoinIndex::Int64 {
                 first_rows,
                 duplicate_rows,
@@ -333,6 +355,12 @@ impl BuildKeyFilter {
                 first_rows
                     .keys()
                     .map(|value| ScalarValue::Int64(i64::from(*value)))
+                    .collect(),
+            ),
+            JoinIndex::Date64 { first_rows, .. } => Some(
+                first_rows
+                    .keys()
+                    .map(|value| ScalarValue::Int64(*value))
                     .collect(),
             ),
             JoinIndex::Int64 { first_rows, .. } => Some(
@@ -1183,6 +1211,10 @@ enum JoinIndex {
         first_rows: AHashMap<i32, usize>,
         duplicate_rows: AHashMap<i32, Vec<usize>>,
     },
+    Date64 {
+        first_rows: AHashMap<i64, usize>,
+        duplicate_rows: AHashMap<i64, Vec<usize>>,
+    },
     Int64 {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
@@ -1344,6 +1376,35 @@ impl JoinIndex {
                 }
             }
             return Ok(Self::Date32 {
+                first_rows,
+                duplicate_rows,
+            });
+        }
+        if let [(.., index)] = keys
+            && right.column(*index).data_type() == &DataType::Date64
+        {
+            let values = right
+                .column(*index)
+                .as_primitive::<arrow::datatypes::Date64Type>();
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<i64, Vec<usize>> = AHashMap::new();
+            for row in 0..values.len() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if values.is_valid(row) {
+                    let key = values.value(row);
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Date64 {
                 first_rows,
                 duplicate_rows,
             });
@@ -1526,6 +1587,27 @@ impl JoinIndex {
                 let values = left
                     .column(keys[0].0)
                     .as_primitive::<arrow::datatypes::Date32Type>();
+                if values.is_null(row) {
+                    None
+                } else {
+                    let key = values.value(row);
+                    if duplicate_rows.is_empty() {
+                        first_rows.get(&key).map(std::slice::from_ref)
+                    } else {
+                        duplicate_rows
+                            .get(&key)
+                            .map(Vec::as_slice)
+                            .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                    }
+                }
+            }
+            Self::Date64 {
+                first_rows,
+                duplicate_rows,
+            } => {
+                let values = left
+                    .column(keys[0].0)
+                    .as_primitive::<arrow::datatypes::Date64Type>();
                 if values.is_null(row) {
                     None
                 } else {
@@ -3049,6 +3131,48 @@ mod tests {
         assert_eq!(
             mask.iter().collect::<Vec<_>>(),
             vec![Some(true), Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn date64_runtime_filter_uses_typed_index_and_storage_predicate() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Date64,
+            true,
+        )]));
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Date64Array::from(vec![
+                Some(86_400_000),
+                Some(172_800_000),
+                Some(172_800_000),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Date64Array::from(vec![
+                Some(0),
+                Some(86_400_000),
+                Some(172_800_000),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let StoragePredicate::In { values, .. } = filter.storage_predicate(&schema).unwrap() else {
+            panic!("expected Date64 single-key IN predicate");
+        };
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&ScalarValue::Int64(86_400_000)));
+        assert!(values.contains(&ScalarValue::Int64(172_800_000)));
+        let mask = filter.filter_batch(&probe).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(true), Some(false)]
         );
     }
 
