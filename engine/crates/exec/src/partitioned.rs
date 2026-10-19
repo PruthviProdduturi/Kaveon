@@ -1669,10 +1669,10 @@ fn spill_salt(depth: u32) -> u64 {
     }
 }
 
-/// Return the index of a partition whose exact row count is sufficiently
-/// above the mean to justify one bounded secondary split.
+/// Return the index of a partition whose exact row count or encoded bytes
+/// are sufficiently above the mean to justify one bounded secondary split.
 ///
-/// The calculation uses only writer-captured run row counts.  It never reads
+/// The calculation uses only writer-captured run counts and sizes. It never reads
 /// or samples values, and returning `None` is always safe: the ordinary
 /// spill/repartition path remains the fallback.  A sole non-empty partition
 /// is intentionally excluded because it is either a single hot key or a
@@ -1681,7 +1681,8 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     let mut total_rows = 0_u64;
     let mut total_bytes = 0_u64;
     let mut non_empty = 0_u64;
-    let mut largest = None;
+    let mut largest_rows = None;
+    let mut largest_bytes = None;
     for (index, partition) in partitions.iter().enumerate() {
         let rows = partition
             .iter()
@@ -1697,14 +1698,18 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
         non_empty = non_empty.saturating_add(1);
         total_rows = total_rows.saturating_add(rows);
         total_bytes = total_bytes.saturating_add(bytes);
-        if largest.is_none_or(|(_, current_rows, _)| rows > current_rows) {
-            largest = Some((index, rows, bytes));
+        if largest_rows.is_none_or(|(_, current)| rows > current) {
+            largest_rows = Some((index, rows));
+        }
+        if largest_bytes.is_none_or(|(_, current)| bytes > current) {
+            largest_bytes = Some((index, bytes));
         }
     }
-    let (index, largest_rows, largest_bytes) = largest?;
     if non_empty < 2 {
         return None;
     }
+    let (row_index, largest_rows) = largest_rows?;
+    let (byte_index, largest_bytes) = largest_bytes?;
     // A partition may be hot by encoded bytes even when its row count is
     // ordinary (for example, a wide string key). Split when either exact
     // row or byte counts show a four-times mean imbalance, with independent
@@ -1715,7 +1720,13 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     let bytes_skewed = total_bytes >= JOIN_SKEW_SPLIT_MIN_BYTES
         && u128::from(largest_bytes) * u128::from(non_empty)
             >= u128::from(total_bytes) * JOIN_SKEW_SPLIT_RATIO;
-    (rows_skewed || bytes_skewed).then_some(index)
+    // Keep the existing row-first decision when both dimensions qualify.
+    // A byte-heavy candidate can be a different, lower-row-count bucket.
+    if rows_skewed {
+        Some(row_index)
+    } else {
+        bytes_skewed.then_some(byte_index)
+    }
 }
 
 /// The level a refused build partitions to: the first for a whole
@@ -2876,12 +2887,23 @@ mod tests {
             )
             .unwrap()
         };
-        let wide = vec![run(512, 10_000)];
-        let partitions = std::iter::once(wide)
-            .chain((0..7).map(|_| vec![run(512, 1)]))
+        // The widest bucket comes after a larger row-count bucket. Testing
+        // byte skew only on the row maximum would miss this candidate.
+        let partitions = (0..7)
+            .map(|_| vec![run(513, 1)])
+            .chain(std::iter::once(vec![run(512, 10_000)]))
             .collect::<Vec<_>>();
-        assert_eq!(skewed_partition_index(&partitions), Some(0));
+        assert_eq!(skewed_partition_index(&partitions), Some(7));
         drop(partitions);
+
+        // When both dimensions qualify on different buckets, retain the
+        // established row-first choice and its bounded single candidate.
+        let competing = std::iter::once(vec![run(30_000, 1)])
+            .chain((0..6).map(|_| vec![run(513, 1)]))
+            .chain(std::iter::once(vec![run(512, 10_000)]))
+            .collect::<Vec<_>>();
+        assert_eq!(skewed_partition_index(&competing), Some(0));
+        drop(competing);
         assert_eq!(disk.snapshot().current_bytes, 0);
     }
 
@@ -2964,6 +2986,161 @@ mod tests {
         drop(join);
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn byte_skew_split_of_a_smaller_bucket_matches_local_inner_and_full_joins() {
+        let key_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("payload", DataType::Utf8, true),
+        ]));
+        let candidates = RecordBatch::try_new(
+            Arc::clone(&key_schema),
+            vec![Arc::new(Int64Array::from_iter_values(0..10_000))],
+        )
+        .unwrap();
+        let buckets =
+            HashPartitioner::try_new_salted(&key_schema, &["id".into()], 16, spill_salt(0))
+                .unwrap()
+                .partition(&candidates)
+                .unwrap();
+        let keys = |bucket: usize| {
+            buckets[bucket]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        };
+        let hot_keys = keys(7).iter().take(32).copied().collect::<Vec<_>>();
+        assert_eq!(hot_keys.len(), 32);
+        let mut ids = Vec::new();
+        let mut payloads = Vec::new();
+        for row in 0..512 {
+            ids.push(Some(hot_keys[row % hot_keys.len()]));
+            // Independent deterministic bytes survive the spill codec, so
+            // this lower-row-count bucket exceeds the encoded-byte gate.
+            let mut state = row as u64 + 0x9e37_79b9_7f4a_7c15;
+            payloads.push(Some(
+                (0..10_000)
+                    .map(|_| {
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1_442_695_040_888_963_407);
+                        (b'!' + ((state >> 32) % 94) as u8) as char
+                    })
+                    .collect::<String>(),
+            ));
+        }
+        let mut left = hot_keys.into_iter().map(Some).collect::<Vec<_>>();
+        for bucket in 0..7 {
+            let key = keys(bucket)[0];
+            left.push(Some(key));
+            ids.extend(std::iter::repeat_n(Some(key), 600));
+            payloads.extend(std::iter::repeat_n(Some("narrow".to_owned()), 600));
+        }
+        // Duplicates, unmatched keys and NULLs must survive the same paired
+        // split, including full-outer preservation on either side.
+        left.extend([left[0], Some(keys(8)[0]), None]);
+        ids.extend([Some(keys(9)[0]), None]);
+        payloads.extend([Some("unmatched".to_owned()), None]);
+        let make_right = || -> Box<dyn BatchOperator> {
+            let batches = ids
+                .chunks(128)
+                .zip(payloads.chunks(128))
+                .map(|(ids, payloads)| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int64Array::from(ids.to_vec())),
+                            Arc::new(StringArray::from(payloads.to_vec())),
+                        ],
+                    )
+                    .unwrap()
+                })
+                .collect();
+            Box::new(Input {
+                schema: Arc::clone(&schema),
+                batches,
+            })
+        };
+        let collect = |operator: &mut dyn BatchOperator| {
+            let mut rows = Vec::new();
+            while let Some(batch) = operator.next_batch().unwrap() {
+                let left = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let right = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let payload = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                rows.extend((0..batch.num_rows()).map(|row| {
+                    (
+                        (!left.is_null(row)).then(|| left.value(row)),
+                        (!right.is_null(row)).then(|| right.value(row)),
+                        (!payload.is_null(row)).then(|| payload.value(row).to_owned()),
+                    )
+                }));
+            }
+            rows.sort();
+            rows
+        };
+        for kind in [JoinType::Inner, JoinType::Full] {
+            let keys = vec![("id".into(), "id".into())];
+            let mut reference =
+                HashJoin::try_new(input(left.clone(), 128), make_right(), kind, keys.clone())
+                    .unwrap();
+            let expected = collect(&mut reference);
+            assert_eq!(
+                expected.len(),
+                if kind == JoinType::Inner {
+                    4_728
+                } else {
+                    4_732
+                }
+            );
+            let pool = QueryMemoryPool::new("byte-skew-split", 64 << 20).unwrap();
+            let disk = spill();
+            let mut join = PartitionedHashJoin::new(
+                input(left.clone(), 128),
+                make_right(),
+                kind,
+                keys,
+                None,
+                None,
+                pool.operator("join").unwrap(),
+                disk.clone(),
+                16,
+            )
+            .unwrap();
+            let left_input = join.left.take().unwrap();
+            let right_input = join.right.take().unwrap();
+            // Force the actual spill routing path; a large budget lets the
+            // comparison measure the policy rather than a refusal boundary.
+            join.partitions = join.partition_pair(left_input, right_input, 0).unwrap();
+            assert_eq!(join.partitions.len(), 31);
+            assert!(
+                join.partitions
+                    .iter()
+                    .filter(|partition| partition.depth == 1 && !partition.right.is_empty())
+                    .count()
+                    > 1,
+                "wide bucket did not spread across child partitions"
+            );
+            assert_eq!(collect(&mut join), expected, "{kind:?}");
+            drop(join);
+            assert_eq!(pool.snapshot().current_bytes, 0);
+            assert_eq!(disk.snapshot().current_bytes, 0);
+        }
     }
 
     #[test]
