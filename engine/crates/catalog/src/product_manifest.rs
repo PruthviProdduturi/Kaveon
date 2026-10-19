@@ -1011,6 +1011,91 @@ fn validate_control_key(key: &str) -> Result<(), ManifestError> {
     Ok(())
 }
 
+/// Whether a kind accumulates with use rather than with curation.
+///
+/// The distinction is not importance, it is growth. A deployment holds as many
+/// datasets as someone chose to create; it holds as many query-history rows as
+/// its owners ran queries, bounded only by a retention cap, and as much
+/// activity as they performed, bounded by nothing. Measured against the
+/// snapshot ceiling, one fully active owner costs 695,400 bytes of these and
+/// the whole snapshot holds twelve such owners.
+///
+/// `ChatSession` is deliberately not here. It is the target of every
+/// `ChatMessage` reference, there is one per conversation rather than one per
+/// message, and keeping it inline means the reference a message carries still
+/// resolves against a record the snapshot can see.
+#[must_use]
+pub const fn accumulates_with_use(kind: ProductRecordKind) -> bool {
+    matches!(
+        kind,
+        ProductRecordKind::QueryHistory
+            | ProductRecordKind::ChatMessage
+            | ProductRecordKind::UserRecent
+            | ProductRecordKind::Activity
+            | ProductRecordKind::DlmRun
+    )
+}
+
+/// Split records into the ones the snapshot carries and the ones it points at.
+///
+/// The second map is keyed by kind name, which is what names the object each
+/// kind is published to. Kinds with no records produce no entry, so a
+/// deployment that has never used chat publishes no chat object.
+#[must_use]
+pub fn partition_product_records(
+    records: &BTreeMap<String, ProductRecordRef>,
+) -> (
+    BTreeMap<String, ProductRecordRef>,
+    BTreeMap<String, BTreeMap<String, ProductRecordRef>>,
+) {
+    let mut inline = BTreeMap::new();
+    let mut evicted: BTreeMap<String, BTreeMap<String, ProductRecordRef>> = BTreeMap::new();
+    for (key, record) in records {
+        if accumulates_with_use(record.kind) {
+            evicted
+                .entry(record.kind.name().to_owned())
+                .or_default()
+                .insert(key.clone(), record.clone());
+        } else {
+            inline.insert(key.clone(), record.clone());
+        }
+    }
+    (inline, evicted)
+}
+
+/// Rejoin what `partition_product_records` separated.
+///
+/// Reading a snapshot resolves its per-kind objects and merges them back, so
+/// everything above this layer sees the map it has always seen. A key present
+/// in both halves is a corrupt snapshot rather than a merge policy, so it is
+/// refused instead of resolved.
+pub fn merge_product_records(
+    inline: BTreeMap<String, ProductRecordRef>,
+    evicted: BTreeMap<String, BTreeMap<String, ProductRecordRef>>,
+) -> Result<BTreeMap<String, ProductRecordRef>, ManifestError> {
+    let mut merged = inline;
+    for (kind_name, records) in evicted {
+        for (key, record) in records {
+            if record.kind.name() != kind_name {
+                return Err(error(format!(
+                    "product record '{key}' was published under '{kind_name}'"
+                )));
+            }
+            if !accumulates_with_use(record.kind) {
+                return Err(error(format!(
+                    "product record '{key}' does not belong in a per-kind object"
+                )));
+            }
+            if merged.insert(key.clone(), record).is_some() {
+                return Err(error(format!(
+                    "product record '{key}' is published both inline and in a per-kind object"
+                )));
+            }
+        }
+    }
+    Ok(merged)
+}
+
 fn product_record_key(kind: ProductRecordKind, id: &str) -> String {
     format!("{}/{}", kind.name(), id)
 }
