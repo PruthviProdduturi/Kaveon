@@ -3777,6 +3777,60 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_join_applies_decimal128_runtime_filter_without_precision_loss() {
+        use arrow::array::Decimal128Array;
+
+        fn input_decimal(values: &[Option<i128>], chunk: usize) -> Box<dyn BatchOperator> {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "amount",
+                DataType::Decimal128(38, 2),
+                true,
+            )]));
+            let batches = values
+                .chunks(chunk)
+                .map(|rows| {
+                    let values = Decimal128Array::from(rows.to_vec())
+                        .with_precision_and_scale(38, 2)
+                        .unwrap();
+                    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)]).unwrap()
+                })
+                .collect();
+            Box::new(Input { schema, batches })
+        }
+
+        let pool =
+            QueryMemoryPool::new("partitioned-decimal128-runtime-filter", 4 * 1024 * 1024).unwrap();
+        let mut join = PartitionedHashJoin::new(
+            input_decimal(&[Some(125), Some(230), Some(400), None], 2),
+            input_decimal(&[Some(400), Some(999), Some(400)], 2),
+            JoinType::Inner,
+            vec![("amount".into(), "amount".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill(),
+            4,
+        )
+        .unwrap();
+        let mut rows = Vec::new();
+        while let Some(batch) = join.next_batch().unwrap() {
+            let left = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap();
+            let right = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap();
+            rows.extend((0..batch.num_rows()).map(|row| (left.value(row), right.value(row))));
+        }
+        assert_eq!(rows, vec![(400, 400), (400, 400)]);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn runtime_join_filter_accepts_float32_keys_without_float_precision_loss() {
         use arrow::array::Float32Array;
 

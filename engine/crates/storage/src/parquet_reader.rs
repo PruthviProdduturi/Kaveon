@@ -1033,19 +1033,26 @@ fn predicate_can_match(
     predicate: &StoragePredicate,
 ) -> bool {
     match predicate {
-        StoragePredicate::Compare { column, op, value } => schema
-            .index_of(column)
-            .ok()
-            .is_none_or(|index| compare_can_match(group, index, *op, value)),
+        StoragePredicate::Compare { column, op, value } => {
+            schema.index_of(column).ok().is_none_or(|index| {
+                compare_can_match_typed(group, index, schema.field(index).data_type(), *op, value)
+            })
+        }
         StoragePredicate::IsNull { column } => column_statistics(group, schema, column)
             .is_none_or(|stats| stats.null_count_opt() != Some(0)),
         StoragePredicate::IsNotNull { column } => column_statistics(group, schema, column)
             .is_none_or(|stats| stats.null_count_opt() != Some(group.num_rows() as u64)),
         StoragePredicate::In { column, values } => {
             schema.index_of(column).ok().is_none_or(|index| {
-                values
-                    .iter()
-                    .any(|value| compare_can_match(group, index, CompareOp::Eq, value))
+                values.iter().any(|value| {
+                    compare_can_match_typed(
+                        group,
+                        index,
+                        schema.field(index).data_type(),
+                        CompareOp::Eq,
+                        value,
+                    )
+                })
             })
         }
         StoragePredicate::And(predicates) => predicates
@@ -1198,9 +1205,20 @@ fn column_statistics<'a>(
         .and_then(|index| group.column(index).statistics())
 }
 
+#[cfg(test)]
 fn compare_can_match(
     group: &RowGroupMetaData,
     column: usize,
+    op: CompareOp,
+    value: &ScalarValue,
+) -> bool {
+    compare_can_match_typed(group, column, &DataType::Null, op, value)
+}
+
+fn compare_can_match_typed(
+    group: &RowGroupMetaData,
+    column: usize,
+    data_type: &DataType,
     op: CompareOp,
     value: &ScalarValue,
 ) -> bool {
@@ -1268,8 +1286,42 @@ fn compare_can_match(
                 .map(|value| ScalarValue::Utf8(value.to_owned()));
             bounds_can_match(min, max, op, value)
         }
-        Statistics::Int96(_) | Statistics::FixedLenByteArray(_) => true,
+        Statistics::Int96(_) => true,
+        Statistics::FixedLenByteArray(stats) => {
+            let DataType::Decimal128(precision, scale) = data_type else {
+                // Decimal256 and other fixed-width byte arrays need a wider
+                // exact scalar representation before their bounds are safe.
+                return true;
+            };
+            let decode = |value: &parquet::data_type::FixedLenByteArray| {
+                decode_decimal128_stat(value.data()).map(|value| ScalarValue::Decimal128 {
+                    value,
+                    precision: *precision,
+                    scale: *scale,
+                })
+            };
+            bounds_can_match(
+                stats.min_opt().and_then(decode),
+                stats.max_opt().and_then(decode),
+                op,
+                value,
+            )
+        }
     }
+}
+
+/// Parquet stores DECIMAL values backed by FIXED_LEN_BYTE_ARRAY as signed
+/// big-endian two's-complement integers. Decimal128 values are at most sixteen
+/// bytes; reject wider or malformed statistics so pruning remains fail-safe.
+fn decode_decimal128_stat(bytes: &[u8]) -> Option<i128> {
+    if bytes.is_empty() || bytes.len() > 16 {
+        return None;
+    }
+    let negative = bytes[0] & 0x80 != 0;
+    let fill = if negative { 0xff } else { 0 };
+    let mut padded = [fill; 16];
+    padded[16 - bytes.len()..].copy_from_slice(bytes);
+    Some(i128::from_be_bytes(padded))
 }
 
 fn bounds_can_match(
@@ -1361,7 +1413,39 @@ fn scalar_cmp(left: &ScalarValue, right: &ScalarValue) -> Option<Ordering> {
         (ScalarValue::Int64(left), ScalarValue::Int64(right)) => left.partial_cmp(right),
         (ScalarValue::Float64(left), ScalarValue::Float64(right)) => left.partial_cmp(right),
         (ScalarValue::Utf8(left), ScalarValue::Utf8(right)) => left.partial_cmp(right),
+        (
+            ScalarValue::Decimal128 {
+                value: left,
+                scale: left_scale,
+                ..
+            },
+            ScalarValue::Decimal128 {
+                value: right,
+                scale: right_scale,
+                ..
+            },
+        ) => compare_decimal128(*left, *left_scale, *right, *right_scale),
         _ => None,
+    }
+}
+
+fn compare_decimal128(
+    left: i128,
+    left_scale: i8,
+    right: i128,
+    right_scale: i8,
+) -> Option<Ordering> {
+    let delta = i32::from(left_scale) - i32::from(right_scale);
+    if delta == 0 {
+        return Some(left.cmp(&right));
+    }
+    if delta > 0 {
+        right
+            .checked_mul(10_i128.checked_pow(delta as u32)?)
+            .map(|right| left.cmp(&right))
+    } else {
+        left.checked_mul(10_i128.checked_pow((-delta) as u32)?)
+            .map(|left| left.cmp(&right))
     }
 }
 
@@ -1565,11 +1649,11 @@ mod tests {
         )));
         let schema = Arc::new(Schema::new(vec![Field::new(
             "amount",
-            DataType::Decimal128(10, 2),
+            DataType::Decimal128(38, 2),
             false,
         )]));
         let amounts = Decimal128Array::from(vec![125_i128, 230, 400, 999])
-            .with_precision_and_scale(10, 2)
+            .with_precision_and_scale(38, 2)
             .expect("decimal fixture metadata must be valid");
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(amounts) as ArrayRef])
             .expect("decimal batch must be valid");
@@ -1944,7 +2028,7 @@ mod tests {
             .read()
             .expect("Decimal source must open");
         // BuildKeyFilter uses precision 38 for decimal hash keys; the probe
-        // column is DECIMAL(10,2). The storage predicate must retag the
+        // column is DECIMAL(38,2). The storage predicate must retain the
         // literal without converting its exact unscaled value.
         assert!(
             source
@@ -1991,7 +2075,7 @@ mod tests {
             .read()
             .expect("Decimal source must open");
         // The build side carries DECIMAL(38,3), while the parquet probe is
-        // DECIMAL(10,2).  1.250 and 4.000 are exactly representable at the
+        // DECIMAL(38,2).  1.250 and 4.000 are exactly representable at the
         // probe scale and must survive validation and predicate compilation.
         assert!(
             source
@@ -2027,6 +2111,44 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![125, 400]);
+    }
+
+    #[test]
+    fn decimal128_runtime_filter_prunes_fixed_length_statistics() {
+        let file = decimal_fixture();
+        let predicate = compare(
+            "amount",
+            CompareOp::Eq,
+            ScalarValue::Decimal128 {
+                value: 400,
+                precision: 38,
+                scale: 2,
+            },
+        );
+        let source = ParquetReader::new(&file.0)
+            .with_predicate(predicate)
+            .read()
+            .expect("Decimal source must open");
+        let planned = source.metrics().snapshot();
+        assert_eq!(planned.row_groups_considered, 2);
+        assert_eq!(planned.row_groups_pruned(), 1);
+
+        let values = source
+            .collect::<Result<Vec<_>>>()
+            .expect("decimal statistics filter must decode")
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .expect("Decimal output")
+                    .iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![400]);
     }
 
     #[test]
