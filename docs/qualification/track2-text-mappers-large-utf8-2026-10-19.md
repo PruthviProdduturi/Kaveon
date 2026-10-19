@@ -1,7 +1,7 @@
 # Track 2 — basic text mappers on LargeUtf8
 
-`UPPER`, `LOWER`, `TRIM`, and `CODEPOINT` now accept Arrow `LargeUtf8` values and preserve
-the source width in their output. `CODEPOINT` validates one Unicode code point per non-NULL value. NULL inputs remain NULL, and the operations
+`UPPER`, `LOWER`, `TRIM`, `LTRIM`, `RTRIM`, `CODEPOINT`, and `LENGTH` now accept Arrow `LargeUtf8` values and preserve
+the source width in their output. `CODEPOINT` validates one Unicode code point per non-NULL value; `LENGTH` retains the existing byte-length contract. NULL inputs remain NULL, and the operations
 share one width-aware mapper so narrow and wide strings follow the same path.
 
 Focused evidence from `engine/`:
