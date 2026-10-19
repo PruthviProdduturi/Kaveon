@@ -5212,6 +5212,40 @@ fn distributed_partitioned_window_dense_rank_ties_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A partitioned window whose scan partitions are all empty must preserve the
+/// projected input and window schema while returning no rows. This exercises
+/// the distributed exchange/final stage rather than only the local operator.
+#[test]
+fn distributed_partitioned_window_all_empty_preserves_schema() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-empty-partitions-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT country, region, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country) AS rn FROM events WHERE country = '__no_such_country__'";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-window-empty-partitions", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected_schema = local.operator.schema().clone();
+    let expected_batches = drain(local.operator.as_mut());
+    assert!(expected_batches.iter().all(|batch| batch.num_rows() == 0));
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let actual = execute_distributed(statement, &plan, &manager, 3, &pool)
+        .unwrap_or_else(|error| panic!("{statement} distributed: {error}"));
+    assert!(actual.iter().all(|batch| batch.num_rows() == 0));
+    assert_eq!(
+        actual.first().map(|batch| batch.schema().clone()),
+        Some(expected_schema),
+        "distributed empty window result must preserve schema"
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// QUALIFY must filter a partitioned window after ranking, on the same
 /// worker-combined result that the local planner produces.
 #[test]

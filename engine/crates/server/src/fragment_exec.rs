@@ -233,7 +233,17 @@ pub fn execute_fragment_streaming_root(
             }
             Vec::new()
         }
-        None => collect(&mut *operator)?,
+        None => {
+            let mut batches = collect(&mut *operator)?;
+            // Preserve the result schema even when this fragment's scan
+            // partition produced no rows. Distributed callers need a typed
+            // empty batch to combine empty worker partitions without losing
+            // projected/window columns.
+            if batches.is_empty() {
+                batches.push(RecordBatch::new_empty(Arc::clone(&result_schema)));
+            }
+            batches
+        }
     };
     Ok(FragmentExecution {
         result_schema,
