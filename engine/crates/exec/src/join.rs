@@ -3224,6 +3224,41 @@ mod tests {
     }
 
     #[test]
+    fn date64_runtime_filter_uses_typed_index_and_preserves_nulls() {
+        let schema = Arc::new(Schema::new(vec![Field::new("day", DataType::Date64, true)]));
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Date64Array::from(vec![
+                Some(86_400_000),
+                Some(172_800_000),
+                Some(172_800_000),
+            ]))],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Date64Array::from(vec![
+                Some(0),
+                Some(86_400_000),
+                Some(172_800_000),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None).unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let predicate = filter
+            .storage_predicate(&schema)
+            .expect("Date64 keys should reach storage pushdown");
+        assert!(matches!(predicate, StoragePredicate::In { values, .. } if values.len() == 2));
+        let mask = filter.filter_batch(&probe).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(true), Some(false)]
+        );
+    }
+
+    #[test]
     fn boolean_runtime_filter_uses_typed_index_and_storage_predicate() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "enabled",
