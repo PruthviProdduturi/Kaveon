@@ -5660,6 +5660,60 @@ fn array_first_last<L: OffsetSizeTrait>(
     Ok(compute::concat(&chunks)?)
 }
 
+fn array_vector_metric(
+    name: &str,
+    args: &[ArrayRef],
+    num_rows: usize,
+    euclidean: bool,
+) -> Result<ArrayRef> {
+    check_arity(name, args, 2)?;
+    let left = args[0]
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution(format!("{name} requires ARRAY values")))?;
+    let right = args[1]
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| KaveonError::Execution(format!("{name} requires ARRAY values")))?;
+    if left.len() != num_rows || right.len() != num_rows {
+        return Err(KaveonError::Execution(format!(
+            "{name} requires one array value per row"
+        )));
+    }
+    let mut result = Vec::with_capacity(num_rows);
+    for row in 0..num_rows {
+        if left.is_null(row) || right.is_null(row) {
+            result.push(None);
+            continue;
+        }
+        let left_values = compute::cast(&left.value(row), &DataType::Float64)?;
+        let right_values = compute::cast(&right.value(row), &DataType::Float64)?;
+        let left_values = left_values.as_primitive::<Float64Type>();
+        let right_values = right_values.as_primitive::<Float64Type>();
+        if left_values.len() != right_values.len() {
+            return Err(KaveonError::Execution(format!(
+                "{name} requires arrays with equal cardinality"
+            )));
+        }
+        let mut total = 0.0_f64;
+        let mut valid = true;
+        for index in 0..left_values.len() {
+            if left_values.is_null(index) || right_values.is_null(index) {
+                valid = false;
+                break;
+            }
+            if euclidean {
+                let delta = left_values.value(index) - right_values.value(index);
+                total += delta * delta;
+            } else {
+                total += left_values.value(index) * right_values.value(index);
+            }
+        }
+        result.push(valid.then(|| if euclidean { total.sqrt() } else { total }));
+    }
+    Ok(Arc::new(Float64Array::from(result)))
+}
+
 fn array_zip<L: OffsetSizeTrait>(arrays: &[&GenericListArray<L>]) -> Result<ArrayRef> {
     if arrays.len() < 2 {
         return Err(KaveonError::Execution(
@@ -9287,6 +9341,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect::<Result<BooleanArray>>()?;
             Ok(Arc::new(result))
         }
+        "EUCLIDEAN_DISTANCE" => array_vector_metric(name, args, num_rows, true),
+        "DOT_PRODUCT" => array_vector_metric(name, args, num_rows, false),
         "ARRAY_JOIN" => {
             if args.len() < 2 || args.len() > 3 {
                 return Err(KaveonError::Execution(
@@ -21867,6 +21923,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(last.as_primitive::<Int64Type>().value(0), 5);
+    }
+
+    #[test]
+    fn vector_array_metrics_compute_distance_and_dot_product() {
+        let mut left = ListBuilder::new(Float64Builder::new());
+        for value in [1.0, 2.0] {
+            left.values().append_value(value);
+        }
+        left.append(true);
+        let mut right = ListBuilder::new(Float64Builder::new());
+        for value in [3.0, 4.0] {
+            right.values().append_value(value);
+        }
+        right.append(true);
+        let args = vec![
+            Arc::new(left.finish()) as ArrayRef,
+            Arc::new(right.finish()) as ArrayRef,
+        ];
+        let distance = eval_scalar_function("EUCLIDEAN_DISTANCE", &args, 1).unwrap();
+        assert!(
+            (distance.as_primitive::<Float64Type>().value(0) - 2.8284271247461903).abs() < 1e-12
+        );
+        let dot = eval_scalar_function("DOT_PRODUCT", &args, 1).unwrap();
+        assert_eq!(dot.as_primitive::<Float64Type>().value(0), 11.0);
     }
 
     #[test]

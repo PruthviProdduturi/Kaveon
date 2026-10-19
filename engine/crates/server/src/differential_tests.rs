@@ -320,6 +320,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_vector_metrics",
+        "SELECT EUCLIDEAN_DISTANCE(ARRAY[1.0, 2.0], ARRAY[3.0, 4.0]) AS distance, DOT_PRODUCT(ARRAY[1.0, 2.0], ARRAY[3.0, 4.0]) AS dot FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_histogram",
         "SELECT ARRAY_HISTOGRAM(ARRAY[2, 1, NULL, 2]) AS histogram FROM {T} LIMIT 1",
         true,
