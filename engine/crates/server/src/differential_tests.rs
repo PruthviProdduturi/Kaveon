@@ -2641,6 +2641,34 @@ fn distributed_json_exists_error_actions_match_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// JSON_EXISTS must apply its ON ERROR action to malformed runtime paths,
+/// while a valid missing member remains an ordinary FALSE result.
+#[test]
+fn distributed_json_exists_malformed_path_error_actions_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-json-exists-malformed-path-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_EXISTS('{\"present\":1}', '$.present[' TRUE ON ERROR) AS true_error, JSON_EXISTS('{\"present\":1}', '$.present[' UNKNOWN ON ERROR) AS unknown_error, JSON_EXISTS('{\"present\":1}', '$.missing' TRUE ON ERROR) AS missing_path FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-json-exists-malformed-path", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["true\u{1f}NULL\u{1f}false"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// JSON_QUERY keeps array-range selection and typed JSON materialization
 /// identical through local planning and the three-worker fragment path.
 #[test]

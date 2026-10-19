@@ -6332,6 +6332,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             Some(false)
                         });
                     }
+                    // A syntactically invalid SQL/JSON path is an error, not
+                    // an empty match.  Keep the ON ERROR action visible here;
+                    // otherwise UNKNOWN/TRUE ON ERROR would incorrectly be
+                    // reported as FALSE for runtime path expressions.
+                    if !json_path_is_valid(path) {
+                        return Ok(if true_on_error {
+                            Some(true)
+                        } else if unknown_on_error {
+                            None
+                        } else {
+                            Some(false)
+                        });
+                    }
                     Ok(Some(json_extract_value(document, path).is_some()))
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -11905,6 +11918,86 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     } else {
         Some(serde_json::Value::Array(values))
     }
+}
+
+/// Validate the bounded SQL/JSON path grammar before evaluating JSON_EXISTS.
+///
+/// `json_extract_value` intentionally returns `None` for both a missing path
+/// and malformed syntax.  JSON_EXISTS must distinguish those cases because
+/// its `ON ERROR` action applies to malformed paths while a missing member is
+/// an ordinary FALSE result.  Keep this validator aligned with the extractor's
+/// supported root/member/index/range/wildcard surface.
+fn json_path_is_valid(path: &str) -> bool {
+    let path = path.trim();
+    let path = ["lax", "strict"]
+        .into_iter()
+        .find_map(|mode| {
+            let rest = path.get(mode.len()..)?;
+            rest.chars()
+                .next()
+                .filter(|character| character.is_whitespace())
+                .map(|_| rest.trim_start())
+        })
+        .unwrap_or(path);
+    let Some(mut remainder) = path.strip_prefix('$') else {
+        return false;
+    };
+    while !remainder.is_empty() {
+        if let Some(after_dot) = remainder.strip_prefix('.') {
+            if let Some(quote @ ('\'' | '"')) = after_dot.chars().next() {
+                let Some((_, close)) = parse_quoted_json_path_key(after_dot, quote) else {
+                    return false;
+                };
+                if !after_dot[close..].is_empty() && !after_dot[close..].starts_with(['.', '[']) {
+                    return false;
+                }
+                remainder = &after_dot[close..];
+                continue;
+            }
+            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
+            if after_dot[..end].is_empty() {
+                return false;
+            }
+            remainder = &after_dot[end..];
+            continue;
+        }
+        if let Some(after_open) = remainder.strip_prefix('[') {
+            if let Some(quote @ ('\'' | '"')) = after_open.chars().next() {
+                let Some((_, close)) = parse_quoted_json_path_key(after_open, quote) else {
+                    return false;
+                };
+                if !after_open[close..].starts_with(']') {
+                    return false;
+                }
+                remainder = &after_open[close + 1..];
+                continue;
+            }
+            let Some(close) = after_open.find(']') else {
+                return false;
+            };
+            let selector = after_open[..close].trim();
+            let valid = if selector == "*" {
+                true
+            } else if let Some((start, end)) = selector.split_once("to") {
+                let (Some(start), Some(end)) = (
+                    start.trim().parse::<usize>().ok(),
+                    end.trim().parse::<usize>().ok(),
+                ) else {
+                    return false;
+                };
+                start <= end
+            } else {
+                !selector.is_empty() && selector.parse::<usize>().is_ok()
+            };
+            if !valid {
+                return false;
+            }
+            remainder = &after_open[close + 1..];
+            continue;
+        }
+        return false;
+    }
+    true
 }
 
 /// Parse a quoted SQL/JSON path member and return its key plus the byte offset
@@ -22918,6 +23011,48 @@ mod tests {
         assert_eq!(
             unknown_values.iter().collect::<Vec<_>>(),
             vec![None, None, Some(false)]
+        );
+    }
+
+    #[test]
+    fn evaluates_json_exists_error_actions_for_malformed_paths() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![Some(r#"{"present":1}"#)])) as ArrayRef,
+        )])
+        .unwrap();
+        let document = Expr::Column("document".into());
+        let path = Expr::Literal(ScalarValue::Utf8("$.present[".into()));
+        let evaluate_action = |name: &str| {
+            evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![document.clone(), path.clone()],
+                },
+                &batch,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            evaluate_action("JSON_EXISTS_TRUE_ON_ERROR")
+                .as_boolean()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
+        assert_eq!(
+            evaluate_action("JSON_EXISTS_UNKNOWN_ON_ERROR")
+                .as_boolean()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None]
+        );
+        assert_eq!(
+            evaluate_action("JSON_EXISTS")
+                .as_boolean()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(false)]
         );
     }
 
