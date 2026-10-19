@@ -423,7 +423,7 @@ fn evaluate_window_with_context(
         end: WindowFrameBound::CurrentRow,
     };
     let frame = frame.as_ref().unwrap_or(&default_frame);
-    validate_frame(frame, &order_cols, order_by.len())?;
+    validate_frame(frame, order_cols, order_by.len())?;
     let col = args
         .first()
         .filter(|e| !matches!(e, Expr::Star))
@@ -469,7 +469,7 @@ fn evaluate_window_with_context(
         let mut starts = vec![0];
         let mut group = vec![0; rows.len()];
         for i in 1..rows.len() {
-            if !peers(&order_cols, rows[i - 1], rows[i])? {
+            if !peers(order_cols, rows[i - 1], rows[i])? {
                 starts.push(i);
             }
             group[i] = starts.len() - 1;
@@ -545,7 +545,7 @@ fn evaluate_window_with_context(
                 "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "FIRST_VALUE" | "LAST_VALUE"
                 | "NTH_VALUE" => {
                     let (start, end) =
-                        frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
+                        frame_bounds(frame, pos, &rows, &starts, &group, order_cols, order_by)?;
                     let selected = if distinct {
                         let key = (start, end);
                         if let std::collections::hash_map::Entry::Vacant(e) =
