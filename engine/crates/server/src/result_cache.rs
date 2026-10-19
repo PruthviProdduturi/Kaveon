@@ -386,7 +386,11 @@ impl ResultCache {
         if inner.entries.contains_key(&key) {
             Self::remove(&mut inner, &key);
         }
-        while inner.bytes + bytes > self.budget_bytes {
+        // Saturation keeps a corrupted or near-u64::MAX accounting value from
+        // wrapping below the budget and admitting an unbounded cache entry.
+        // The normal path never approaches this bound, but fail-closed
+        // accounting is part of the cache's memory safety contract.
+        while inner.bytes.saturating_add(bytes) > self.budget_bytes {
             let Some((_, oldest)) = inner.order.iter().next() else {
                 break;
             };
@@ -397,7 +401,7 @@ impl ResultCache {
         inner.tick += 1;
         let tick = inner.tick;
         inner.order.insert(tick, Arc::clone(&key));
-        inner.bytes += bytes;
+        inner.bytes = inner.bytes.saturating_add(bytes);
         inner.entries.insert(
             key,
             Entry {
@@ -731,6 +735,24 @@ mod tests {
         assert_eq!(stats.entries, 1);
         assert_eq!(stats.bytes, result_bytes(&columns(), &rows(1, 1)));
         assert_eq!(cache.get(&key("SELECT 1")).unwrap().query_id, "q2");
+    }
+
+    #[test]
+    fn near_maximum_accounting_evicts_before_byte_counter_can_wrap() {
+        let cache = ResultCache::new(u64::MAX, Duration::from_secs(60));
+        assert!(cache.insert(key("SELECT 1"), &columns(), &rows(1, 1), 1, "q1"));
+        {
+            let mut inner = cache.lock();
+            inner.bytes = u64::MAX - 1;
+        }
+
+        assert!(cache.insert(key("SELECT 2"), &columns(), &rows(1, 1), 1, "q2"));
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.evictions, 1);
+        assert!(stats.bytes < 1_024);
+        assert!(cache.get(&key("SELECT 1")).is_none());
+        assert!(cache.get(&key("SELECT 2")).is_some());
     }
 
     #[test]
