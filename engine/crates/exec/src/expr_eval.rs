@@ -6681,33 +6681,74 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REGEXP_REPLACE" => {
             check_arity(name, args, 3)?;
-            let arr = as_string_array(&args[0])?;
-            let patterns = as_string_array(&args[1])?;
-            let replacements = as_string_array(&args[2])?;
             // Bounded by the input: a replacement can only grow a row by the
             // replacement text per match, and the budget is charged for the
             // input again plus that growth once the rows are written.
-            reserve_string_expansion(arr.values().len() as u64, num_rows)?;
-            let mut builder = StringBuilder::with_capacity(num_rows, arr.values().len());
-            let mut expression: Option<(&str, regex::Regex)> = None;
+            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                let Some(source) = text_value(&args[0], index)? else {
+                    return Ok(total);
+                };
+                total.checked_add(source.len() as u64).ok_or_else(|| {
+                    KaveonError::Execution("REGEXP_REPLACE input size overflow".into())
+                })
+            })?;
+            reserve_string_expansion(bytes, num_rows)?;
+            let mut expression: Option<(String, regex::Regex)> = None;
             let mut grown = 0_u64;
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut builder = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                for i in 0..num_rows {
+                    let (Some(source), Some(pattern), Some(replacement)) = (
+                        text_value(&args[0], i)?,
+                        text_value(&args[1], i)?,
+                        text_value(&args[2], i)?,
+                    ) else {
+                        builder.append_null();
+                        continue;
+                    };
+                    if expression
+                        .as_ref()
+                        .is_none_or(|(current, _)| current != pattern)
+                    {
+                        expression = Some((pattern.to_owned(), compiled_regex(pattern)?));
+                    }
+                    let (_, regex) = expression.as_ref().expect("set above");
+                    match regex.replace_all(source, replacement) {
+                        std::borrow::Cow::Borrowed(unchanged) => builder.append_value(unchanged),
+                        std::borrow::Cow::Owned(replaced) => {
+                            grown = grown.saturating_add(
+                                (replaced.len() as u64).saturating_sub(source.len() as u64),
+                            );
+                            builder.append_value(&replaced);
+                        }
+                    }
+                    if i % 1024 == 1023 {
+                        check_expression_cancelled()?;
+                    }
+                }
+                if grown != 0 {
+                    reserve_string_expansion(grown, 0)?;
+                }
+                return Ok(Arc::new(builder.finish()));
+            }
+            let mut builder = StringBuilder::with_capacity(num_rows, bytes as usize);
             for i in 0..num_rows {
-                if arr.is_null(i) || patterns.is_null(i) || replacements.is_null(i) {
+                let (Some(source), Some(pattern), Some(replacement)) = (
+                    text_value(&args[0], i)?,
+                    text_value(&args[1], i)?,
+                    text_value(&args[2], i)?,
+                ) else {
                     builder.append_null();
                     continue;
-                }
-                // The pattern is a literal in practice: one compiled regex
-                // serves the batch, from the process-wide cache.
-                let pattern = patterns.value(i);
+                };
                 if expression
                     .as_ref()
-                    .is_none_or(|(current, _)| *current != pattern)
+                    .is_none_or(|(current, _)| current != pattern)
                 {
-                    expression = Some((pattern, compiled_regex(pattern)?));
+                    expression = Some((pattern.to_owned(), compiled_regex(pattern)?));
                 }
                 let (_, regex) = expression.as_ref().expect("set above");
-                let source = arr.value(i);
-                match regex.replace_all(source, replacements.value(i)) {
+                match regex.replace_all(source, replacement) {
                     std::borrow::Cow::Borrowed(unchanged) => builder.append_value(unchanged),
                     std::borrow::Cow::Owned(replaced) => {
                         grown = grown.saturating_add(
@@ -24354,6 +24395,53 @@ mod tests {
             second.iter().collect::<Vec<_>>(),
             vec![Some("12"), Some("34")]
         );
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_regexp_replace_for_large_utf8() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(LargeStringArray::from(vec![
+                    Some("id=12 id=34"),
+                    Some("unchanged"),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(LargeStringArray::from(vec![
+                    Some(r"id=(\d+)"),
+                    Some("x"),
+                    Some("x"),
+                ])) as ArrayRef,
+            ),
+            (
+                "replacement",
+                Arc::new(LargeStringArray::from(vec![
+                    Some("user=$1"),
+                    Some("y"),
+                    Some("y"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REGEXP_REPLACE".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Column("pattern".into()),
+                    Expr::Column("replacement".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "user=12 user=34");
+        assert_eq!(values.value(1), "unchanged");
         assert!(values.is_null(2));
     }
 }
