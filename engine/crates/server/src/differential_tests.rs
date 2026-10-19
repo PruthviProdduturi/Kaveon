@@ -4404,6 +4404,52 @@ fn distributed_grouping_sets_match_the_local_result() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// ROLLUP emits one branch for each prefix of its key list, followed by the
+/// grand total.  Keep a nullable source dimension in the fixture so the
+/// distributed UNION/aggregate lowering cannot confuse a source NULL with a
+/// subtotal NULL.  The grouping masks and the complete row set must match the
+/// node-local path exactly.
+#[test]
+fn distributed_rollup_preserves_subtotals_grand_total_and_null_dimensions() {
+    let directory = std::env::temp_dir().join(format!("kaveon-rollup-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT region, industry, GROUPING(region), GROUPING(industry), GROUPING_ID(region, industry), COUNT(*) AS n FROM events GROUP BY ROLLUP (region, industry)";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-rollup", 32 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let masks = actual
+        .iter()
+        .filter_map(|row| row.rsplit('\u{1f}').nth(1))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(masks, ["0", "1", "3"].into_iter().collect());
+    // A source NULL industry is present in the detail rows, while the
+    // industry subtotal and grand total also carry NULL in that position.
+    assert!(
+        actual
+            .iter()
+            .any(|row| { row.contains("NULL\u{1f}0\u{1f}0\u{1f}") })
+    );
+    assert!(
+        actual
+            .iter()
+            .any(|row| { row.starts_with("NULL\u{1f}NULL\u{1f}1\u{1f}1\u{1f}3\u{1f}") })
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// `GROUPING` distinguishes a real NULL dimension from the NULL introduced by
 /// a rolled-up grouping set.  `GROUPING_ID` combines those branch markers in
 /// Trino's left-to-right bit order.  Compare the complete CUBE through the
