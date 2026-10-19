@@ -455,6 +455,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "replace_large_utf8_compatibility",
+        "SELECT REPLACE('Kaveon engine', 'engine', 'lake') AS replaced FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "trigonometric_scalar_compatibility",
         "SELECT SIN(PI() / 2) AS sine, COS(0) AS cosine, TAN(0) AS tangent, ATAN2(1, 1) AS atan2_value, DEGREES(PI()) AS degrees, RADIANS(180) AS radians, CBRT(27) AS cube_root, COSH(0) AS hyper_cosine, SINH(0) AS hyper_sine, TANH(0) AS hyper_tangent, E() AS euler, IS_INFINITE(INFINITY()) AS infinity, IS_NAN(NAN()) AS nan, FROM_BASE('ff', 16) AS from_base, TO_BASE(255, 16) AS to_base, ARRAY_SUM(ARRAY[1, 2, 3]) AS array_sum, ARRAY_AVERAGE(ARRAY[1, 2, 3]) AS array_average, ARRAY_SUM(ARRAY[CAST(1.25 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_sum, ARRAY_AVERAGE(ARRAY[CAST(1.25 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_average, ARRAY_CUM_SUM(ARRAY[1, 2, 3]) AS array_cum_sum, ARRAY_CUM_SUM(ARRAY[CAST(1.25 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_cum_sum, BITWISE_AND(12, 10) AS bitwise_and, BITWISE_OR(12, 10) AS bitwise_or, BITWISE_XOR(12, 10) AS bitwise_xor, BITWISE_NOT(12) AS bitwise_not, SIN(NULL) AS null_sine FROM {T} LIMIT 1",
         false,
@@ -6024,6 +6029,34 @@ fn distributed_timestamp_range_interval_second_matches_local() {
     let plan = bound_plan(statement, &manager);
     let pool =
         QueryMemoryPool::new("distributed-window-timestamp-range-interval", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_timestamp_range_explicit_millisecond_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-timestamp-range-millisecond-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT event_date, SUM(actions) OVER (ORDER BY CAST(event_date AS TIMESTAMP) RANGE BETWEEN INTERVAL '86400500' MILLISECOND PRECEDING AND INTERVAL '86400500' MILLISECOND FOLLOWING) AS rolling_actions FROM events WHERE event_date BETWEEN DATE '2026-07-01' AND DATE '2026-07-10' ORDER BY event_date, user_id LIMIT 18";
+    let plan = bound_plan(statement, &manager);
+    let pool =
+        QueryMemoryPool::new("distributed-window-timestamp-range-millisecond", 256 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);

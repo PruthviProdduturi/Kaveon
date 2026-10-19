@@ -5212,10 +5212,20 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
             return Err(sql_err("temporal RANGE offset requires an INTERVAL unit"));
         };
         if interval.last_field.is_some()
-            || !matches!(field, ast::DateTimeField::Day | ast::DateTimeField::Second)
+            || !matches!(
+                field,
+                ast::DateTimeField::Day
+                    | ast::DateTimeField::Second
+                    | ast::DateTimeField::Millisecond
+                    | ast::DateTimeField::Milliseconds
+                    | ast::DateTimeField::Microsecond
+                    | ast::DateTimeField::Microseconds
+                    | ast::DateTimeField::Nanosecond
+                    | ast::DateTimeField::Nanoseconds
+            )
         {
             return Err(sql_err(
-                "temporal RANGE offsets support INTERVAL DAY for DATE or INTERVAL SECOND for TIMESTAMP",
+                "temporal RANGE offsets support INTERVAL DAY for DATE or fixed-unit SECOND/MILLISECOND/MICROSECOND/NANOSECOND for TIMESTAMP",
             ));
         }
         let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = interval.value.as_ref()
@@ -5224,7 +5234,16 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                 "temporal RANGE INTERVAL offset must be a string literal",
             ));
         };
-        if field == ast::DateTimeField::Second {
+        if matches!(
+            field,
+            ast::DateTimeField::Second
+                | ast::DateTimeField::Millisecond
+                | ast::DateTimeField::Milliseconds
+                | ast::DateTimeField::Microsecond
+                | ast::DateTimeField::Microseconds
+                | ast::DateTimeField::Nanosecond
+                | ast::DateTimeField::Nanoseconds
+        ) {
             let (whole, fraction) = value
                 .split_once('.')
                 .map_or((value.as_str(), None), |(whole, fraction)| {
@@ -5234,8 +5253,25 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                 .parse::<u64>()
                 .map_err(|_| sql_err(format!("invalid temporal RANGE INTERVAL offset: {value}")))?;
             let Some(fraction) = fraction else {
-                return Ok(Some((field, whole, false)));
+                if field == ast::DateTimeField::Second {
+                    return Ok(Some((field, whole, false)));
+                }
+                let multiplier = match field {
+                    ast::DateTimeField::Millisecond | ast::DateTimeField::Milliseconds => 1_000_000,
+                    ast::DateTimeField::Microsecond | ast::DateTimeField::Microseconds => 1_000,
+                    ast::DateTimeField::Nanosecond | ast::DateTimeField::Nanoseconds => 1,
+                    _ => unreachable!(),
+                };
+                let nanos = whole.checked_mul(multiplier).ok_or_else(|| {
+                    sql_err(format!("temporal RANGE INTERVAL offset overflows: {value}"))
+                })?;
+                return Ok(Some((field, nanos, false)));
             };
+            if field != ast::DateTimeField::Second {
+                return Err(sql_err(
+                    "fractional RANGE intervals are supported only with INTERVAL SECOND",
+                ));
+            }
             if fraction.is_empty()
                 || fraction.len() > 9
                 || !fraction.bytes().all(|byte| byte.is_ascii_digit())
@@ -5276,6 +5312,12 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                         WindowFrameBound::PrecedingNanos(amount)
                     }
                     ast::DateTimeField::Second => WindowFrameBound::PrecedingSeconds(amount),
+                    ast::DateTimeField::Millisecond
+                    | ast::DateTimeField::Milliseconds
+                    | ast::DateTimeField::Microsecond
+                    | ast::DateTimeField::Microseconds
+                    | ast::DateTimeField::Nanosecond
+                    | ast::DateTimeField::Nanoseconds => WindowFrameBound::PrecedingNanos(amount),
                     _ => unreachable!(),
                 })
             }
@@ -5298,6 +5340,12 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                         WindowFrameBound::FollowingNanos(amount)
                     }
                     ast::DateTimeField::Second => WindowFrameBound::FollowingSeconds(amount),
+                    ast::DateTimeField::Millisecond
+                    | ast::DateTimeField::Milliseconds
+                    | ast::DateTimeField::Microsecond
+                    | ast::DateTimeField::Microseconds
+                    | ast::DateTimeField::Nanosecond
+                    | ast::DateTimeField::Nanoseconds => WindowFrameBound::FollowingNanos(amount),
                     _ => unreachable!(),
                 })
             }
@@ -7883,6 +7931,44 @@ mod tests {
         let frame = frame.as_ref().expect("frame should be Some");
         assert_eq!(frame.start, WindowFrameBound::PrecedingNanos(1_250_000_000));
         assert_eq!(frame.end, WindowFrameBound::FollowingNanos(500_000_000));
+    }
+
+    #[test]
+    fn parses_explicit_subsecond_temporal_range_units_as_nanos() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(v) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1500' MILLISECOND PRECEDING AND INTERVAL '250000' MICROSECOND FOLLOWING) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected window expression");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.start, WindowFrameBound::PrecedingNanos(1_500_000_000));
+        assert_eq!(frame.end, WindowFrameBound::FollowingNanos(250_000_000));
+
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(v) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '250000000' NANOSECOND PRECEDING AND CURRENT ROW) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected window expression");
+        };
+        assert_eq!(
+            frame.as_ref().expect("frame should be Some").start,
+            WindowFrameBound::PrecedingNanos(250_000_000)
+        );
     }
 
     #[test]
