@@ -85,7 +85,7 @@ fn parse_bounded_map_casts(sql: &str) -> Option<Vec<Statement>> {
     let statements = Parser::parse_sql(&GenericDialect {}, sql)
         .or_else(|_| Parser::parse_sql(&ClickHouseDialect {}, sql))
         .ok()?;
-    let scalar_member = |member: &DataType| {
+    fn scalar_member(member: &DataType) -> bool {
         !matches!(
             member,
             DataType::Array(_)
@@ -98,7 +98,29 @@ fn parse_bounded_map_casts(sql: &str) -> Option<Vec<Statement>> {
                 | DataType::LowCardinality(_)
                 | DataType::Custom(_, _)
         )
-    };
+    }
+    // The evaluator already casts nested LIST children recursively.  Admit
+    // the bounded nested-array shape here instead of rejecting it merely
+    // because DuckDB's grammar cannot carry the Trino MAP type through its
+    // normal AST.  Keep the depth cap explicit: arbitrary recursive complex
+    // casts still fail closed until their schema and exchange contracts are
+    // qualified separately.
+    fn bounded_array_member(member: &DataType, depth: usize) -> bool {
+        if scalar_member(member) {
+            return true;
+        }
+        if depth >= 1 {
+            return false;
+        }
+        match member {
+            DataType::Array(
+                ArrayElemTypeDef::AngleBracket(element)
+                | ArrayElemTypeDef::Parenthesis(element)
+                | ArrayElemTypeDef::SquareBracket(element, None),
+            ) => bounded_array_member(element, depth + 1),
+            _ => false,
+        }
+    }
     let mut found_bounded_map = false;
     let bounded = visit_expressions(&statements, |expr| {
         if let Expr::Cast {
@@ -114,7 +136,7 @@ fn parse_bounded_map_casts(sql: &str) -> Option<Vec<Statement>> {
                     ArrayElemTypeDef::AngleBracket(element)
                     | ArrayElemTypeDef::Parenthesis(element)
                     | ArrayElemTypeDef::SquareBracket(element, None),
-                ) if scalar_member(element) => found_bounded_map = true,
+                ) if bounded_array_member(element, 0) => found_bounded_map = true,
                 member if scalar_member(member) => {
                     found_bounded_map |=
                         matches!(key.as_ref(), DataType::Decimal(_) | DataType::Numeric(_))

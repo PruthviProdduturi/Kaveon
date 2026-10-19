@@ -2229,6 +2229,35 @@ fn distributed_map_lookup_row_key_matches_local_rows() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Nested ARRAY values inside a MAP cast are a supported Trino complex-type
+/// shape.  The recursive evaluator already preserves both list offset levels;
+/// keep the parser fallback and the three-worker path on the same contract.
+#[test]
+fn distributed_nested_array_map_cast_matches_local_rows() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-map-nested-array-cast-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT ELEMENT_AT(ELEMENT_AT(ELEMENT_AT(CAST(MAP(ARRAY['numbers'], ARRAY[ARRAY[ARRAY[1, 2]]]) AS MAP(VARCHAR, ARRAY(ARRAY(BIGINT)))), 'numbers'), 1), 2) AS value FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-map-nested-array-cast", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(expected, vec!["2"]);
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// MAP_VALUES is a row-producing map projection and must retain value order
 /// and values through the distributed UNNEST path, just like MAP_KEYS.
 #[test]

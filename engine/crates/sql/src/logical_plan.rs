@@ -6819,10 +6819,10 @@ mod tests {
     }
 
     #[test]
-    fn bounded_map_cast_fallback_rejects_deeper_complex_members() {
+    fn bounded_map_cast_fallback_rejects_unsupported_complex_members() {
         for target in [
             "MAP(ARRAY(BIGINT), ARRAY(BIGINT))",
-            "MAP(VARCHAR, ARRAY(ARRAY(BIGINT)))",
+            "MAP(VARCHAR, ARRAY(ARRAY(ARRAY(BIGINT))))",
             "MAP(VARCHAR, ARRAY(MAP(VARCHAR, BIGINT)))",
             "MAP(VARCHAR, ARRAY(ROW(x BIGINT)))",
             "MAP(VARCHAR, MAP(DECIMAL(10, 2), BIGINT))",
@@ -6832,6 +6832,29 @@ mod tests {
                 "{target}"
             );
         }
+    }
+
+    #[test]
+    fn parses_bounded_nested_array_map_values() {
+        let plan = sql_to_logical_plan(
+            "SELECT CAST(NULL AS MAP(VARCHAR, ARRAY(ARRAY(BIGINT)))) FROM events",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        let Expr::Cast { data_type, .. } = &columns[0] else {
+            panic!("expected Cast");
+        };
+        assert_eq!(
+            data_type,
+            &CastTarget::Map {
+                key: Box::new(CastTarget::Utf8),
+                value: Box::new(CastTarget::Array(Box::new(CastTarget::Array(Box::new(
+                    CastTarget::Int64
+                ),)))),
+            }
+        );
     }
 
     #[test]
