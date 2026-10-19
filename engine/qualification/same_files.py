@@ -188,7 +188,15 @@ def main():
         base_port = free_port()
         base = f"http://127.0.0.1:{base_port}"
         token, exchange_token = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        headers = {"Authorization": "Bearer " + token}
+        # Current catalog access keeps the product catalog identity explicit;
+        # without a durable KaveonDB authority in this disposable fixture,
+        # qualify as an administrator so visibility is not mistaken for an
+        # execution or correctness failure.
+        headers = {
+            "Authorization": "Bearer " + token,
+            "X-Trino-Catalog": "Kaveon",
+            "X-Trino-Schema": "default",
+        }
         processes = []
 
         def stop(process):
@@ -210,14 +218,14 @@ def main():
                         "KAVEON_CATALOG_DATABASE_PATH": str(work / f"catalog-{index}.db"),
                         "KAVEON_EXCHANGE_TOKEN": exchange_token,
                         "KAVEON_LOCAL_PARALLELISM": str(args.local_parallelism),
-                        "KAVEON_SECURITY_JSON": json.dumps({"principals": [{"token": token, "principal": "qualification", "role": "analyst"}]})})
+                        "KAVEON_SECURITY_JSON": json.dumps({"principals": [{"token": token, "principal": "qualification", "role": "admin"}]})})
             log = stack.enter_context((args.output / f"node-{index}.log").open("w"))
             if args.docker_image:
                 container_name = "kaveon-benchmark-" + run
                 container_env = {key: value for key, value in env.items() if key.startswith("KAVEON_")}
                 container_env.update(KAVEON_HTTP_PORT="8080", KAVEON_BIND_HOST="0.0.0.0", KAVEON_INSECURE_DEVELOPMENT="true", KAVEON_DATA_DIR="/data", KAVEON_CATALOG_DIR="/tmp/catalogs", KAVEON_CATALOG_DATABASE_PATH="/tmp/catalog.db", KAVEON_QUERY_MEMORY_LIMIT_BYTES=str(query_memory_bytes), KAVEON_MEMORY_ADMISSION_LIMIT_BYTES=str(6*1024**3))
                 report["kaveon_configuration"] = {key: "<redacted>" if key in {"KAVEON_SECURITY_JSON", "KAVEON_EXCHANGE_TOKEN"} else value for key, value in container_env.items()}
-                report["kaveon_configuration"]["security_policy"] = {"principal": "qualification", "role": "analyst", "random_per_run_tokens": True}
+                report["kaveon_configuration"]["security_policy"] = {"principal": "qualification", "role": "admin", "random_per_run_tokens": True}
                 command = ["docker", "run", "--rm", "--name", container_name, "--cpus", "4", "--memory", "8g", "-p", f"127.0.0.1:{port}:8080", "--mount", f"type=bind,source={data},target=/data,readonly"]
                 for key, value in container_env.items():
                     command.extend(["-e", f"{key}={value}"])
