@@ -7298,3 +7298,85 @@ fn distributed_global_topn_multi_integer_heap_matches_local() {
     }
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Decimal128 heap keys retain adjacent precision-38 values across local
+/// planning, worker candidates, exchange serialization, and final OFFSET.
+#[test]
+fn distributed_global_topn_multi_decimal_heap_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-global-topn-multi-decimal-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("score", DataType::Decimal128(38, 6), true),
+        Field::new("sequence", DataType::Decimal128(38, 2), true),
+        Field::new("id", DataType::Int64, false),
+    ]));
+    let rows = 33 * 16;
+    let extreme = 10_i128.pow(38) - 1;
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(
+                Decimal128Array::from_iter((0..rows).map(|id| match id % 7 {
+                    0 => None,
+                    1 => Some(-extreme),
+                    2 => Some(extreme),
+                    _ => Some(i128::from(id % 5 - 3)),
+                }))
+                .with_precision_and_scale(38, 6)
+                .unwrap(),
+            ),
+            Arc::new(
+                Decimal128Array::from_iter(
+                    (0..rows).map(|id| (id % 11 != 0).then_some(extreme - i128::from(id))),
+                )
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+            ),
+            Arc::new(Int64Array::from_iter_values(0..rows)),
+        ],
+    )
+    .unwrap();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: directory.clone(),
+        },
+    )
+    .with_schema("events");
+    let meta = write_directory(&directory, "decimal_ranked", &batch, 33);
+    catalog.register_table("events", meta).unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    for score_direction in ["ASC", "DESC"] {
+        for sequence_direction in ["ASC", "DESC"] {
+            for null_order in ["FIRST", "LAST"] {
+                for predicate in ["", "WHERE score IS NOT NULL AND sequence IS NOT NULL"] {
+                    let statement = format!(
+                        "SELECT score, sequence, id FROM decimal_ranked {predicate} ORDER BY score {score_direction} NULLS {null_order}, sequence {sequence_direction} NULLS {null_order}, id ASC LIMIT 73 OFFSET 19"
+                    );
+                    let plan = bound_plan(&statement, &manager);
+                    let pool = QueryMemoryPool::new("global-topn-multi-decimal", 64 << 20).unwrap();
+                    let mut local =
+                        crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+                    let local_batches = drain(local.operator.as_mut());
+                    let schema = local_batches[0].schema();
+                    let expected = arrow::compute::concat_batches(&schema, &local_batches).unwrap();
+                    drop(local);
+                    assert_eq!(expected.num_rows(), 73);
+                    for workers in [3, 17, 40] {
+                        let actual =
+                            execute_distributed(&statement, &plan, &manager, workers, &pool)
+                                .unwrap();
+                        let actual = arrow::compute::concat_batches(&schema, &actual).unwrap();
+                        assert_eq!(actual, expected, "{statement}, workers={workers}");
+                        assert_eq!(pool.snapshot().current_bytes, 0);
+                    }
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
