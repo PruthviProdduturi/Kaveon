@@ -681,9 +681,11 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
     }
     let position = |b| match b {
         UnboundedPreceding => i128::MIN,
-        Preceding(n) | PrecedingDays(n) | PrecedingSeconds(n) | PrecedingNanos(n) => -(n as i128),
+        Preceding(n) | PrecedingDays(n) | PrecedingMonths(n) | PrecedingSeconds(n)
+        | PrecedingNanos(n) => -(n as i128),
         CurrentRow => 0,
-        Following(n) | FollowingDays(n) | FollowingSeconds(n) | FollowingNanos(n) => n as i128,
+        Following(n) | FollowingDays(n) | FollowingMonths(n) | FollowingSeconds(n)
+        | FollowingNanos(n) => n as i128,
         UnboundedFollowing => i128::MAX,
     };
     if position(frame.start) > position(frame.end) {
@@ -699,6 +701,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
                 | Following(_)
                 | PrecedingDays(_)
                 | FollowingDays(_)
+                | PrecedingMonths(_)
+                | FollowingMonths(_)
                 | PrecedingSeconds(_)
                 | FollowingSeconds(_)
                 | PrecedingNanos(_)
@@ -711,6 +715,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
                     | Following(_)
                     | PrecedingDays(_)
                     | FollowingDays(_)
+                    | PrecedingMonths(_)
+                    | FollowingMonths(_)
                     | PrecedingSeconds(_)
                     | FollowingSeconds(_)
                     | PrecedingNanos(_)
@@ -726,6 +732,8 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
             || matches!(frame.end, Preceding(_) | Following(_));
         let has_days = matches!(frame.start, PrecedingDays(_) | FollowingDays(_))
             || matches!(frame.end, PrecedingDays(_) | FollowingDays(_));
+        let has_months = matches!(frame.start, PrecedingMonths(_) | FollowingMonths(_))
+            || matches!(frame.end, PrecedingMonths(_) | FollowingMonths(_));
         let has_seconds = matches!(frame.start, PrecedingSeconds(_) | FollowingSeconds(_))
             || matches!(frame.end, PrecedingSeconds(_) | FollowingSeconds(_));
         let has_nanos = matches!(frame.start, PrecedingNanos(_) | FollowingNanos(_))
@@ -745,10 +753,11 @@ fn validate_frame(frame: &WindowFrame, cols: &[ArrayRef], order_count: usize) ->
         let timestamp_order = matches!(cols[0].data_type(), DataType::Timestamp(_, _));
         if (has_numeric && !numeric_order)
             || (has_days && !matches!(cols[0].data_type(), DataType::Date32))
+            || (has_months && !matches!(cols[0].data_type(), DataType::Date32))
             || ((has_seconds || has_nanos) && !timestamp_order)
         {
             return Err(error(
-                "RANGE offsets support numeric ordering; INTERVAL DAY requires DATE ordering; INTERVAL SECOND requires TIMESTAMP ordering",
+                "RANGE offsets support numeric ordering; INTERVAL DAY/MONTH/YEAR require DATE ordering; fixed-unit SECOND intervals require TIMESTAMP ordering",
             ));
         }
     }
@@ -765,92 +774,163 @@ fn frame_bounds(
     order: &[(Expr, bool, bool)],
 ) -> Result<(usize, usize)> {
     use WindowFrameBound::*;
-    let bound =
-        |b: WindowFrameBound, end: bool| -> Result<usize> {
-            if matches!(b, UnboundedPreceding) {
-                return Ok(0);
-            }
-            if matches!(b, UnboundedFollowing) {
-                return Ok(rows.len());
-            }
-            if matches!(
-                frame.units,
-                WindowFrameUnits::Rows | WindowFrameUnits::Groups
-            ) {
-                let base = if matches!(frame.units, WindowFrameUnits::Rows) {
-                    pos
-                } else {
-                    groups[pos]
-                } as i128;
-                let target =
-                    base + match b {
-                        Preceding(n) | PrecedingDays(n) | PrecedingSeconds(n)
-                        | PrecedingNanos(n) => -(n as i128),
-                        Following(n) | FollowingDays(n) | FollowingSeconds(n)
-                        | FollowingNanos(n) => n as i128,
-                        _ => 0,
-                    } + i128::from(end);
-                let count = if matches!(frame.units, WindowFrameUnits::Rows) {
-                    rows.len()
-                } else {
-                    starts.len() - 1
-                };
-                let index = target.clamp(0, count as i128) as usize;
-                return Ok(if matches!(frame.units, WindowFrameUnits::Rows) {
-                    index
-                } else {
-                    starts[index]
-                });
-            }
-            if matches!(b, CurrentRow) || cols.first().is_some_and(|c| c.is_null(rows[pos])) {
-                return Ok(starts[groups[pos] + usize::from(end)]);
-            }
-            let amount = match b {
-                Preceding(n) | Following(n) => {
-                    if let Preceding(_) = b {
-                        -(n as i128)
-                    } else {
-                        n as i128
-                    }
-                }
-                PrecedingDays(n) => -(n as i128),
-                FollowingDays(n) => n as i128,
-                PrecedingSeconds(n) => -timestamp_seconds_in_units(&cols[0], n)?,
-                FollowingSeconds(n) => timestamp_seconds_in_units(&cols[0], n)?,
-                PrecedingNanos(n) => -timestamp_nanos_in_units(&cols[0], n)?,
-                FollowingNanos(n) => timestamp_nanos_in_units(&cols[0], n)?,
-                _ => unreachable!(),
+    let bound = |b: WindowFrameBound, end: bool| -> Result<usize> {
+        if matches!(b, UnboundedPreceding) {
+            return Ok(0);
+        }
+        if matches!(b, UnboundedFollowing) {
+            return Ok(rows.len());
+        }
+        if matches!(
+            frame.units,
+            WindowFrameUnits::Rows | WindowFrameUnits::Groups
+        ) {
+            let base = if matches!(frame.units, WindowFrameUnits::Rows) {
+                pos
+            } else {
+                groups[pos]
+            } as i128;
+            let target =
+                base + match b {
+                    Preceding(n) | PrecedingDays(n) | PrecedingMonths(n) | PrecedingSeconds(n)
+                    | PrecedingNanos(n) => -(n as i128),
+                    Following(n) | FollowingDays(n) | FollowingMonths(n) | FollowingSeconds(n)
+                    | FollowingNanos(n) => n as i128,
+                    _ => 0,
+                } + i128::from(end);
+            let count = if matches!(frame.units, WindowFrameUnits::Rows) {
+                rows.len()
+            } else {
+                starts.len() - 1
             };
-            let ascending = order[0].1;
-            for (i, &row) in rows.iter().enumerate() {
-                // NULLS LAST independently of direction; a finite boundary never includes NULL.
-                if cols[0].is_null(row) {
-                    // With NULLS FIRST, null rows precede every finite value. They
-                    // must be skipped while finding a finite RANGE boundary; a
-                    // null current row was handled above as its peer group.
-                    if order[0].2 {
-                        continue;
-                    }
-                    return Ok(i);
+            let index = target.clamp(0, count as i128) as usize;
+            return Ok(if matches!(frame.units, WindowFrameUnits::Rows) {
+                index
+            } else {
+                starts[index]
+            });
+        }
+        if matches!(b, CurrentRow) || cols.first().is_some_and(|c| c.is_null(rows[pos])) {
+            return Ok(starts[groups[pos] + usize::from(end)]);
+        }
+        let calendar_months = match b {
+            PrecedingMonths(n) => Some(-(n as i128)),
+            FollowingMonths(n) => Some(n as i128),
+            _ => None,
+        };
+        let amount = match b {
+            Preceding(n) | Following(n) => {
+                if let Preceding(_) = b {
+                    -(n as i128)
+                } else {
+                    n as i128
                 }
-                let mut cmp = compare_offset(
+            }
+            PrecedingDays(n) => -(n as i128),
+            FollowingDays(n) => n as i128,
+            PrecedingMonths(_) | FollowingMonths(_) => 0,
+            PrecedingSeconds(n) => -timestamp_seconds_in_units(&cols[0], n)?,
+            FollowingSeconds(n) => timestamp_seconds_in_units(&cols[0], n)?,
+            PrecedingNanos(n) => -timestamp_nanos_in_units(&cols[0], n)?,
+            FollowingNanos(n) => timestamp_nanos_in_units(&cols[0], n)?,
+            _ => unreachable!(),
+        };
+        let ascending = order[0].1;
+        for (i, &row) in rows.iter().enumerate() {
+            // NULLS LAST independently of direction; a finite boundary never includes NULL.
+            if cols[0].is_null(row) {
+                // With NULLS FIRST, null rows precede every finite value. They
+                // must be skipped while finding a finite RANGE boundary; a
+                // null current row was handled above as its peer group.
+                if order[0].2 {
+                    continue;
+                }
+                return Ok(i);
+            }
+            let mut cmp = if let Some(months) = calendar_months {
+                compare_calendar_offset(&cols[0], row, rows[pos], months)?
+            } else {
+                compare_offset(
                     &cols[0],
                     row,
                     rows[pos],
                     if ascending { amount } else { -amount },
-                )?;
-                if !ascending {
-                    cmp = cmp.reverse();
-                }
-                if cmp == Ordering::Greater || (!end && cmp == Ordering::Equal) {
-                    return Ok(i);
-                }
+                )?
+            };
+            if !ascending {
+                cmp = cmp.reverse();
             }
-            Ok(rows.len())
-        };
+            if cmp == Ordering::Greater || (!end && cmp == Ordering::Equal) {
+                return Ok(i);
+            }
+        }
+        Ok(rows.len())
+    };
     let start = bound(frame.start, false)?;
     let end = bound(frame.end, true)?;
     Ok((start.min(end), end))
+}
+
+fn compare_calendar_offset(
+    col: &ArrayRef,
+    row: usize,
+    current: usize,
+    months: i128,
+) -> Result<Ordering> {
+    let col = col
+        .as_any()
+        .downcast_ref::<arrow::array::Date32Array>()
+        .ok_or_else(|| error("calendar RANGE offsets require DATE ordering"))?;
+    let target = add_calendar_months(col.value(current), months)?;
+    Ok(i128::from(col.value(row)).cmp(&target))
+}
+
+fn add_calendar_months(days: i32, months: i128) -> Result<i128> {
+    let (year, month, day) = civil_from_days(i128::from(days));
+    let total = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(month - 1))
+        .and_then(|value| value.checked_add(months))
+        .ok_or_else(|| error("calendar RANGE interval overflows date arithmetic"))?;
+    let target_year = total.div_euclid(12);
+    let target_month = total.rem_euclid(12) + 1;
+    let target_day = day.min(days_in_month(target_year, target_month));
+    Ok(days_from_civil(target_year, target_month, target_day))
+}
+
+fn is_leap_year(year: i128) -> bool {
+    year.rem_euclid(4) == 0 && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0)
+}
+
+fn days_in_month(year: i128, month: i128) -> i128 {
+    match month {
+        2 => 28 + i128::from(is_leap_year(year)),
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn civil_from_days(days: i128) -> (i128, i128, i128) {
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }).div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let day = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    (year + i128::from(month <= 2), month, day)
+}
+
+fn days_from_civil(year: i128, month: i128, day: i128) -> i128 {
+    let year = year - i128::from(month <= 2);
+    let era = (if year >= 0 { year } else { year - 399 }).div_euclid(400);
+    let yoe = year - era * 400;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2).div_euclid(5) + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 fn timestamp_seconds_in_units(col: &ArrayRef, seconds: u64) -> Result<i128> {
@@ -1647,6 +1727,33 @@ mod tests {
         assert_eq!(
             output.as_primitive::<Int64Type>().values().as_ref(),
             &[1, 3, 3, 3]
+        );
+    }
+
+    #[test]
+    fn date_range_interval_month_clamps_calendar_end_days() {
+        let dates = Date32Array::from(vec![18_292, 18_321, 18_352]);
+        let values = Int64Array::from(vec![1, 1, 1]);
+        let batch = RecordBatch::try_from_iter([
+            ("d", Arc::new(dates) as ArrayRef),
+            ("v", Arc::new(values) as ArrayRef),
+        ])
+        .unwrap();
+        let expr = Expr::WindowFunction {
+            name: "SUM".into(),
+            args: vec![Expr::Column("v".into())],
+            partition_by: vec![],
+            order_by: vec![(Expr::Column("d".into()), true, false)],
+            frame: Some(WindowFrame {
+                units: WindowFrameUnits::Range,
+                start: WindowFrameBound::PrecedingMonths(1),
+                end: WindowFrameBound::CurrentRow,
+            }),
+        };
+        let output = evaluate_window(&expr, &batch).unwrap();
+        assert_eq!(
+            output.as_primitive::<Int64Type>().values().as_ref(),
+            &[1, 2, 2]
         );
     }
 

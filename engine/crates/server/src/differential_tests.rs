@@ -6073,6 +6073,33 @@ fn distributed_timestamp_range_explicit_millisecond_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn distributed_date_range_interval_month_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-date-range-month-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT event_date, SUM(actions) OVER (ORDER BY event_date RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '1' MONTH FOLLOWING) AS rolling_actions FROM events WHERE event_date BETWEEN DATE '2026-07-01' AND DATE '2026-07-10' ORDER BY event_date, user_id LIMIT 18";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-window-date-range-month", 256 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(!actual.is_empty());
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Narrow numeric window inputs must retain Trino's widening contract after
 /// the partition is exchanged: TINYINT SUM returns BIGINT rather than failing
 /// in the worker's window evaluator or silently accumulating through f64.

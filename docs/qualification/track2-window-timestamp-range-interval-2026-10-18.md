@@ -18,6 +18,12 @@ the in-process three-worker fragment path, including the same preceding and
 following 24-hour boundaries. An explicit `MILLISECOND` interval has the same
 exact local/distributed result.
 
+Calendar `INTERVAL '<n>' MONTH` and `INTERVAL '<n>' YEAR` bounds are also
+supported for `DATE` ordering. Month arithmetic clamps a day to the last valid
+day of the target month, so end-of-month frames do not depend on a fixed-day
+approximation. A three-worker date-month differential compares the exact local
+and distributed results.
+
 Validation passed:
 
 ```text
@@ -32,6 +38,7 @@ test result: ok. 1 passed; 0 failed
 ```
 
 The scope is intentionally bounded to nonnegative `SECOND` intervals with at most nine fractional digits over
-`TIMESTAMP` ordering and integer explicit subsecond units. Calendar month/year
-intervals, expression-valued bounds, and full distributed window exchange
-remain open.
+`TIMESTAMP` ordering, integer explicit subsecond units, and calendar
+month/year intervals over `DATE`. Calendar intervals over `TIMESTAMP` (where
+timezone and timestamp precision semantics require a separate contract),
+expression-valued bounds, and full distributed window exchange remain open.

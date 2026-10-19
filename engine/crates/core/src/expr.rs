@@ -166,6 +166,9 @@ pub enum WindowFrameBound {
     /// A calendar-day RANGE offset for DATE ordering.  This is kept distinct
     /// from row counts because Trino's temporal RANGE grammar uses INTERVAL.
     PrecedingDays(u64),
+    /// A calendar-month RANGE offset for DATE ordering. Month ends clamp to
+    /// the last valid day in the target month, matching SQL date arithmetic.
+    PrecedingMonths(u64),
     /// A fixed-second RANGE offset for TIMESTAMP ordering.  The executor
     /// converts seconds to the timestamp column's physical time unit without
     /// applying calendar arithmetic.
@@ -175,6 +178,7 @@ pub enum WindowFrameBound {
     CurrentRow,
     Following(u64),
     FollowingDays(u64),
+    FollowingMonths(u64),
     FollowingSeconds(u64),
     FollowingNanos(u64),
     UnboundedFollowing,
