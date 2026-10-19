@@ -5204,7 +5204,7 @@ fn ast_window_frame(frame: &ast::WindowFrame) -> Result<WindowFrame> {
 }
 
 fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBound> {
-    fn interval_offset(expr: &ast::Expr) -> Result<Option<(ast::DateTimeField, u64)>> {
+    fn interval_offset(expr: &ast::Expr) -> Result<Option<(ast::DateTimeField, u64, bool)>> {
         let ast::Expr::Interval(interval) = expr else {
             return Ok(None);
         };
@@ -5224,10 +5224,44 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
                 "temporal RANGE INTERVAL offset must be a string literal",
             ));
         };
+        if field == ast::DateTimeField::Second {
+            let (whole, fraction) = value
+                .split_once('.')
+                .map_or((value.as_str(), None), |(whole, fraction)| {
+                    (whole, Some(fraction))
+                });
+            let whole = whole
+                .parse::<u64>()
+                .map_err(|_| sql_err(format!("invalid temporal RANGE INTERVAL offset: {value}")))?;
+            let Some(fraction) = fraction else {
+                return Ok(Some((field, whole, false)));
+            };
+            if fraction.is_empty()
+                || fraction.len() > 9
+                || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(sql_err(format!(
+                    "temporal RANGE SECOND interval supports at most 9 fractional digits: {value}"
+                )));
+            }
+            let nanos = fraction
+                .parse::<u64>()
+                .map_err(|_| sql_err(format!("invalid temporal RANGE INTERVAL offset: {value}")))?
+                .checked_mul(10u64.pow(9 - fraction.len() as u32))
+                .and_then(|fraction| {
+                    whole
+                        .checked_mul(1_000_000_000)
+                        .and_then(|whole| whole.checked_add(fraction))
+                })
+                .ok_or_else(|| {
+                    sql_err(format!("temporal RANGE INTERVAL offset overflows: {value}"))
+                })?;
+            return Ok(Some((field, nanos, true)));
+        }
         let amount = value
             .parse::<u64>()
             .map_err(|_| sql_err(format!("invalid temporal RANGE INTERVAL offset: {value}")))?;
-        Ok(Some((field, amount)))
+        Ok(Some((field, amount, false)))
     }
 
     match bound {
@@ -5235,9 +5269,12 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
         ast::WindowFrameBound::Preceding(None) => Ok(WindowFrameBound::UnboundedPreceding),
         ast::WindowFrameBound::Preceding(Some(expr)) => match expr.as_ref() {
             expr if interval_offset(expr)?.is_some() => {
-                let (field, amount) = interval_offset(expr)?.unwrap();
+                let (field, amount, fractional) = interval_offset(expr)?.unwrap();
                 Ok(match field {
                     ast::DateTimeField::Day => WindowFrameBound::PrecedingDays(amount),
+                    ast::DateTimeField::Second if fractional => {
+                        WindowFrameBound::PrecedingNanos(amount)
+                    }
                     ast::DateTimeField::Second => WindowFrameBound::PrecedingSeconds(amount),
                     _ => unreachable!(),
                 })
@@ -5254,9 +5291,12 @@ fn ast_window_frame_bound(bound: &ast::WindowFrameBound) -> Result<WindowFrameBo
         ast::WindowFrameBound::Following(None) => Ok(WindowFrameBound::UnboundedFollowing),
         ast::WindowFrameBound::Following(Some(expr)) => match expr.as_ref() {
             expr if interval_offset(expr)?.is_some() => {
-                let (field, amount) = interval_offset(expr)?.unwrap();
+                let (field, amount, fractional) = interval_offset(expr)?.unwrap();
                 Ok(match field {
                     ast::DateTimeField::Day => WindowFrameBound::FollowingDays(amount),
+                    ast::DateTimeField::Second if fractional => {
+                        WindowFrameBound::FollowingNanos(amount)
+                    }
                     ast::DateTimeField::Second => WindowFrameBound::FollowingSeconds(amount),
                     _ => unreachable!(),
                 })
@@ -7823,6 +7863,26 @@ mod tests {
         let frame = frame.as_ref().expect("frame should be Some");
         assert_eq!(frame.start, WindowFrameBound::PrecedingSeconds(2));
         assert_eq!(frame.end, WindowFrameBound::FollowingSeconds(1));
+    }
+
+    #[test]
+    fn parses_fractional_temporal_range_interval_second_bounds_as_nanos() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(v) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '1.250' SECOND PRECEDING AND INTERVAL '0.500' SECOND FOLLOWING) FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Window { window_exprs, .. } = *input else {
+            panic!("expected Window");
+        };
+        let Expr::WindowFunction { frame, .. } = &window_exprs[0] else {
+            panic!("expected window expression");
+        };
+        let frame = frame.as_ref().expect("frame should be Some");
+        assert_eq!(frame.start, WindowFrameBound::PrecedingNanos(1_250_000_000));
+        assert_eq!(frame.end, WindowFrameBound::FollowingNanos(500_000_000));
     }
 
     #[test]

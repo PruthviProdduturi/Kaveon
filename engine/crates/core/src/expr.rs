@@ -170,10 +170,13 @@ pub enum WindowFrameBound {
     /// converts seconds to the timestamp column's physical time unit without
     /// applying calendar arithmetic.
     PrecedingSeconds(u64),
+    /// A fractional fixed-second RANGE offset represented in nanoseconds.
+    PrecedingNanos(u64),
     CurrentRow,
     Following(u64),
     FollowingDays(u64),
     FollowingSeconds(u64),
+    FollowingNanos(u64),
     UnboundedFollowing,
 }
 
