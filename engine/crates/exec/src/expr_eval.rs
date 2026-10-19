@@ -5519,30 +5519,28 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     }
     if upper == "SPLIT_TO_MAP" {
         check_arity(name, args, 3)?;
-        let sources = as_string_array(&args[0])?;
-        let entry_delimiters = as_string_array(&args[1])?;
-        let key_delimiters = as_string_array(&args[2])?;
         let mut offsets = Vec::with_capacity(num_rows + 1);
         offsets.push(0_i32);
         let mut valid = Vec::with_capacity(num_rows);
         let mut keys = Vec::new();
         let mut values = Vec::new();
         for row in 0..num_rows {
-            if sources.is_null(row) || entry_delimiters.is_null(row) || key_delimiters.is_null(row)
-            {
+            let (Some(source), Some(entry_delimiter), Some(key_delimiter)) = (
+                text_value(&args[0], row)?,
+                text_value(&args[1], row)?,
+                text_value(&args[2], row)?,
+            ) else {
                 valid.push(false);
                 offsets.push(keys.len() as i32);
                 continue;
-            }
-            let entry_delimiter = entry_delimiters.value(row);
-            let key_delimiter = key_delimiters.value(row);
+            };
             if entry_delimiter.is_empty() || key_delimiter.is_empty() {
                 return Err(KaveonError::Execution(
                     "SPLIT_TO_MAP delimiters must not be empty".into(),
                 ));
             }
             let mut seen = std::collections::HashSet::new();
-            for entry in sources.value(row).split(entry_delimiter) {
+            for entry in source.split(entry_delimiter) {
                 let mut pair = entry.splitn(2, key_delimiter);
                 let key = pair.next().unwrap_or_default();
                 let value = pair.next().unwrap_or_default();
@@ -5580,23 +5578,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     }
     if upper == "SPLIT_TO_MULTIMAP" {
         check_arity(name, args, 3)?;
-        let sources = as_string_array(&args[0])?;
-        let entry_delimiters = as_string_array(&args[1])?;
-        let key_delimiters = as_string_array(&args[2])?;
         let mut map_offsets = vec![0_i32];
         let mut value_offsets = vec![0_i32];
         let mut valid = Vec::with_capacity(num_rows);
         let mut keys = Vec::new();
         let mut values = Vec::new();
         for row in 0..num_rows {
-            if sources.is_null(row) || entry_delimiters.is_null(row) || key_delimiters.is_null(row)
-            {
+            let (Some(source), Some(entry_delimiter), Some(key_delimiter)) = (
+                text_value(&args[0], row)?,
+                text_value(&args[1], row)?,
+                text_value(&args[2], row)?,
+            ) else {
                 valid.push(false);
                 map_offsets.push(keys.len() as i32);
                 continue;
-            }
-            let entry_delimiter = entry_delimiters.value(row);
-            let key_delimiter = key_delimiters.value(row);
+            };
             if entry_delimiter.is_empty() || key_delimiter.is_empty() {
                 return Err(KaveonError::Execution(
                     "SPLIT_TO_MULTIMAP delimiters must not be empty".into(),
@@ -5604,7 +5600,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             let mut grouped = Vec::<(String, Vec<String>)>::new();
             let mut positions = std::collections::HashMap::<String, usize>::new();
-            for entry in sources.value(row).split(entry_delimiter) {
+            for entry in source.split(entry_delimiter) {
                 let mut pair = entry.splitn(2, key_delimiter);
                 let key = pair.next().unwrap_or_default().to_owned();
                 let value = pair.next().unwrap_or_default().to_owned();
@@ -16977,6 +16973,40 @@ mod tests {
                 .to_string()
                 .contains("duplicate key")
         );
+
+        let wide = RecordBatch::try_from_iter([
+            (
+                "source",
+                Arc::new(LargeStringArray::from(vec![Some("λ:1,μ:2")])) as ArrayRef,
+            ),
+            (
+                "entry",
+                Arc::new(LargeStringArray::from(vec![Some(",")])) as ArrayRef,
+            ),
+            (
+                "key",
+                Arc::new(LargeStringArray::from(vec![Some(":")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let wide_expression = Expr::Function {
+            name: "SPLIT_TO_MAP".into(),
+            args: vec![
+                Expr::Column("source".into()),
+                Expr::Column("entry".into()),
+                Expr::Column("key".into()),
+            ],
+        };
+        let wide_result = evaluate(&wide_expression, &wide).unwrap();
+        let wide_map = wide_result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            wide_map
+                .keys()
+                .as_string::<i32>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("λ"), Some("μ")]
+        );
     }
 
     #[test]
@@ -17017,6 +17047,36 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some("2")]
         );
+
+        let wide = RecordBatch::try_from_iter([
+            (
+                "source",
+                Arc::new(LargeStringArray::from(vec![Some("λ:1,λ:2")])) as ArrayRef,
+            ),
+            (
+                "entry",
+                Arc::new(LargeStringArray::from(vec![Some(",")])) as ArrayRef,
+            ),
+            (
+                "key",
+                Arc::new(LargeStringArray::from(vec![Some(":")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let wide_result = evaluate(
+            &Expr::Function {
+                name: "SPLIT_TO_MULTIMAP".into(),
+                args: vec![
+                    Expr::Column("source".into()),
+                    Expr::Column("entry".into()),
+                    Expr::Column("key".into()),
+                ],
+            },
+            &wide,
+        )
+        .unwrap();
+        let wide_map = wide_result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(wide_map.keys().as_string::<i32>().value(0), "λ");
     }
 
     #[test]
