@@ -1,7 +1,8 @@
 use kaveon_core::{KaveonError, Result};
 use sqlparser::ast::Statement;
 use sqlparser::ast::{
-    AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
+    AssignmentTarget, BinaryOperator, Expr, FromTable, GroupByExpr, SelectItem, SetExpr,
+    TableFactor, TableWithJoins, Value,
 };
 use sqlparser::dialect::{
     BigQueryDialect, ClickHouseDialect, DuckDbDialect, GenericDialect, MsSqlDialect,
@@ -1292,30 +1293,95 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
             }
             let id_index = id_index.expect("validated product INSERT id column");
             let document_index = document_index.expect("validated product INSERT document column");
-            let Some(SetExpr::Values(values)) =
-                insert.source.as_deref().map(|query| query.body.as_ref())
-            else {
-                return Err(sql_error("product INSERT requires VALUES"));
+            let Some(query) = insert.source.as_deref() else {
+                return Err(sql_error("product INSERT requires VALUES or SELECT"));
             };
-            if values.rows.is_empty() || values.rows.iter().any(|row| row.len() != 2) {
-                return Err(sql_error(
-                    "product INSERT rows must contain id and document_json",
-                ));
-            }
-            values
-                .rows
-                .iter()
-                .map(|row| {
-                    Ok(ProductDmlCommand::Create {
-                        kind: kind.clone(),
-                        id: string_literal(&row[id_index], "product ID")?,
+            match query.body.as_ref() {
+                SetExpr::Values(values) => {
+                    if values.rows.is_empty() || values.rows.iter().any(|row| row.len() != 2) {
+                        return Err(sql_error(
+                            "product INSERT rows must contain id and document_json",
+                        ));
+                    }
+                    values
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            Ok(ProductDmlCommand::Create {
+                                kind: kind.clone(),
+                                id: string_literal(&row[id_index], "product ID")?,
+                                document_json: string_literal(
+                                    &row[document_index],
+                                    "product document_json",
+                                )?,
+                            })
+                        })
+                        .collect()
+                }
+                SetExpr::Select(select) => {
+                    if query.with.is_some()
+                        || query.order_by.is_some()
+                        || query.limit.is_some()
+                        || !query.limit_by.is_empty()
+                        || query.offset.is_some()
+                        || query.fetch.is_some()
+                        || !query.locks.is_empty()
+                        || query.for_clause.is_some()
+                        || query.settings.is_some()
+                        || query.format_clause.is_some()
+                        || select.distinct.is_some()
+                        || select.top.is_some()
+                        || select.into.is_some()
+                        || !select.from.is_empty()
+                        || !select.lateral_views.is_empty()
+                        || select.prewhere.is_some()
+                        || select.selection.is_some()
+                        || !matches!(
+                            &select.group_by,
+                            GroupByExpr::Expressions(expressions, modifiers)
+                                if expressions.is_empty() && modifiers.is_empty()
+                        )
+                        || !select.cluster_by.is_empty()
+                        || !select.distribute_by.is_empty()
+                        || !select.sort_by.is_empty()
+                        || select.having.is_some()
+                        || !select.named_window.is_empty()
+                        || select.qualify.is_some()
+                        || select.value_table_mode.is_some()
+                        || select.connect_by.is_some()
+                    {
+                        return Err(sql_error(
+                            "product INSERT SELECT supports one constant SELECT without FROM or query modifiers",
+                        ));
+                    }
+                    let mut values = [None, None];
+                    if select.projection.len() != 2 {
+                        return Err(sql_error(
+                            "product INSERT SELECT must project id and document_json",
+                        ));
+                    }
+                    for (index, item) in select.projection.iter().enumerate() {
+                        let SelectItem::UnnamedExpr(expression) = item else {
+                            return Err(sql_error(
+                                "product INSERT SELECT does not accept projection aliases",
+                            ));
+                        };
+                        values[index] = Some(expression);
+                    }
+                    let values = values.map(|value| value.expect("projection length checked"));
+                    Ok(vec![ProductDmlCommand::Create {
+                        kind,
+                        id: string_literal(values[id_index], "product ID")?,
                         document_json: string_literal(
-                            &row[document_index],
+                            values[document_index],
                             "product document_json",
                         )?,
-                    })
-                })
-                .collect()
+                    }])
+                }
+                _ => Err(sql_error(
+                    "product INSERT supports VALUES or one constant SELECT only",
+                )),
+            }
         }
         Statement::Update {
             assignments,
@@ -1483,9 +1549,9 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             }
             if !matches!(
                 insert.source.as_deref().map(|query| query.body.as_ref()),
-                Some(SetExpr::Values(_))
+                Some(SetExpr::Values(_)) | Some(SetExpr::Select(_))
             ) {
-                return Err(sql_error("INSERT supports VALUES only"));
+                return Err(sql_error("INSERT supports VALUES or SELECT only"));
             }
             if insert.table_alias.is_some()
                 || insert.or.is_some()
@@ -2099,7 +2165,7 @@ mod tests {
     fn rejects_unbounded_or_extended_write_forms() {
         let cases = [
             "INSERT INTO users VALUES (1)",
-            "INSERT INTO users (id) SELECT id FROM old_users",
+            "INSERT INTO users (id) SELECT id FROM old_users RETURNING id",
             "INSERT INTO users (id) VALUES (1) RETURNING id",
             "UPDATE users SET name = 'Ada'",
             "UPDATE users SET name = old.name FROM old_users old WHERE users.id = old.id",
@@ -2287,5 +2353,45 @@ mod tests {
             }
         );
         assert!(adapt_product_dml(&dml).is_err());
+    }
+
+    #[test]
+    fn product_insert_select_accepts_one_constant_row() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (document_json, id) SELECT '{\"name\":\"Orders\"}', 'ds-1'",
+        )
+        .expect("constant product INSERT SELECT should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn product_insert_select_rejects_source_queries_and_modifiers() {
+        for sql in [
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM source.datasets",
+            "INSERT INTO product.datasets (id, document_json) SELECT DISTINCT 'ds-1', '{}'",
+            "INSERT INTO product.datasets (id, document_json) SELECT 'ds-1', '{}' LIMIT 1",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("SELECT shape should parse")
+            else {
+                panic!("expected product DML");
+            };
+            let error = adapt_product_dml(&dml).expect_err("unsupported SELECT must fail closed");
+            assert!(
+                error.to_string().contains("constant SELECT")
+                    || error.to_string().contains("product INSERT SELECT"),
+                "{sql}: {error}"
+            );
+        }
     }
 }
