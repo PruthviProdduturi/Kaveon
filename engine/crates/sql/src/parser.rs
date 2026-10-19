@@ -18,7 +18,8 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // leave numeric/list brackets untouched so ARRAY[...] remains available
     // for the syntax that explicitly supports it.
     let bracket_normalized = normalize_bracket_identifiers(sql);
-    let json_clauses_normalized = normalize_json_null_clauses(&bracket_normalized)?;
+    let json_exists_normalized = normalize_json_exists_error_clauses(&bracket_normalized)?;
+    let json_clauses_normalized = normalize_json_null_clauses(&json_exists_normalized)?;
     let json_unique_normalized = normalize_json_object_unique_keys(&json_clauses_normalized)?;
     let json_returning_normalized = normalize_json_returning(&json_unique_normalized);
     let normalized = normalize_lateral_unnest(&json_returning_normalized);
@@ -57,6 +58,145 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         }
         Err(error) => Err(KaveonError::Sql(error.to_string())),
     }
+}
+
+/// Lower the bounded SQL/JSON `JSON_EXISTS ... ON ERROR` actions to explicit
+/// evaluator variants.  The default Trino behavior is FALSE on error; TRUE
+/// and UNKNOWN are represented by dedicated names so malformed documents do
+/// not get confused with a valid document whose path is absent.
+fn normalize_json_exists_error_clauses(sql: &str) -> Result<String> {
+    let mut output = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    while cursor < sql.len() {
+        let Some((name_start, open)) = next_json_exists_function(sql, cursor) else {
+            output.push_str(&sql[cursor..]);
+            break;
+        };
+        output.push_str(&sql[cursor..name_start]);
+        let Some(close) = matching_paren(sql, open) else {
+            output.push_str(&sql[name_start..]);
+            break;
+        };
+        let inner = normalize_json_exists_error_clauses(&sql[open + 1..close])?;
+        let (inner, action) = strip_json_exists_error_clause(&inner)?;
+        let name = match action {
+            Some(JsonExistsErrorAction::True) => "JSON_EXISTS_TRUE_ON_ERROR",
+            Some(JsonExistsErrorAction::Unknown) => "JSON_EXISTS_UNKNOWN_ON_ERROR",
+            None | Some(JsonExistsErrorAction::False) => "JSON_EXISTS",
+        };
+        output.push_str(name);
+        output.push('(');
+        output.push_str(&inner);
+        output.push(')');
+        cursor = close + 1;
+    }
+    Ok(output)
+}
+
+#[derive(Clone, Copy)]
+enum JsonExistsErrorAction {
+    True,
+    False,
+    Unknown,
+}
+
+fn next_json_exists_function(sql: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = sql.as_bytes();
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        if matches!(bytes[cursor], b'\'' | b'"') {
+            cursor = quoted_sql_end(sql, cursor);
+            continue;
+        }
+        let name_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        if cursor == name_start {
+            cursor += 1;
+            continue;
+        }
+        if !sql[name_start..cursor].eq_ignore_ascii_case("JSON_EXISTS")
+            || bytes
+                .get(name_start.wrapping_sub(1))
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        {
+            continue;
+        }
+        let mut open = cursor;
+        while open < bytes.len() && bytes[open].is_ascii_whitespace() {
+            open += 1;
+        }
+        if bytes.get(open) == Some(&b'(') {
+            return Some((name_start, open));
+        }
+    }
+    None
+}
+
+fn strip_json_exists_error_clause(inner: &str) -> Result<(String, Option<JsonExistsErrorAction>)> {
+    let bytes = inner.as_bytes();
+    let mut cursor = 0;
+    let mut depth = 0usize;
+    let mut range = None;
+    let mut action = None;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' | b'"' => cursor = quoted_sql_end(inner, cursor),
+            b'(' | b'[' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+            }
+            _ if depth == 0 => {
+                let token = ["TRUE", "FALSE", "UNKNOWN"]
+                    .into_iter()
+                    .find(|token| json_is_sql_word_at(inner, cursor, token));
+                if let Some(token) = token {
+                    let start = cursor;
+                    cursor += token.len();
+                    cursor = skip_sql_space(inner, cursor);
+                    if !json_is_sql_word_at(inner, cursor, "ON") {
+                        continue;
+                    }
+                    cursor += 2;
+                    cursor = skip_sql_space(inner, cursor);
+                    if !json_is_sql_word_at(inner, cursor, "ERROR") {
+                        return Err(KaveonError::Sql(
+                            "invalid JSON_EXISTS error clause; expected ON ERROR".into(),
+                        ));
+                    }
+                    cursor += "ERROR".len();
+                    if range.is_some() {
+                        return Err(KaveonError::Sql(
+                            "duplicate JSON_EXISTS ON ERROR clause".into(),
+                        ));
+                    }
+                    action = Some(match token {
+                        "TRUE" => JsonExistsErrorAction::True,
+                        "FALSE" => JsonExistsErrorAction::False,
+                        "UNKNOWN" => JsonExistsErrorAction::Unknown,
+                        _ => unreachable!(),
+                    });
+                    range = Some((start, cursor));
+                    continue;
+                }
+                cursor += 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+    let Some((start, end)) = range else {
+        return Ok((inner.to_owned(), None));
+    };
+    let mut result = inner.to_owned();
+    result.replace_range(start..end, "");
+    Ok((result, action))
 }
 
 /// Lower the bounded SQL/JSON `WITH UNIQUE KEYS` constructor clause.
@@ -1704,6 +1844,29 @@ mod tests {
         assert_eq!(normalized.matches("WITH UNIQUE KEYS").count(), 1);
         assert!(normalized.contains("'WITH UNIQUE KEYS'"));
         assert!(normalized.contains("JSON_OBJECT('x' : 1 )"));
+    }
+
+    #[test]
+    fn json_exists_error_actions_lower_to_bounded_variants() {
+        let statements = parse_sql(
+            "SELECT JSON_EXISTS(payload, '$.x' TRUE ON ERROR), JSON_EXISTS(payload, '$.y' UNKNOWN ON ERROR), JSON_EXISTS(payload, '$.z' FALSE ON ERROR) FROM t",
+        )
+        .expect("JSON_EXISTS ON ERROR actions should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("JSON_EXISTS_TRUE_ON_ERROR"), "{rendered}");
+        assert!(
+            rendered.contains("JSON_EXISTS_UNKNOWN_ON_ERROR"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("ON ERROR"), "{rendered}");
+    }
+
+    #[test]
+    fn json_exists_duplicate_error_action_fails_closed() {
+        let error =
+            parse_sql("SELECT JSON_EXISTS(payload, '$.x' TRUE ON ERROR FALSE ON ERROR) FROM t")
+                .expect_err("duplicate JSON_EXISTS ON ERROR actions must be rejected");
+        assert!(error.to_string().contains("duplicate JSON_EXISTS"));
     }
 
     #[test]

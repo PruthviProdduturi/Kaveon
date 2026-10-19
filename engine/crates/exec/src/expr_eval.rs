@@ -6296,10 +6296,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .into();
             Ok(Arc::new(result))
         }
-        "JSON_EXISTS" => {
+        "JSON_EXISTS" | "JSON_EXISTS_TRUE_ON_ERROR" | "JSON_EXISTS_UNKNOWN_ON_ERROR" => {
             check_arity(name, args, 2)?;
             let documents = &args[0];
             let paths = &args[1];
+            let true_on_error = upper == "JSON_EXISTS_TRUE_ON_ERROR";
+            let unknown_on_error = upper == "JSON_EXISTS_UNKNOWN_ON_ERROR";
             let result: BooleanArray = (0..num_rows)
                 .map(|row| {
                     let (Some(document), Some(path)) =
@@ -6307,6 +6309,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     else {
                         return Ok(None);
                     };
+                    if serde_json::from_str::<serde_json::Value>(document).is_err() {
+                        return Ok(if true_on_error {
+                            Some(true)
+                        } else if unknown_on_error {
+                            None
+                        } else {
+                            Some(false)
+                        });
+                    }
                     Ok(Some(json_extract_value(document, path).is_some()))
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -22746,6 +22757,45 @@ mod tests {
         assert!(values.value(1));
         assert!(!values.value(2));
         assert!(values.is_null(3));
+    }
+
+    #[test]
+    fn evaluates_json_exists_error_actions_for_malformed_documents() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some("not-json"),
+                Some("not-json"),
+                Some(r#"{"present":1}"#),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let path = Expr::Literal(ScalarValue::Utf8("$.missing".into()));
+        let document = Expr::Column("document".into());
+        let evaluate_action = |name: &str| {
+            evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![document.clone(), path.clone()],
+                },
+                &batch,
+            )
+            .unwrap()
+        };
+        let true_values = evaluate_action("JSON_EXISTS_TRUE_ON_ERROR")
+            .as_boolean()
+            .clone();
+        assert_eq!(
+            true_values.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(false)]
+        );
+        let unknown_values = evaluate_action("JSON_EXISTS_UNKNOWN_ON_ERROR")
+            .as_boolean()
+            .clone();
+        assert_eq!(
+            unknown_values.iter().collect::<Vec<_>>(),
+            vec![None, None, Some(false)]
+        );
     }
 
     #[test]
