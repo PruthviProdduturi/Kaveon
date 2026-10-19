@@ -3,8 +3,9 @@ use kaveon_core::{
     DataFormat, EXECUTABLE_FRAGMENT_VERSION, ExchangeDescriptor, ExchangeId, ExchangeInput,
     ExchangeOutput, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
     JoinSpec, JoinType as FragmentJoinType, KaveonError, ListingDigest, NamedExpr, Partitioning,
-    QueryMemoryPool, Result, ScanAssignment, ScanFile, ScanListing, ScanSpec, ScanTable, SortSpec,
-    StageFragment, StageGraph, StageId, TableReference, expression_contains_column,
+    QueryMemoryPool, Result, ScalarValue, ScanAssignment, ScanFile, ScanListing, ScanSpec,
+    ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
+    expression_contains_column,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc};
 use kaveon_exec::filter::FilterOperator;
@@ -1070,12 +1071,14 @@ impl ExecutableFragmentBuilder<'_> {
         condition: Option<&Expr>,
         distribution: JoinDistribution,
     ) -> Result<StageId> {
-        // A non-constant UNNEST on the right of a cross join is the physical
-        // form of CROSS JOIN LATERAL UNNEST. It must execute against each
-        // input batch; routing it through the ordinary hash/cross join would
-        // evaluate the array once as a zero-input leaf.
-        if join_type == JoinType::Cross
-            && condition.is_none()
+        // A correlated UNNEST on the right of a CROSS JOIN, or a LEFT JOIN
+        // whose ON predicate is the required TRUE literal, must execute
+        // against each input batch. Routing it through the ordinary join
+        // would evaluate the array once as a zero-input leaf. LEFT JOIN
+        // preserves one NULL-extended row for an empty input array.
+        let lateral_left = join_type == JoinType::Left
+            && matches!(condition, Some(Expr::Literal(ScalarValue::Bool(true))));
+        if ((join_type == JoinType::Cross && condition.is_none()) || lateral_left)
             && let LogicalPlan::Unnest {
                 expressions,
                 columns,
@@ -1094,6 +1097,7 @@ impl ExecutableFragmentBuilder<'_> {
                     with_ordinality: *with_ordinality,
                     ordinality_column: ordinality_column.clone(),
                     ordinality_start: *ordinality_start,
+                    preserve_empty: lateral_left,
                 },
                 vec![draft.root],
             );
@@ -1617,8 +1621,9 @@ impl StageGraphBuilder {
                 distribution,
                 ..
             } => {
-                if *join_type == JoinType::Cross
-                    && condition.is_none()
+                let lateral_left = *join_type == JoinType::Left
+                    && matches!(condition, Some(Expr::Literal(ScalarValue::Bool(true))));
+                if ((*join_type == JoinType::Cross && condition.is_none()) || lateral_left)
                     && let LogicalPlan::Unnest { expressions, .. } = right.as_ref()
                     && expressions.iter().any(expression_contains_column)
                 {
@@ -2375,8 +2380,9 @@ fn plan_query_with_predicate(
             condition,
             ..
         } => {
-            if *join_type == JoinType::Cross
-                && condition.is_none()
+            let lateral_left = *join_type == JoinType::Left
+                && matches!(condition, Some(Expr::Literal(ScalarValue::Bool(true))));
+            if ((*join_type == JoinType::Cross && condition.is_none()) || lateral_left)
                 && let LogicalPlan::Unnest {
                     expressions,
                     columns,
@@ -2396,6 +2402,7 @@ fn plan_query_with_predicate(
                     *with_ordinality,
                     ordinality_column.clone(),
                     *ordinality_start,
+                    lateral_left,
                 )?;
                 return Ok(PlannedQuery {
                     operator: Box::new(operator),

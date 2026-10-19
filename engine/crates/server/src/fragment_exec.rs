@@ -613,6 +613,7 @@ fn compile_node(
             with_ordinality,
             ordinality_column,
             ordinality_start,
+            preserve_empty,
         } => Ok(Box::new(
             kaveon_exec::lateral_unnest::LateralUnnestOperator::new(
                 compile_input(
@@ -630,6 +631,7 @@ fn compile_node(
                 *with_ordinality,
                 ordinality_column.clone(),
                 *ordinality_start,
+                *preserve_empty,
             )?,
         )),
         FragmentOperator::ExchangeInput(input) => exchanges.open(&input.exchange_id),
