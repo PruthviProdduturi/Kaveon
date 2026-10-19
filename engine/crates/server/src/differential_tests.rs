@@ -1368,6 +1368,12 @@ const APPROXIMATE_CASES: &[(&str, &str, bool, f64)] = &[
         0.0,
     ),
     (
+        "approx_count_distinct_filter",
+        "SELECT region, APPROX_COUNT_DISTINCT(user_id) FILTER (WHERE actions > 5) AS active_users FROM {T} GROUP BY region ORDER BY region",
+        true,
+        0.1,
+    ),
+    (
         "approx_percentile_grouped",
         "SELECT platform, APPROX_PERCENTILE(latency_p75_ms, 0.5) AS p50, APPROX_PERCENTILE(latency_p75_ms, ARRAY[0.9, 0.99]) AS tail FROM {T} GROUP BY platform ORDER BY platform",
         true,
