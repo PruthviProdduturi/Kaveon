@@ -6846,36 +6846,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REPLACE" => {
             check_arity(name, args, 3)?;
-            let arr = as_string_array(&args[0])?;
-            let from = as_string_array(&args[1])?;
-            let to = as_string_array(&args[2])?;
             let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
-                if arr.is_null(index) || from.is_null(index) || to.is_null(index) {
+                let Some(source) = text_value(&args[0], index)? else {
                     return Ok(total);
-                }
-                let source = arr.value(index);
-                let matches = if from.value(index).is_empty() {
-                    source.chars().count() + 1
-                } else {
-                    source.len() / from.value(index).len()
                 };
-                (matches as u64)
-                    .checked_mul(to.value(index).len() as u64)
-                    .and_then(|bytes| bytes.checked_add(source.len() as u64))
-                    .and_then(|bytes| total.checked_add(bytes))
+                total
+                    .checked_add(source.len() as u64)
                     .ok_or_else(|| KaveonError::Execution("REPLACE output size overflow".into()))
             })?;
             reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || from.is_null(i) || to.is_null(i) {
-                        None
-                    } else {
-                        Some(arr.value(i).replace(from.value(i), to.value(i)))
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    match (
+                        text_value(&args[0], row)?,
+                        text_value(&args[1], row)?,
+                        text_value(&args[2], row)?,
+                    ) {
+                        (Some(source), Some(from), Some(to)) => {
+                            result.append_value(source.replace(from, to))
+                        }
+                        _ => result.append_null(),
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    match (
+                        text_value(&args[0], row)?,
+                        text_value(&args[1], row)?,
+                        text_value(&args[2], row)?,
+                    ) {
+                        (Some(source), Some(from), Some(to)) => {
+                            result.append_value(source.replace(from, to))
+                        }
+                        _ => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "TRANSLATE" => {
             check_arity(name, args, 3)?;
@@ -20102,6 +20112,37 @@ mod tests {
             values.iter().collect::<Vec<_>>(),
             vec![Some(true), Some(true), None]
         );
+    }
+
+    #[test]
+    fn replace_accepts_large_utf8_values_and_operands() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::LargeUtf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(LargeStringArray::from(vec![
+                Some("Kaveon engine"),
+                Some("Trino engine"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REPLACE".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8("engine".into())),
+                Expr::Literal(ScalarValue::Utf8("lake".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "Kaveon lake");
+        assert_eq!(values.value(1), "Trino lake");
+        assert!(values.is_null(2));
     }
 
     #[test]
