@@ -1385,6 +1385,12 @@ const APPROXIMATE_CASES: &[(&str, &str, bool, f64)] = &[
         false,
         0.1,
     ),
+    (
+        "approx_percentile_filter",
+        "SELECT APPROX_PERCENTILE(latency_p75_ms, 0.95) FILTER (WHERE actions > 5) AS p95 FROM {T}",
+        false,
+        0.1,
+    ),
 ];
 
 /// Whether two canonical rows differ beyond `tolerance` (see
