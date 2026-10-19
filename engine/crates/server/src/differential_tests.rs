@@ -315,6 +315,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_positions",
+        "SELECT ARRAY_POSITIONS(ARRAY[1, 2, 1, 3], 1) AS positions FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "array_histogram",
         "SELECT ARRAY_HISTOGRAM(ARRAY[2, 1, NULL, 2]) AS histogram FROM {T} LIMIT 1",
         true,
