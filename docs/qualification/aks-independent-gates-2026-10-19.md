@@ -41,6 +41,20 @@ test adls_commit::tests::azurite_conditional_commit_matches_the_contract ... ok
 The remaining container-level work is the full Trino differential run and
 failure injection across the networked Compose topology.
 
+## Local Compose smoke
+
+Docker Desktop was available for the later run. The coordinator and two
+workers were rebuilt from the current source, Azurite was started, and all
+Engine services reported healthy. The first table read failed because the
+integration checkout's default `data/adls-mirror/opensource` directory was
+empty; the catalog definitions were present but their files were not. Pointing
+`KAVEON_DATA_PATH` at the populated local lake fixed the configuration issue.
+
+The live coordinator then returned an exact `COUNT(*)` of **50,838** for
+`OpenSource.public.covid_global`, and a distributed grouped query returned the
+first five countries and their exact counts in **273 ms**. The first response
+was correctly paged through `/v1/trino/query/<id>/results/0`.
+
 ## Remaining environment-dependent gates
 
 - Docker/WSL multi-container topology and Trino differential comparison;
