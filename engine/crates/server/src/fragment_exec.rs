@@ -2423,7 +2423,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(execution.result_schema, input_batch().schema());
-        assert!(execution.result_batches.is_empty());
+        assert_eq!(execution.result_batches.len(), 1);
+        assert_eq!(execution.result_batches[0].num_rows(), 0);
+        assert_eq!(execution.result_batches[0].schema(), input_batch().schema());
     }
 
     #[test]
