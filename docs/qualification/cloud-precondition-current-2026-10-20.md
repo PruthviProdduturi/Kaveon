@@ -20,3 +20,12 @@ local Docker, release-binary, and Azurite gates remain valid; this document is
 the explicit prerequisite for resuming cloud tests after the subscription and
 storage data plane are reactivated.
 
+The reusable fail-closed check is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\scripts\\check-aks-cloud-precondition.ps1
+```
+
+It exits nonzero unless AKS is running and the ADLS data plane accepts an
+authenticated container-list request.
+
