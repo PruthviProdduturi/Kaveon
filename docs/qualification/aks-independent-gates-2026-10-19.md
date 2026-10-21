@@ -7,8 +7,8 @@ behavior.
 
 ## Distributed execution and recovery
 
-The focused in-process distributed gate passed **8/8, 0 failures** at source
-commit `f5e91aa5`. It covered:
+The focused in-process distributed gate passed **8/8, 0 failures** at the
+current integration source. It covered:
 
 - distributed join spill refusal with no retained spill files;
 - grouped aggregate correctness under spill;
@@ -30,12 +30,13 @@ checks for a 1M-row full scan, projection, and single-row-group read also
 completed successfully.
 
 The opt-in Azurite Compose profile is now running alongside the local stack.
-The ignored provider test passed **1/1** against Azurite, including the real
-Azure-protocol `409 BlobAlreadyExists` and `412 ConditionNotMet` responses:
+The ignored provider tests passed **2/2** against Azurite, including the real
+Azure-protocol `409 BlobAlreadyExists` and `412 ConditionNotMet` responses and
+the concurrent-writer conflict contract:
 
 ```text
 cargo test -p kaveon-storage azurite -- --ignored --nocapture
-test adls_commit::tests::azurite_conditional_commit_matches_the_contract ... ok
+test result: ok. 2 passed; 0 failed
 ```
 
 The remaining container-level work is the full Trino differential run and
@@ -58,7 +59,6 @@ was correctly paged through `/v1/trino/query/<id>/results/0`.
 ## Remaining environment-dependent gates
 
 - Docker/WSL multi-container topology and Trino differential comparison;
-- Azurite provider-error, retry, and conditional-write qualification;
 - AKS ADLS reads, node loss, deployed worker topology, and cloud endurance;
 - broader skew, ordered-streaming, federation, and sustained mixed-workload
   qualification.
