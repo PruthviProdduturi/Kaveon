@@ -132,8 +132,6 @@ def main():
         parser.error("warmups and customers must be positive")
     if args.rows < 1 or args.repetitions < 1 or args.throughput_rounds < 0 or args.throughput_repeats < 1:
         parser.error("rows, repetitions and throughput repeats must be positive; throughput rounds must be nonnegative")
-    if args.docker_image and args.workers:
-        parser.error("matched Docker comparison currently supports single-node topology only")
     binary = args.server_bin.resolve(strict=True) if args.server_bin else None
     args.output.mkdir(parents=True, exist_ok=True)
     query_memory_bytes = 1024**3 if args.throughput_rounds else 4 * 1024**3
@@ -223,6 +221,13 @@ def main():
             "X-Trino-Schema": "default",
         }
         processes = []
+        docker_network = None
+        if args.docker_image:
+            docker_network = "kaveon-benchmark-net-" + run
+            subprocess.check_call(["docker", "network", "create", docker_network], stdout=subprocess.DEVNULL)
+            stack.callback(lambda name=docker_network: subprocess.run(
+                ["docker", "network", "rm", name], stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, check=False))
 
         def stop(process):
             if process.poll() is None:
@@ -235,6 +240,8 @@ def main():
 
         for index in range(args.workers + 1):
             port = base_port if index == 0 else free_port()
+            container_name = "kaveon-benchmark-" + run + "-" + str(index)
+            coordinator_name = "kaveon-benchmark-" + run + "-0"
             env = {key: value for key, value in os.environ.items() if not key.startswith("KAVEON_")}
             env.update({"KAVEON_NODE_ID": f"same-files-{index}", "KAVEON_ENVIRONMENT": "qualification",
                         "KAVEON_COORDINATOR": str(index == 0).lower(), "KAVEON_HTTP_PORT": str(port),
@@ -246,12 +253,13 @@ def main():
                         "KAVEON_SECURITY_JSON": json.dumps({"principals": [{"token": token, "principal": "qualification", "role": "admin"}]})})
             log = stack.enter_context((args.output / f"node-{index}.log").open("w"))
             if args.docker_image:
-                container_name = "kaveon-benchmark-" + run
+                env["KAVEON_DISCOVERY_URI"] = f"http://{coordinator_name}:8080"
+                env["KAVEON_ADVERTISED_URI"] = f"http://{container_name}:8080"
                 container_env = {key: value for key, value in env.items() if key.startswith("KAVEON_")}
                 container_env.update(KAVEON_HTTP_PORT="8080", KAVEON_BIND_HOST="0.0.0.0", KAVEON_INSECURE_DEVELOPMENT="true", KAVEON_DATA_DIR="/data", KAVEON_CATALOG_DIR="/tmp/catalogs", KAVEON_CATALOG_DATABASE_PATH="/tmp/catalog.db", KAVEON_QUERY_MEMORY_LIMIT_BYTES=str(query_memory_bytes), KAVEON_MEMORY_ADMISSION_LIMIT_BYTES=str(6*1024**3))
                 report["kaveon_configuration"] = {key: "<redacted>" if key in {"KAVEON_SECURITY_JSON", "KAVEON_EXCHANGE_TOKEN"} else value for key, value in container_env.items()}
                 report["kaveon_configuration"]["security_policy"] = {"principal": "qualification", "role": "admin", "random_per_run_tokens": True}
-                command = ["docker", "run", "--rm", "--name", container_name, "--cpus", "4", "--memory", "8g", "-p", f"127.0.0.1:{port}:8080", "--mount", f"type=bind,source={data},target=/data,readonly"]
+                command = ["docker", "run", "--rm", "--name", container_name, "--network", docker_network, "--cpus", "4", "--memory", "8g", "-p", f"127.0.0.1:{port}:8080", "--mount", f"type=bind,source={data},target=/data,readonly"]
                 for key, value in container_env.items():
                     command.extend(["-e", f"{key}={value}"])
                 command.append(report["docker_image"])
