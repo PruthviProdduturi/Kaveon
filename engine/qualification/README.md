@@ -132,6 +132,18 @@ not establish superiority on other workloads or overall feature coverage.
 Native executables are copied into the report directory before launch so builds
 cannot change or lock the binary being qualified.
 
+The same harness supports a resource-matched two-worker Docker topology. It
+creates a disposable Docker network and uses container DNS for coordinator
+discovery; non-metadata cases must report distributed stages:
+
+```powershell
+& engine/qualification/venv/Scripts/python.exe engine/qualification/same_files.py --docker-image kaveon-engine:qualification --suite extended --rows 500000 --customers 50000 --warmups 1 --repetitions 2 --workers 2 --output tmp/qualification-docker-2worker
+```
+
+The two-worker run is a distributed correctness gate. Keep it separate from
+the single-node performance publication gate because the topologies and
+resource scheduling are different.
+
 ## Benchmarks and shutdown
 
 The six-query million-row workload is an optimization diagnostic. For the broader
