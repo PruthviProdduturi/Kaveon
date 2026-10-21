@@ -25,6 +25,19 @@ All 11 cases passed:
 
 The run reported no retained spill files. RSS values are diagnostic process samples, not the logical operator-memory accounting; short peaks can be missed. The successful join took 44.2 seconds at this deliberately bounded local size, so this evidence must not be presented as a large-scale latency or throughput claim.
 
+## Release-build scale rerun
+
+The same suite was rerun against the optimized release binary at 500,000 fact rows, two workers, and a 1 GiB logical query pool:
+
+```powershell
+python engine/qualification/pressure.py `
+  --server-bin engine/target/release/kaveon-server.exe `
+  --workers 2 --rows 500000 --memory-mib 1024 `
+  --output tmp/pressure-release-500k
+```
+
+It passed **11/11**. The release binary SHA-256 was `be585fe190e2bde4e346e2a49ee0bbe841d84653bfe1ae8d117b6c8ee280bf7a`. Measured elapsed times were 27.1 s for the grouped aggregate, 4.6 s for the distributed join, 18.2 s for the full sort, 0.5 s for the bounded skew join, and under 0.4 s for the remaining bounded or rejection cases. The debug-build attempt at the same size exceeded the 90 s harness timeout on the join; that was a build-mode limitation, not a release-runtime failure.
+
 ## Remaining qualification
 
 This closes the local safety gate. The remaining work is larger-scale and deployment-specific:
