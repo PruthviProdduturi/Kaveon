@@ -42,6 +42,11 @@ The current cloud start precondition is recorded in
 
 The current AKS wire corpus is retained in `docs/qualification/track2-aks-wire-corpus-fetch-percent-current-2026-10-16.md` and its raw JSON. All twelve declared SQL shapes passed twice with identical results on the current immutable `sha256:60de4cf5…` Engine image, with three catalog-compatible workers. The new literal `FETCH FIRST 50 PERCENT ROWS ONLY` case returned 12 rows on both runs. The eleven-shape lateral report remains available for history.
 
+The current release binary also passed a bounded 500k-row extended Trino
+differential rerun with 2 workers and 12/12 exact-result cases; this is
+correctness evidence only because the harness did not qualify fair performance
+comparison (`docs/qualification/trino-differential-release-500k-rerun-2026-10-20.md`).
+
 ## Track 2 — SQL compatibility and types
 
 | Capability | State | Current contract | Acceptance evidence still required |
