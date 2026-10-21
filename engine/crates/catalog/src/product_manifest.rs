@@ -1270,7 +1270,23 @@ fn validate_product_records(
     records: &BTreeMap<String, ProductRecordRef>,
     counts: &BTreeMap<String, u64>,
 ) -> Result<(), ManifestError> {
-    if records.len() > MAX_PRODUCT_RECORDS {
+    // Counted over the records the snapshot itself carries, not over every
+    // record in memory.
+    //
+    // This limit exists to stop a snapshot growing without bound, and the
+    // accumulating kinds are no longer in one -- they are published beside it,
+    // each bounded by its own object size at publish time. Counting them here
+    // as well left the old ceiling in force through a second door: measured,
+    // bytes permitted 749 owners while this count permitted 57, so the split
+    // bought a fraction of what it was measured to buy.
+    //
+    // A kind that accumulates is bounded by MAX_PRODUCT_RECORD_TABLE_BYTES
+    // when its object is encoded, which is a real bound and a larger one.
+    let carried = records
+        .values()
+        .filter(|record| !accumulates_with_use(record.kind))
+        .count();
+    if carried > MAX_PRODUCT_RECORDS {
         return Err(error("snapshot product-record limit exceeded"));
     }
     let mut unique = BTreeSet::new();

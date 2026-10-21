@@ -1536,6 +1536,131 @@ mod tests {
     /// The occupancy metric must reflect a real commit, not just unit-level
     /// arithmetic. Without this the field could report zero forever and every
     /// test of it would still pass.
+    /// A temporary directory that removes itself.
+    struct TempRoot(std::path::PathBuf);
+
+    impl TempRoot {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "kaveon-evict-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Commit accumulating records, read them back through a handle that has
+    /// never seen them, and check none of them stayed in the snapshot.
+    ///
+    /// The second handle is the point. Reading through the committing one is
+    /// served from the snapshot it remembered and never resolves an object.
+    async fn eviction_round_trip(backend: &str, storage: AdlsConditionalCommit, records: u32) {
+        let prefix = format!("evict-{backend}");
+        let catalog = ProductCatalogCommit::new(
+            storage.clone(),
+            prefix.clone(),
+            Arc::new(TransactionMetrics::default()),
+        )
+        .unwrap();
+
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        assert!(
+            matches!(
+                catalog.initialize(genesis.clone()).await,
+                CommitOutcome::Committed(_)
+            ),
+            "{backend}: genesis did not land"
+        );
+
+        let mut current = genesis;
+        for number in 0..records {
+            let id = format!("history-{number:04}");
+            let request = PrepareChange {
+                base: current.reference(),
+                snapshot_id: format!("snapshot-{number}"),
+                operation_id: format!("op-{number}"),
+                request_digest: DIGEST.into(),
+                changes: vec![CatalogChange::CreateProduct {
+                    record: related_record(ProductRecordKind::QueryHistory, &id, None),
+                }],
+            };
+            match catalog
+                .commit_with_documents(request.clone(), documents_for(&request))
+                .await
+            {
+                CommitOutcome::Committed(next) => current = next,
+                other => panic!("{backend}: commit {number} did not land: {other:?}"),
+            }
+        }
+
+        let fresh =
+            ProductCatalogCommit::new(storage, prefix, Arc::new(TransactionMetrics::default()))
+                .unwrap();
+        let reread = fresh
+            .read_snapshot(&current.reference())
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{backend}: the published snapshot did not read: {error:?}")
+            });
+
+        assert_eq!(
+            reread.product_records, current.product_records,
+            "{backend}: a snapshot read back must hold exactly the records committed to it"
+        );
+        assert_eq!(reread.product_records.len() as u32, records);
+        assert!(
+            reread
+                .product_record_tables
+                .contains_key(ProductRecordKind::QueryHistory.name()),
+            "{backend}: the snapshot must name the object its history lives in"
+        );
+        let (inline, _) = partition_product_records(&reread.product_records);
+        assert!(
+            inline.is_empty(),
+            "{backend}: no accumulating record may remain in the snapshot"
+        );
+    }
+
+    /// The filesystem store, which is what local development actually runs.
+    #[tokio::test]
+    async fn eviction_round_trips_on_the_filesystem_store() {
+        let root = TempRoot::new();
+        let storage = kaveon_storage::local_file_commit(&root.0).expect("local store");
+        eviction_round_trip("local", storage, 60).await;
+    }
+
+    /// Real blob storage: conditional PUTs over HTTP against service-issued
+    /// ETags, which neither other backend exercises.
+    ///
+    /// ```text
+    /// docker compose --profile emulator up -d azurite
+    /// az storage container create -n kaveon-product \
+    ///   --connection-string "UseDevelopmentStorage=true"
+    /// cargo test -p kaveon-catalog azurite -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires Azurite: docker compose --profile emulator up -d azurite"]
+    async fn eviction_round_trips_on_azurite() {
+        let container =
+            std::env::var("KAVEON_AZURITE_CONTAINER").unwrap_or_else(|_| "kaveon-product".into());
+        let storage = kaveon_storage::emulator_adls_commit(&container).expect("emulator store");
+        // Fewer records than the local backends: every commit here is a round
+        // trip, and the property under test does not need volume to show.
+        eviction_round_trip("azurite", storage, 25).await;
+        println!("azurite: eviction round trip holds against real blob storage");
+    }
+
     /// A snapshot written before the split still reads, and the next commit
     /// migrates it.
     ///

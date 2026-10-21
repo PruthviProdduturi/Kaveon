@@ -183,6 +183,100 @@ reference-only record -- has a document body started being inlined into the snap
     println!();
 }
 
+/// Which limit actually binds after the eviction.
+///
+/// The split removed the snapshot's byte ceiling as the constraint. It did not
+/// remove the other two, and both are counts:
+///
+/// - `MAX_PRODUCT_RECORDS` (100,000) caps the records a snapshot may hold,
+///   and `validate_product_records` checks it against the merged map -- the
+///   one that still holds every kind, because eviction changed what is
+///   published, not what is validated.
+/// - a per-kind object has its own byte bound, eight times the snapshot's.
+///
+/// Reporting the byte figure alone would overstate what the change bought.
+#[test]
+fn which_limit_binds_after_the_eviction() {
+    use crate::product_manifest::{MAX_PRODUCT_RECORDS, partition_product_records};
+
+    const QUERY_HISTORY_PER_OWNER: usize = 800;
+    const CHAT_MESSAGES_PER_OWNER: usize = 900;
+    const RECENTS_PER_OWNER: usize = 20;
+    // What one owner curates, which stays inline.
+    const ARTIFACTS_PER_OWNER: usize = 3 + 12 + 3 + 6;
+
+    let owner_records = |owner: usize| {
+        let mut records = Vec::new();
+        for (kind, count) in [
+            (ProductRecordKind::QueryHistory, QUERY_HISTORY_PER_OWNER),
+            (ProductRecordKind::ChatMessage, CHAT_MESSAGES_PER_OWNER),
+            (ProductRecordKind::UserRecent, RECENTS_PER_OWNER),
+            (ProductRecordKind::Dataset, 3),
+            (ProductRecordKind::Chart, 12),
+            (ProductRecordKind::Dashboard, 3),
+            (ProductRecordKind::SavedQuery, 6),
+        ] {
+            for n in 0..count {
+                records.push(record(kind, owner * 100_000 + n));
+            }
+        }
+        records
+    };
+
+    let build = |owners: usize| {
+        let mut records = Vec::new();
+        for owner in 0..owners {
+            records.extend(owner_records(owner));
+        }
+        snapshot_with(records.into_iter())
+    };
+
+    let empty = encoded_len(&snapshot_with(std::iter::empty()));
+    let inline_bytes = |owners: usize| {
+        let snapshot = build(owners);
+        let (inline, _) = partition_product_records(&snapshot.product_records);
+        encoded_len(&snapshot_with(inline.into_iter()))
+    };
+    let per_owner_inline = (inline_bytes(3) - inline_bytes(1)) as f64 / 2.0;
+
+    // A per-kind object has its own byte bound, and the kind that fills
+    // fastest decides. Chat messages are the largest allowance per owner.
+    const MAX_PRODUCT_RECORD_TABLE_BYTES: usize = 64 * 1024 * 1024;
+    let chat_bytes_per_owner =
+        bytes_per_record(ProductRecordKind::ChatMessage) * CHAT_MESSAGES_PER_OWNER as f64;
+    let history_bytes_per_owner =
+        bytes_per_record(ProductRecordKind::QueryHistory) * QUERY_HISTORY_PER_OWNER as f64;
+    let by_kind_object = (MAX_PRODUCT_RECORD_TABLE_BYTES as f64
+        / chat_bytes_per_owner.max(history_bytes_per_owner)) as u64;
+
+    // Only the records the snapshot still carries count against this now.
+    let by_record_count = (MAX_PRODUCT_RECORDS / ARTIFACTS_PER_OWNER) as u64;
+    let by_snapshot_bytes = ((MAX_SNAPSHOT_BYTES - empty) as f64 / per_owner_inline) as u64;
+    let binding = by_snapshot_bytes.min(by_record_count).min(by_kind_object);
+
+    println!();
+    println!("owners permitted by each limit, after eviction");
+    println!("  snapshot bytes        {by_snapshot_bytes}");
+    println!("  carried-record count  {by_record_count}");
+    println!("  per-kind object       {by_kind_object}");
+    println!("  -> the ceiling is     {binding}");
+    println!();
+    println!(
+        "An owner costs the snapshot {per_owner_inline:.0} bytes once the accumulating kinds\n\
+are published beside it, so neither the snapshot bytes nor the {MAX_PRODUCT_RECORDS}-record\n\
+count binds any more. The per-kind object does: one object holds every owner's rows of\n\
+that kind, so the largest per-owner allowance decides. Raising a limit that is not the\n\
+smallest changes nothing."
+    );
+    println!();
+
+    assert!(
+        binding < by_snapshot_bytes,
+        "the byte ceiling is expected to stop being the constraint after eviction; if it is \
+still the smallest, the split is not doing what it was measured to do"
+    );
+}
+
 /// What the eviction buys, measured the same way the ceiling was.
 ///
 /// The bulk kinds move to one content-addressed object each and the snapshot
