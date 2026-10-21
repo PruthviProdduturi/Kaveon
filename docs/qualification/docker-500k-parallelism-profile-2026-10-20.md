@@ -28,3 +28,14 @@ not a stable improvement; the controls remain opt-in and no default was changed.
 The result confirms that local partial dispatch and batch coalescing alone do
 not close the exchange/final-merge gap. A direct grouped-state exchange remains
 the next structural target.
+
+## 2026-10-20 direct grouped exchange qualification
+
+The opt-in `KAVEON_DIRECT_GROUPED_EXCHANGE=1` path was rechecked on the same
+500k-row, two-worker extended corpus. All **12/12** cases were exact. A three-
+repetition run measured high-cardinality aggregation at **1458, 1484, and
+1625 ms** (mean **1522 ms**). The default path's available control was **1575
+ms**; the difference is within the observed run variance and does not establish
+a stable win. The prototype remains opt-in. The ClickHouse-scale exchange path
+still needs profiling and a direct grouped-state stream before any default
+change.
