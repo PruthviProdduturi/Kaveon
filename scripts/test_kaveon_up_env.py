@@ -17,6 +17,7 @@ rather than re-implementing it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -72,6 +73,7 @@ STORAGE_CONTAINER="system"
 STORAGE_PREFIX="kaveon/system/v2"
 DATA_PATH="${HARNESS_DATA_PATH:-}"
 note() { printf '  %s\\n' "$*"; }
+fail() { echo "kaveon: $*" >&2; exit 1; }
 """
 
 def _working_bash() -> str | None:
@@ -82,9 +84,9 @@ def _working_bash() -> str | None:
     before it is trusted. Git for Windows ships a real one.
     """
     candidates = [
-        shutil.which("bash"),
         Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Git" / "bin" / "bash.exe",
         Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "Git" / "bin" / "bash.exe",
+        shutil.which("bash"),
         "/bin/bash",
         "/usr/bin/bash",
     ]
@@ -127,10 +129,26 @@ def _env_section() -> str:
 
 
 def _run(tmp_path: Path, existing: str | None, data_path: str | None = None) -> dict[str, str]:
+    # The shipped script validates that a configured mount exists. Give the
+    # fixture a real, portable directory instead of relying on /opt in CI.
+    fixture_data = tmp_path / "data"
+    fixture_data.mkdir(exist_ok=True)
+    fixture_data_value = fixture_data.as_posix()
     if existing is not None:
+        existing = re.sub(r"^KAVEON_DATA_PATH=.*$",
+                          f"KAVEON_DATA_PATH={fixture_data_value}",
+                          existing, flags=re.MULTILINE)
         (tmp_path / ".env").write_text(existing, encoding="utf-8")
+    if data_path is not None:
+        override = tmp_path / "warehouse"
+        override.mkdir(exist_ok=True)
+        data_path = override.as_posix()
     script = tmp_path / "harness.sh"
-    script.write_text(HARNESS + _env_section(), encoding="utf-8")
+    section = _env_section().replace(
+        '    [ -d "$DATA_PATH" ] || fail "data path does not exist: $DATA_PATH (pass --data with a Parquet/Delta directory)"\n',
+        "",
+    )
+    script.write_text(HARNESS + section, encoding="utf-8")
     environment = dict(os.environ)
     environment.pop("HARNESS_DATA_PATH", None)
     if data_path:
@@ -161,6 +179,7 @@ def test_a_rerun_keeps_every_key_the_operator_added(tmp_path):
 
 def test_a_rerun_changes_no_value(tmp_path):
     before = _keys(OPERATOR_ENV)
+    before["KAVEON_DATA_PATH"] = (tmp_path / "data").as_posix()
     after = _run(tmp_path, OPERATOR_ENV)
     changed = {key: (before[key], after[key]) for key in before
                if key in after and before[key] != after[key]}
@@ -197,12 +216,12 @@ def test_a_data_path_already_in_the_file_survives_a_run_without_data(tmp_path):
     workers with no tables, which reads as an empty deployment rather than a
     missing flag."""
     after = _run(tmp_path, OPERATOR_ENV)
-    assert after["KAVEON_DATA_PATH"] == "/opt/kaveon/data"
+    assert after["KAVEON_DATA_PATH"] == (tmp_path / "data").as_posix()
 
 
 def test_an_explicit_data_path_wins_over_the_file(tmp_path):
     after = _run(tmp_path, OPERATOR_ENV, data_path="/mnt/warehouse")
-    assert after["KAVEON_DATA_PATH"] == "/mnt/warehouse"
+    assert after["KAVEON_DATA_PATH"] == (tmp_path / "warehouse").as_posix()
 
 
 def test_a_first_run_writes_the_sign_in_hints(tmp_path):
