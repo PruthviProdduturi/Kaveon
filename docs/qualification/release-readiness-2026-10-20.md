@@ -35,3 +35,12 @@ fails closed until both resources are usable.
 - Docker Compose configuration validation: `docker compose config --quiet` passed.
 - Server differential sweep rerun independently: **1 passed, 0 failed** in
   593.12s (`the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`).
+
+## Engine workflow cloud boundary
+
+GitHub Engine run `39549605188` passed **Check & Test**, all three cross-platform
+release builds, and the dev release. The only failed job was `Publish Engine
+server image`; `az acr build` returned `ReadOnlyDisabledSubscription` because the
+Azure subscription is disabled/read-only. This is the same external cloud
+precondition documented above and does not indicate an Engine build or test
+failure.
