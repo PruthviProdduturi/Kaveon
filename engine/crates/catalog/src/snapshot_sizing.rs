@@ -343,21 +343,32 @@ fn which_limit_binds_after_the_eviction() {
 
     // Only the records the snapshot still carries count against this now.
     let by_record_count = (MAX_PRODUCT_RECORDS / ARTIFACTS_PER_OWNER) as u64;
-    let by_snapshot_bytes = ((MAX_SNAPSHOT_BYTES - empty) as f64 / per_owner_inline) as u64;
-    let binding = by_snapshot_bytes.min(by_record_count).min(by_kind_object);
+    // An owner costs the snapshot nothing once every kind is published
+    // beside it, and dividing by nothing is not a ceiling.
+    let by_snapshot_bytes = if per_owner_inline < 1.0 {
+        None
+    } else {
+        Some(((MAX_SNAPSHOT_BYTES - empty) as f64 / per_owner_inline) as u64)
+    };
+    let binding = by_record_count
+        .min(by_kind_object)
+        .min(by_snapshot_bytes.unwrap_or(u64::MAX));
 
     println!();
     println!("owners permitted by each limit, after eviction");
-    println!("  snapshot bytes        {by_snapshot_bytes}");
+    match by_snapshot_bytes {
+        Some(owners) => println!("  snapshot bytes        {owners}"),
+        None => println!("  snapshot bytes        does not bind"),
+    }
     println!("  carried-record count  {by_record_count}");
     println!("  per-kind object       {by_kind_object}");
     println!("  -> the ceiling is     {binding}");
     println!();
     println!(
-        "An owner costs the snapshot {per_owner_inline:.0} bytes in artifacts once the\n\
-accumulating kinds are published beside it, and a kind is spread over its shards, so the\n\
-snapshot's own bytes bind again -- this time on what an owner curates rather than on what\n\
-using it produced. Raising a limit that is not the smallest changes nothing."
+        "Every kind is published beside the snapshot now, so an owner costs it\n\
+{per_owner_inline:.0} bytes and its size stops being a ceiling at all. What constrains a\n\
+deployment is the per-kind objects: one kind is spread over its shards, each bounded when\n\
+it is encoded, and the kind with the largest per-owner allowance decides."
     );
     println!();
 
