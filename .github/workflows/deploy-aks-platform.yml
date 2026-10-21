@@ -70,12 +70,43 @@ env:
   KAVEON_CERT_ISSUER: ${{ vars.KAVEON_CERT_ISSUER }}
 
 jobs:
+  preflight:
+    name: Cloud preflight
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify AKS and ADLS are writable before building images
+        shell: pwsh
+        env:
+          SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'kaveon-rg' }}
+          AKS_NAME: ${{ vars.AZURE_AKS_NAME || 'kaveon-aks' }}
+          STORAGE_ACCOUNT: ${{ vars.KAVEON_ADLS_ACCOUNT || 'kaveonlake' }}
+          STORAGE_CONTAINER: ${{ vars.KAVEON_ADLS_CONTAINER || 'product-transactions' }}
+        run: |
+          "./scripts/check-aks-cloud-precondition.ps1" `
+            -SubscriptionId $env:SUBSCRIPTION `
+            -ResourceGroup $env:RESOURCE_GROUP `
+            -AksName $env:AKS_NAME `
+            -StorageAccount $env:STORAGE_ACCOUNT `
+            -Container $env:STORAGE_CONTAINER
+
   # The images this release is made of, built from the commit being deployed.
   # Their digests used to be Actions variables a person pasted in, which meant
   # a change to api/ reached the cluster only if someone remembered to build
   # an image and edit repository settings. Now the commit produces them.
   build:
     name: Build images
+    needs: preflight
     runs-on: ubuntu-latest
     environment: production
     outputs:
