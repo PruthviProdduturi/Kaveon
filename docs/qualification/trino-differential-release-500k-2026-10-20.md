@@ -12,7 +12,7 @@ python engine/qualification/same_files.py `
   --output tmp/same-files-release-500k-final
 ```
 
-The run used two Kaveon workers and compared both engines against DuckDB results generated from the same Parquet files. The binary was built from commit `237eec03b7d839edf3787036e305e8008f554181`.
+The run used two Kaveon workers and compared both engines against DuckDB results generated from the same Parquet files. The rerun below uses the direct primitive JSON-number encoding optimization; its commit is recorded with the evidence update.
 
 ## Result
 
@@ -22,18 +22,18 @@ Median elapsed milliseconds (Kaveon / Trino):
 
 | Case | Kaveon | Trino |
 |---|---:|---:|
-| filtered sum | 83 | 89 |
-| grouped sum | 119 | 115 |
-| join | 242 | 141 |
-| small left join | 195 | 121 |
-| TopN | 86 | 81 |
-| distinct | 105 | 77 |
-| metadata count | 60 | 30 |
-| arithmetic projection | 519 | 56 |
-| medium groups | 171 | 91 |
-| high groups | 2,616 | 197 |
-| multi-aggregate | 95 | 70 |
-| grouped join | 209 | 123 |
+| filtered sum | 74 | 68 |
+| grouped sum | 93 | 67 |
+| join | 188 | 121 |
+| small left join | 202 | 117 |
+| TopN | 84 | 89 |
+| distinct | 116 | 83 |
+| metadata count | 48 | 31 |
+| arithmetic projection | 445 | 74 |
+| medium groups | 168 | 110 |
+| high groups | 2,239 | 238 |
+| multi-aggregate | 109 | 81 |
+| grouped join | 198 | 137 |
 
-The result is strong correctness evidence and a useful optimization baseline. It also shows clear performance gaps in arithmetic projection and high-cardinality grouping that remain open before claiming parity or superiority.
+The result is strong correctness evidence. Direct primitive JSON-number construction reduced the arithmetic projection median from 519 ms to 445 ms and high-cardinality grouping from 2,616 ms to 2,239 ms in the comparable release rerun. The remaining gaps are still open before claiming parity or superiority.
 
