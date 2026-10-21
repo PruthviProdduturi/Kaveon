@@ -32,3 +32,4 @@ fails closed until both resources are usable.
 
 - Workspace release build: `cargo build --workspace --release --locked` passed on
   the current integration checkout (2m04s).
+- Docker Compose configuration validation: `docker compose config --quiet` passed.
