@@ -11,7 +11,8 @@ user:         pruthvi.prodduturi@gmail.com
 ```
 
 The current resource inventory contains `kaveon-aks` in `kaveon-rg`, but its
-power state is **Deallocated**. The `kaveonlake` ADLS Gen2 account is present
+power state is **Deallocated** and its provisioning state is **Failed**. The
+`kaveonlake` ADLS Gen2 account is present
 and reports `provisioningState: Succeeded` / `statusOfPrimary: available`, but a
 data-plane container listing returns `AccountIsDisabled`.
 
