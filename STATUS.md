@@ -69,6 +69,7 @@
 | Dashboard filter bar — DLM-powered dropdowns, cascading filters, click-outside close | ✅ Done | Dimension count is dataset- and dashboard-specific |
 | Client-side query cache — SHA-based dedup of repeated dashboard chart queries | ✅ Done | |
 | SQL Lab — Monaco, multi-tab, history, saved queries | ✅ Done | |
+| Control plane on object storage — datasets, charts, dashboards, saved queries, favourites and history as product records committed through the Engine's transaction API | 🧪 Alpha | PostgreSQL retired. Records are published beside the catalog snapshot, 64 content-addressed shards a kind, so a commit rewrites one shard rather than the catalogue. Measured capacity 11,900 owners at the per-owner retention caps; verified on the in-memory, filesystem and Azurite stores only — see Known Issues |
 | Async query execution + result caching (SHA-256, TTL) | ✅ Done | Async job store not cleaned on restart |
 | CTAS endpoint | ✅ Done | |
 | Per-user favorites, themes, workspace activity | ✅ Done | |
@@ -125,6 +126,8 @@
 | Engine server has no auth/TLS | Keep behind a trusted local boundary during alpha |
 | Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
 | Hash aggregate/join stop at their configured query budget instead of spilling | Add partitioned aggregate/join spill before production scale claims |
+| Control-plane record sharding is not qualified against the cluster | A published-format change verified on the in-memory, filesystem and Azurite stores. The measured 11,900-owner capacity and the one-shard write cost are local figures; qualify both on AKS before either is claimed publicly |
+| A commit still republishes every shard a change touches | Group commit and incremental per-shard appends are unbuilt. Writes are small enough that this is no longer urgent, and the Azurite concurrency baseline exists for when it is taken up |
 
 ---
 
