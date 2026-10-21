@@ -45,12 +45,15 @@ def cache_stats(session, base, headers):
     return stats
 
 
-def execute(session, base, headers, sql, settings):
+def execute(session, base, headers, sql, settings, catalog=None, schema=None):
     started = time.perf_counter()
     response = session.post(
         f"{base}/v1/statement",
         headers=headers,
-        json={"query": sql, "settings": settings},
+        # The result cache stores complete inline results; paged delivery is
+        # intentionally excluded because it owns a separate retained spool.
+        json={"query": sql, "catalog": catalog, "schema": schema,
+              "result_delivery": "inline", "settings": settings},
         timeout=180,
     )
     body = response.json()
@@ -91,6 +94,8 @@ def main(argv=None):
     parser.add_argument("--server", default="http://127.0.0.1:8081")
     parser.add_argument("--token", default=os.environ.get("KAVEON_TOKEN"))
     parser.add_argument("--sql", required=True)
+    parser.add_argument("--catalog", help="catalog context for the statement")
+    parser.add_argument("--schema", help="schema context for the statement")
     parser.add_argument("--warm-hits", type=int, default=20)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--ca-cert", type=Path, help="CA bundle for an HTTPS coordinator")
@@ -125,11 +130,11 @@ def main(argv=None):
         session.verify = False
     try:
         report["clear_before"] = clear_cache(session, base, headers)
-        uncached = execute(session, base, headers, args.sql, {"result_cache": False})
-        cold = execute(session, base, headers, args.sql, {"result_cache": True})
-        warm = [execute(session, base, headers, args.sql, {"result_cache": True}) for _ in range(args.warm_hits)]
+        uncached = execute(session, base, headers, args.sql, {"result_cache": False}, args.catalog, args.schema)
+        cold = execute(session, base, headers, args.sql, {"result_cache": True}, args.catalog, args.schema)
+        warm = [execute(session, base, headers, args.sql, {"result_cache": True}, args.catalog, args.schema) for _ in range(args.warm_hits)]
         before_bypass = cache_stats(session, base, headers)
-        bypass = execute(session, base, headers, args.sql, {"result_cache": False})
+        bypass = execute(session, base, headers, args.sql, {"result_cache": False}, args.catalog, args.schema)
         after_bypass = cache_stats(session, base, headers)
         report.update(
             uncached=uncached,
