@@ -58,6 +58,9 @@ stages; performance publication remains separate
 (`docs/qualification/trino-differential-docker-2worker-200k-2026-10-20.md`).
 The same gate passes at 500k rows and 50k customers with the same 12/12 exact
 results (`docs/qualification/trino-differential-docker-2worker-500k-2026-10-20.md`).
+The image was rebuilt from the current source and rerun at 200k rows with the
+same 12/12 distributed correctness result
+(`docs/qualification/trino-differential-docker-current-2worker-200k-2026-10-20.md`).
 
 ## Track 2 — SQL compatibility and types
 
