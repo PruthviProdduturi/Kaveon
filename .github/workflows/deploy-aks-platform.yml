@@ -93,7 +93,7 @@ jobs:
           STORAGE_ACCOUNT: ${{ vars.KAVEON_ADLS_ACCOUNT || 'kaveonlake' }}
           STORAGE_CONTAINER: ${{ vars.KAVEON_ADLS_CONTAINER || 'product-transactions' }}
         run: |
-          "./scripts/check-aks-cloud-precondition.ps1" `
+          & "./scripts/check-aks-cloud-precondition.ps1" `
             -SubscriptionId $env:SUBSCRIPTION `
             -ResourceGroup $env:RESOURCE_GROUP `
             -AksName $env:AKS_NAME `
