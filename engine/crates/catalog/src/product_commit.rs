@@ -15,6 +15,7 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
+use futures::StreamExt;
 use kaveon_storage::{
     AdlsConditionalCommit, CommitErrorKind, ImmutableParquetWriter, ObjectVersion,
 };
@@ -1098,27 +1099,49 @@ operation {}",
         if snapshot.product_record_tables.is_empty() {
             return Ok(snapshot);
         }
-        let mut evicted = BTreeMap::new();
-        for (shard, reference) in snapshot.product_record_tables.clone() {
+        // Checked before anything is fetched: a malformed reference is the
+        // snapshot's fault, not the storage's, and should not cost a round
+        // trip to discover.
+        for reference in snapshot.product_record_tables.values() {
             if !valid_digest(&reference.sha256) {
                 return Err(CommitErrorKind::Invalid);
             }
-            let bytes = self
-                .storage
-                .read_bounded(
-                    &format!("{}/{}", self.prefix, reference.path),
-                    MAX_PRODUCT_RECORD_TABLE_BYTES,
-                )
-                .await
-                .map_err(|error| error.kind)?
-                .bytes;
-            // Named by its own digest, so a mismatch is corruption rather than
-            // a stale read and must not be served.
-            if digest(&bytes) != reference.sha256 {
-                return Err(CommitErrorKind::Invalid);
-            }
-            let records: BTreeMap<String, ProductRecordRef> =
-                decode(&bytes, MAX_PRODUCT_RECORD_TABLE_BYTES).ok_or(CommitErrorKind::Invalid)?;
+        }
+
+        // Each shard resolves one immutable object named by its own digest, so
+        // the reads do not depend on each other and are issued together.
+        // Sharding multiplied the number of objects a load reads by the shard
+        // count, and doing that in a loop with an await in it turned a cold
+        // load on blob storage into hundreds of sequential round trips.
+        let reads = snapshot.product_record_tables.clone().into_iter().map(
+            |(shard, reference)| async move {
+                let bytes = self
+                    .storage
+                    .read_bounded(
+                        &format!("{}/{}", self.prefix, reference.path),
+                        MAX_PRODUCT_RECORD_TABLE_BYTES,
+                    )
+                    .await
+                    .map_err(|error| error.kind)?
+                    .bytes;
+                // Named by its own digest, so a mismatch is corruption rather
+                // than a stale read and must not be served.
+                if digest(&bytes) != reference.sha256 {
+                    return Err(CommitErrorKind::Invalid);
+                }
+                let records: BTreeMap<String, ProductRecordRef> =
+                    decode(&bytes, MAX_PRODUCT_RECORD_TABLE_BYTES)
+                        .ok_or(CommitErrorKind::Invalid)?;
+                Ok::<_, CommitErrorKind>((shard, records))
+            },
+        );
+
+        // Bounded, so a large catalogue does not open an unbounded number of
+        // connections the moment it is opened.
+        let mut resolved = futures::stream::iter(reads).buffer_unordered(SHARD_READ_CONCURRENCY);
+        let mut evicted = BTreeMap::new();
+        while let Some(result) = resolved.next().await {
+            let (shard, records) = result?;
             evicted.insert(shard, records);
         }
         snapshot.product_records =
@@ -1269,6 +1292,13 @@ const MAX_TYPED_TABLE_BYTES: usize = 64 * 1024 * 1024;
 /// Objects that must be published before the head moves, as (path, bytes).
 /// Named because two split functions return it and clippy counts the nesting.
 type PendingObjects = Vec<(String, Vec<u8>)>;
+
+/// How many shard objects are fetched at once when a snapshot is resolved.
+///
+/// High enough that a kind's sixty-four shards are a handful of rounds rather
+/// than sixty-four, low enough that opening a catalogue does not open as many
+/// connections as it has shards.
+const SHARD_READ_CONCURRENCY: usize = 16;
 
 /// A per-kind product-record object. Sized like a typed table, because it
 /// holds the same sort of thing: many small records of one shape.
