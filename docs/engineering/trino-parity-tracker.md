@@ -48,6 +48,10 @@ The current release binary also passed a bounded 500k-row extended Trino
 differential rerun with 2 workers and 12/12 exact-result cases; this is
 correctness evidence only because the harness did not qualify fair performance
 comparison (`docs/qualification/trino-differential-release-500k-rerun-2026-10-20.md`).
+The local qualification image also passed the harness-supported Docker
+single-node 200k-row run with 12/12 exact cases; Kaveon was slower in that fair
+sample, and the harness does not yet support Docker comparisons with two
+workers (`docs/qualification/trino-differential-docker-200k-2026-10-20.md`).
 
 ## Track 2 — SQL compatibility and types
 
