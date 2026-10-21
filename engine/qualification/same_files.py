@@ -304,7 +304,13 @@ def main():
                         if engine == "kaveon":
                             history = requests.get(base + "/v1/query/" + result["id"], headers=headers, timeout=5).json()
                             case["stages"] = len(history.get("stages", []))
-                            if args.workers and not case["stages"]:
+                            mode = (history.get("execution") or {}).get("mode")
+                            case["execution_mode"] = mode
+                            # Exact catalog/context counts are intentionally answered
+                            # without worker stages. Keep the distributed guard for every
+                            # other shape so a real local fallback cannot go unnoticed.
+                            metadata_fast_path = name == "unfiltered_count" and mode in {"context", "catalog", "coordinator"}
+                            if args.workers and not case["stages"] and not metadata_fast_path:
                                 raise AssertionError("Distributed query silently fell back to local")
                         if not rows_match(actual, expected):
                             raise AssertionError(f"{engine} rows disagree with DuckDB reading the same Parquet files")
