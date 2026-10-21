@@ -1053,6 +1053,51 @@ pub const fn accumulates_with_use(kind: ProductRecordKind) -> bool {
     )
 }
 
+/// How many objects a single accumulating kind is spread over.
+///
+/// A kind was one object, so recording one query republished every query. The
+/// shard count divides both the write and the capacity: a write rewrites one
+/// shard, and a kind holds this many times one object's worth of records.
+///
+/// Sixty-four is chosen from the two failures either side of it. Too few and a
+/// write still rewrites megabytes; too many and resolving a kind becomes a
+/// long series of small reads on every snapshot load.
+pub const PRODUCT_RECORD_SHARDS: u8 = 64;
+
+/// Which shard a record belongs to, from the digest of its key.
+///
+/// The digest rather than the owner, so that one owner writing heavily does
+/// not concentrate on a single shard, and so a record with no owner still has
+/// a home. Stable for the life of a key, which is what lets an unchanged shard
+/// keep its object.
+#[must_use]
+pub fn product_record_shard(key: &str) -> u8 {
+    // FNV-1a, 64-bit. Small, stable across processes and architectures, and
+    // not a hash whose output anyone stores -- only the bucket is used.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    // FNV-1a avalanches poorly in its low bits, and the bucket is taken from
+    // exactly those. Measured without this step, keys of the shape the product
+    // issues reached 16 of 64 shards and a write cost eight times what the
+    // shard count promised. The MurmurHash3 finaliser spreads the entropy
+    // across the whole word first.
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    hash ^= hash >> 33;
+    (hash % u64::from(PRODUCT_RECORD_SHARDS)) as u8
+}
+
+/// The name a kind's shard is published under.
+#[must_use]
+pub fn product_shard_name(kind_name: &str, shard: u8) -> String {
+    format!("{kind_name}/{shard:02}")
+}
+
 /// Split records into the ones the snapshot carries and the ones it points at.
 ///
 /// The second map is keyed by kind name, which is what names the object each
@@ -1069,11 +1114,12 @@ pub fn partition_product_records(
     records: &ProductRecords,
 ) -> (ProductRecords, ProductRecordsByKind) {
     let mut inline = BTreeMap::new();
-    let mut evicted: BTreeMap<String, BTreeMap<String, ProductRecordRef>> = BTreeMap::new();
+    let mut evicted: ProductRecordsByKind = BTreeMap::new();
     for (key, record) in records {
         if accumulates_with_use(record.kind) {
+            let shard = product_record_shard(key);
             evicted
-                .entry(record.kind.name().to_owned())
+                .entry(product_shard_name(record.kind.name(), shard))
                 .or_default()
                 .insert(key.clone(), record.clone());
         } else {
@@ -1094,11 +1140,12 @@ pub fn merge_product_records(
     evicted: ProductRecordsByKind,
 ) -> Result<ProductRecords, ManifestError> {
     let mut merged = inline;
-    for (kind_name, records) in evicted {
+    for (shard_name, records) in evicted {
         for (key, record) in records {
-            if record.kind.name() != kind_name {
+            let expected = product_shard_name(record.kind.name(), product_record_shard(&key));
+            if shard_name != expected {
                 return Err(error(format!(
-                    "product record '{key}' was published under '{kind_name}'"
+                    "product record '{key}' was published under '{shard_name}'"
                 )));
             }
             if !accumulates_with_use(record.kind) {

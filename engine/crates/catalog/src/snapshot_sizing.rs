@@ -183,6 +183,95 @@ reference-only record -- has a document body started being inlined into the snap
     println!();
 }
 
+/// What one write costs, and how evenly the shards fill.
+///
+/// Before sharding a kind was one object, so recording one query republished
+/// every query: at the ceiling, 64 MiB to store a few hundred bytes. The
+/// shard a record lands in is chosen by the digest of its key, so the cost of
+/// a write is one shard and the question is how big that is -- and whether
+/// the digest spreads records evenly enough that the answer holds.
+#[test]
+fn a_write_rewrites_one_shard_and_the_shards_fill_evenly() {
+    use crate::product_manifest::{PRODUCT_RECORD_SHARDS, partition_product_records};
+
+    // A kind at a realistic size: 200 owners of chat at their cap.
+    const OWNERS: usize = 200;
+    const MESSAGES_PER_OWNER: usize = 900;
+    let mut records = Vec::new();
+    for owner in 0..OWNERS {
+        for n in 0..MESSAGES_PER_OWNER {
+            records.push(record(ProductRecordKind::ChatMessage, owner * 100_000 + n));
+        }
+    }
+    let snapshot = snapshot_with(records.into_iter());
+    let (_, evicted) = partition_product_records(&snapshot.product_records);
+
+    let total: usize = snapshot.product_records.len();
+    let sizes: Vec<usize> = evicted.values().map(BTreeMap::len).collect();
+    let largest = *sizes.iter().max().expect("shards exist");
+    let smallest = *sizes.iter().min().expect("shards exist");
+    let unsharded_bytes = encoded_len(&snapshot);
+    let largest_shard_bytes = evicted
+        .values()
+        .map(|shard| serde_json::to_vec(shard).expect("encodes").len())
+        .max()
+        .expect("shards exist");
+
+    println!();
+    println!("{total} records of one kind across {} shards", sizes.len());
+    println!("  smallest shard        {smallest} records");
+    println!("  largest shard         {largest} records");
+    println!("  a write rewrites      {largest_shard_bytes} bytes (worst shard)");
+    println!("  before sharding       {unsharded_bytes} bytes (the whole kind)");
+    println!(
+        "  reduction             {:.0}x",
+        unsharded_bytes as f64 / largest_shard_bytes as f64
+    );
+    println!();
+
+    // Every shard in use, or the digest is not spreading records at all.
+    assert_eq!(
+        sizes.len(),
+        PRODUCT_RECORD_SHARDS as usize,
+        "records should reach every shard at this volume"
+    );
+    // Within a factor of two of even. A digest will not divide exactly, but a
+    // shard carrying many times its share would mean the worst-case write is
+    // far worse than the average and the measurement above is misleading.
+    assert!(
+        largest * 2 < smallest * 3,
+        "shards are uneven: largest {largest}, smallest {smallest}; the cost of a write is \
+then set by the unluckiest key rather than by the shard count"
+    );
+    // The point of the exercise.
+    assert!(
+        largest_shard_bytes * 20 < unsharded_bytes,
+        "sharding must make a write cost a small fraction of the kind, not merely less"
+    );
+}
+
+/// The shard of a key never moves.
+///
+/// A shard keeps its object when its contents are unchanged, which is what
+/// stops a commit republishing the rest of the kind. That reuse is only sound
+/// if a record always lands in the same shard, so this pins the assignment
+/// rather than trusting it.
+#[test]
+fn a_records_shard_is_stable() {
+    use crate::product_manifest::product_record_shard;
+
+    for key in [
+        "query_history/00000000-1f4b-4c2a-9e7d-000000000000",
+        "chat_message/ffffffff-1f4b-4c2a-9e7d-ffffffffffff",
+        "activity/1",
+        "",
+    ] {
+        let first = product_record_shard(key);
+        assert_eq!(first, product_record_shard(key), "'{key}' moved shards");
+        assert!(first < crate::product_manifest::PRODUCT_RECORD_SHARDS);
+    }
+}
+
 /// Which limit actually binds after the eviction.
 ///
 /// The split removed the snapshot's byte ceiling as the constraint. It did not
@@ -246,7 +335,10 @@ fn which_limit_binds_after_the_eviction() {
         bytes_per_record(ProductRecordKind::ChatMessage) * CHAT_MESSAGES_PER_OWNER as f64;
     let history_bytes_per_owner =
         bytes_per_record(ProductRecordKind::QueryHistory) * QUERY_HISTORY_PER_OWNER as f64;
-    let by_kind_object = (MAX_PRODUCT_RECORD_TABLE_BYTES as f64
+    // A kind is spread over PRODUCT_RECORD_SHARDS objects, so its capacity is
+    // the object bound times the shard count rather than the bound alone.
+    let by_kind_object = ((MAX_PRODUCT_RECORD_TABLE_BYTES
+        * crate::product_manifest::PRODUCT_RECORD_SHARDS as usize) as f64
         / chat_bytes_per_owner.max(history_bytes_per_owner)) as u64;
 
     // Only the records the snapshot still carries count against this now.
@@ -262,18 +354,22 @@ fn which_limit_binds_after_the_eviction() {
     println!("  -> the ceiling is     {binding}");
     println!();
     println!(
-        "An owner costs the snapshot {per_owner_inline:.0} bytes once the accumulating kinds\n\
-are published beside it, so neither the snapshot bytes nor the {MAX_PRODUCT_RECORDS}-record\n\
-count binds any more. The per-kind object does: one object holds every owner's rows of\n\
-that kind, so the largest per-owner allowance decides. Raising a limit that is not the\n\
-smallest changes nothing."
+        "An owner costs the snapshot {per_owner_inline:.0} bytes in artifacts once the\n\
+accumulating kinds are published beside it, and a kind is spread over its shards, so the\n\
+snapshot's own bytes bind again -- this time on what an owner curates rather than on what\n\
+using it produced. Raising a limit that is not the smallest changes nothing."
     );
     println!();
 
+    // Not an assertion about which limit wins. That moves as each one is
+    // addressed -- bytes bound, then the record count, then the per-kind
+    // object, then bytes again once a kind was sharded -- and pinning it
+    // would make this a record of the order the work happened in. What
+    // matters is where the ceiling now is.
     assert!(
-        binding < by_snapshot_bytes,
-        "the byte ceiling is expected to stop being the constraint after eviction; if it is \
-still the smallest, the split is not doing what it was measured to do"
+        binding > 500,
+        "the ceiling is {binding} owners; eviction and sharding together were measured to \
+carry it well past the eleven an inline snapshot allowed"
     );
 }
 

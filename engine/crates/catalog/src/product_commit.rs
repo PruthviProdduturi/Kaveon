@@ -1099,7 +1099,7 @@ operation {}",
             return Ok(snapshot);
         }
         let mut evicted = BTreeMap::new();
-        for (kind, reference) in snapshot.product_record_tables.clone() {
+        for (shard, reference) in snapshot.product_record_tables.clone() {
             if !valid_digest(&reference.sha256) {
                 return Err(CommitErrorKind::Invalid);
             }
@@ -1119,7 +1119,7 @@ operation {}",
             }
             let records: BTreeMap<String, ProductRecordRef> =
                 decode(&bytes, MAX_PRODUCT_RECORD_TABLE_BYTES).ok_or(CommitErrorKind::Invalid)?;
-            evicted.insert(kind, records);
+            evicted.insert(shard, records);
         }
         snapshot.product_records =
             merge_product_records(std::mem::take(&mut snapshot.product_records), evicted)
@@ -1290,21 +1290,24 @@ fn split_product_records(
     manifest.product_records = inline;
     manifest.product_record_tables = BTreeMap::new();
     let mut pending = Vec::new();
-    for (kind, records) in &evicted {
+    for (shard, records) in &evicted {
         let bytes = encode_bounded(records, MAX_PRODUCT_RECORD_TABLE_BYTES)?;
         let sha256 = digest(&bytes);
         let path = format!("product-records/{sha256}.json");
         // Equal digests mean equal bytes, so the object is already there and
-        // writing it again would be a no-op that costs a round trip.
+        // writing it again would be a no-op that costs a round trip. This is
+        // what makes sharding pay: a commit touching one record leaves the
+        // other sixty-three shards of its kind untouched, and they are not
+        // written again.
         let already_published = parent
-            .and_then(|parent| parent.snapshot.product_record_tables.get(kind))
+            .and_then(|parent| parent.snapshot.product_record_tables.get(shard))
             .is_some_and(|reference| reference.sha256 == sha256);
         if !already_published {
             pending.push((path.clone(), bytes));
         }
         manifest
             .product_record_tables
-            .insert(kind.clone(), ImmutableFileRef { path, sha256 });
+            .insert(shard.clone(), ImmutableFileRef { path, sha256 });
     }
     Ok((manifest, pending))
 }
@@ -1566,7 +1569,18 @@ mod tests {
     /// The second handle is the point. Reading through the committing one is
     /// served from the snapshot it remembered and never resolves an object.
     async fn eviction_round_trip(backend: &str, storage: AdlsConditionalCommit, records: u32) {
-        let prefix = format!("evict-{backend}");
+        // Unique per run. The in-memory store starts empty every time, but
+        // Azurite keeps what the last run wrote, so a fixed prefix made the
+        // second run collide with the first run's genesis and the test only
+        // passed against a clean emulator.
+        let prefix = format!(
+            "evict-{backend}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         let catalog = ProductCatalogCommit::new(
             storage.clone(),
             prefix.clone(),
@@ -1622,7 +1636,8 @@ mod tests {
         assert!(
             reread
                 .product_record_tables
-                .contains_key(ProductRecordKind::QueryHistory.name()),
+                .keys()
+                .any(|shard| shard.starts_with(ProductRecordKind::QueryHistory.name())),
             "{backend}: the snapshot must name the object its history lives in"
         );
         let (inline, _) = partition_product_records(&reread.product_records);
@@ -1734,7 +1749,8 @@ mod tests {
         assert!(
             reread
                 .product_record_tables
-                .contains_key(ProductRecordKind::QueryHistory.name()),
+                .keys()
+                .any(|shard| shard.starts_with(ProductRecordKind::QueryHistory.name())),
             "after migrating, the snapshot must name the object its history lives in"
         );
         let (inline, _) = partition_product_records(&reread.product_records);
