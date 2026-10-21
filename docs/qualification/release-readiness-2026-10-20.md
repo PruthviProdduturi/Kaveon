@@ -30,3 +30,5 @@ access to `kaveonlake` returns `AccountIsDisabled`. Run
 `scripts/check-aks-cloud-precondition.ps1` before attempting cloud tests; it
 fails closed until both resources are usable.
 
+- Workspace release build: `cargo build --workspace --release --locked` passed on
+  the current integration checkout (2m04s).
