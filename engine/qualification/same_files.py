@@ -180,8 +180,8 @@ def main():
         db = stack.enter_context(duckdb.connect())
         customers = min(args.customers, args.rows)
         tables = {
-            "events": db.execute(f"SELECT i::BIGINT AS event_id, (i % {customers})::BIGINT AS customer_id, (i % 17)::BIGINT AS category, (i % 1000)::BIGINT AS amount FROM range({args.rows}) t(i)").fetch_arrow_table(),
-            "customers": db.execute(f"SELECT i::BIGINT AS customer_id FROM range({customers}) t(i)").fetch_arrow_table(),
+            "events": db.execute(f"SELECT i::BIGINT AS event_id, (i % {customers})::BIGINT AS customer_id, (i % 17)::BIGINT AS category, (i % 1000)::BIGINT AS amount FROM range({args.rows}) t(i)").to_arrow_table(),
+            "customers": db.execute(f"SELECT i::BIGINT AS customer_id FROM range({customers}) t(i)").to_arrow_table(),
         }
         connection = trino.dbapi.connect(host="127.0.0.1", port=18080, user="qualification", catalog="lake", schema=run, request_timeout=120)
         stack.callback(connection.close)
