@@ -61,6 +61,8 @@ results (`docs/qualification/trino-differential-docker-2worker-500k-2026-10-20.m
 The image was rebuilt from the current source and rerun at 200k rows with the
 same 12/12 distributed correctness result
 (`docs/qualification/trino-differential-docker-current-2worker-200k-2026-10-20.md`).
+The same rebuilt image also passes the 500k-row, 50k-customer two-worker gate
+with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2worker-500k-2026-10-20.md`).
 
 ## Track 2 — SQL compatibility and types
 
