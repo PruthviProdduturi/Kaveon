@@ -9,6 +9,8 @@ evidence passes against exact-result references.
 The latest source/build gate record is retained in
 `docs/qualification/track1-track2-workspace-2026-10-19.md`; the earlier CI and
 release workflow record remains in `docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
+The current release server suite also passes 611/611, including the full
+differential sweep (`docs/qualification/server-suite-release-2026-10-20.md`).
 The current cloud start precondition is recorded in
 `docs/qualification/track1-cloud-precondition-2026-10-19.md`.
 
