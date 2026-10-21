@@ -125,8 +125,12 @@ class ProductReadAuthorityTests(unittest.TestCase):
             "id": "q-1", "sql_text": "SELECT 1", "user_email": "alice@example.com",
             "executed_at": "2026-01-01T00:00:00", "status": "success",
         }}]
+        # query_history grows with use, so it is listed through the capped path
+        # that truncates rather than refusing. This test is about owner
+        # scoping, so both listings answer the same records.
         with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "query_history"}, clear=True),              patch.object(authority.product_store, "list_records",
-                          side_effect=lambda kind, *args, **kwargs: records):
+                          side_effect=lambda kind, *args, **kwargs: records),              patch.object(authority.product_store, "list_records_capped",
+                          side_effect=lambda kind, *args, **kwargs: (records, False)):
             own = authority.list_documents("query_history", "alice@example.com", "Viewer")
             self.assertEqual([item["id"] for item in own], ["q-1"])
             # Another principal's history stays invisible at the same role.

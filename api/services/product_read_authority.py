@@ -23,6 +23,20 @@ _KIND = {
 }
 _OWNER_FAMILIES = {"saved_queries", "user_themes", "user_recents", "favorites", "query_history"}
 
+# Families that grow with use rather than with curation, and may therefore be
+# truncated rather than refused.
+#
+# These accumulate a row per action, so an active owner reaches the listing
+# bound in normal use. Refusing the whole listing at that point shows a person
+# nothing on the page that is most theirs, and the sweep that would bring them
+# back under the bound fails on the same read. Returning the most recent rows
+# is both the safe answer and the one the page wanted.
+#
+# The artifact families are deliberately absent. A dataset missing from a list
+# of datasets is a fault, not a truncation, and curation keeps them far enough
+# below the bound that they never reach it.
+_TRUNCATABLE_FAMILIES = {"query_history", "activity", "user_recents", "chat_history"}
+
 
 class ProductReadAuthorityError(RuntimeError):
     """A cutover family could not be read safely from KaveonDB."""
@@ -163,17 +177,21 @@ def read_document(
 
 def list_documents(family: str, actor: str, role: str, *,
                    max_records: int | None = None,
-                   capped: bool = False) -> list[dict]:
+                   capped: bool | None = None) -> list[dict]:
     """List one cutover family from KaveonDB with legacy visibility and order.
 
     `max_records` is passed through for a family whose own retention bound is
     close to the store's listing ceiling, so the caller states the bound it
     expects instead of discovering the default by exceeding it.
 
-    `capped` changes what happens when the family runs past that bound. The
-    default refuses the whole listing, which is right for a caller that needs
-    all of it. For a caller showing the most recent handful it is the worst
-    possible answer: an owner over the ceiling saw nothing at all, and the
+    `capped` changes what happens when the family runs past that bound.
+    Unset, it follows the family: the ones that grow with use are truncated to
+    what fits, and the ones that grow with curation refuse, because a dataset
+    missing from a list of datasets is a fault rather than a truncation. Pass
+    it explicitly to override either way.
+
+    Refusing is the worst possible answer for a family that grows: an owner
+    over the ceiling saw nothing at all, and the
     page reported "not configured" for a store that was configured and
     working. With `capped` the listing stops at the bound and returns what it
     has, so a partial history beats no history.
@@ -190,6 +208,10 @@ def list_documents(family: str, actor: str, role: str, *,
         "datasets", "charts", "dashboards", "saved_queries", "sources"
     }
     bound = {} if max_records is None else {"max_records": max_records}
+    # Unset means "whatever this family needs", which is what stops the next
+    # caller inheriting a 503 by not knowing to ask for anything else.
+    if capped is None:
+        capped = family in _TRUNCATABLE_FAMILIES
     if capped:
         limit = max_records or product_store.COUNT_BOUND
         reads = [lambda: product_store.list_records_capped(
