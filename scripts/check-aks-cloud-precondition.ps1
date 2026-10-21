@@ -19,13 +19,19 @@ $storage = az storage account show --resource-group $ResourceGroup --name $Stora
 $dataPlane = "not_checked"
 $dataPlaneError = $null
 try {
-    $null = az storage container list --account-name $StorageAccount --auth-mode login `
-        --query "[].name" -o tsv 2>&1
+    $dataPlaneOutput = @(
+        az storage container list --account-name $StorageAccount --auth-mode login `
+            --query "[].name" -o tsv 2>&1
+    )
     if ($LASTEXITCODE -eq 0) {
         $dataPlane = "ready"
     } else {
         $dataPlane = "failed"
-        $dataPlaneError = "az storage container list exited with code $LASTEXITCODE"
+        $dataPlaneError = (($dataPlaneOutput | ForEach-Object { $_.ToString().Trim() } |
+                Where-Object { $_ }) -join " ")
+        if (-not $dataPlaneError) {
+            $dataPlaneError = "az storage container list exited with code $LASTEXITCODE"
+        }
     }
 } catch {
     $dataPlane = "failed"
