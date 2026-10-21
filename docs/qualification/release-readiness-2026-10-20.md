@@ -33,3 +33,5 @@ fails closed until both resources are usable.
 - Workspace release build: `cargo build --workspace --release --locked` passed on
   the current integration checkout (2m04s).
 - Docker Compose configuration validation: `docker compose config --quiet` passed.
+- Server differential sweep rerun independently: **1 passed, 0 failed** in
+  593.12s (`the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`).
