@@ -1,5 +1,68 @@
 # Decision log
 
+### The snapshot stopped carrying the records it was a snapshot of
+
+- **Decision (2026-10-21).** No product record is serialised into the catalog
+  snapshot. Every kind is published beside it as content-addressed objects,
+  spread over `PRODUCT_RECORD_SHARDS` (64) shards chosen by a digest of the
+  record's key, and the snapshot keeps one reference per shard plus a
+  `reference_counts` index. `product_records` still holds every kind in memory,
+  so no accessor and no caller changed.
+- **The ceiling was eleven owners, and nobody knew.** A commit republishes the
+  whole snapshot and `encode` refuses it past 8 MiB, so writes stop outright
+  rather than slowing. Measured against the retention caps the product already
+  enforces — 800 query-history rows, 900 chat messages and 20 recents an owner,
+  plus activity, which had no cap at all — one fully active owner cost 706,599
+  bytes and eleven of them filled the snapshot. This had already happened once
+  through the typed-row door, and `product_manifest.rs` records it: a
+  production installation stopped accepting writes with 5,650 rows of query
+  history filling 63% of the snapshot, while every dataset, chart and dashboard
+  it held came to 74 KB. Saving a favourite rewrote all of it.
+- **Every figure that came from reading the code was wrong.** The estimate from
+  the struct shape was 4,000–8,000 records; measured, it was 24,600. Stated in
+  owners it went 14, then 12, then 11 as `owner_principal`, the recents key and
+  the per-owner artifacts were each found to be real rather than assumed. After
+  the first eviction it was reported as 749 owners, which was the answer to how
+  many fit in the snapshot's bytes — a question that had stopped applying,
+  while `MAX_PRODUCT_RECORDS` counted the evicted records too and held the old
+  ceiling at 57 through a second door. The harness in `snapshot_sizing.rs` now
+  reports all three limits and the smallest, because the direction of the error
+  was not predictable.
+- **Sharding was not only capacity.** With a kind as one object, recording one
+  query republished every query: 64 MiB written to store a few hundred bytes.
+  Sharding divides both — a write touches one shard, and a kind holds the
+  object bound times the shard count. The first assignment took the bucket from
+  FNV-1a's low bits, which avalanche poorly, and reached 16 of 64 shards for an
+  eightfold reduction rather than sixtyfold; the evenness assertion caught it
+  and a finaliser fixed it. Measured over 180,000 records: a write rewrites
+  1.1 MB instead of 69 MB.
+- **Evicting the artifacts too was decided by measurement, against expectation.**
+  Leaving them inline kept the ceiling at 749 and kept a favourite rewriting
+  every artifact an owner had. The objection was cold-load latency, since each
+  evicted kind adds up to 64 objects to a load. Against Azurite, 40 shards took
+  38.4 ms and 64 took 43.1 ms: the bounded concurrency absorbs shard count, and
+  the growth with volume is objects getting bigger rather than more numerous.
+  The expectation going in was that the trade might not be worth taking.
+- **Ordering was the silent failure, and was checked.**
+  `materialise_product_records` runs before `validate`, so a reference from one
+  evicted kind to another still resolves. Reversed, this would have corrupted
+  every snapshot holding a cross-kind reference without failing a test. The
+  `reference_counts` index was built first, while the full scan was still
+  authoritative and could cross-check it, because deletion restricts on those
+  references and the scan is what eviction removes.
+- **The ceiling is now 11,900 owners** and the snapshot's size does not bind at
+  all: an owner costs it nothing. What constrains a deployment is the per-kind
+  objects. `MAX_PRODUCT_RECORDS` was raised from 100,000 to 5,000,000 and is
+  documented as a backstop rather than the limit — scoped to carried records it
+  had become vacuous, and a check that cannot fail reads as a bound while being
+  none.
+- **Not done, and not implied.** Group commit and incremental commits are
+  unbuilt; writes are small enough that the urgency dropped, and the Azurite
+  concurrency baseline exists for when they are taken up. None of this has run
+  on AKS — it is a published-format change verified on the in-memory,
+  filesystem and Azurite stores only, and qualifying it against the cluster is
+  the first thing that should happen when the subscription returns.
+
 ### Two of the three contradicting retirement bounds were right; one was the wrong unit
 
 - **Decision (2026-10-15).** The exact-row rollback capacity is declared once,
