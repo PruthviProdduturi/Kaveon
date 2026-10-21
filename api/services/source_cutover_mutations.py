@@ -5,7 +5,8 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from services import product_read_authority, product_store, source_mutations
+from services import (product_read_authority, product_retention, product_store,
+                      source_mutations)
 from services.activity_backfill import document as activity_document
 
 
@@ -34,6 +35,35 @@ def _current(record_id: str, actor: str):
     return record
 
 
+# How much activity one owner keeps.
+#
+# Below the listing limit with room to spare, because an owner at the limit
+# cannot be listed and the sweep that would bring them back under it reads the
+# same listing. The two numbers are related and the relationship is the point.
+_ACTIVITY_LIST_LIMIT = 1_000
+ACTIVITY_RETENTION = product_retention.RetentionPolicy(
+    kind="activity",
+    cap=800,
+    list_limit=_ACTIVITY_LIST_LIMIT,
+    ordered_by="timestamp",
+    owner_field="user_email",
+)
+
+
+def _commit(mutations, actor: str) -> None:
+    """Apply *mutations*, then keep the actor's activity under its bound.
+
+    Every path that records activity ends here, so the bound is inherited by a
+    path added later rather than having to be remembered at it. The sweep runs
+    after the commit and in the background: retention is a bound, not an
+    invariant, so an owner briefly over it is correct and an operator waiting
+    on a listing and a hundred deletes is not.
+    """
+    product_store.transact(mutations, actor, "Admin")
+    if any(mutation.kind == "activity" for mutation in mutations):
+        product_retention.schedule(ACTIVITY_RETENTION, actor)
+
+
 def _audit(action: str, source_id: str, name: str, actor: str, details=None):
     event_id = str(uuid.uuid4())
     row = {"id": event_id, "action": action, "object_type": "catalog_source" if source_id.startswith("catalog-") else "data_source",
@@ -46,17 +76,17 @@ def _audit(action: str, source_id: str, name: str, actor: str, details=None):
 def audit_only(action: str, object_id: str, name: str, actor: str, details=None,
                *, object_type="catalog_source") -> None:
     prefix = "catalog-" if object_type == "catalog_source" else "data-"
-    product_store.transact([_audit(action, prefix + str(object_id), name, actor, details)], actor, "Admin")
+    _commit([_audit(action, prefix + str(object_id), name, actor, details)], actor)
 
 
 def create(family: str, row: dict, actor: str, *, details=None) -> dict:
     document = source_mutations.catalog_document(row) if family == "catalog_sources" else source_mutations.data_document(row)
     if _current(document["source_id"], actor) is not None:
         raise RuntimeError("KaveonDB source already exists")
-    product_store.transact([
+    _commit([
         product_store.ProductMutation("create", "source", document["source_id"], document),
         _audit("created", document["source_id"], str(document.get("name") or ""), actor, details),
-    ], actor, "Admin")
+    ], actor)
     return document
 
 
@@ -68,10 +98,10 @@ def update(record_id: str, changes: dict, actor: str, *, action="updated", detai
     document.update(changes)
     document["modified_by"] = actor
     document["modified_at"] = datetime.now(timezone.utc).isoformat()
-    product_store.transact([
+    _commit([
         product_store.ProductMutation("update", "source", record_id, document, current["revision"]),
         _audit(action, record_id, str(document.get("name") or ""), actor, details),
-    ], actor, "Admin")
+    ], actor)
     return document
 
 
@@ -80,8 +110,8 @@ def delete(record_id: str, actor: str) -> bool:
     if current is None:
         return False
     document = current["document"]
-    product_store.transact([
+    _commit([
         product_store.ProductMutation("delete", "source", record_id, expected_revision=current["revision"]),
         _audit("deleted", record_id, str(document.get("name") or ""), actor),
-    ], actor, "Admin")
+    ], actor)
     return True
