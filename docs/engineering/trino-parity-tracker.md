@@ -56,6 +56,8 @@ performance-win claim (`docs/qualification/trino-differential-docker-200k-2026-1
 A Docker two-worker run now also passes 12/12 exact cases with distributed
 stages; performance publication remains separate
 (`docs/qualification/trino-differential-docker-2worker-200k-2026-10-20.md`).
+The same gate passes at 500k rows and 50k customers with the same 12/12 exact
+results (`docs/qualification/trino-differential-docker-2worker-500k-2026-10-20.md`).
 
 ## Track 2 — SQL compatibility and types
 
