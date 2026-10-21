@@ -14,6 +14,8 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 # `time` only: the commit path sleeps between rebase attempts.
 tokio = { workspace = true }
+# Resolving a snapshot's shards concurrently; no runtime of its own.
+futures = { workspace = true }
 
 [dev-dependencies]
 arrow-schema = { workspace = true }
