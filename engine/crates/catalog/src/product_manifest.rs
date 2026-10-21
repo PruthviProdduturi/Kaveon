@@ -15,7 +15,11 @@ use std::{
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 pub const MAX_TABLES: usize = 1_000;
 pub const MAX_CONTROL_RECORDS: usize = 10_000;
-pub const MAX_PRODUCT_RECORDS: usize = 100_000;
+// A backstop rather than the ceiling. Records live in sharded objects now,
+// each bounded when it is encoded, and that is what constrains a deployment.
+// At the per-owner volumes the product permits, 100,000 was reached by 57
+// owners, which was the old inline ceiling wearing a different hat.
+pub const MAX_PRODUCT_RECORDS: usize = 5_000_000;
 pub const MAX_REFERENCES_PER_PRODUCT_RECORD: usize = 100;
 pub const MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD: usize = 32;
 pub const MAX_PRODUCT_PAGE_SIZE: usize = 100;
@@ -1113,18 +1117,18 @@ pub type ProductRecordsByKind = BTreeMap<String, ProductRecords>;
 pub fn partition_product_records(
     records: &ProductRecords,
 ) -> (ProductRecords, ProductRecordsByKind) {
-    let mut inline = BTreeMap::new();
+    // Every kind, not only the growing ones. The artifacts were left inline
+    // when the accumulating kinds were evicted, and measurement then put them
+    // at the whole of the remaining ceiling: 11.2 KB an owner against an 8 MiB
+    // snapshot, republished in full to record one favourite.
+    let inline = BTreeMap::new();
     let mut evicted: ProductRecordsByKind = BTreeMap::new();
     for (key, record) in records {
-        if accumulates_with_use(record.kind) {
-            let shard = product_record_shard(key);
-            evicted
-                .entry(product_shard_name(record.kind.name(), shard))
-                .or_default()
-                .insert(key.clone(), record.clone());
-        } else {
-            inline.insert(key.clone(), record.clone());
-        }
+        let shard = product_record_shard(key);
+        evicted
+            .entry(product_shard_name(record.kind.name(), shard))
+            .or_default()
+            .insert(key.clone(), record.clone());
     }
     (inline, evicted)
 }
@@ -1146,11 +1150,6 @@ pub fn merge_product_records(
             if shard_name != expected {
                 return Err(error(format!(
                     "product record '{key}' was published under '{shard_name}'"
-                )));
-            }
-            if !accumulates_with_use(record.kind) {
-                return Err(error(format!(
-                    "product record '{key}' does not belong in a per-kind object"
                 )));
             }
             if merged.insert(key.clone(), record).is_some() {
@@ -1317,23 +1316,20 @@ fn validate_product_records(
     records: &BTreeMap<String, ProductRecordRef>,
     counts: &BTreeMap<String, u64>,
 ) -> Result<(), ManifestError> {
-    // Counted over the records the snapshot itself carries, not over every
-    // record in memory.
+    // Bounds what one snapshot may hold in total.
     //
-    // This limit exists to stop a snapshot growing without bound, and the
-    // accumulating kinds are no longer in one -- they are published beside it,
-    // each bounded by its own object size at publish time. Counting them here
-    // as well left the old ceiling in force through a second door: measured,
-    // bytes permitted 749 owners while this count permitted 57, so the split
-    // bought a fraction of what it was measured to buy.
+    // This counted every record in memory, which kept the pre-eviction ceiling
+    // in force through a second door: measured, bytes permitted 749 owners
+    // while this count permitted 57. It then counted only what the snapshot
+    // carried, which became nothing once every kind was published beside it.
     //
-    // A kind that accumulates is bounded by MAX_PRODUCT_RECORD_TABLE_BYTES
-    // when its object is encoded, which is a real bound and a larger one.
-    let carried = records
-        .values()
-        .filter(|record| !accumulates_with_use(record.kind))
-        .count();
-    if carried > MAX_PRODUCT_RECORDS {
+    // A vacuous check is worse than none, because it reads as a bound while
+    // being unable to fail. So it is a total again, raised to match what now
+    // actually constrains a deployment: each kind is spread over
+    // PRODUCT_RECORD_SHARDS objects, each bounded when it is encoded, and that
+    // is the real limit. This is a backstop against a catalogue growing
+    // without anyone noticing, not the ceiling.
+    if records.len() > MAX_PRODUCT_RECORDS {
         return Err(error("snapshot product-record limit exceeded"));
     }
     let mut unique = BTreeSet::new();

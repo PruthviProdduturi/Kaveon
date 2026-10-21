@@ -1685,6 +1685,110 @@ mod tests {
         eviction_round_trip("local", storage, 60).await;
     }
 
+    /// How long a cold snapshot load takes, by how many shards it resolves.
+    ///
+    /// Sharding made writes small by multiplying the objects a load reads.
+    /// Evicting the artifact kinds too would multiply them again, and that
+    /// trade is only worth making if a cold open stays fast. The reads are
+    /// issued concurrently, so the question is whether the bound on that
+    /// concurrency keeps up as the object count grows.
+    ///
+    /// Reported rather than asserted on: a timing threshold in a test is a
+    /// flake waiting for a loaded machine. The number is the point.
+    ///
+    /// ```text
+    /// docker compose --profile emulator up -d azurite
+    /// cargo test -p kaveon-catalog cold_load -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires Azurite: docker compose --profile emulator up -d azurite"]
+    async fn cold_load_latency_by_shard_count() {
+        let container =
+            std::env::var("KAVEON_AZURITE_CONTAINER").unwrap_or_else(|_| "kaveon-product".into());
+        let storage = kaveon_storage::emulator_adls_commit(&container).expect("emulator store");
+
+        println!();
+        println!("{:>8}  {:>8}  {:>12}", "records", "shards", "cold load");
+        println!("{}", "-".repeat(32));
+
+        for records in [64u32, 256, 1_024] {
+            let prefix = format!(
+                "coldload-{}-{}-{}",
+                records,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let catalog = ProductCatalogCommit::new(
+                storage.clone(),
+                prefix.clone(),
+                Arc::new(TransactionMetrics::default()),
+            )
+            .unwrap();
+            let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+            catalog.initialize(genesis.clone()).await;
+
+            // A commit carries a bounded number of changes, so the setup is
+            // batched. What is being timed is the read, not this.
+            const BATCH: u32 = 64;
+            let mut current = genesis;
+            for (batch, start) in (0..records).step_by(BATCH as usize).enumerate() {
+                let changes = (start..(start + BATCH).min(records))
+                    .map(|number| CatalogChange::CreateProduct {
+                        record: related_record(
+                            ProductRecordKind::QueryHistory,
+                            &format!("history-{number:05}"),
+                            None,
+                        ),
+                    })
+                    .collect();
+                let request = PrepareChange {
+                    base: current.reference(),
+                    snapshot_id: format!("snapshot-loaded-{batch}"),
+                    operation_id: format!("op-loaded-{batch}"),
+                    request_digest: DIGEST.into(),
+                    changes,
+                };
+                match catalog
+                    .commit_with_documents(request.clone(), documents_for(&request))
+                    .await
+                {
+                    CommitOutcome::Committed(next) => current = next,
+                    other => panic!("setup batch {batch} did not land: {other:?}"),
+                }
+            }
+
+            // A handle that has never seen this snapshot, so every shard is
+            // fetched rather than served from a remembered one.
+            let fresh = ProductCatalogCommit::new(
+                storage.clone(),
+                prefix,
+                Arc::new(TransactionMetrics::default()),
+            )
+            .unwrap();
+            let started = std::time::Instant::now();
+            let loaded = fresh
+                .read_snapshot(&current.reference())
+                .await
+                .expect("the snapshot reads back");
+            let elapsed = started.elapsed();
+            assert_eq!(loaded.product_records.len() as u32, records);
+            // Read from what storage holds: the snapshot a commit returns is
+            // the pre-split one, which names no objects.
+            let shards = loaded.product_record_tables.len();
+
+            println!("{records:>8}  {shards:>8}  {:>10.1?}", elapsed);
+        }
+        println!();
+        println!(
+            "Against an emulator on this machine, so the absolute numbers are a floor for\n\
+real blob storage. What matters is how the time moves with the shard count."
+        );
+        println!();
+    }
+
     /// Real blob storage: conditional PUTs over HTTP against service-issued
     /// ETags, which neither other backend exercises.
     ///
