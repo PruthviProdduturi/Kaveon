@@ -13,6 +13,8 @@ The current release server suite also passes 611/611, including the full
 differential sweep (`docs/qualification/server-suite-release-2026-10-20.md`).
 The current cloud start precondition is recorded in
 `docs/qualification/track1-cloud-precondition-2026-10-19.md`.
+The latest subscription-state check is in
+`docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
 ## Status vocabulary
 
