@@ -14624,33 +14624,39 @@ pub(crate) fn batches_to_json(
                             .value(row);
                         serde_json::Value::Bool(v)
                     }
-                    DataType::Int8 => serde_json::json!(arr.as_primitive::<Int8Type>().value(row)),
-                    DataType::Int16 => {
-                        serde_json::json!(arr.as_primitive::<Int16Type>().value(row))
-                    }
-                    DataType::Int32 => {
-                        serde_json::json!(arr.as_primitive::<Int32Type>().value(row))
-                    }
+                    DataType::Int8 => serde_json::Value::Number(
+                        i64::from(arr.as_primitive::<Int8Type>().value(row)).into(),
+                    ),
+                    DataType::Int16 => serde_json::Value::Number(
+                        i64::from(arr.as_primitive::<Int16Type>().value(row)).into(),
+                    ),
+                    DataType::Int32 => serde_json::Value::Number(
+                        i64::from(arr.as_primitive::<Int32Type>().value(row)).into(),
+                    ),
                     DataType::Int64 => {
-                        serde_json::json!(arr.as_primitive::<Int64Type>().value(row))
+                        serde_json::Value::Number(arr.as_primitive::<Int64Type>().value(row).into())
                     }
-                    DataType::UInt8 => {
-                        serde_json::json!(arr.as_primitive::<UInt8Type>().value(row))
-                    }
-                    DataType::UInt16 => {
-                        serde_json::json!(arr.as_primitive::<UInt16Type>().value(row))
-                    }
-                    DataType::UInt32 => {
-                        serde_json::json!(arr.as_primitive::<UInt32Type>().value(row))
-                    }
-                    DataType::UInt64 => {
-                        serde_json::json!(arr.as_primitive::<UInt64Type>().value(row))
-                    }
-                    DataType::Float32 => {
-                        serde_json::json!(arr.as_primitive::<Float32Type>().value(row))
-                    }
+                    DataType::UInt8 => serde_json::Value::Number(
+                        u64::from(arr.as_primitive::<UInt8Type>().value(row)).into(),
+                    ),
+                    DataType::UInt16 => serde_json::Value::Number(
+                        u64::from(arr.as_primitive::<UInt16Type>().value(row)).into(),
+                    ),
+                    DataType::UInt32 => serde_json::Value::Number(
+                        u64::from(arr.as_primitive::<UInt32Type>().value(row)).into(),
+                    ),
+                    DataType::UInt64 => serde_json::Value::Number(
+                        arr.as_primitive::<UInt64Type>().value(row).into(),
+                    ),
+                    DataType::Float32 => serde_json::Number::from_f64(f64::from(
+                        arr.as_primitive::<Float32Type>().value(row),
+                    ))
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null),
                     DataType::Float64 => {
-                        serde_json::json!(arr.as_primitive::<Float64Type>().value(row))
+                        serde_json::Number::from_f64(arr.as_primitive::<Float64Type>().value(row))
+                            .map(serde_json::Value::Number)
+                            .unwrap_or(serde_json::Value::Null)
                     }
                     DataType::Utf8 => {
                         serde_json::Value::String(arr.as_string::<i32>().value(row).to_owned())
