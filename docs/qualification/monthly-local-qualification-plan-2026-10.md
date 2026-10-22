@@ -31,6 +31,9 @@ can make the release safer and faster, but it cannot claim cloud qualification.
   workspace targets, with no reported failures.
 - The 500k-row Trino differential is exact across the current 12-case corpus.- Docker result-cache lifecycle and Azurite conditional-write contracts are
   qualified locally.
+- The PostgreSQL dependency audit still reports 16 active authority families in the
+  API. PostgreSQL retirement is therefore not complete; local engine qualification
+  does not substitute for migrating and validating those control-plane authorities.
 - Cloud execution is unavailable while the Azure subscription is read-only and
   the ADLS data plane reports `The specified account is disabled`.
 
