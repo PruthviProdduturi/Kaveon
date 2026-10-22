@@ -1691,6 +1691,121 @@ mod tests {
         eviction_round_trip("local", storage, 60).await;
     }
 
+    /// What concurrent writers actually cost each other.
+    ///
+    /// Every writer serialises on one head, and a loser is rebased and
+    /// retried. Whether that needs batching is a question about commits a
+    /// second and attempts per commit, and neither had been measured since
+    /// the commit changed shape -- the snapshot no longer carries the records,
+    /// and a write rewrites one shard rather than the catalogue.
+    ///
+    /// Reported, not asserted on, beyond every writer eventually landing.
+    ///
+    /// ```text
+    /// docker compose --profile emulator up -d azurite
+    /// cargo test -p kaveon-catalog commit_throughput -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[ignore = "requires Azurite: docker compose --profile emulator up -d azurite"]
+    async fn commit_throughput_under_concurrent_writers() {
+        let container =
+            std::env::var("KAVEON_AZURITE_CONTAINER").unwrap_or_else(|_| "kaveon-product".into());
+        let storage = kaveon_storage::emulator_adls_commit(&container).expect("emulator store");
+
+        println!();
+        println!(
+            "{:>8}  {:>8}  {:>10}  {:>12}  {:>9}",
+            "writers", "commits", "elapsed", "commits/s", "attempts"
+        );
+        println!("{}", "-".repeat(56));
+
+        for writers in [1usize, 4, 8] {
+            const PER_WRITER: u32 = 6;
+            let prefix = format!(
+                "throughput-{writers}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let metrics = Arc::new(TransactionMetrics::default());
+            let catalog =
+                ProductCatalogCommit::new(storage.clone(), prefix, Arc::clone(&metrics)).unwrap();
+            let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+            catalog.initialize(genesis.clone()).await;
+            let base = genesis.reference();
+
+            let catalog = Arc::new(catalog);
+            let gate = Arc::new(tokio::sync::Barrier::new(writers));
+            let started = std::time::Instant::now();
+            let mut tasks = Vec::new();
+            for writer in 0..writers {
+                let catalog = Arc::clone(&catalog);
+                let gate = Arc::clone(&gate);
+                let base = base.clone();
+                tasks.push(tokio::spawn(async move {
+                    gate.wait().await;
+                    // Each writer commits a run of its own records. They do not
+                    // conflict on content, only on the head, which is the
+                    // contention being measured.
+                    let mut current = base;
+                    for number in 0..PER_WRITER {
+                        let id = format!("w{writer}-{number:04}");
+                        let request = PrepareChange {
+                            base: current.clone(),
+                            snapshot_id: format!("snap-{writer}-{number}"),
+                            operation_id: format!("op-{writer}-{number}"),
+                            request_digest: DIGEST.into(),
+                            changes: vec![CatalogChange::CreateProduct {
+                                record: related_record(ProductRecordKind::QueryHistory, &id, None),
+                            }],
+                        };
+                        match catalog
+                            .commit_with_documents(request.clone(), documents_for(&request))
+                            .await
+                        {
+                            CommitOutcome::Committed(next) => current = next.reference(),
+                            // A rebased commit returns the snapshot it landed
+                            // on; a refusal here is the thing worth knowing.
+                            other => return Err(format!("writer {writer} failed: {other:?}")),
+                        }
+                    }
+                    Ok(())
+                }));
+            }
+
+            let mut failures = Vec::new();
+            for task in tasks {
+                if let Err(message) = task.await.unwrap() {
+                    failures.push(message);
+                }
+            }
+            let elapsed = started.elapsed();
+            let scrape = metrics.snapshot();
+            let commits = writers as u32 * PER_WRITER;
+            let attempts_per_commit = scrape.attempts as f64 / scrape.committed.max(1) as f64;
+
+            assert!(
+                failures.is_empty(),
+                "with {writers} writers: {}",
+                failures.join("; ")
+            );
+            println!(
+                "{writers:>8}  {commits:>8}  {:>9.0?}  {:>12.1}  {attempts_per_commit:>9.2}",
+                elapsed,
+                commits as f64 / elapsed.as_secs_f64(),
+            );
+        }
+        println!();
+        println!(
+            "Against an emulator on this machine, so a ceiling rather than a floor: a real\n\
+endpoint is slower per round trip. Attempts per commit above one is the cost of\n\
+serialising on a single head, and is what batching writers would remove."
+        );
+        println!();
+    }
+
     /// A cold load across the kinds a catalogue actually holds.
     ///
     /// Evicting every kind was decided on a measurement of one kind's 64
