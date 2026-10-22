@@ -18,6 +18,26 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
+## Owner execution target — 2026-10-21
+
+The competitive goal is measured against a fixed corpus, not a blanket claim
+that one engine is faster for every workload. For the matched ClickBench
+corpus, Kaveon must retain exact result parity for every statement and close
+the current high-cardinality aggregate gap before a performance win is
+claimed. The current evidence has 28/43 shared result hashes and leaves the
+long grouped URL queries behind Trino; the qualified same-host ClickHouse
+controls remain q33 **4.552 s** and q35 **6.316 s**. Those are the release
+targets for the next optimization round, with correctness, bounded memory,
+spill cleanup, cancellation, and repeatability as hard gates.
+
+The next implementation boundary is the final grouped-state exchange: avoid
+materialising Arrow binary batches for the worker-local grouped pass while
+preserving checksums, retries, memory accounting, cancellation, and the exact
+fallback path. Until a new paired run closes those gates, Kaveon is not
+described as a Trino or ClickHouse replacement. Cloud qualification is also
+blocked by the disabled ADLS account and is tracked separately from local
+engine work.
+
 ## Status vocabulary
 
 - **Qualified** — the declared acceptance test passes and its evidence is retained.
