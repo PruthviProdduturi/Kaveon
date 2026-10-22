@@ -1298,6 +1298,12 @@ type PendingObjects = Vec<(String, Vec<u8>)>;
 /// High enough that a kind's sixty-four shards are a handful of rounds rather
 /// than sixty-four, low enough that opening a catalogue does not open as many
 /// connections as it has shards.
+///
+/// Sixteen rather than more because raising it was measured and did nothing:
+/// against Azurite, a 509-shard cold load took 285 ms at sixteen, 334 ms at
+/// thirty-two and 290 ms at sixty-four -- all within the noise of each other,
+/// so the bound is not what the load is waiting on. More connections for no
+/// gain is a cost with no benefit.
 const SHARD_READ_CONCURRENCY: usize = 16;
 
 /// A per-kind product-record object. Sized like a typed table, because it
@@ -1683,6 +1689,131 @@ mod tests {
         let root = TempRoot::new();
         let storage = kaveon_storage::local_file_commit(&root.0).expect("local store");
         eviction_round_trip("local", storage, 60).await;
+    }
+
+    /// A cold load across the kinds a catalogue actually holds.
+    ///
+    /// Evicting every kind was decided on a measurement of one kind's 64
+    /// shards, extrapolated to the several hundred a real deployment reaches.
+    /// The extrapolation assumed the bounded concurrency keeps absorbing
+    /// objects as they multiply. Every other assumption in this sequence that
+    /// went unmeasured turned out wrong, so this measures it.
+    ///
+    /// Reported rather than asserted on, except that it must not be
+    /// catastrophic: a cold open is once per snapshot generation and sits
+    /// behind a cache, but it is still a person waiting.
+    ///
+    /// ```text
+    /// docker compose --profile emulator up -d azurite
+    /// cargo test -p kaveon-catalog many_kinds -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires Azurite: docker compose --profile emulator up -d azurite"]
+    async fn cold_load_latency_across_many_kinds() {
+        let container =
+            std::env::var("KAVEON_AZURITE_CONTAINER").unwrap_or_else(|_| "kaveon-product".into());
+        let storage = kaveon_storage::emulator_adls_commit(&container).expect("emulator store");
+
+        // The kinds a deployment in use actually holds, rather than one of
+        // them. Enough records each that every shard is reached.
+        let kinds = [
+            ProductRecordKind::QueryHistory,
+            ProductRecordKind::ChatMessage,
+            ProductRecordKind::UserRecent,
+            ProductRecordKind::Activity,
+            ProductRecordKind::Dataset,
+            ProductRecordKind::Chart,
+            ProductRecordKind::Dashboard,
+            ProductRecordKind::SavedQuery,
+            ProductRecordKind::Favorite,
+        ];
+
+        let prefix = format!(
+            "coldload-many-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let catalog = ProductCatalogCommit::new(
+            storage.clone(),
+            prefix.clone(),
+            Arc::new(TransactionMetrics::default()),
+        )
+        .unwrap();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        const PER_KIND: u32 = 128;
+        const BATCH: u32 = 64;
+        let mut current = genesis;
+        let mut batch_number = 0usize;
+        for kind in kinds {
+            for start in (0..PER_KIND).step_by(BATCH as usize) {
+                let changes = (start..(start + BATCH).min(PER_KIND))
+                    .map(|number| CatalogChange::CreateProduct {
+                        record: related_record(kind, &format!("{}-{number:05}", kind.name()), None),
+                    })
+                    .collect();
+                let request = PrepareChange {
+                    base: current.reference(),
+                    snapshot_id: format!("snapshot-many-{batch_number}"),
+                    operation_id: format!("op-many-{batch_number}"),
+                    request_digest: DIGEST.into(),
+                    changes,
+                };
+                match catalog
+                    .commit_with_documents(request.clone(), documents_for(&request))
+                    .await
+                {
+                    CommitOutcome::Committed(next) => current = next,
+                    other => panic!("setup batch {batch_number} did not land: {other:?}"),
+                }
+                batch_number += 1;
+            }
+        }
+
+        let fresh =
+            ProductCatalogCommit::new(storage, prefix, Arc::new(TransactionMetrics::default()))
+                .unwrap();
+        let started = std::time::Instant::now();
+        let loaded = fresh
+            .read_snapshot(&current.reference())
+            .await
+            .expect("the published snapshot reads back");
+        let elapsed = started.elapsed();
+
+        let shards = loaded.product_record_tables.len();
+        let records = loaded.product_records.len();
+        assert_eq!(records as u32, PER_KIND * kinds.len() as u32);
+
+        println!();
+        println!(
+            "{} kinds, {records} records, {shards} shard objects",
+            kinds.len()
+        );
+        println!("  cold load            {elapsed:.1?}");
+        println!(
+            "  per shard            {:.2?}",
+            elapsed / shards.max(1) as u32
+        );
+        println!();
+        println!(
+            "Against an emulator on this machine, so a floor for real blob storage. The\n\
+figure that matters is whether it grew with the shard count or stayed flat."
+        );
+        println!();
+
+        // Not a performance threshold -- those flake on a loaded machine --
+        // but a cold open that took seconds would mean the concurrency is not
+        // absorbing the objects and the decision to evert every kind rested on
+        // an extrapolation that does not hold.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "a cold load of {shards} shards took {elapsed:.1?}; the bounded concurrency is not \
+absorbing the object count and evicting every kind needs revisiting"
+        );
     }
 
     /// How long a cold snapshot load takes, by how many shards it resolves.
