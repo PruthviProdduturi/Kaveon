@@ -24,7 +24,8 @@ can make the release safer and faster, but it cannot claim cloud qualification.
   broadcast safety, Bloom/row-group pruning, source identity invalidation,
   context refresh, and directory-source scheduling. The current integrated
   branch also passes formatting, strict Clippy, the locked workspace check, and
-  the locked release build.- The 500k-row Trino differential is exact across the current 12-case corpus.
+  the locked release build. The complete server target then passed 611 tests with
+  zero failures in 551.66 seconds, including the full differential sweep.- The 500k-row Trino differential is exact across the current 12-case corpus.
 - Docker result-cache lifecycle and Azurite conditional-write contracts are
   qualified locally.
 - Cloud execution is unavailable while the Azure subscription is read-only and
