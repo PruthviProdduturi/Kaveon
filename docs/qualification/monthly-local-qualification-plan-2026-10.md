@@ -29,11 +29,14 @@ can make the release safer and faster, but it cannot claim cloud qualification.
   complete locked workspace test run also passed every package group: catalog 89,
   CLI 211, SQL 259, execution 587, server 611, storage 154, and the remaining
   workspace targets, with no reported failures.
-- The 500k-row Trino differential is exact across the current 12-case corpus.- Docker result-cache lifecycle and Azurite conditional-write contracts are
+- The 500k-row Trino differential is exact across the current 12-case corpus.
+- Docker result-cache lifecycle and Azurite conditional-write contracts are
   qualified locally.
 - The PostgreSQL dependency audit still reports 16 active authority families in the
   API. PostgreSQL retirement is therefore not complete; local engine qualification
-  does not substitute for migrating and validating those control-plane authorities.
+  does not substitute for migrating and validating those control-plane authorities. The
+  source-family migration/cutover test set is green (20 tests plus 3 subtests),
+  but live replay and shadow-read parity are still required before enabling it.
 - Cloud execution is unavailable while the Azure subscription is read-only and
   the ADLS data plane reports `The specified account is disabled`.
 
