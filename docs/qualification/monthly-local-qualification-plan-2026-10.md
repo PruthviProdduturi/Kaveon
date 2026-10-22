@@ -37,6 +37,9 @@ can make the release safer and faster, but it cannot claim cloud qualification.
   does not substitute for migrating and validating those control-plane authorities. The
   source-family migration/cutover test set is green (20 tests plus 3 subtests),
   but live replay and shadow-read parity are still required before enabling it.
+- The API service suite passes 948 tests and 171 subtests, including KaveonDB
+  cutovers, backfills, recovery evidence, retirement probes, and source migration
+  behavior; two dependency warnings remain, with no test failures.
 - Cloud execution is unavailable while the Azure subscription is read-only and
   the ADLS data plane reports `The specified account is disabled`.
 
