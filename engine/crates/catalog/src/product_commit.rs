@@ -1691,6 +1691,134 @@ mod tests {
         eviction_round_trip("local", storage, 60).await;
     }
 
+    /// Build a catalogue of accumulating records and return the handle, the
+    /// raw store beneath it, and the snapshot it committed.
+    async fn sharded_catalogue(
+        tag: &str,
+        records: u32,
+    ) -> (ProductCatalogCommit, Arc<InMemory>, String, CatalogSnapshot) {
+        let raw = Arc::new(InMemory::new());
+        let prefix = format!("shardfail-{tag}");
+        let catalog = ProductCatalogCommit::new(
+            AdlsConditionalCommit::new(raw.clone()),
+            prefix.clone(),
+            Arc::new(TransactionMetrics::default()),
+        )
+        .unwrap();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        let changes = (0..records)
+            .map(|number| CatalogChange::CreateProduct {
+                record: related_record(
+                    ProductRecordKind::QueryHistory,
+                    &format!("history-{number:04}"),
+                    None,
+                ),
+            })
+            .collect();
+        let request = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-sharded".into(),
+            operation_id: "op-sharded".into(),
+            request_digest: DIGEST.into(),
+            changes,
+        };
+        let CommitOutcome::Committed(committed) = catalog
+            .commit_with_documents(request.clone(), documents_for(&request))
+            .await
+        else {
+            panic!("the setup commit did not land");
+        };
+        (catalog, raw, prefix, committed)
+    }
+
+    /// A fresh handle, so a read resolves objects rather than being served the
+    /// snapshot the commit remembered.
+    fn cold_handle(raw: Arc<InMemory>, prefix: &str) -> ProductCatalogCommit {
+        ProductCatalogCommit::new(
+            AdlsConditionalCommit::new(raw),
+            prefix,
+            Arc::new(TransactionMetrics::default()),
+        )
+        .unwrap()
+    }
+
+    /// A shard object that is gone must refuse the snapshot.
+    ///
+    /// Continuing would resolve a catalogue missing every record that shard
+    /// held, and nothing downstream could tell the difference between a record
+    /// that was deleted and one that could not be read.
+    #[tokio::test]
+    async fn a_missing_shard_refuses_the_snapshot_rather_than_shortening_it() {
+        let (_catalog, raw, prefix, committed) = sharded_catalogue("missing", 64).await;
+        let reference = committed.reference();
+
+        // Confirm it reads before anything is broken, or the test proves
+        // nothing about the breaking.
+        let loaded = cold_handle(raw.clone(), &prefix)
+            .read_snapshot(&reference)
+            .await
+            .expect("reads before the shard is removed");
+        assert_eq!(loaded.product_records.len(), 64);
+        let shard = loaded
+            .product_record_tables
+            .values()
+            .next()
+            .expect("a shard exists")
+            .clone();
+
+        raw.delete(&Path::from(format!("{prefix}/{}", shard.path)))
+            .await
+            .expect("the shard object is removed");
+
+        let refused = cold_handle(raw, &prefix).read_snapshot(&reference).await;
+        assert!(
+            refused.is_err(),
+            "a snapshot whose shard object is gone must be refused; resolving it would \
+silently drop every record that shard held"
+        );
+    }
+
+    /// A shard whose bytes do not match its name must refuse the snapshot.
+    ///
+    /// The object is named by the digest of its contents, so a mismatch is
+    /// corruption rather than staleness, and serving it would publish records
+    /// nobody committed.
+    #[tokio::test]
+    async fn a_corrupt_shard_refuses_the_snapshot() {
+        let (_catalog, raw, prefix, committed) = sharded_catalogue("corrupt", 64).await;
+        let reference = committed.reference();
+
+        let loaded = cold_handle(raw.clone(), &prefix)
+            .read_snapshot(&reference)
+            .await
+            .expect("reads before the shard is altered");
+        let shard = loaded
+            .product_record_tables
+            .values()
+            .next()
+            .expect("a shard exists")
+            .clone();
+
+        // Valid JSON of the right shape, so only the digest check can catch
+        // it. An empty map is the dangerous case: it decodes, and a load that
+        // accepted it would simply lose those records.
+        raw.put(
+            &Path::from(format!("{prefix}/{}", shard.path)),
+            b"{}".to_vec().into(),
+        )
+        .await
+        .expect("the shard object is replaced");
+
+        let refused = cold_handle(raw, &prefix).read_snapshot(&reference).await;
+        assert!(
+            refused.is_err(),
+            "a shard whose bytes do not match the digest naming it must be refused, even when \
+those bytes decode cleanly"
+        );
+    }
+
     /// What concurrent writers actually cost each other.
     ///
     /// Every writer serialises on one head, and a loser is rebased and
