@@ -6,8 +6,25 @@ can make the release safer and faster, but it cannot claim cloud qualification.
 
 ## Current baseline
 
-- Formatting, strict Clippy, CI, catalog tests, storage tests, and the local`r`n  distributed reliability subset are green. Focused local coverage also passes: 587`r`n  execution tests, 89 catalog tests, 154 storage tests, 45 transaction/DML`r`n  tests, 25 aggregate/planner tests, 24 window/planner tests, and 4 TopN`r`n  differential tests, all with zero failures. Catalog access and revision tests add 11`r`n  passing cases covering restart reload, stale-revision conflicts, default deny,`r`n  grant/revoke visibility, and admin isolation. Snapshot consistency adds 6`r`n  passing cases covering drift rejection, cache invalidation, stable Delta enumeration,`r`n  and snapshot-pinned metadata counts. Resource-safety gates are also green: 8`r`n  resource-group tests, 18 result-cache tests, 14 cancellation tests, and 9 retry`r`n  tests passed without failures. SQL compatibility coverage adds 97 passing array,`r`n  map, and JSON distributed/wire differential cases. External-client compatibility adds 8`r`n  passing tests for Trino-wire ordering, prepared-statement ownership and binding,`r`n  and safe paging metadata. Runtime statistics and source qualification adds 30`r`n  passing cases for exact stats, broadcast safety, Bloom/row-group pruning, source`r`n  identity invalidation, context refresh, and directory-source scheduling.
-- The 500k-row Trino differential is exact across the current 12-case corpus.
+- Formatting, strict Clippy, CI, catalog tests, storage tests, and the local
+  distributed reliability subset are green. Focused local coverage also passes:
+  587 execution tests, 89 catalog tests, 154 storage tests, 45 transaction/DML
+  tests, 25 aggregate/planner tests, 24 window/planner tests, and 4 TopN
+  differential tests, all with zero failures. Catalog access and revision tests
+  add 11 passing cases covering restart reload, stale-revision conflicts, default
+  deny, grant/revoke visibility, and admin isolation. Snapshot consistency adds
+  6 passing cases covering drift rejection, cache invalidation, stable Delta
+  enumeration, and snapshot-pinned metadata counts. Resource-safety gates are
+  also green: 8 resource-group tests, 18 result-cache tests, 14 cancellation
+  tests, and 9 retry tests passed without failures. SQL compatibility coverage
+  adds 97 passing array, map, and JSON distributed/wire differential cases.
+  External-client compatibility adds 8 passing tests for Trino-wire ordering,
+  prepared-statement ownership and binding, and safe paging metadata. Runtime
+  statistics and source qualification adds 30 passing cases for exact stats,
+  broadcast safety, Bloom/row-group pruning, source identity invalidation,
+  context refresh, and directory-source scheduling. The current integrated
+  branch also passes formatting, strict Clippy, the locked workspace check, and
+  the locked release build.- The 500k-row Trino differential is exact across the current 12-case corpus.
 - Docker result-cache lifecycle and Azurite conditional-write contracts are
   qualified locally.
 - Cloud execution is unavailable while the Azure subscription is read-only and
