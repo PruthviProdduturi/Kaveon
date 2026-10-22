@@ -27,9 +27,9 @@ can make the release safer and faster, but it cannot claim cloud qualification.
   the locked release build. The complete server target then passed 611 tests with
   zero failures in 551.66 seconds, including the full differential sweep. The
   complete locked workspace test run also passed every package group: catalog 89,
-  SQL 211, execution 587, server 611, storage 154, and the remaining workspace
-  targets, with no reported failures.- The 500k-row Trino differential is exact across the current 12-case corpus.
-- Docker result-cache lifecycle and Azurite conditional-write contracts are
+  CLI 211, SQL 259, execution 587, server 611, storage 154, and the remaining
+  workspace targets, with no reported failures.
+- The 500k-row Trino differential is exact across the current 12-case corpus.- Docker result-cache lifecycle and Azurite conditional-write contracts are
   qualified locally.
 - Cloud execution is unavailable while the Azure subscription is read-only and
   the ADLS data plane reports `The specified account is disabled`.
