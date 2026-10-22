@@ -40,6 +40,9 @@ can make the release safer and faster, but it cannot claim cloud qualification.
 - The API service suite passes 948 tests and 171 subtests, including KaveonDB
   cutovers, backfills, recovery evidence, retirement probes, and source migration
   behavior; two dependency warnings remain, with no test failures.
+- Local deployment-contract checks pass: the Helm retirement-evidence validator ran 4
+  tests, and the operational-evidence and AKS-probe script suites pass with the API
+  package path configured. These validate packaging only, not live cloud evidence.
 - Cloud execution is unavailable while the Azure subscription is read-only and
   the ADLS data plane reports `The specified account is disabled`.
 
