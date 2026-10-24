@@ -678,6 +678,52 @@ impl AccColumn {
     }
 }
 
+enum IntegerInput<'a> {
+    Int64(&'a Int64Array),
+    Int32(&'a Int32Array),
+}
+
+impl<'a> IntegerInput<'a> {
+    fn new(array: &'a ArrayRef) -> Result<Self> {
+        match array.data_type() {
+            DataType::Int64 => Ok(Self::Int64(array.as_primitive::<Int64Type>())),
+            DataType::Int32 => Ok(Self::Int32(array.as_primitive::<Int32Type>())),
+            other => Err(exec_err(format!("integer aggregate over {other}"))),
+        }
+    }
+
+    #[inline]
+    fn value(&self, row: usize) -> Option<i64> {
+        match self {
+            Self::Int64(values) => (!values.is_null(row)).then_some(values.value(row)),
+            Self::Int32(values) => (!values.is_null(row)).then_some(i64::from(values.value(row))),
+        }
+    }
+}
+
+enum NumericInput<'a> {
+    Float64(&'a Float64Array),
+    Integer(IntegerInput<'a>),
+}
+
+impl<'a> NumericInput<'a> {
+    fn new(array: &'a ArrayRef) -> Result<Self> {
+        match array.data_type() {
+            DataType::Float64 => Ok(Self::Float64(array.as_primitive::<Float64Type>())),
+            DataType::Int64 | DataType::Int32 => Ok(Self::Integer(IntegerInput::new(array)?)),
+            other => Err(exec_err(format!("numeric aggregate over {other}"))),
+        }
+    }
+
+    #[inline]
+    fn value(&self, row: usize) -> Option<f64> {
+        match self {
+            Self::Float64(values) => (!values.is_null(row)).then_some(values.value(row)),
+            Self::Integer(values) => values.value(row).map(|value| value as f64),
+        }
+    }
+}
+
 fn for_each_integer(
     array: &ArrayRef,
     slots: &[u32],
@@ -1825,6 +1871,50 @@ impl ColumnarGroups {
         {
             return self.push_single_int64_count_sum(&key_columns[0], value_columns[1], rows);
         }
+        // ClickBench q33 groups by a wide integer key pair and computes a
+        // count, integer sum and average. The general path materializes a
+        // packed key row, hashes it, resolves every slot, then walks each
+        // aggregate column in separate passes. Keep the same hash/index and
+        // null semantics, but resolve the pair and update all three states in
+        // one row pass. This is intentionally limited to the exact layout;
+        // every other mixed aggregate keeps the general, fully-tested path.
+        if key_columns.len() == 2
+            && value_columns.len() == 2
+            && value_columns.iter().all(Option::is_some)
+            && matches!(
+                self.accumulators.as_slice(),
+                [
+                    AccColumn::Count(_),
+                    AccColumn::IntegerSum { .. },
+                    AccColumn::Float { avg: true, .. }
+                ]
+            )
+            && matches!(
+                self.keys.as_slice(),
+                [
+                    KeyColumn::Integer {
+                        data_type: DataType::Int64,
+                        ..
+                    },
+                    KeyColumn::Integer {
+                        data_type: DataType::Int32,
+                        ..
+                    }
+                ]
+            )
+            && matches!(key_columns[0].data_type(), DataType::Int64)
+            && matches!(key_columns[1].data_type(), DataType::Int32)
+            && matches!(
+                value_columns[0].expect("checked above").data_type(),
+                DataType::Int64 | DataType::Int32
+            )
+            && matches!(
+                value_columns[1].expect("checked above").data_type(),
+                DataType::Float64 | DataType::Int64 | DataType::Int32
+            )
+        {
+            return self.push_two_integer_count_sum_avg(key_columns, value_columns, rows);
+        }
         let mut new_bytes = 0u64;
         let stride = self.stride();
         self.packed.clear();
@@ -2126,6 +2216,131 @@ impl ColumnarGroups {
                 sums[slot as usize] += i128::from(sum_values.value(row));
                 counts[slot as usize] += 1;
             }
+        }
+        Ok((created, 0))
+    }
+
+    /// Fused two-integer-key COUNT + integer SUM + AVG update. This is the
+    /// ClickBench q33 shape (`WatchID, ClientIP`) and avoids the packed-key
+    /// scratch allocation plus three separate accumulator walks.
+    fn push_two_integer_count_sum_avg(
+        &mut self,
+        key_columns: &[ArrayRef],
+        value_columns: &[Option<&ArrayRef>],
+        rows: usize,
+    ) -> Result<(usize, u64)> {
+        let key0 = key_columns[0].as_primitive::<Int64Type>();
+        let key1 = key_columns[1].as_primitive::<Int32Type>();
+        let sum = IntegerInput::new(value_columns[0].expect("sum is present"))?;
+        let avg = NumericInput::new(value_columns[1].expect("avg is present"))?;
+        let mut created = 0usize;
+        for row in 0..rows {
+            let null0 = key0.is_null(row);
+            let null1 = key1.is_null(row);
+            let packed = [
+                if null0 {
+                    u64::MAX
+                } else {
+                    key0.value(row) as u64
+                },
+                if null1 {
+                    u64::MAX
+                } else {
+                    key1.value(row) as i64 as u64
+                },
+                u64::from(null0) | (u64::from(null1) << 1),
+            ];
+            let hash = packed_hash(&packed);
+            if self.index.is_full() {
+                let keys = &self.keys;
+                self.index.grow(self.uses_large_integer_growth(), |slot| {
+                    slot_hash(keys, slot as usize)
+                });
+            }
+            let keys = &self.keys;
+            let (slot, is_new) = match self.index.probe(hash, |candidate| {
+                key_matches(keys, candidate as usize, &packed)
+            }) {
+                Probe::Found(slot) => (slot, false),
+                Probe::Vacant(bucket) => {
+                    let slot = u32::try_from(self.len)
+                        .map_err(|_| exec_err("too many groups for one task"))?;
+                    if let [
+                        KeyColumn::Integer {
+                            values: values0,
+                            nulls: nulls0,
+                            ..
+                        },
+                        KeyColumn::Integer {
+                            values: values1,
+                            nulls: nulls1,
+                            ..
+                        },
+                    ] = self.keys.as_mut_slice()
+                    {
+                        values0.push(if null0 { 0 } else { key0.value(row) });
+                        nulls0.push(null0);
+                        values1.push(if null1 { 0 } else { i64::from(key1.value(row)) });
+                        nulls1.push(null1);
+                    }
+                    if let [
+                        AccColumn::Count(counts),
+                        AccColumn::IntegerSum {
+                            sums,
+                            counts: sum_counts,
+                        },
+                        AccColumn::Float {
+                            sums: avg_sums,
+                            counts: avg_counts,
+                            ..
+                        },
+                    ] = self.accumulators.as_mut_slice()
+                    {
+                        counts.push(0);
+                        sums.push(0);
+                        sum_counts.push(0);
+                        avg_sums.push(0.0);
+                        avg_counts.push(0);
+                    }
+                    self.index.occupy(bucket, hash, slot);
+                    self.len += 1;
+                    created += 1;
+                    (slot, true)
+                }
+            };
+            let slot = slot as usize;
+            if let [
+                AccColumn::Count(counts),
+                AccColumn::IntegerSum {
+                    sums,
+                    counts: sum_counts,
+                },
+                AccColumn::Float {
+                    sums: avg_sums,
+                    counts: avg_counts,
+                    ..
+                },
+            ] = self.accumulators.as_mut_slice()
+            {
+                counts[slot] = counts[slot]
+                    .checked_add(1)
+                    .ok_or_else(|| exec_err("COUNT overflow"))?;
+                if let Some(value) = sum.value(row) {
+                    sum_counts[slot] = sum_counts[slot]
+                        .checked_add(1)
+                        .ok_or_else(|| exec_err("integer SUM count overflow"))?;
+                    sums[slot] = sums[slot]
+                        .checked_add(i128::from(value))
+                        .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                }
+                if let Some(value) = avg.value(row) {
+                    avg_counts[slot] = avg_counts[slot]
+                        .checked_add(1)
+                        .ok_or_else(|| exec_err("floating aggregate count overflow"))?;
+                    avg_sums[slot] += value;
+                }
+            }
+            let _ = is_new;
         }
         Ok((created, 0))
     }
