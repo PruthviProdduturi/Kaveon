@@ -2009,10 +2009,115 @@ fn is_equality_join_condition(expr: &Expr) -> bool {
     }
 }
 
+/// The names a SELECT list binds, in the order it binds them.
+///
+/// Only explicit aliases count. An unnamed expression has no name to be
+/// referred to, and a column selected plainly already resolves as itself.
+fn select_alias_names(projection: &[ast::SelectItem]) -> Vec<String> {
+    projection
+        .iter()
+        .filter_map(|item| match item {
+            ast::SelectItem::ExprWithAlias { alias, .. } => Some(alias.value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `expr` refers to `name` as a bare, unqualified identifier.
+///
+/// Qualified names are excluded deliberately: `t.total` names a column of `t`,
+/// and a SELECT alias is not a member of any relation. Treating it as a
+/// reference to the alias would reject a legitimate column whose table happens
+/// to share the alias's name.
+fn references_bare_identifier(expr: &ast::Expr, name: &str) -> bool {
+    use ast::Expr as A;
+    match expr {
+        A::Identifier(ident) => ident.value.eq_ignore_ascii_case(name),
+        A::BinaryOp { left, right, .. } => {
+            references_bare_identifier(left, name) || references_bare_identifier(right, name)
+        }
+        A::UnaryOp { expr, .. } | A::Nested(expr) | A::Cast { expr, .. } => {
+            references_bare_identifier(expr, name)
+        }
+        A::IsNull(expr)
+        | A::IsNotNull(expr)
+        | A::IsTrue(expr)
+        | A::IsNotTrue(expr)
+        | A::IsFalse(expr)
+        | A::IsNotFalse(expr) => references_bare_identifier(expr, name),
+        A::Between {
+            expr, low, high, ..
+        } => {
+            references_bare_identifier(expr, name)
+                || references_bare_identifier(low, name)
+                || references_bare_identifier(high, name)
+        }
+        A::InList { expr, list, .. } => {
+            references_bare_identifier(expr, name)
+                || list
+                    .iter()
+                    .any(|item| references_bare_identifier(item, name))
+        }
+        A::Like { expr, pattern, .. } | A::ILike { expr, pattern, .. } => {
+            references_bare_identifier(expr, name) || references_bare_identifier(pattern, name)
+        }
+        A::Function(function) => match &function.args {
+            ast::FunctionArguments::List(list) => list.args.iter().any(|arg| match arg {
+                ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr))
+                | ast::FunctionArg::Named {
+                    arg: ast::FunctionArgExpr::Expr(expr),
+                    ..
+                } => references_bare_identifier(expr, name),
+                _ => false,
+            }),
+            _ => false,
+        },
+        A::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            operand
+                .as_ref()
+                .is_some_and(|operand| references_bare_identifier(operand, name))
+                || conditions
+                    .iter()
+                    .chain(results.iter())
+                    .any(|expr| references_bare_identifier(expr, name))
+                || else_result
+                    .as_ref()
+                    .is_some_and(|result| references_bare_identifier(result, name))
+        }
+        _ => false,
+    }
+}
+
+/// Refuse a WHERE clause that refers to a name the SELECT list binds.
+///
+/// Without a schema the planner cannot tell this apart from a real column of
+/// the same name, so it cannot resolve it -- and it previously did not try,
+/// letting the reference reach storage and surface as a missing column in a
+/// Parquet file. The alias is in the query the person wrote, so the refusal
+/// says so, and names the rewrite that works.
+fn reject_select_alias_in_where(select: &ast::Select, expr: &ast::Expr) -> Result<()> {
+    for alias in select_alias_names(&select.projection) {
+        if references_bare_identifier(expr, &alias) {
+            return Err(sql_err(format!(
+                "WHERE cannot refer to the SELECT alias '{alias}'; a filter is applied before \
+the SELECT list is computed. Repeat the expression in WHERE, or wrap the query and filter \
+outside it"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn build_where(plan: LogicalPlan, select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> {
     match &select.selection {
         None => Ok(plan),
         Some(expr) => {
+            reject_select_alias_in_where(select, expr)?;
             let mut plan = plan;
             let mut remaining = Vec::new();
             extract_subquery_predicates(expr, &mut plan, &mut remaining, ctes)?;
@@ -3083,6 +3188,9 @@ fn build_projection(
     let mut columns = Vec::new();
     let mut is_star = false;
     let mut has_qualified_star = false;
+    // Names this SELECT list has bound so far, so a later item referring to
+    // one is caught where the alias is visible.
+    let mut bound_aliases: Vec<String> = Vec::new();
 
     for item in projection {
         match item {
@@ -3090,7 +3198,21 @@ fn build_projection(
                 columns.push(ast_projection_expr_to_expr(expr)?);
             }
             ast::SelectItem::ExprWithAlias { expr, alias } => {
+                // An alias bound earlier in this same SELECT list cannot be
+                // referred to by a later item, for the same reason WHERE
+                // cannot refer to one: the list is computed from the input
+                // row, not from itself. Refused here rather than left to
+                // reach storage, where it surfaced as a missing Parquet
+                // column and named the wrong thing.
+                for bound in &bound_aliases {
+                    if references_bare_identifier(expr, bound) {
+                        return Err(sql_err(format!(
+                            "the SELECT list cannot refer to its own alias '{bound}'; every item is computed from the input row. Repeat the expression, or compute it in a subquery and select from that"
+                        )));
+                    }
+                }
                 let e = ast_projection_expr_to_expr(expr)?;
+                bound_aliases.push(alias.value.clone());
                 columns.push(Expr::Alias {
                     expr: Box::new(e),
                     name: alias.value.clone(),
@@ -5733,6 +5855,108 @@ mod tests {
         };
         assert_eq!(order_by, vec![(Expr::Column("m".into()), true, false)]);
         assert!(matches!(*input, LogicalPlan::Project { .. }));
+    }
+
+    #[test]
+    fn the_select_list_refuses_its_own_alias_and_says_why() {
+        let error =
+            sql_to_logical_plan("SELECT actions * 2 AS doubled, doubled + 1 AS plus_one FROM t")
+                .expect_err("a SELECT item referring to an earlier alias must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("its own alias 'doubled'"),
+            "the refusal must name the alias, got: {message}"
+        );
+        assert!(
+            message.contains("subquery"),
+            "the refusal must name a rewrite that works, got: {message}"
+        );
+    }
+
+    #[test]
+    fn a_later_select_item_may_reuse_a_name_that_is_not_an_alias() {
+        // Only a name this list has bound is refused. Selecting the same
+        // column twice, or aliasing to a name used later as a qualified
+        // column, both stay legal.
+        for sql in [
+            "SELECT actions AS a, actions * 2 AS b FROM t",
+            "SELECT t.doubled AS doubled, t.doubled * 2 AS twice FROM t",
+            "SELECT actions AS doubled FROM t",
+        ] {
+            assert!(
+                sql_to_logical_plan(sql).is_ok(),
+                "this must keep planning: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn where_refuses_a_select_alias_and_says_why() {
+        // Previously this planned, then failed in storage as "projection
+        // references unknown column 'doubled'" -- telling someone their
+        // Parquet file lacks a column they never asked for, when what is
+        // unsupported is referring to the alias beside it.
+        let error = sql_to_logical_plan("SELECT actions * 2 AS doubled FROM t WHERE doubled > 10")
+            .expect_err("a WHERE referring to a SELECT alias must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("SELECT alias 'doubled'"),
+            "the refusal must name the alias, got: {message}"
+        );
+        assert!(
+            message.contains("before"),
+            "the refusal must say why a filter cannot see it, got: {message}"
+        );
+        assert!(
+            message.contains("Repeat the expression"),
+            "the refusal must name a rewrite that works, got: {message}"
+        );
+    }
+
+    #[test]
+    fn where_finds_a_select_alias_however_it_is_nested() {
+        // A reference inside a function, a CASE, a BETWEEN or an IN list is
+        // the same unsupported reference; missing any of them puts the query
+        // back on the path that fails in storage.
+        for sql in [
+            "SELECT actions * 2 AS doubled FROM t WHERE ABS(doubled) > 10",
+            "SELECT actions * 2 AS doubled FROM t WHERE CASE WHEN doubled > 1 THEN 1 ELSE 0 END = 1",
+            "SELECT actions * 2 AS doubled FROM t WHERE doubled BETWEEN 1 AND 10",
+            "SELECT actions * 2 AS doubled FROM t WHERE doubled IN (1, 2, 3)",
+            "SELECT actions * 2 AS doubled FROM t WHERE NOT (doubled > 10)",
+            "SELECT actions * 2 AS doubled FROM t WHERE country = 'Japan' AND doubled > 10",
+            "SELECT CAST(actions AS BIGINT) AS big FROM t WHERE CAST(big AS BIGINT) > 1",
+        ] {
+            assert!(
+                sql_to_logical_plan(sql).is_err(),
+                "a SELECT alias reference must be refused wherever it appears: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn where_still_accepts_everything_that_is_not_an_alias_reference() {
+        // The refusal must not grow into rejecting legitimate queries. A
+        // qualified name is a column of a relation and never an alias, which
+        // matters most when a table has a column named like someone's alias.
+        for sql in [
+            // The alias exists but WHERE filters a real column.
+            "SELECT actions * 2 AS doubled FROM t WHERE country = 'Japan'",
+            // A qualified column that shares the alias's name is still that
+            // column, not the alias.
+            "SELECT t.doubled * 2 AS doubled FROM t WHERE t.doubled > 10",
+            // No alias at all.
+            "SELECT actions * 2 FROM t WHERE actions > 10",
+            // An alias on a different name than the one filtered.
+            "SELECT actions AS a, country AS c FROM t WHERE region = 'North'",
+            // ORDER BY may refer to a select alias; only WHERE may not.
+            "SELECT actions * 2 AS doubled FROM t ORDER BY doubled",
+        ] {
+            assert!(
+                sql_to_logical_plan(sql).is_ok(),
+                "this must keep planning: {sql}"
+            );
+        }
     }
 
     #[test]
