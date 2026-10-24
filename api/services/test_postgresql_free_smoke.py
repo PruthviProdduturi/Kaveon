@@ -19,11 +19,11 @@ class Client:
    "/api/v1/user/recents":[{"id":"r1"}],"/api/v1/favorites":[{"id":"f1"}],"/api/v1/chat/history":{"sessions":[{"id":"10"}]},
    "/api/v1/datasets/7":{"id":"7"},"/api/v1/charts/8":{"id":"8"},"/api/v1/dashboards/9":{"id":"9"},
    "/api/v1/lab/saved-queries/sq1":{"id":"sq1"},"/api/v1/chat/history/10":{"id":"10","messages":[]},
-   "/api/v1/lab/saved-queries/__postgresql_free_absence_probe__":{"detail":"not found"},
-   "/api/v1/chat/history/__postgresql_free_absence_probe__":{"detail":"not found"},"/api/v1/theme":{"theme_color":"dark"},
+   "/api/v1/lab/saved-queries/00000000-0000-0000-0000-000000000000":{"detail":"not found"},
+   "/api/v1/chat/history/-1":{"detail":"not found"},"/api/v1/theme":{"theme_color":"dark"},
    "/api/v1/datasets/7/dlm":{"dataset_id":"7","artifact":{"private":"value"}},"/api/v1/datasets/7/dlm/context":{"ok":True,"context":{"private":"value"}},
    "/api/v1/dlm/ask":{"ok":True,"answer":"private answer"},"/api/v1/chat":{"route":"dlm","answer":"private answer"}}
-  value=values[path];status=404 if path.endswith("__postgresql_free_absence_probe__") else 200
+  value=values[path];status=404 if path in {"/api/v1/lab/saved-queries/00000000-0000-0000-0000-000000000000","/api/v1/chat/history/-1"} else 200
   if self.mutate:value,status=self.mutate(path,value,status)
   return Response(value,status)
 class Tests(unittest.TestCase):
