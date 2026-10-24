@@ -108,14 +108,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default=os.getenv("KAVEON_ENGINE_URL", "http://127.0.0.1:8081"))
     parser.add_argument("--token", default=os.getenv("KAVEON_ENGINE_ADMIN_TOKEN", "kaveon-local-admin-token-not-for-production"))
-    parser.add_argument("--root", type=Path, default=Path("data/adls-mirror/opensource/showcase"))
+    parser.add_argument("--root", type=Path, default=Path("data/adls-mirror/opensource/showcase"),
+                        help="host directory containing showcase schema/table directories")
+    parser.add_argument("--base-path", default=os.getenv("KAVEON_LOCAL_CATALOG_BASE_PATH", "/data/showcase"),
+                        help="the same showcase root as seen inside the Engine container")
     parser.add_argument("--catalog", default="OpenSource")
     parser.add_argument("--timeout", type=float, default=60.0)
     args = parser.parse_args()
     catalog = sql_ident(args.catalog, "catalog")
     tables = discover(args.root)
     engine = Engine(args.endpoint, args.token, args.timeout)
-    engine.statement(f"CREATE CATALOG IF NOT EXISTS {catalog} WITH (storage = 'local', base_path = '/data/showcase')")
+    if not args.base_path.startswith("/") or ".." in Path(args.base_path).parts:
+        raise ValueError("--base-path must be an absolute container path without '..'")
+    engine.statement(f"CREATE CATALOG IF NOT EXISTS {catalog} WITH (storage = 'local', base_path = {sql_string(args.base_path)})")
     for schema, table, fmt in tables:
         schema = sql_ident(schema, "schema")
         table = sql_ident(table, "table")
