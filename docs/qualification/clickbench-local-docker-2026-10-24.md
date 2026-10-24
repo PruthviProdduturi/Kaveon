@@ -3,7 +3,8 @@
 This is a local qualification run because AKS is unavailable until the next
 cloud window. It is evidence for the Docker path only; it does not replace an
 AKS qualification. The stack was rebuilt from the clean integration revision
-`78b0eafd` before the final measurements.
+`78b0eafd`, then from the verified executor optimization `c235c49d`, before
+the final measurements.
 
 ## Environment
 
@@ -28,11 +29,11 @@ CPU/memory and warm/cold-cache phases before publishing a headline comparison.
 
 | Query | Shape | Kaveon wall | Kaveon result | ClickHouse-local wall | Result check |
 |---|---|---:|---:|---:|---|
-| q33 | grouped `WatchID, ClientIP`, `COUNT/SUM/AVG`, top 10 | 24.900 s (engine 24.872 s) | 10 rows | 5.816 s | exact values inspected; parity rerun required |
-| q35 | grouped constant + `URL`, `COUNT`, top 10 | 16.142 s (engine 16.119 s) | 10 rows | 8.250 s | exact values inspected; parity rerun required |
+| q33 | grouped `WatchID, ClientIP`, `COUNT/SUM/AVG`, top 10 | 24.223 s (engine 24.184 s) | 10 rows | 5.816 s | exact values inspected; parity rerun required |
+| q35 | grouped constant + `URL`, `COUNT`, top 10 | 14.776 s (engine 14.743 s) | 10 rows | 8.250 s | exact values inspected; parity rerun required |
 
-Kaveon query IDs: `4b6431e0-25f0-40c9-b700-6f51ae603df3` (q33) and
-`56900113-4a2a-4730-bf16-e6d82fd9297a` (q35).
+Kaveon query IDs: `f6e2bafe-ebac-4cb0-b651-88a21b0712e0` (q33) and
+`47b099a7-1d57-43d8-8e8b-fef63eadcfb9` (q35).
 
 ## Observed bottleneck
 
@@ -43,9 +44,12 @@ are near-unique, so the exchange moved large intermediate batches. q35's
 distributed scan/partial stage was 16.563 s and its final merge was only
 0.111 s. Admission wait and spill were zero.
 
-The next performance work should therefore target high-cardinality grouped
-aggregates: avoid needless materialization/copying for passthrough partials,
-improve numeric-key hashing and scan/decode throughput, and preserve exact
-results. It should be measured against this record and rerun with a pinned
-ClickHouse control before any claim that Kaveon beats ClickHouse.
+The fused two-key numeric aggregate path in `c235c49d` reduced q35's local
+time to 14.8 s and q33's to 24.2 s, but q33 remains a passthrough aggregate
+because its grouping keys are near-unique. The next performance work should
+therefore target high-cardinality grouped aggregates: avoid needless
+materialization/copying for passthrough partials, improve numeric-key hashing
+and scan/decode throughput, and preserve exact results. It should be measured
+against this record and rerun with a pinned ClickHouse control before any
+claim that Kaveon beats ClickHouse.
 
