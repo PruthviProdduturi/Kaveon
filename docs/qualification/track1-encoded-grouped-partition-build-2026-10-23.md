@@ -16,6 +16,8 @@ Validation:
 - The server's full differential sweep passed in isolation: 611 tests, 0
   failures, including `the_differential_sweep_matches_across_parquet_encodings_and_execution_paths` (580.09 s).
 
-This is an allocation reduction with exact routing coverage. It is not yet a
-ClickHouse or Trino performance claim; a rebuilt ClickBench run is required to
-measure wall time and exchange bytes before enabling or scoring it.
+This is an allocation reduction with exact routing coverage. The canonical
+binary route is now the default; set `KAVEON_DIRECT_GROUPED_EXCHANGE=off` for
+an explicit rollback/control. It is not yet a ClickHouse or Trino performance
+claim; a rebuilt ClickBench run is required to measure wall time and exchange
+bytes before scoring it.

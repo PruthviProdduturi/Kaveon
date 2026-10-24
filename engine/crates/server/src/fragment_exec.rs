@@ -1459,8 +1459,16 @@ pub(crate) fn compile_final_aggregate_parallel(
     // consumes the same bytes, so Arrow row conversion and the later
     // ThreadSelector hash are both avoided. Keep the established text path
     // as the fallback for non grouped-state callers.
+    // The direct encoded route is the safe default for canonical grouped
+    // states. Keep an explicit opt-out for staged rollback and comparison;
+    // absent or unrecognised values select the optimized path, while only
+    // `off` restores the Arrow fallback.
+    let direct_grouped_exchange = !matches!(
+        std::env::var("KAVEON_DIRECT_GROUPED_EXCHANGE").as_deref(),
+        Ok("off") | Ok("0") | Ok("false")
+    );
     let encoded_partitioned = source_threaded
-        && std::env::var("KAVEON_DIRECT_GROUPED_EXCHANGE").as_deref() == Ok("1")
+        && direct_grouped_exchange
         && sources
             .schema()
             .field_with_name("group_keys")
