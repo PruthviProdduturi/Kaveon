@@ -96,10 +96,20 @@ class CommitHealthCheck(unittest.TestCase):
     def test_a_healthy_engine_says_nothing(self):
         self.assertEqual(qualify.check_commit_health(_healthy()), [])
 
+    def test_an_engine_that_has_never_committed_says_so(self):
+        """The vacuous pass this script was one line away from giving.
+
+        Every other check passes on a freshly started Engine while nothing has
+        been written, and the run read as a full qualification. A warning is
+        the difference between qualifying the control plane and qualifying
+        that it answers the phone.
+        """
+        warnings = qualify.check_commit_health(_healthy(attempts=0, committed=0))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("unexercised", warnings[0])
+
     def test_no_commits_yet_does_not_divide_by_zero(self):
-        """A freshly started Engine has committed nothing."""
-        self.assertEqual(
-            qualify.check_commit_health(_healthy(attempts=0, committed=0)), [])
+        qualify.check_commit_health(_healthy(attempts=0, committed=0))
 
 
 if __name__ == "__main__":
