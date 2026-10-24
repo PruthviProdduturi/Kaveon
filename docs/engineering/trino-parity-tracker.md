@@ -33,8 +33,12 @@ qualified same-host ClickHouse controls remain q33 **4.552 s** and q35
 targets for the next optimization round, with correctness, bounded memory,
 spill cleanup, cancellation, and repeatability as hard gates.
 
-The next implementation boundary is the final grouped-state exchange: avoid
-materialising Arrow binary batches for the worker-local grouped pass while
+The first bounded step is now implemented: canonical binary grouped-state
+partitions are built directly instead of using row-index builders plus Arrow
+`take`, with exact NULL/routing coverage in
+`docs/qualification/track1-encoded-grouped-partition-build-2026-10-23.md`.
+The remaining implementation boundary is the full final grouped-state
+exchange: avoid materialising intermediate Arrow binary batches while
 preserving checksums, retries, memory accounting, cancellation, and the exact
 fallback path. Until a new paired run closes those gates, Kaveon is not
 described as a Trino or ClickHouse replacement. Cloud qualification is also
