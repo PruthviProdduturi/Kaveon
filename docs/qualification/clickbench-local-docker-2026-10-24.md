@@ -2,7 +2,8 @@
 
 This is a local qualification run because AKS is unavailable until the next
 cloud window. It is evidence for the Docker path only; it does not replace an
-AKS qualification.
+AKS qualification. The stack was rebuilt from the clean integration revision
+`78b0eafd` before the final measurements.
 
 ## Environment
 
@@ -27,11 +28,11 @@ CPU/memory and warm/cold-cache phases before publishing a headline comparison.
 
 | Query | Shape | Kaveon wall | Kaveon result | ClickHouse-local wall | Result check |
 |---|---|---:|---:|---:|---|
-| q33 | grouped `WatchID, ClientIP`, `COUNT/SUM/AVG`, top 10 | 24.468 s (engine 24.417 s) | 10 rows | 5.816 s | exact values inspected; parity rerun required |
-| q35 | grouped constant + `URL`, `COUNT`, top 10 | 16.616 s (engine 16.567 s) | 10 rows | 8.250 s | exact values inspected; parity rerun required |
+| q33 | grouped `WatchID, ClientIP`, `COUNT/SUM/AVG`, top 10 | 24.900 s (engine 24.872 s) | 10 rows | 5.816 s | exact values inspected; parity rerun required |
+| q35 | grouped constant + `URL`, `COUNT`, top 10 | 16.142 s (engine 16.119 s) | 10 rows | 8.250 s | exact values inspected; parity rerun required |
 
-Kaveon query IDs: `c0937bb8-ab21-4d5d-9ba9-9d7b09b74c1d` (q33) and
-`dd0631cd-2e47-492b-b6e1-b1fb092bfd84` (q35).
+Kaveon query IDs: `4b6431e0-25f0-40c9-b700-6f51ae603df3` (q33) and
+`56900113-4a2a-4730-bf16-e6d82fd9297a` (q35).
 
 ## Observed bottleneck
 
