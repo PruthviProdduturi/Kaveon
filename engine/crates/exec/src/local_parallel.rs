@@ -2701,16 +2701,24 @@ mod tests {
     fn encoded_source_partitioner_routes_each_state_key_once() {
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("group_keys", DataType::Binary, false),
-            arrow::datatypes::Field::new("payload", DataType::Int64, false),
+            arrow::datatypes::Field::new("payload", DataType::Binary, true),
         ]));
         let keys = (0..256)
             .map(|value| format!("fixed-key-{value}").into_bytes())
+            .collect::<Vec<_>>();
+        let source_payloads = (0..256)
+            .map(|value| (value % 3 != 0).then(|| format!("payload-{value}").into_bytes()))
             .collect::<Vec<_>>();
         let batch = RecordBatch::try_new(
             schema,
             vec![
                 Arc::new(arrow::array::BinaryArray::from_iter_values(keys.iter())),
-                Arc::new(Int64Array::from_iter_values(0..256)),
+                Arc::new(arrow::array::BinaryArray::from(
+                    source_payloads
+                        .iter()
+                        .map(|payload| payload.as_deref())
+                        .collect::<Vec<_>>(),
+                )),
             ],
         )
         .unwrap();
@@ -2728,9 +2736,23 @@ mod tests {
                 .as_any()
                 .downcast_ref::<arrow::array::BinaryArray>()
                 .unwrap();
+            let payloads = part
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow::array::BinaryArray>()
+                .unwrap();
             for row in 0..values.len() {
                 let key = values.value(row).to_vec();
                 assert_eq!(selector.thread_of(&key), worker);
+                let source_row = key
+                    .strip_prefix(b"fixed-key-")
+                    .and_then(|value| std::str::from_utf8(value).ok())
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap();
+                assert_eq!(payloads.is_null(row), source_payloads[source_row].is_none());
+                if let Some(payload) = source_payloads[source_row].as_ref() {
+                    assert_eq!(payloads.value(row), payload.as_slice());
+                }
                 assert!(seen.insert(key, worker).is_none());
             }
         }
