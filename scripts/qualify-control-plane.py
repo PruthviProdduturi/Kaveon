@@ -26,6 +26,7 @@ later.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
@@ -65,6 +66,17 @@ def _request(path: str, token: str, base: str, timeout: float = 30.0) -> dict:
         raise Failed(f"GET {path} answered {error.code}: {error.read()[:200]!r}") from None
     except urllib.error.URLError as error:
         raise Failed(f"GET {path} did not answer: {error.reason}") from None
+    except (OSError, http.client.HTTPException) as error:
+        # A connection dropped mid-request is neither of the above --
+        # RemoteDisconnected is an http.client exception, and an Engine still
+        # starting answers with one. Crashing here would hand an operator a
+        # stack trace where the finding is simply that nothing answered yet.
+        raise Failed(
+            f"GET {path} failed in transport ({type(error).__name__}: {error}); "
+            "if the Engine has just started, it may not be serving yet"
+        ) from None
+    except json.JSONDecodeError as error:
+        raise Failed(f"GET {path} answered something that is not JSON: {error}") from None
 
 
 def check_reachable(base: str, token: str) -> dict:
@@ -122,6 +134,14 @@ def check_commit_health(metrics: dict) -> list[str]:
     indeterminate = metrics.get("indeterminate", 0)
     rejected = metrics.get("rejected", 0)
     per_commit = attempts / committed if committed else 0.0
+    if not committed:
+        # A fresh Engine passes every other check in this script while having
+        # proved nothing about writing. Saying so is the difference between a
+        # qualification and a reachability probe.
+        warnings.append(
+            "nothing has committed on this Engine, so the commit path is unexercised; "
+            "this run qualifies reachability and the read path only"
+        )
     print(
         f"  {committed:,} commits, {conflicts:,} conflicts, {rejected:,} rejected, "
         f"{indeterminate:,} indeterminate ({per_commit:.2f} attempts a commit)"
@@ -195,8 +215,13 @@ def main() -> int:
         print(f"WARNING: {warning}")
     if warnings:
         print()
-    print("The control plane qualifies: records resolve from their shards, the snapshot")
-    print("is inside its bound, and commits are landing.")
+    committed = metrics.get("committed", 0)
+    print("The control plane qualifies: records resolve from their shards and the snapshot")
+    if committed:
+        print(f"is inside its bound, across {committed:,} commits.")
+    else:
+        # Not "commits are landing". None have.
+        print("is inside its bound. No commit has run here, so writing is unproven.")
     print()
     print("Not covered here: capacity at scale, which needs a populated catalogue, and")
     print("write cost under concurrency, which needs load rather than a probe.")
