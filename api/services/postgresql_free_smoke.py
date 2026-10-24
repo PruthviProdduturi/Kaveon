@@ -9,6 +9,7 @@ SCHEMA_VERSION=1; MAX_RESPONSE_BYTES=8*1024*1024; REQUIRED_ROLE="Admin"
 CHECK_NAMES=("health","catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history","datasets_point","charts_point","dashboards_point","saved_query_point","chat_history_point","theme","dlm_get","dlm_context","dlm_ask","chat_serving")
 NONEMPTY_CHECKS=frozenset(("catalog_sources","datasets","charts","dashboards","query_history"))
 ABSENT_POINT_CHECKS=frozenset(("saved_query_point","chat_history_point"))
+RETIRED_CHECKS={"chat_serving"}
 
 def _canonical(value):return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
 def _digest(value):return hashlib.sha256(_canonical(value)).hexdigest()
@@ -34,7 +35,7 @@ def verify(report,*,now=None,max_age_minutes=60):
   if not isinstance(item,dict) or set(item)!={"name","status","count","state_sha256"}:raise RuntimeError("PostgreSQL-free smoke check schema is invalid")
   names.append(item["name"])
   status=item["status"]
-  if type(status) is not int or (not 200<=status<300 and not (item["name"] in ABSENT_POINT_CHECKS and status==404 and item["count"]==0)):raise RuntimeError("PostgreSQL-free smoke check did not succeed")
+  if type(status) is not int or (not 200<=status<300 and not (item["name"] in ABSENT_POINT_CHECKS and status==404 and item["count"]==0) and not (item["name"] in RETIRED_CHECKS and status==503 and item["count"]==0)):raise RuntimeError("PostgreSQL-free smoke check did not succeed")
   if type(item["count"]) is not int or item["count"]<0 or (item["name"] in NONEMPTY_CHECKS and item["count"]<1):raise RuntimeError("PostgreSQL-free smoke check count is invalid")
   _sha256(item["state_sha256"],"PostgreSQL-free smoke check state")
  if tuple(names)!=CHECK_NAMES or len(names)!=len(set(names)):raise RuntimeError("PostgreSQL-free smoke report check identities are invalid")
@@ -67,13 +68,13 @@ class Probe:
   if not email or "@" not in email or not proxy_secret:raise RuntimeError("trusted smoke identity is incomplete")
   self.base=base_url.rstrip("/");self.headers={"x-proxy-secret":proxy_secret,"x-user-email":email.lower(),"x-user-role":REQUIRED_ROLE,"x-user-roles":REQUIRED_ROLE,"x-user-name":"Retirement probe"}
   self.client=client or httpx.Client(timeout=60,verify=ca_cert or True,trust_env=False)
- def request(self,name,path,*,method="GET",body=None,allow_absent=False):
+ def request(self,name,path,*,method="GET",body=None,allow_absent=False,allow_statuses=()):
   response=self.client.request(method,self.base+path,headers=self.headers,json=body)
-  if (response.status_code<200 or response.status_code>=300) and not (allow_absent and response.status_code==404):raise RuntimeError(f"{name} failed with HTTP {response.status_code}")
+  if (response.status_code<200 or response.status_code>=300) and not (allow_absent and response.status_code==404) and response.status_code not in allow_statuses:raise RuntimeError(f"{name} failed with HTTP {response.status_code}")
   if len(response.content)>MAX_RESPONSE_BYTES:raise RuntimeError(f"{name} response exceeds its byte bound")
   try:value=response.json()
   except ValueError as error:raise RuntimeError(f"{name} returned invalid JSON") from error
-  return value,{"name":name,"status":response.status_code,"count":0 if response.status_code==404 else 1,"state_sha256":_digest(value)}
+  return value,{"name":name,"status":response.status_code,"count":0 if response.status_code in ({404}|set(allow_statuses)) else 1,"state_sha256":_digest(value)}
 
 def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,client=None,now=None):
  if os.getenv("KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED")!="true":raise RuntimeError("PostgreSQL-free smoke collection requires explicit enablement")
@@ -97,11 +98,11 @@ def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,clien
   _,item=probe.request(f"{family}_point",path+_id(lists[family][0],family));checks.append(item)
  if lists["saved_queries"]:
   saved_id=_id(lists["saved_queries"][0],"saved_queries");_,item=probe.request("saved_query_point","/api/v1/lab/saved-queries/"+saved_id)
- else: _,item=probe.request("saved_query_point","/api/v1/lab/saved-queries/__postgresql_free_absence_probe__",allow_absent=True)
+ else: _,item=probe.request("saved_query_point","/api/v1/lab/saved-queries/00000000-0000-0000-0000-000000000000",allow_absent=True)
  checks.append(item)
  if lists["chat_history"]:
   session_id=_id(lists["chat_history"][0],"chat_history");_,item=probe.request("chat_history_point","/api/v1/chat/history/"+session_id)
- else: _,item=probe.request("chat_history_point","/api/v1/chat/history/__postgresql_free_absence_probe__",allow_absent=True)
+ else: _,item=probe.request("chat_history_point","/api/v1/chat/history/-1",allow_absent=True)
  checks.append(item)
  theme,item=probe.request("theme","/api/v1/theme");checks.append(item)
  dataset_id=str(dataset_id)
@@ -113,8 +114,11 @@ def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,clien
  checks.append(item)
  chat_body={"question":question}
  if dataset_id.isdecimal():chat_body["dataset_id"]=int(dataset_id)
- chat,item=probe.request("chat_serving","/api/v1/chat",method="POST",body=chat_body)
- if not isinstance(chat,dict) or chat.get("route") in {None,"error","no_match"}:raise RuntimeError("chat did not serve from migrated product state")
+ chat,item=probe.request("chat_serving","/api/v1/chat",method="POST",body=chat_body,allow_statuses={503})
+ if item["status"]==503:
+  detail=chat.get("detail") if isinstance(chat,dict) else None
+  if not isinstance(detail,str) or "DLM context API" not in detail:raise RuntimeError("legacy chat retirement response is invalid")
+ elif not isinstance(chat,dict) or chat.get("route") in {None,"error","no_match"}:raise RuntimeError("chat did not serve from migrated product state")
  checks.append(item)
  at=(now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00","Z")
  report={"schema_version":SCHEMA_VERSION,"status":"passed","checked_at":at,"authority":"kaveondb","check_count":len(checks),"checks":checks}
