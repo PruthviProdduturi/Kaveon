@@ -24,9 +24,12 @@ The competitive goal is measured against a fixed corpus, not a blanket claim
 that one engine is faster for every workload. For the matched ClickBench
 corpus, Kaveon must retain exact result parity for every statement and close
 the current high-cardinality aggregate gap before a performance win is
-claimed. The current evidence has 28/43 shared result hashes and leaves the
-long grouped URL queries behind Trino; the qualified same-host ClickHouse
-controls remain q33 **4.552 s** and q35 **6.316 s**. Those are the release
+claimed. The current evidence has 28/43 shared result hashes; all 43
+statements have hashes, while the other 15 have byte differences that include
+unordered-tie output and type/rendering differences requiring an explicit
+canonical comparison. The long grouped URL queries remain behind Trino; the
+qualified same-host ClickHouse controls remain q33 **4.552 s** and q35
+**6.316 s**. Those are the release
 targets for the next optimization round, with correctness, bounded memory,
 spill cleanup, cancellation, and repeatability as hard gates.
 
