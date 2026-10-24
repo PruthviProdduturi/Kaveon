@@ -1,13 +1,13 @@
 # Run the full Kaveon stack locally with Docker
 
-Status: **verified 2026-09-17** on Windows 11 with Docker Desktop (WSL 2). The
+Status: **verified 2026-10-24** on Windows 11 with Docker Desktop (WSL 2). The
 same Compose file runs on macOS and Linux.
 
-This is the self-contained developer install: Studio, the API and DLM,
-PostgreSQL, and the KaveonDB Engine (one coordinator, two workers) on one
-machine, with no Azure subscription, no Entra sign-in, and no cloud storage.
-Everything listens on `127.0.0.1` only. It is a development profile, not a
-production deployment; never publish numbers measured on it.
+This is the self-contained PostgreSQL-free developer install: Studio, the API
+and DLM, and KaveonDB (one coordinator, two workers) on one machine. It reads
+the local ADLS mirror from disk and needs no Azure subscription, Entra sign-in,
+or cloud storage. Everything listens on `127.0.0.1` only. It is a development
+profile, not a production deployment; never publish numbers measured on it.
 
 For the Engine alone without PostgreSQL, API or Studio, see
 [Run KaveonDB locally](local-kavedb.md). For the same topology as native
@@ -22,14 +22,10 @@ processes when Docker is unavailable, see
 | API | http://localhost:8082 | FastAPI + DLM; `GET /api/health` |
 | Engine coordinator | http://localhost:8081 | `/health`, `/ui`, `/v1/...`; insecure-development security profile |
 | Engine workers ×2 | internal only | reached through the coordinator |
-| PostgreSQL 17 | localhost:5433 | databases `kaveonmeta` and `kaveon`, role `kaveon` / `kaveon-local-only`; `KAVEON_POSTGRES_PORT` in `.env` moves it when a host PostgreSQL service already holds 5433 |
+| Product state | local KaveonDB catalog volume | datasets, charts, dashboards, DLM artifacts, history, and audit state; no PostgreSQL service |
 
-The API runs its product-catalog replay worker in this profile
-(`KAVEON_PRODUCT_REPLAY_ENABLED=true`): every dataset, chart, dashboard and
-source write in PostgreSQL is applied in order to the coordinator's KaveonDB
-product catalog on the `catalog-data` volume, which DLM generation and serving
-consult. `GET /api/health` shows it as `checks.product_replay` with
-`enabled` and `running` both true.
+The API reads and writes product state through KaveonDB. `GET /api/health`
+reports `authority: kaveondb` and `checks.postgresql.required: false`.
 
 Local-only development tokens are baked into `docker-compose.yml` defaults
 (`kaveon-local-admin-token-not-for-production`, `kaveon-local-catalog-admin`,
@@ -42,9 +38,8 @@ if the machine is shared.
   Give the VM at least 8 GB of memory and 4 CPUs; the 504M-row lake below is
   comfortable with 16 GB and 8 CPUs.
 - Git.
-- Python 3.11+ with `pyarrow` and `numpy` on the host, only for building the
-  local lake once and for the one-time catalog registration.
-- About 20 GB of free disk for images, PostgreSQL state and the generated lake.
+- Python 3.11+ with the standard library on the host for catalog bootstrap.
+- About 20 GB of free disk for images, the catalog volume and the lake mirror.
 
 Install the `kaveon` CLI binary (no Rust toolchain needed):
 
@@ -122,7 +117,8 @@ docker compose ps
 
 The first build compiles the Engine (Rust, cargo-chef cached), installs the API
 (Python) and builds Studio (Next.js); expect 10–20 minutes on a fast machine.
-Later starts are seconds. All six services should report `running` or
+Later starts are seconds. The coordinator, two workers, API and Studio should
+report `running` or
 `healthy`:
 
 ```text
@@ -130,7 +126,6 @@ kaveon-api                  Up (healthy)
 kaveon-engine-coordinator   Up (healthy)
 kaveon-engine-worker-1      Up
 kaveon-engine-worker-2      Up
-kaveon-postgres             Up (healthy)
 kaveon-studio               Up (healthy)
 ```
 
@@ -140,7 +135,25 @@ Verify the cluster sees both workers:
 curl.exe -s http://localhost:8081/v1/cluster
 ```
 
-## 4. Register the Kaveon usage lake as the `Kaveon` catalog
+## 4. Bootstrap the OpenSource catalog
+
+The repository mirror already contains the showcase Delta/Parquet tables under
+`data/adls-mirror/opensource/showcase`. Register them after the stack is up;
+the command is idempotent and is safe against an existing catalog volume.
+
+```powershell
+python scripts\bootstrap-local-catalog.py
+```
+
+It discovers schemas and tables, probes their locations through the Engine,
+and reports the final table count. A fresh local volume should finish with
+the same 25 showcase tables as the checked-in mirror.
+
+## 5. Legacy telemetry registration (optional)
+
+The procedure below is retained for the historical synthetic telemetry build.
+It is not required for the PostgreSQL-free Docker stack and should not be used
+to configure a new installation.
 
 One-time, from the host, using the API's virtual environment (`cd api; python
 -m venv venv; venv\Scripts\pip install -r requirements.txt` if it does not exist
@@ -182,7 +195,7 @@ The registration lives in the `catalog-data` volume and survives restarts and
 image rebuilds. Re-running the script is safe; it verifies rather than
 duplicates.
 
-## 5. Query it
+## 6. Query it
 
 The coordinator runs the insecure-development profile, so the CLI connects
 without a token:
@@ -215,7 +228,7 @@ A filter such as `WHERE country = 'India' AND actions = 7 AND sessions = 3`
 shows its first rows a few seconds in; the `GROUP BY` above lands its six rows
 when it finishes.
 
-## 6. Ask the DLM
+## 7. Ask the DLM
 
 The catalog registered in step 4 is an Engine-side definition; the platform
 also needs a **catalog source** record (so datasets can name the catalog) and a
@@ -281,8 +294,8 @@ it with `.ask <number>`.
 
 ```powershell
 docker compose up -d                 # start (images already built)
-docker compose down                  # stop; keeps PostgreSQL state, the catalog and the lake
-docker compose down --volumes        # also deletes PostgreSQL state and the Engine catalog registration
+docker compose down                  # stop; keeps the catalog volume and the lake
+docker compose down --volumes        # also deletes the Engine catalog registration
 docker compose logs -f engine-coordinator
 docker compose build engine-coordinator engine-worker-1 engine-worker-2   # after pulling Engine changes
 docker compose build api             # after pulling API/DLM changes
