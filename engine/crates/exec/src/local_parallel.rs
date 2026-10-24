@@ -24,7 +24,7 @@ use crate::{
     spill::SpillManager,
 };
 use arrow::{
-    array::{Array, BinaryArray, UInt32Builder},
+    array::{Array, BinaryArray, BinaryBuilder, UInt32Builder},
     compute::take,
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
@@ -555,6 +555,65 @@ impl SourcePartitioner {
         match self {
             Self::Arrow(partitioner) => partitioner.partition(batch),
             Self::Encoded { column, selector } => {
+                // The canonical grouped-state exchange contains binary key
+                // and state frames. Build each worker's binary columns
+                // directly instead of first allocating row-index arrays and
+                // running Arrow `take` over every column. The bytes still
+                // need to be copied into the worker batch, but this removes
+                // the intermediate indices and the generic take dispatch
+                // from the hottest high-cardinality path.
+                if batch
+                    .columns()
+                    .iter()
+                    .all(|array| array.data_type() == &DataType::Binary)
+                {
+                    let values = batch
+                        .column(*column)
+                        .as_any()
+                        .downcast_ref::<BinaryArray>()
+                        .ok_or_else(|| error("encoded grouped key must be Binary"))?;
+                    let mut builders = (0..selector.workers)
+                        .map(|_| {
+                            batch
+                                .columns()
+                                .iter()
+                                .map(|array| {
+                                    BinaryBuilder::with_capacity(
+                                        0,
+                                        array.get_array_memory_size() / selector.workers.max(1),
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    for row in 0..batch.num_rows() {
+                        if values.is_null(row) {
+                            return Err(error("encoded grouped key cannot be null"));
+                        }
+                        let worker = selector.thread_of(values.value(row));
+                        for (builder, array) in builders[worker].iter_mut().zip(batch.columns()) {
+                            let binary = array
+                                .as_any()
+                                .downcast_ref::<BinaryArray>()
+                                .expect("binary schema checked above");
+                            if binary.is_null(row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(binary.value(row));
+                            }
+                        }
+                    }
+                    return builders
+                        .into_iter()
+                        .map(|builders| {
+                            let columns = builders
+                                .into_iter()
+                                .map(|mut builder| Arc::new(builder.finish()) as _)
+                                .collect::<Vec<_>>();
+                            Ok(RecordBatch::try_new(batch.schema().clone(), columns)?)
+                        })
+                        .collect();
+                }
                 let values = batch
                     .column(*column)
                     .as_any()
