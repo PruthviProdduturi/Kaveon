@@ -18,6 +18,7 @@ Validation:
 
 This is an allocation reduction with exact routing coverage. The canonical
 binary route is now the default; set `KAVEON_DIRECT_GROUPED_EXCHANGE=off` for
-an explicit rollback/control. It is not yet a ClickHouse or Trino performance
-claim; a rebuilt ClickBench run is required to measure wall time and exchange
-bytes before scoring it.
+an explicit rollback/control. `on`/`1`/`true` enable it, `off`/`0`/`false`
+disable it, and any other value fails closed. It is not yet a ClickHouse or
+Trino performance claim; a rebuilt ClickBench run is required to measure wall
+time and exchange bytes before scoring it.
