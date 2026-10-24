@@ -66,3 +66,6 @@ at the supported eight-lane setting. The default eight-lane/two-worker
 topology is retained for repeatability; more lanes alone do not remove q33's
 passthrough exchange cost.
 
+A two-partition exchange control was also slower (q33 28.0 s, q35 15.8 s),
+so the four-partition default is retained.
+
