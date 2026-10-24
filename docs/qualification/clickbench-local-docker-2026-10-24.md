@@ -60,3 +60,9 @@ The q33/q35 runs took 37.0 s and 18.5 s respectively, versus 24.2 s and
 14.8 s with LZ4. Both runs returned the same result shape. LZ4 remains the
 local default; disabling it is not an optimization for this workload.
 
+A 12-lane-per-worker control (24 host logical cores) also did not improve the
+whole workload: q33 was 25.3 s and q35 was 13.8 s versus 24.2 s and 14.8 s
+at the supported eight-lane setting. The default eight-lane/two-worker
+topology is retained for repeatability; more lanes alone do not remove q33's
+passthrough exchange cost.
+
