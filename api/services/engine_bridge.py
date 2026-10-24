@@ -582,7 +582,10 @@ def _read_role(role):
 
 
 def catalogs(actor, role):
-    return _request("GET", "/v1/catalog", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    # Catalog metadata is protected by the catalog service credential.  The
+    # bridge credential is intentionally limited to query/control-plane
+    # operations and is not accepted by the Engine catalog surface.
+    return _request("GET", "/v1/catalog", "KAVEON_ENGINE_CATALOG_TOKEN", actor, role=_read_role(role))
 
 
 def cluster(actor, role):

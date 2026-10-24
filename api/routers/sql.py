@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 import re
 import json
 import threading
@@ -145,6 +146,16 @@ def _engine_source_for_catalog(catalog: str) -> dict | None:
         listed = engine_bridge.catalogs("kaveon-system", "Admin") or {}
         if "KaveonDB" in (listed.get("catalogs") or []):
             return {"id": "kaveondb", "engine_catalog": "KaveonDB"}
+    # A PostgreSQL-free local Docker installation uses the Engine catalog
+    # registry as its source registry.  The product authority is still the
+    # source of datasets/charts, but it must not require a duplicate catalog
+    # source row just to execute those local datasets.  Hosted deployments
+    # remain fail-closed on the explicit source registry below.
+    if os.getenv("KAVEON_LOCAL_PRODUCT_MODE", "").strip().lower() == "true":
+        from services import engine_bridge
+        listed = engine_bridge.catalogs("kaveon-system", "Admin") or {}
+        if catalog in (listed.get("catalogs") or []):
+            return {"id": catalog.casefold(), "engine_catalog": catalog}
     if product_read_authority.enabled("sources"):
         for source in product_read_authority.list_documents("sources", "kaveon-system", "Admin"):
             if (source.get("source_kind") == "catalog"

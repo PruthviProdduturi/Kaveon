@@ -262,7 +262,11 @@ pub async fn authorize(
         return next.run(request).await;
     }
     // The catalog service credential is confined to the metadata API.
-    if path.starts_with("/v1/catalog/")
+    // Catalog discovery itself is mounted at the exact `/v1/catalog` path;
+    // the remaining metadata resources use the trailing-slash form.  Both
+    // are part of the catalog service surface and must accept only the
+    // catalog credential, never the general bridge credential.
+    if (path == "/v1/catalog" || path.starts_with("/v1/catalog/"))
         && token_matches(
             bearer(request.headers()),
             state.config.catalog_admin_token.as_deref(),
