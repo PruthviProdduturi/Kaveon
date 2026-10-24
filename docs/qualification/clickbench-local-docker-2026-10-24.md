@@ -53,3 +53,10 @@ and scan/decode throughput, and preserve exact results. It should be measured
 against this record and rerun with a pinned ClickHouse control before any
 claim that Kaveon beats ClickHouse.
 
+## Exchange compression control
+
+The same two-worker image was rerun with `KAVEON_EXCHANGE_COMPRESSION=off`.
+The q33/q35 runs took 37.0 s and 18.5 s respectively, versus 24.2 s and
+14.8 s with LZ4. Both runs returned the same result shape. LZ4 remains the
+local default; disabling it is not an optimization for this workload.
+
