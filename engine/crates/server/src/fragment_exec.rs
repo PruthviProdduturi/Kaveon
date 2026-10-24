@@ -1461,12 +1461,20 @@ pub(crate) fn compile_final_aggregate_parallel(
     // as the fallback for non grouped-state callers.
     // The direct encoded route is the safe default for canonical grouped
     // states. Keep an explicit opt-out for staged rollback and comparison;
-    // absent or unrecognised values select the optimized path, while only
-    // `off` restores the Arrow fallback.
-    let direct_grouped_exchange = !matches!(
-        std::env::var("KAVEON_DIRECT_GROUPED_EXCHANGE").as_deref(),
-        Ok("off") | Ok("0") | Ok("false")
-    );
+    // `off` restores the Arrow fallback and malformed values fail closed.
+    let direct_grouped_exchange = match std::env::var("KAVEON_DIRECT_GROUPED_EXCHANGE") {
+        Ok(value) if matches!(value.as_str(), "off" | "0" | "false") => false,
+        Ok(value) if matches!(value.as_str(), "on" | "1" | "true") => true,
+        Ok(_) => {
+            return Err(exec_err("KAVEON_DIRECT_GROUPED_EXCHANGE must be on or off"));
+        }
+        Err(std::env::VarError::NotPresent) => true,
+        Err(_) => {
+            return Err(exec_err(
+                "KAVEON_DIRECT_GROUPED_EXCHANGE must contain valid Unicode",
+            ));
+        }
+    };
     let encoded_partitioned = source_threaded
         && direct_grouped_exchange
         && sources
