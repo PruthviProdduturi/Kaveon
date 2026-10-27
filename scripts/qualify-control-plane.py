@@ -27,6 +27,7 @@ later.
 """
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -110,42 +111,113 @@ def _execute_sql(sql: str, token: str, base: str, timeout: float = 60.0) -> dict
         raise Failed(f"{sql.split()[0]} answered something that is not JSON: {error}") from None
 
 
+def _post(path: str, body: dict, token: str, base: str, timeout: float = 60.0) -> dict:
+    headers = {
+        "Content-Type": "application/json",
+        "x-kaveon-principal": os.getenv("KAVEON_ENGINE_PRINCIPAL", "qualification@kaveon.local"),
+        "x-kaveon-role": os.getenv("KAVEON_ENGINE_ROLE", "admin"),
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        base.rstrip("/") + path,
+        data=json.dumps(body).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as error:
+        raise Failed(f"POST {path} answered {error.code}: {error.read()[:300]!r}") from None
+    except urllib.error.URLError as error:
+        raise Failed(f"POST {path} did not answer: {error.reason}") from None
+    except (OSError, http.client.HTTPException) as error:
+        raise Failed(
+            f"POST {path} failed in transport ({type(error).__name__}: {error})"
+        ) from None
+    except json.JSONDecodeError as error:
+        raise Failed(f"POST {path} answered something that is not JSON: {error}") from None
+
+
 def check_writes(base: str, token: str, before: dict) -> list[str]:
-    """Write a row, read it back, and clean up.
+    """Write one product record, read it back, and delete it.
 
     Everything else in this script holds on an installation nobody has written
-    to. This is the check that does not: it either commits or it does not.
+    to. This is the check that does not, and it goes through the thing the
+    control plane is made of: a product record, published into a shard and
+    named by the snapshot.
 
-    The table is named for this run so two qualifications cannot collide, and
-    it is dropped on the way out including when a step in the middle fails --
-    a qualification that leaves debris behind in a real catalogue is a bad
+    The record is deleted on the way out including when a step in between
+    fails -- a qualification that leaves debris in a real catalogue is a bad
     trade for the evidence it bought.
     """
     warnings: list[str] = []
-    table = "kaveon_qualify_" + str(int(time.time() * 1000))
-    dropped = False
+    record_id = f"kaveon-qualify-{int(time.time() * 1000)}"
+    document = json.dumps(
+        {"id": record_id, "user_email": os.getenv(
+            "KAVEON_ENGINE_PRINCIPAL", "qualification@kaveon.local")},
+        separators=(",", ":"),
+    ).encode()
+    # Content-addressed: the Engine refuses a record whose bytes do not match
+    # the digest naming them, which is the same check that protects a shard.
+    digest = hashlib.sha256(document).hexdigest()
+    path = f"product/qualification/{record_id}.json"
+
+    def transact(changes_and_documents) -> None:
+        begun = _post("/v1/transaction", {}, token, base)
+        transaction = begun.get("transaction_id") or begun.get("transactionId")
+        if not transaction:
+            raise Failed(f"beginning a transaction returned no id: {begun!r}")
+        for change, document_input in changes_and_documents:
+            body = {"change": change}
+            if document_input is not None:
+                body["document"] = document_input
+            _post(f"/v1/transaction/{transaction}/stage", body, token, base)
+        _post(f"/v1/transaction/{transaction}/commit", {}, token, base)
+
+    created = False
     try:
-        _execute_sql(f"CREATE TABLE {table} (id BIGINT, note VARCHAR)", token, base)
-        _execute_sql(f"INSERT INTO {table} VALUES (1, 'qualification')", token, base)
-        read = _execute_sql(f"SELECT id, note FROM {table}", token, base)
-        rows = read.get("rows") or read.get("data") or []
-        if not rows:
+        transact([(
+            {
+                "type": "create_product",
+                "record": {
+                    "kind": "user_theme",
+                    "id": record_id,
+                    "revision": 1,
+                    "document": {"path": path, "sha256": digest},
+                    "unique_values": {},
+                    "references": [],
+                },
+            },
+            {"path": path, "bytes": list(document)},
+        )])
+        created = True
+        read = _request(f"/v1/product/user_theme/{record_id}", token, base)
+        if not read:
             raise Failed(
-                f"a row was written to {table} and the read came back empty; the commit "
-                "reported success without the write being visible"
+                f"record {record_id} committed and read back empty; the commit reported "
+                "success without the write being visible"
             )
-        print(f"  wrote and read back {len(rows)} row(s) through {table}")
+        print(f"  wrote and read back product record {record_id}")
     finally:
-        try:
-            _execute_sql(f"DROP TABLE {table}", token, base)
-            dropped = True
-        except Failed:
-            pass
-    if not dropped:
-        warnings.append(
-            f"the qualification table {table} could not be dropped and is still present; "
-            "remove it by hand"
-        )
+        if created:
+            try:
+                transact([(
+                    {
+                        "type": "delete_product",
+                        "kind": "user_theme",
+                        "id": record_id,
+                        "expected_revision": 1,
+                    },
+                    None,
+                )])
+            except Failed:
+                warnings.append(
+                    f"the qualification record {record_id} could not be deleted and is "
+                    "still present; remove it by hand"
+                )
 
     after = _request("/v1/transaction/metrics", token, base)
     committed = after.get("committed", 0) - before.get("committed", 0)
@@ -280,13 +352,22 @@ def main() -> int:
         check_snapshot_is_sharded(metrics)
         print("occupancy")
         warnings += check_occupancy(metrics)
+        exercising_writes = os.getenv("KAVEON_QUALIFY_WRITES") == "1"
         print("commit health")
-        warnings += check_commit_health(metrics)
+        # Deferred when writes are about to run: the counters read here are
+        # from before them, so warning that nothing has committed and then
+        # committing makes the report argue with itself.
+        if not exercising_writes:
+            warnings += check_commit_health(metrics)
         print("round trip")
         check_records_round_trip(base, token)
-        if os.getenv("KAVEON_QUALIFY_WRITES") == "1":
+        if exercising_writes:
             print("writes")
             warnings += check_writes(base, token, metrics)
+            # Re-read, so the health below and the closing line describe the
+            # Engine as it is now rather than as it was before this wrote.
+            metrics = _request("/v1/transaction/metrics", token, base)
+            warnings += check_commit_health(metrics)
         else:
             warnings.append(
                 "writes were not exercised; set KAVEON_QUALIFY_WRITES=1 to create, write, "
