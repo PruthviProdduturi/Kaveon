@@ -112,5 +112,69 @@ class CommitHealthCheck(unittest.TestCase):
         qualify.check_commit_health(_healthy(attempts=0, committed=0))
 
 
+class WriteCheck(unittest.TestCase):
+    """The only check that proves the commit path, and the only one that writes."""
+
+    def setUp(self):
+        self.calls = []
+        self.base, self.token = "http://engine", "token"
+
+    def _patch(self, sql_results, metrics_after):
+        """Stand in for the Engine: record statements, answer in order."""
+        import unittest.mock as mock
+
+        def execute(sql, token, base, timeout=60.0):
+            self.calls.append(sql)
+            result = sql_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        return (
+            mock.patch.object(qualify, "_execute_sql", side_effect=execute),
+            mock.patch.object(qualify, "_request", return_value=metrics_after),
+        )
+
+    def test_a_write_that_reads_back_empty_is_a_failure(self):
+        """The dangerous case: the commit reports success and nothing landed."""
+        execute, request = self._patch(
+            [{}, {}, {"rows": []}, {}], {"committed": 10})
+        with execute, request, self.assertRaises(qualify.Failed) as raised:
+            qualify.check_writes(self.base, self.token, {"committed": 7})
+        self.assertIn("came back empty", str(raised.exception))
+
+    def test_the_table_is_dropped_even_when_the_read_fails(self):
+        """A qualification must not leave debris in a real catalogue."""
+        execute, request = self._patch(
+            [{}, {}, qualify.Failed("select exploded"), {}], {"committed": 10})
+        with execute, request, self.assertRaises(qualify.Failed):
+            qualify.check_writes(self.base, self.token, {"committed": 7})
+        self.assertTrue(
+            any(sql.startswith("DROP TABLE") for sql in self.calls),
+            f"the table must be dropped on the way out, got: {self.calls}",
+        )
+
+    def test_a_commit_counter_that_does_not_move_is_a_failure(self):
+        """Statements that appear to work while nothing commits."""
+        execute, request = self._patch(
+            [{}, {}, {"rows": [{"id": 1}]}, {}], {"committed": 7})
+        with execute, request, self.assertRaises(qualify.Failed) as raised:
+            qualify.check_writes(self.base, self.token, {"committed": 7})
+        self.assertIn("commit counter", str(raised.exception))
+
+    def test_a_healthy_write_path_passes_and_cleans_up(self):
+        execute, request = self._patch(
+            [{}, {}, {"rows": [{"id": 1, "note": "qualification"}]}, {}],
+            {"committed": 11})
+        with execute, request:
+            warnings = qualify.check_writes(self.base, self.token, {"committed": 7})
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(self.calls), 4)
+        self.assertTrue(self.calls[0].startswith("CREATE TABLE"))
+        self.assertTrue(self.calls[-1].startswith("DROP TABLE"))
+        # Named per run, so two qualifications cannot collide on one table.
+        self.assertIn("kaveon_qualify_", self.calls[0])
+
+
 if __name__ == "__main__":
     unittest.main()

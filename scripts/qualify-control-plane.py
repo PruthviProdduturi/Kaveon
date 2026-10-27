@@ -13,6 +13,7 @@ rather than working out what to run.
 
     KAVEON_ENGINE_URL=http://localhost:8080 \\
     KAVEON_ENGINE_TOKEN=... \\
+    KAVEON_QUALIFY_WRITES=1 \\
     python scripts/qualify-control-plane.py
 
 The token is a principal token the Engine's security configuration knows, not
@@ -77,6 +78,84 @@ def _request(path: str, token: str, base: str, timeout: float = 30.0) -> dict:
         ) from None
     except json.JSONDecodeError as error:
         raise Failed(f"GET {path} answered something that is not JSON: {error}") from None
+
+
+def _execute_sql(sql: str, token: str, base: str, timeout: float = 60.0) -> dict:
+    """Run one statement through the Engine's transactional SQL route."""
+    headers = {
+        "Content-Type": "application/json",
+        "x-kaveon-principal": os.getenv("KAVEON_ENGINE_PRINCIPAL", "qualification@kaveon.local"),
+        "x-kaveon-role": os.getenv("KAVEON_ENGINE_ROLE", "admin"),
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        base.rstrip("/") + "/v1/transaction/sql",
+        data=json.dumps({"sql": sql}).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise Failed(f"{sql.split()[0]} answered {error.code}: {error.read()[:300]!r}") from None
+    except urllib.error.URLError as error:
+        raise Failed(f"{sql.split()[0]} did not answer: {error.reason}") from None
+    except (OSError, http.client.HTTPException) as error:
+        raise Failed(
+            f"{sql.split()[0]} failed in transport ({type(error).__name__}: {error})"
+        ) from None
+    except json.JSONDecodeError as error:
+        raise Failed(f"{sql.split()[0]} answered something that is not JSON: {error}") from None
+
+
+def check_writes(base: str, token: str, before: dict) -> list[str]:
+    """Write a row, read it back, and clean up.
+
+    Everything else in this script holds on an installation nobody has written
+    to. This is the check that does not: it either commits or it does not.
+
+    The table is named for this run so two qualifications cannot collide, and
+    it is dropped on the way out including when a step in the middle fails --
+    a qualification that leaves debris behind in a real catalogue is a bad
+    trade for the evidence it bought.
+    """
+    warnings: list[str] = []
+    table = "kaveon_qualify_" + str(int(time.time() * 1000))
+    dropped = False
+    try:
+        _execute_sql(f"CREATE TABLE {table} (id BIGINT, note VARCHAR)", token, base)
+        _execute_sql(f"INSERT INTO {table} VALUES (1, 'qualification')", token, base)
+        read = _execute_sql(f"SELECT id, note FROM {table}", token, base)
+        rows = read.get("rows") or read.get("data") or []
+        if not rows:
+            raise Failed(
+                f"a row was written to {table} and the read came back empty; the commit "
+                "reported success without the write being visible"
+            )
+        print(f"  wrote and read back {len(rows)} row(s) through {table}")
+    finally:
+        try:
+            _execute_sql(f"DROP TABLE {table}", token, base)
+            dropped = True
+        except Failed:
+            pass
+    if not dropped:
+        warnings.append(
+            f"the qualification table {table} could not be dropped and is still present; "
+            "remove it by hand"
+        )
+
+    after = _request("/v1/transaction/metrics", token, base)
+    committed = after.get("committed", 0) - before.get("committed", 0)
+    if committed <= 0:
+        raise Failed(
+            "the write path ran without the commit counter moving; either the metrics are "
+            "not recording commits or the statements did not commit"
+        )
+    print(f"  {committed} commit(s) landed during the check")
+    return warnings
 
 
 def check_reachable(base: str, token: str) -> dict:
@@ -205,6 +284,15 @@ def main() -> int:
         warnings += check_commit_health(metrics)
         print("round trip")
         check_records_round_trip(base, token)
+        if os.getenv("KAVEON_QUALIFY_WRITES") == "1":
+            print("writes")
+            warnings += check_writes(base, token, metrics)
+        else:
+            warnings.append(
+                "writes were not exercised; set KAVEON_QUALIFY_WRITES=1 to create, write, "
+                "read and drop a temporary table, which is the only check here that "
+                "proves the commit path works"
+            )
     except Failed as failure:
         print()
         print(f"FAILED: {failure}")
