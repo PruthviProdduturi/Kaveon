@@ -10,6 +10,8 @@ exist to catch: an Engine predating the sharded format, a snapshot at its
 ceiling, commits finishing indeterminate, and writers contending harder than
 the local measurement.
 """
+import hashlib
+import json
 import importlib.util
 import unittest
 from pathlib import Path
@@ -116,64 +118,100 @@ class WriteCheck(unittest.TestCase):
     """The only check that proves the commit path, and the only one that writes."""
 
     def setUp(self):
-        self.calls = []
+        self.posts = []
         self.base, self.token = "http://engine", "token"
 
-    def _patch(self, sql_results, metrics_after):
-        """Stand in for the Engine: record statements, answer in order."""
+    def _engine(self, read_result, metrics_after, fail_on=None):
+        """Stand in for the Engine: record posts, answer reads.
+
+        `fail_on` is a substring of a staged change type that should blow up,
+        so a failure can be placed in the middle of the sequence.
+        """
         import unittest.mock as mock
 
-        def execute(sql, token, base, timeout=60.0):
-            self.calls.append(sql)
-            result = sql_results.pop(0)
-            if isinstance(result, Exception):
-                raise result
-            return result
+        def post(path, body, token, base, timeout=60.0):
+            self.posts.append((path, body))
+            if fail_on and fail_on in json.dumps(body):
+                raise qualify.Failed(f"staging {fail_on} exploded")
+            if path.endswith("/v1/transaction"):
+                return {"transaction_id": "txn-1"}
+            return {}
+
+        def request(path, token, base, timeout=30.0):
+            return metrics_after if path.endswith("metrics") else read_result
 
         return (
-            mock.patch.object(qualify, "_execute_sql", side_effect=execute),
-            mock.patch.object(qualify, "_request", return_value=metrics_after),
+            mock.patch.object(qualify, "_post", side_effect=post),
+            mock.patch.object(qualify, "_request", side_effect=request),
         )
 
-    def test_a_write_that_reads_back_empty_is_a_failure(self):
-        """The dangerous case: the commit reports success and nothing landed."""
-        execute, request = self._patch(
-            [{}, {}, {"rows": []}, {}], {"committed": 10})
-        with execute, request, self.assertRaises(qualify.Failed) as raised:
-            qualify.check_writes(self.base, self.token, {"committed": 7})
-        self.assertIn("came back empty", str(raised.exception))
+    def _staged_types(self):
+        return [
+            body["change"]["type"]
+            for _path, body in self.posts
+            if isinstance(body, dict) and "change" in body
+        ]
 
-    def test_the_table_is_dropped_even_when_the_read_fails(self):
-        """A qualification must not leave debris in a real catalogue."""
-        execute, request = self._patch(
-            [{}, {}, qualify.Failed("select exploded"), {}], {"committed": 10})
-        with execute, request, self.assertRaises(qualify.Failed):
+    def test_a_record_that_reads_back_empty_is_a_failure(self):
+        """The dangerous case: the commit reports success and nothing landed."""
+        post, request = self._engine({}, {"committed": 10})
+        with post, request, self.assertRaises(qualify.Failed) as raised:
             qualify.check_writes(self.base, self.token, {"committed": 7})
-        self.assertTrue(
-            any(sql.startswith("DROP TABLE") for sql in self.calls),
-            f"the table must be dropped on the way out, got: {self.calls}",
+        self.assertIn("read back empty", str(raised.exception))
+
+    def test_the_record_is_deleted_even_when_the_read_fails(self):
+        """A qualification must not leave debris in a real catalogue."""
+        import unittest.mock as mock
+
+        post, _ = self._engine({}, {"committed": 10})
+        # The record is created, then the read-back raises.
+        def request(path, token, base, timeout=30.0):
+            if path.endswith("metrics"):
+                return {"committed": 10}
+            raise qualify.Failed("the read exploded")
+
+        with post, mock.patch.object(qualify, "_request", side_effect=request), \
+                self.assertRaises(qualify.Failed):
+            qualify.check_writes(self.base, self.token, {"committed": 7})
+        self.assertIn(
+            "delete_product",
+            self._staged_types(),
+            f"the record must be deleted on the way out, staged: {self._staged_types()}",
         )
 
     def test_a_commit_counter_that_does_not_move_is_a_failure(self):
         """Statements that appear to work while nothing commits."""
-        execute, request = self._patch(
-            [{}, {}, {"rows": [{"id": 1}]}, {}], {"committed": 7})
-        with execute, request, self.assertRaises(qualify.Failed) as raised:
+        post, request = self._engine({"id": "r"}, {"committed": 7})
+        with post, request, self.assertRaises(qualify.Failed) as raised:
             qualify.check_writes(self.base, self.token, {"committed": 7})
         self.assertIn("commit counter", str(raised.exception))
 
     def test_a_healthy_write_path_passes_and_cleans_up(self):
-        execute, request = self._patch(
-            [{}, {}, {"rows": [{"id": 1, "note": "qualification"}]}, {}],
-            {"committed": 11})
-        with execute, request:
+        post, request = self._engine({"id": "r"}, {"committed": 11})
+        with post, request:
             warnings = qualify.check_writes(self.base, self.token, {"committed": 7})
         self.assertEqual(warnings, [])
-        self.assertEqual(len(self.calls), 4)
-        self.assertTrue(self.calls[0].startswith("CREATE TABLE"))
-        self.assertTrue(self.calls[-1].startswith("DROP TABLE"))
-        # Named per run, so two qualifications cannot collide on one table.
-        self.assertIn("kaveon_qualify_", self.calls[0])
+        self.assertEqual(self._staged_types(), ["create_product", "delete_product"])
+
+    def test_the_document_digest_matches_the_bytes_it_names(self):
+        """A record whose bytes do not match its digest is refused by the Engine.
+
+        Computing it wrong here would fail against a real Engine and pass
+        against any mock, so it is checked rather than assumed.
+        """
+        post, request = self._engine({"id": "r"}, {"committed": 11})
+        with post, request:
+            qualify.check_writes(self.base, self.token, {"committed": 7})
+        staged = next(
+            body for _path, body in self.posts
+            if isinstance(body, dict) and body.get("change", {}).get("type") == "create_product"
+        )
+        document = bytes(staged["document"]["bytes"])
+        self.assertEqual(
+            hashlib.sha256(document).hexdigest(),
+            staged["change"]["record"]["document"]["sha256"],
+            "the digest in the record must be of the bytes staged beside it",
+        )
 
 
 if __name__ == "__main__":
