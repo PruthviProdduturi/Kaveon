@@ -203,7 +203,10 @@ class RouteInventoryTests(unittest.TestCase):
                     "POST /api/v1/lab/saved-queries", "POST /api/v1/lab/ctas", "POST /api/v1/catalog-sources",
                     "POST /api/v1/engine/catalog/tables", "PUT /api/v1/datasets/{dataset_id}/dlm/context",
                     "POST /api/v1/datasets/{dataset_id}/dlm/generate", "PUT /api/v1/engine/admin/resource-groups",
-                    "POST /api/v1/admin/reset", "DELETE /api/v1/sql/cache"):
+                    # `POST /api/v1/admin/reset` was in this list until the
+                    # legacy metadata control path was removed; a route that
+                    # does not exist cannot be ungoverned.
+                    "DELETE /api/v1/sql/cache"):
             self.assertIn(key, governed)
 
 
