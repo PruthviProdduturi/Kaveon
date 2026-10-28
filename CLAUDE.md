@@ -14,7 +14,7 @@ A **unified, self-hosted, open-source data intelligence platform** (MIT). Taglin
 
 | Pillar | Path | Stack | Maturity |
 |---|---|---|---|
-| **Kaveon Engine** | `engine/` | Rust (edition 2024), Arrow 54 / Parquet 54, sqlparser, axum, tokio | Alpha — **not yet wired into Studio/API** |
+| **Kaveon Engine** | `engine/` | Rust (edition 2024), Arrow 54 / Parquet 54, sqlparser, axum, tokio | Alpha — **wired into Studio + API**: charts and SQL Lab route to `/api/v1/sql/engine` when an Engine catalog is selected (`ChartBuilderContext.tsx`, `api/routers/sql.py:execute_engine_sql`, routers `engine_catalog` / `engine_console` / `engine_governance`). No numbered Engine release yet. |
 | **Kaveon DLM** | `api/dlm/` | Python — deterministic no-LLM NL→SQL + answer-from-context | Shipping, primary homepage path |
 | **Kaveon Studio** | `studio/` | Next.js 15 / React 19, App Router, NextAuth v5, ECharts 5 + echarts-gl, Monaco | Live |
 
