@@ -37,8 +37,11 @@ values per role, so `helm upgrade` reproduces the running StatefulSets.
    residual semi joins (TPC-H Q21).
 6. Qualify identity rotation, tenant isolation and the platform bridge for
    production.
-7. Fill the remaining telemetry: live per-operator CPU and memory, spilled
-   tables and groups on the final merge.
+7. Complete the troubleshooting surface: task-level CPU, queue, exchange,
+   memory, spill and scan-cache counters are recorded when workers report
+   them; the Studio detail view exposes those measured hotspots. Remaining
+   work is live operator attribution for in-flight tasks and historical
+   percentile comparisons across comparable query runs.
 
 See the [validation checkpoint](../engineering/checkpoint-2026-09-08.md),
 [AKS deployment record](../engineering/aks-test-deployment.md),
