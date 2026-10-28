@@ -177,7 +177,6 @@ class RouteInventoryTests(unittest.TestCase):
         "POST /api/v1/lab/execute": "sql", "POST /api/v1/lab/query": "query",
         "POST /api/v1/sql/execute": "sql_text", "POST /api/v1/sql/execute-async": "sql_text",
         "POST /api/v1/sql/engine": "sql_text", "POST /api/v1/dlm/reproduce": "sql",
-        "POST /api/v1/context/ask": "sql",
     }
 
     def test_the_application_dependency_and_the_allowances(self):
