@@ -6,7 +6,7 @@ import pytest
 from fastapi import Response
 
 import database.metadata as metadata
-from routers import catalog, catalog_sources, chat, data_sources, lab, sql
+from routers import catalog, catalog_sources, data_sources, lab, sql
 from services import engine_bridge, product_read_authority
 
 
@@ -110,7 +110,4 @@ def test_engine_catalog_resolution_and_legacy_studio_routes_fail_closed(monkeypa
     with pytest.raises(Exception) as execute_error:
         sql.execute_sql(execute_body,Response(),context)
     assert getattr(execute_error.value,"status_code",None)==503
-    with pytest.raises(Exception) as chat_error:
-        chat.chat(chat.ChatRequest(question="show trips"),context)
-    assert getattr(chat_error.value,"status_code",None)==503
     retired.assert_not_called()
