@@ -14,6 +14,8 @@ import {
 } from "../../utils/mapProjection";
 import { getPlugin } from "./chartPluginRegistry";
 import { normaliseCountryName } from "../../utils/countryAliases";
+import { normaliseUsState, normaliseNycBorough } from "../../utils/regionAliases";
+import { startRender, endRender } from "../../utils/renderTelemetry";
 import { encodeThumbnail, surfaceColor } from "../../utils/thumbnail";
 import { msalFetch } from "../../utils/msalFetch";
 import { API_BASE } from "../../config";
@@ -434,8 +436,8 @@ const geoFetching: Record<string, Promise<any>> = {};
 // Region config: which GeoJSON + ECharts map name + how to normalise the join key.
 const MAP_REGIONS: Record<string, { url: string; mapName: string; normalize: (s: string) => string }> = {
   world: { url: "/geo/world.json", mapName: "world", normalize: (s) => normaliseCountryName(s) },
-  usa:   { url: "/geo/usa.json",   mapName: "USA",   normalize: (s) => s.trim() },
-  nyc:   { url: "/geo/nyc.json",   mapName: "NYC",   normalize: (s) => s.trim() },
+  usa:   { url: "/geo/usa.json",   mapName: "USA",   normalize: (s) => normaliseUsState(s) },
+  nyc:   { url: "/geo/nyc.json",   mapName: "NYC",   normalize: (s) => normaliseNycBorough(s) },
 };
 
 // Elegant single-family sequential (light sky → deep ocean blue). Tasteful and
@@ -525,9 +527,12 @@ const WorldMapRenderer: React.FC<{
   columns: string[];
   advancedOptions?: any;
   onCrossFilter?: (value: string) => void;
-}> = ({ rows, columns, advancedOptions, onCrossFilter }) => {
+  /** The server returned fewer rows than the query matched. */
+  truncated?: boolean;
+}> = ({ rows, columns, advancedOptions, onCrossFilter, truncated }) => {
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = React.useState(0);
   const eRef = React.useRef<any>(null);
   const hostRef = React.useRef<HTMLDivElement>(null);
   const { theme: mapTheme } = useTheme();
@@ -576,12 +581,21 @@ const WorldMapRenderer: React.FC<{
   // ── Geo source ─────────────────────────────────────────────────────────────
   React.useEffect(() => {
     setReady(false);
+    setError(null);
     const load = async () => {
       try {
         if (!geoCache[region]) {
           if (!geoFetching[region]) {
             geoFetching[region] = fetch(REGION.url)
-              .then(r => r.json())
+              .then(r => {
+                // Unchecked, a 404 or an HTML error page reached `json()` and
+                // surfaced as a parse error, which reads as corrupt map data
+                // rather than absent map data.
+                if (!r.ok) {
+                  throw new Error(`${REGION.url} answered ${r.status}`);
+                }
+                return r.json();
+              })
               .then(data => {
                 // echarts-gl 2.0.9 has several null-safety bugs in its mesh builder:
                 // 1. Crashes on non-Polygon/MultiPolygon geometry types
@@ -621,11 +635,42 @@ const WorldMapRenderer: React.FC<{
         }
         setReady(true);
       } catch (e) {
-        setError("Failed to load map data");
+        // A rejected fetch is cached in geoFetching; clear it so the Retry
+        // action below really performs a new request rather than returning the
+        // same rejected promise forever.
+        delete geoFetching[region];
+        setError(`Unable to load the ${region} map data`);
       }
     };
     load();
-  }, [isGlobe, region]);
+  }, [isGlobe, region, loadAttempt]);
+
+  // ── The join key ───────────────────────────────────────────────────────────
+  // ECharts matches a series datum to a map feature by exact name, so a value
+  // has to arrive spelled the way the GeoJSON spells it. The alias tables
+  // handle codes and variants; the casing comes from the loaded features
+  // themselves, because an alias table only canonicalises what it recognises
+  // -- "zambia" was passing straight through and never meeting "Zambia" --
+  // and a hand-kept list of every canonical spelling would drift from the
+  // GeoJSON the moment either changed.
+  const featureNames = React.useMemo(() => {
+    const byLower = new Map<string, string>();
+    for (const f of (geoCache[region]?.features || [])) {
+      const name = String(f?.properties?.name ?? "").trim();
+      if (name) byLower.set(name.toLowerCase(), name);
+    }
+    return byLower;
+    // `geoCache` is a module-level store the loader above fills, so there is no
+    // reactive value to depend on -- `ready` and `loadAttempt` are the signals
+    // that it has been filled, which is why the lint rule reads them as
+    // unnecessary and they have to stay.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, region, loadAttempt]);
+
+  const joinKey = React.useCallback((raw: unknown): string => {
+    const aliased = REGION.normalize(String(raw ?? "").trim());
+    return featureNames.get(aliased.toLowerCase()) ?? aliased;
+  }, [REGION, featureNames]);
 
   // ── Data framing ───────────────────────────────────────────────────────────
   // Frame the map on the regions that actually carry data: US-only data zooms
@@ -639,14 +684,15 @@ const WorldMapRenderer: React.FC<{
     if (!feats.length) return;
     const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
     if (nameIdx < 0) return;
-    const dataNames = new Set(
-      rows.map(r => REGION.normalize(String(r[nameIdx] ?? ""))).filter(Boolean)
-    );
+    // Framed through the join key for the same reason the series is: a result
+    // of state codes matched no feature here either, so the map opened on the
+    // whole country instead of on the data.
+    const dataNames = new Set(rows.map(r => joinKey(r[nameIdx])).filter(Boolean));
     const sig = `${region}|${rows.length}|${[...dataNames].slice(0, 3).join(",")}`;
     if (fitSigRef.current === sig) return;   // already fitted this dataset
     fitSigRef.current = sig;
     setDataFit(computeAutoFit(feats, dataNames));
-  }, [ready, isGlobe, region, rows, columns, REGION]);
+  }, [ready, isGlobe, region, rows, columns, joinKey]);
 
   // Interactive pan/zoom, held per projection: the two projections express
   // `center` in different spaces, so a change of projection starts from the fit.
@@ -687,6 +733,52 @@ const WorldMapRenderer: React.FC<{
   );
   const useProjection = mode === "globe" && canProject && !!projection;
 
+  // A successful GeoJSON load can still produce a blank map when the query's
+  // first text column contains values that do not exist in the selected
+  // geography (for example country names for a US map). Surface that as a
+  // useful state instead of rendering an apparently broken canvas.
+  /// Why a map cannot be drawn, or how much of it can.
+  ///
+  /// This was a boolean, so a column holding no geography, a column holding
+  /// only nulls, and a column whose values simply do not match this map all
+  /// ended at the same sentence. They need different actions: change the
+  /// column, look at the query, or change the map region.
+  const geoDiagnosis = React.useMemo((): {
+    kind: "ok" | "no-geographic-column" | "all-null" | "no-match";
+    matched: number;
+    unmatched: number;
+    sample: string[];
+  } | null => {
+    if (!ready || !rows.length || columns.length < 2) return null;
+    const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
+    if (nameIdx < 0) {
+      return { kind: "no-geographic-column", matched: 0, unmatched: 0, sample: [] };
+    }
+
+    const present = rows
+      .map((r) => String(r[nameIdx] ?? "").trim())
+      .filter((value) => value.length > 0);
+    if (!present.length) {
+      return { kind: "all-null", matched: 0, unmatched: rows.length, sample: [] };
+    }
+
+    const names = new Set(featureNames.values());
+    const unmatched: string[] = [];
+    let matched = 0;
+    for (const value of present) {
+      if (names.has(joinKey(value))) matched += 1;
+      else if (unmatched.length < 3 && !unmatched.includes(value)) unmatched.push(value);
+    }
+    const missed = present.length - matched;
+    if (matched === 0) {
+      return { kind: "no-match", matched: 0, unmatched: missed, sample: unmatched };
+    }
+    // Partly matched still draws. The count is reported because the rows that
+    // did not match are simply absent from the map, so a result that matched
+    // a fifth of its rows looks complete.
+    return { kind: "ok", matched, unmatched: missed, sample: unmatched };
+  }, [ready, rows, columns, featureNames, joinKey]);
+
   const option = React.useMemo(() => {
     if (!ready || !rows.length || columns.length < 2) return null;
     if (!box.width || !box.height) return null;
@@ -716,7 +808,7 @@ const WorldMapRenderer: React.FC<{
     if (nameIdx < 0 || valIdx < 0) return null;
 
     const data = rows
-      .map(r => ({ name: REGION.normalize(String(r[nameIdx] ?? "")), value: Number(r[valIdx] ?? 0) }))
+      .map(r => ({ name: joinKey(r[nameIdx]), value: Number(r[valIdx] ?? 0) }))
       .filter(d => d.name && !isNaN(d.value));
 
     const values = data.map(d => d.value);
@@ -954,12 +1046,28 @@ const WorldMapRenderer: React.FC<{
       }],
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark]);
+  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark, joinKey]);
 
   // The host box stays mounted through every state so it can be measured before
   // the chart that depends on that measurement exists. The parent
   // (.chart-builder-preview-inner) centres its children, which would otherwise
   // collapse a height:100% child to nothing.
+  // ── Render telemetry ───────────────────────────────────────────────────────
+  // Timed from the option being produced to ECharts reporting the paint
+  // finished, which is the part a query timer cannot see. The stamp is taken
+  // here rather than in an effect because a child's effects run before the
+  // parent's, so an effect would start the clock after the option had already
+  // been handed to the chart.
+  // The 3-D globe is a separate component with its own renderer, so only the
+  // 2-D map is timed here -- stamping a start that nothing can finish would
+  // leave a clock running forever.
+  const surface = `map:${region}`;
+  const stampedOption = React.useRef<unknown>(null);
+  if (!isGlobe && option && stampedOption.current !== option) {
+    stampedOption.current = option;
+    startRender(surface);
+  }
+
   const host = (child: React.ReactNode) => (
     <div
       ref={hostRef}
@@ -972,10 +1080,32 @@ const WorldMapRenderer: React.FC<{
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color, fontSize: 13 }}>{text}</div>
   );
 
-  if (error) return host(notice(error, "#ef4444"));
+  if (error) return host(
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", height: "100%", color: "#ef4444", fontSize: 13 }}>
+      <span>{error}</span>
+      <button type="button" onClick={() => setLoadAttempt((n) => n + 1)} style={{ border: "1px solid currentColor", borderRadius: 6, padding: "4px 10px", background: "transparent", color: "inherit", cursor: "pointer", fontSize: 12 }}>Retry</button>
+    </div>,
+  );
   // The globe's map has to be registered before an option can name it — hold the
   // chart for that frame rather than flashing the flat map first.
   if (!ready || (mode === "globe" && canProject && !projection)) return host(notice("Loading map…", chartTone.muted));
+
+  if (geoDiagnosis && geoDiagnosis.kind !== "ok") {
+    // Each of these is a different thing to do next, so each says a different
+    // thing. The previous single message sent someone to look at their data
+    // when the fix was often the column picker or the map region.
+    const message =
+      geoDiagnosis.kind === "no-geographic-column"
+        ? "No column in this result looks geographic. A map needs a column of place names or codes — pick one, or choose a different chart type."
+        : geoDiagnosis.kind === "all-null"
+          ? `Every geography value in this result is empty (${geoDiagnosis.unmatched} row${geoDiagnosis.unmatched === 1 ? "" : "s"}). Check the query's grouping or filters.`
+          : `No geography in this result matches the ${region} map${
+              geoDiagnosis.sample.length
+                ? ` — for example ${geoDiagnosis.sample.map((s) => `"${s}"`).join(", ")}`
+                : ""
+            }. Try a different map region, or check the names against the map's own spelling.`;
+    return host(notice(message, chartTone.muted));
+  }
 
   // Author-selected 3-D globe: delegate to the chunk that statically imports echarts-gl.
   if (isGlobe) {
@@ -991,12 +1121,57 @@ const WorldMapRenderer: React.FC<{
 
   if (!option) return host(null);
 
+  const unmatched = geoDiagnosis?.kind === "ok" ? geoDiagnosis.unmatched : 0;
+  // Two different ways a map can be showing less than the question asked for,
+  // in one place: rows the server did not send, and rows it sent that no
+  // feature on this map answers to. Both look like a complete map otherwise.
+  const shortfall: string[] = [];
+  if (truncated) shortfall.push(`largest ${rows.length.toLocaleString()} shown`);
+  if (unmatched > 0) shortfall.push(`${unmatched.toLocaleString()} unmapped`);
+
   return host(
+    <>
+    {shortfall.length > 0 && (
+      <div
+        title={[
+          truncated
+            ? `The result was capped, so this map shows the largest ${rows.length.toLocaleString()} regions by value.`
+            : "",
+          unmatched > 0 && geoDiagnosis?.sample.length
+            ? `Not on the ${region} map: ${geoDiagnosis.sample.join(", ")}${
+                unmatched > geoDiagnosis.sample.length ? ", …" : ""
+              }`
+            : unmatched > 0
+              ? `${unmatched.toLocaleString()} value(s) match no feature on the ${region} map.`
+              : "",
+        ].filter(Boolean).join(" ") || undefined}
+        style={{
+          position: "absolute", top: 6, right: 8, zIndex: 5,
+          display: "flex", alignItems: "center", gap: 5,
+          padding: "2px 7px", borderRadius: 6,
+          background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.45)",
+          color: "#b45309", fontSize: 10.5, fontWeight: 600,
+          cursor: "help",
+          pointerEvents: "auto",
+        }}
+      >
+        <i className="fas fa-triangle-exclamation" style={{ fontSize: 9 }} />
+        <span>{shortfall.join(" · ")}</span>
+      </div>
+    )}
     <ReactECharts
       option={option}
       style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
       onChartReady={(instance: any) => { eRef.current = instance; }}
       onEvents={{
+        // `endRender` ignores a finish with no matching start, so a pan or a
+        // resize does not get recorded as a data render.
+        finished: () => {
+          endRender(surface, {
+            rows: rows.length,
+            drawn: geoDiagnosis?.kind === "ok" ? geoDiagnosis.matched : 0,
+          });
+        },
         ...(onCrossFilter ? {
           click: (params: any) => {
             if (params?.name === GLOBE_SPHERE_REGION) return;   // the ocean is not a place
@@ -1025,6 +1200,7 @@ const WorldMapRenderer: React.FC<{
         },
       }}
     />
+    </>
   );
 };
 
@@ -1632,6 +1808,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
             columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
             advancedOptions={advancedOptions}
             onCrossFilter={onCrossFilter}
+            truncated={sqlPreview.resultTruncated === true}
           />
         ) : hasOption && !sqlPreview.isRunning && chartType && getPlugin(chartType)?.Renderer ? (
           (() => {

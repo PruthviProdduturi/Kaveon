@@ -160,8 +160,7 @@ impl BatchOperator for SetOpOperator {
                         }
                     }
                     SetOpMode::IntersectAll => {
-                        if let Some(remaining) = self.right_counts.as_mut().unwrap().get_mut(&key)
-                        {
+                        if let Some(remaining) = self.right_counts.as_mut().unwrap().get_mut(&key) {
                             if *remaining > 0 {
                                 *remaining -= 1;
                                 keep.push(row as u32);
@@ -340,9 +339,8 @@ mod tests {
                 Some("b"),
             ]))
         };
-        let right = || -> ArrayRef {
-            Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("c")]))
-        };
+        let right =
+            || -> ArrayRef { Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("c")])) };
         for (mode, expected) in [
             (
                 SetOpMode::IntersectAll,

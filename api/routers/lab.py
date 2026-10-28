@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import logging
 import threading
 from fastapi import APIRouter, BackgroundTasks, Request, Response, HTTPException, Query, Depends
@@ -552,7 +553,7 @@ def _streamed_history(summary: dict, scoped_sql: str, catalog: str, dataset_id, 
 
 
 async def _submit_streamed(data: LabQueryBody, source: dict, scoped_sql: str, user: str, role: str,
-                           engine_schema, started_at: int):
+                           engine_schema, started_at: int, row_cap_applied: bool = False):
     from services import engine_bridge
     catalog = source["engine_catalog"]
     dataset_id = data.datasetId
@@ -570,6 +571,10 @@ async def _submit_streamed(data: LabQueryBody, source: dict, scoped_sql: str, us
         "tag": submitted["tag"],
         "state": record.get("state"),
         "nextUri": record.get("next_uri"),
+        # Said rather than implied: without this the grid stops at a thousand
+        # rows and looks like the end of the table.
+        "rowCapApplied": row_cap_applied,
+        "rowCap": LAB_DEFAULT_ROW_CAP if row_cap_applied else None,
     }
 
 
@@ -620,6 +625,44 @@ async def _no_dataset():
     return None
 
 
+# How many rows an unbounded interactive SELECT returns, and why there is a
+# bound at all.
+#
+# A statement typed into SQL Lab with no LIMIT, no TOP and no FETCH is almost
+# never a request for every row: `SELECT * FROM events.daily_user_activity` is
+# a billion of them, and what stopped it was the coordinator's result disk
+# quota after a quarter of a gigabyte had been written. The person wanted to
+# see the shape of the table.
+#
+# Applied only to a bare `SELECT *`. A statement that names its columns, or
+# aggregates, or already carries a bound, is taken at its word -- the cap is a
+# guard against the accidental full table, not a policy about result size.
+LAB_DEFAULT_ROW_CAP = 1_000
+
+# A statement that already bounds itself, in any of the three spellings the
+# Engine accepts. Matched outside quotes only, so a literal does not count.
+_BOUNDED = re.compile(r"(?is)\b(limit|fetch)\b|\bselect\s+(distinct\s+)?top\b")
+# `SELECT *` or `SELECT t.*` with nothing else projected.
+_BARE_STAR = re.compile(r"(?is)^\s*select\s+(distinct\s+)?(?:[A-Za-z_][\w$]*\s*\.\s*)?\*\s+from\b")
+
+
+def default_row_cap(sql: str) -> tuple[str, bool]:
+    """The statement to run, and whether a cap was added to it.
+
+    Returns the statement unchanged when it bounds itself, names its columns,
+    or is not a single bare `SELECT *`. The caller reports the second value so
+    the grid can say the result was capped rather than implying the table ends
+    there.
+    """
+    statement = (sql or "").strip().rstrip(";").strip()
+    if not statement or ";" in statement:
+        # More than one statement is not this guard's business.
+        return sql, False
+    if not _BARE_STAR.match(statement) or _BOUNDED.search(statement):
+        return sql, False
+    return f"{statement} LIMIT {LAB_DEFAULT_ROW_CAP}", True
+
+
 @router.post("/lab/query")
 @statement_route("query")
 async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst")),
@@ -630,7 +673,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     user = ctx.email
     sql_execute_limiter.check(user)
     user_id = user
-    sql = data.query
+    # A bare `SELECT *` with no bound is capped, and the caller is told.
+    sql, row_cap_applied = default_row_cap(data.query)
     database = _resolve_db(data.database)
     engine_source_id = data.engineSourceId
     engine_schema = data.engineSchema
@@ -682,7 +726,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         scoped_sql = _engine_query(sql, source["engine_catalog"])
         start_time = int(time.time() * 1000)
         if data.stream:
-            return await _submit_streamed(data, source, scoped_sql, user, ctx.role, engine_schema, start_time)
+            return await _submit_streamed(data, source, scoped_sql, user, ctx.role, engine_schema,
+                                          start_time, row_cap_applied)
         result = await asyncio.to_thread(
             engine_bridge.execute,
             scoped_sql, source["engine_catalog"], user, ctx.role, engine_schema,

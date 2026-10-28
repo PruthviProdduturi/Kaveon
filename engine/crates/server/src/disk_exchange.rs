@@ -461,7 +461,8 @@ mod tests {
 
     #[test]
     fn failed_chunk_write_refunds_quota() {
-        let root = std::env::temp_dir().join(format!("kaveon-write-failure-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("kaveon-write-failure-{}", uuid::Uuid::new_v4()));
         let store = DiskExchangeStore::new(&root, 1024).unwrap();
         fs::remove_dir_all(&store.directory.0).unwrap();
         assert!(store.insert(chunk()).is_err());
@@ -512,12 +513,9 @@ mod tests {
             .unwrap();
         std::fs::write(root.join("keep-me"), b"unrelated").unwrap();
 
-        let store = DiskExchangeStore::with_query_limit_and_reclaim(&root, 1024, 1024, true)
-            .unwrap();
-        assert_eq!(
-            std::fs::read(root.join("keep-me")).unwrap(),
-            b"unrelated"
-        );
+        let store =
+            DiskExchangeStore::with_query_limit_and_reclaim(&root, 1024, 1024, true).unwrap();
+        assert_eq!(std::fs::read(root.join("keep-me")).unwrap(), b"unrelated");
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
         drop(store);
         std::fs::remove_dir_all(root).unwrap();

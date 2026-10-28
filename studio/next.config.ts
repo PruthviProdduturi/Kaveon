@@ -15,7 +15,34 @@ const nextConfig: NextConfig = {
 
   // The product page moved from /about to the site root; keep old links alive.
   async redirects() {
-    return [{ source: '/about', destination: '/', permanent: true }];
+    return [
+      { source: '/about', destination: '/', permanent: true },
+      // Every push mints a production alias of the form
+      // `kaveon-<hash>-prodduturi-labs.vercel.app`, and each one is public
+      // and indexable. Left alone the product accumulates hundreds of
+      // addresses, none of them the brand, any of which can be shared or
+      // rank ahead of it. One host answers; the rest send you to it.
+      //
+      // A permanent redirect so search engines and anyone who saved a link
+      // are corrected once rather than every visit. Preview deployments are
+      // not covered on purpose -- `*.vercel.app` here matches the production
+      // aliases, and a preview URL exists to be opened before it is the
+      // live site.
+      // Armed by KAVEON_CANONICAL_HOST, and deliberately not by default.
+      // This sends every other hostname to the canonical one, so it must not
+      // ship before that host serves: with the apex still pointing at a
+      // retired load balancer, arming it would redirect the one working
+      // address to a dead one and take the site from reachable-but-ugly to
+      // unreachable. Set the variable once the apex resolves to Vercel.
+      ...(process.env.KAVEON_CANONICAL_HOST
+        ? [{
+            source: '/:path*',
+            has: [{ type: 'host' as const, value: '(?<alias>.+\\.vercel\\.app)' }],
+            destination: `https://${process.env.KAVEON_CANONICAL_HOST}/:path*`,
+            permanent: true,
+          }]
+        : []),
+    ];
   },
 
   // Tree-shake heavy packages — Next.js will only bundle the modules actually used.

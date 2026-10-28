@@ -1,8 +1,8 @@
 """Typed client for KaveonDB's durable product-record transaction API.
 
-PostgreSQL remains authoritative.  This module is the narrow application-side
-boundary used by backfill, shadow reads, and a later repository cutover; it
-does not enable dual writes by itself.
+KaveonDB is authoritative for product state.  This module is the narrow
+application-side boundary for transactional reads and writes; it does not
+fall back to or dual-write a relational metadata database.
 """
 
 import json
@@ -268,6 +268,88 @@ def list_records(kind: ProductKind, actor: str, role: str, *, max_records: int =
                 raise HTTPException(503, "KaveonDB product list exceeds its configured bound")
         cursor = page.get("next_cursor")
         if cursor is None: return records
+        if not isinstance(cursor, str) or not cursor:
+            raise HTTPException(502, "KaveonDB returned an invalid product list cursor")
+
+
+# What the Engine says when a cursor outlives the snapshot it was issued
+# against, and how many times a listing restarts before giving up.
+#
+# A listing pages a hundred records at a time, so a family at the ceiling is
+# ten round trips. Anything written in between moves the snapshot, and the
+# Engine then refuses the cursor with an upstream 400 that the bridge reports
+# as 502. `query_history` takes a write on every statement a person runs, so
+# its own reads were the ones most likely to be interrupted -- by the reader.
+_CURSOR_DRIFTED = "product cursor belongs to a different snapshot"
+_LIST_RESTARTS = 3
+
+
+def _cursor_drifted(error: HTTPException) -> bool:
+    """Whether *error* is the snapshot moving rather than a real failure."""
+    return _CURSOR_DRIFTED in str(error.detail)
+
+
+def list_records_capped(kind: ProductKind, actor: str, role: str, *,
+                        limit: int = 1000) -> tuple[list[dict], bool]:
+    """At most *limit* records, and whether the family holds more.
+
+    `list_records` raises 503 the moment a family exceeds the bound it was
+    given, which is right for a caller that needs the whole family and wrong
+    for one whose job is to make the family smaller. An owner already past the
+    ceiling could not be listed at all, so the retention sweep that would have
+    brought them back under failed in exactly the same way as the read it was
+    meant to repair -- the population could only grow.
+
+    This stops at the limit and says so, the way `count_records` reports a
+    truncated count rather than refusing to count. Records come back in the
+    store's own order, not sorted: a caller trimming an over-ceiling owner is
+    reducing a population it cannot yet see all of, and ordering what it can
+    see does not make that exact.
+    """
+    if kind not in _KINDS:
+        raise HTTPException(422, "Unsupported product record kind")
+    if not isinstance(limit, int) or limit < 1 or limit > COUNT_BOUND:
+        raise HTTPException(422, "Invalid product list limit")
+    for attempt in range(_LIST_RESTARTS):
+        try:
+            return _list_capped_once(kind, actor, role, limit)
+        except HTTPException as error:
+            # Restarting is the only correct response: the pages already read
+            # describe a snapshot that no longer exists, so continuing would
+            # splice two different versions of the family together.
+            if attempt == _LIST_RESTARTS - 1 or not (
+                    _cursor_drifted(error) or error.status_code == 409):
+                raise
+    raise RuntimeError("unreachable")
+
+
+def _list_capped_once(kind: ProductKind, actor: str, role: str,
+                      limit: int) -> tuple[list[dict], bool]:
+    """One pass of the capped listing, against one snapshot."""
+    records, cursor, snapshot_id = [], None, None
+    while True:
+        query = "?limit=100" + (("&cursor=" + quote(cursor, safe="")) if cursor else "")
+        page = engine_bridge._request("GET", f"/v1/products/{kind}{query}",
+            "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_role(role))
+        if not isinstance(page, dict) or not isinstance(page.get("records"), list):
+            raise HTTPException(502, "KaveonDB returned an invalid product list")
+        current = page.get("snapshot_id")
+        if not isinstance(current, str) or not current:
+            raise HTTPException(502, "KaveonDB product list omitted its snapshot identity")
+        if snapshot_id is not None and current != snapshot_id:
+            raise HTTPException(409, "KaveonDB product list changed during pagination")
+        snapshot_id = current
+        for record in page["records"]:
+            if not isinstance(record, dict) or not isinstance(record.get("document"), dict):
+                raise HTTPException(502, "KaveonDB returned an invalid product list record")
+            records.append(record)
+            if len(records) >= limit:
+                # One more page would tell us whether anything remains, so
+                # report "possibly more" rather than paying for that read.
+                return records, True
+        cursor = page.get("next_cursor")
+        if cursor is None:
+            return records, False
         if not isinstance(cursor, str) or not cursor:
             raise HTTPException(502, "KaveonDB returned an invalid product list cursor")
 

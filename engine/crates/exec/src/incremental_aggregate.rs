@@ -254,21 +254,13 @@ impl IncrementalAggregateMerger {
     /// path. The columnar path reserves the selected batch's complete growth
     /// before applying it, so a memory refusal cannot leave a partially
     /// applied selection and spill retry remains exact.
-    pub fn push_selected_batch(
-        &mut self,
-        batch: &RecordBatch,
-        selected: &[u32],
-    ) -> Result<bool> {
+    ///
+    /// The selected path borrows the input arrays. Its caller keeps the
+    /// input batch reservation alive while this call runs, so the complete
+    /// batch is not charged a second time. This avoids avoidable spill
+    /// pressure when a worker owns only a small fraction of a wide batch.
+    pub fn push_selected_batch(&mut self, batch: &RecordBatch, selected: &[u32]) -> Result<bool> {
         self.applied = 0;
-        // Keep the same transient input reservation as `push_batch`.  The
-        // exchange source may be waiting for pressure relief; without this
-        // guard a selected merge can consume the last headroom and make the
-        // source refusal final before the merge has a chance to spill.
-        let _batch_guard = self
-            .memory
-            .as_ref()
-            .map(|memory| memory.reserve(batch.get_array_memory_size() as u64))
-            .transpose()?;
         let types = grouped_aggregate_key_types(&batch.schema())?;
         let keys = batch
             .column(0)
@@ -623,6 +615,33 @@ mod tests {
             drop(guards);
             assert_eq!(pool.snapshot().current_bytes, 0);
         }
+    }
+
+    #[test]
+    fn selected_merge_does_not_double_charge_a_wide_input_batch() {
+        let groups = (0..20_000)
+            .map(|key| GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(key)],
+                states: vec![AggregateState::Count(1)],
+            })
+            .collect::<Vec<_>>();
+        let batch = grouped_aggregate_states_to_typed_batch(&groups, &[DataType::Int64]).unwrap();
+        let input_bytes = batch.get_array_memory_size() as u64;
+        assert!(
+            input_bytes > 64 * 1024,
+            "test input is not wide enough: {input_bytes}"
+        );
+
+        // The distributed final merge owns the input reservation in its
+        // queue. A worker that receives one selected row must be able to
+        // merge it without reserving the complete shared batch again.
+        let pool = QueryMemoryPool::new("selected-merge-input", 64 * 1024).unwrap();
+        let account = pool.operator("final").unwrap();
+        let mut merger = IncrementalAggregateMerger::new(Some(account));
+        assert!(merger.push_selected_batch(&batch, &[0]).unwrap());
+        assert_eq!(merger.group_count(), 1);
+        drop(merger);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]

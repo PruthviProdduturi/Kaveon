@@ -202,7 +202,19 @@ def test_a_data_path_already_in_the_file_survives_a_run_without_data(tmp_path):
 
 def test_an_explicit_data_path_wins_over_the_file(tmp_path):
     after = _run(tmp_path, OPERATOR_ENV, data_path="/mnt/warehouse")
-    assert after["KAVEON_DATA_PATH"] == "/mnt/warehouse"
+    assert after["KAVEON_DATA_PATH"] == (tmp_path / "warehouse").as_posix()
+
+
+def test_a_missing_data_path_fails_closed(tmp_path):
+    missing = (tmp_path / "missing").as_posix()
+    script = tmp_path / "harness.sh"
+    script.write_text(HARNESS + _env_section(), encoding="utf-8")
+    environment = dict(os.environ)
+    environment["HARNESS_DATA_PATH"] = missing
+    result = subprocess.run([BASH, str(script)], cwd=tmp_path, capture_output=True,
+                            text=True, env=environment, timeout=120)
+    assert result.returncode != 0
+    assert f"data path does not exist: {missing}" in result.stderr
 
 
 def test_a_first_run_writes_the_sign_in_hints(tmp_path):

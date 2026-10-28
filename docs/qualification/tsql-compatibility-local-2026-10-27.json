@@ -1,0 +1,139 @@
+{
+  "endpoint": "http://127.0.0.1:8081/v1/statement",
+  "repetitions": 2,
+  "cases": [
+    {
+      "id": "TSQL-004",
+      "rows": 1,
+      "columns": [
+        "d",
+        "y",
+        "dd",
+        "n",
+        "bad"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 2.35,
+        "median": 9.83,
+        "max": 17.31
+      }
+    },
+    {
+      "id": "TSQL-005",
+      "rows": 1,
+      "columns": [
+        "d",
+        "daypart",
+        "converted"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 12.97,
+        "median": 14.3,
+        "max": 15.63
+      }
+    },
+    {
+      "id": "TSQL-010",
+      "rows": 5,
+      "columns": [
+        "borough",
+        "y",
+        "rn"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.59,
+        "median": 15.62,
+        "max": 15.65
+      }
+    },
+    {
+      "id": "TSQL-011",
+      "rows": 5,
+      "columns": [
+        "year",
+        "y",
+        "c"
+      ],
+      "server_elapsed_ms": 8,
+      "client_ms": {
+        "min": 25.31,
+        "median": 28.18,
+        "max": 31.05
+      }
+    },
+    {
+      "id": "TSQL-012",
+      "rows": 2,
+      "columns": [
+        "year"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 2.01,
+        "median": 2.34,
+        "max": 2.66
+      }
+    },
+    {
+      "id": "TSQL-013",
+      "rows": 1,
+      "columns": [
+        "ts",
+        "h"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 2.37,
+        "median": 8.96,
+        "max": 15.55
+      }
+    },
+    {
+      "id": "TSQL-014",
+      "rows": 1,
+      "columns": [
+        "y",
+        "m",
+        "d"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 14.67,
+        "median": 15.4,
+        "max": 16.13
+      }
+    },
+    {
+      "id": "TSQL-015",
+      "rows": 1,
+      "columns": [
+        "local_now",
+        "utc_now"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.73,
+        "median": 15.76,
+        "max": 15.8
+      }
+    },
+    {
+      "id": "TSQL-016",
+      "rows": 2,
+      "columns": [
+        "borough",
+        "trips",
+        "rn"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.04,
+        "median": 15.83,
+        "max": 16.63
+      }
+    }
+  ]
+}

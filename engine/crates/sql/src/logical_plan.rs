@@ -760,15 +760,22 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
     // A single SELECT hands back the bindings its aggregate lowering made,
     // so an ORDER BY that repeats a lowered expression (`ORDER BY a - a % 60`
     // beside `GROUP BY a - a % 60`) resolves to the same column.
-    let (plan, bindings) = match query.body.as_ref() {
-        ast::SetExpr::Select(select) => select_to_plan_with_bindings(select, ctes)?,
-        body => (set_expr_to_plan(body, ctes)?, Vec::new()),
+    let (plan, bindings, top) = match query.body.as_ref() {
+        ast::SetExpr::Select(select) => {
+            let (plan, bindings) = select_to_plan_with_bindings(select, ctes)?;
+            (plan, bindings, select.top.as_ref())
+        }
+        body => (set_expr_to_plan(body, ctes)?, Vec::new(), None),
     };
 
     let (plan, visible) = match &query.order_by {
         Some(ob) => build_order_by(plan, &ob.exprs, &bindings)?,
         None => (plan, None),
     };
+    // MSSQL/Fabric TOP belongs to the SELECT body, but its row bound is
+    // applied after ORDER BY. Lower it here so it shares the same bounded
+    // execution path as LIMIT and FETCH in every worker.
+    let plan = build_top(plan, top)?;
     let plan = build_limit_offset(plan, &query.limit, &query.offset, query.fetch.as_ref())?;
     // ORDER BY on a column the query does not select: the column rode
     // along through the sort and limit and is dropped here.
@@ -1144,9 +1151,9 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .next()
                 .is_some_and(|name| name.eq_ignore_ascii_case("UNNEST"))
             {
-                let args = args.as_ref().ok_or_else(|| {
-                    sql_err("UNNEST in FROM requires an ARRAY expression")
-                })?;
+                let args = args
+                    .as_ref()
+                    .ok_or_else(|| sql_err("UNNEST in FROM requires an ARRAY expression"))?;
                 if args.args.is_empty() {
                     return Err(sql_err(
                         "UNNEST in FROM requires at least one ARRAY expression",
@@ -1359,6 +1366,12 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 ordinality_start: if *with_offset { 0 } else { 1 },
             })
         }
+        ast::TableFactor::Pivot { .. } => Err(sql_err(
+            "PIVOT is parsed but not executable yet; rewrite it as conditional aggregates",
+        )),
+        ast::TableFactor::Unpivot { .. } => Err(sql_err(
+            "UNPIVOT is parsed but not executable yet; use UNION ALL projections",
+        )),
         _ => Err(sql_err(
             "only table references and subqueries are supported in FROM",
         )),
@@ -1370,12 +1383,19 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
         let right = table_factor_to_plan(&join.relation, ctes)?;
         let left_qualifier = join_relation_qualifier(&left);
         let right_qualifier = join_relation_qualifier(&right);
+        let uncorrelated_cross_apply = matches!(&join.join_operator, ast::JoinOperator::CrossApply);
         let (join_type, constraint) = match &join.join_operator {
             ast::JoinOperator::Inner(c) => (JoinType::Inner, Some(c)),
             ast::JoinOperator::LeftOuter(c) => (JoinType::Left, Some(c)),
             ast::JoinOperator::RightOuter(c) => (JoinType::Right, Some(c)),
             ast::JoinOperator::FullOuter(c) => (JoinType::Full, Some(c)),
             ast::JoinOperator::CrossJoin => (JoinType::Cross, None),
+            ast::JoinOperator::CrossApply => (JoinType::Cross, None),
+            ast::JoinOperator::OuterApply => {
+                return Err(sql_err(
+                    "OUTER APPLY is parsed but not executable yet; use a supported LEFT JOIN",
+                ));
+            }
             other => return Err(sql_err(format!("unsupported join type: {other:?}"))),
         };
         let using_columns = match constraint {
@@ -1413,6 +1433,13 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
             }
             Some(other) => return Err(sql_err(format!("unsupported join constraint: {other:?}"))),
         };
+        if uncorrelated_cross_apply {
+            validate_uncorrelated(&right).map_err(|error| {
+                sql_err(format!(
+                    "CROSS APPLY requires an uncorrelated derived relation in the current runtime: {error}"
+                ))
+            })?;
+        }
         if join_type != JoinType::Cross && condition.is_none() {
             return Err(sql_err("non-cross joins require an ON condition"));
         }
@@ -2561,6 +2588,32 @@ fn bind_order_keys_to_projection(
     Ok((LogicalPlan::Project { input, columns }, visible))
 }
 
+fn build_top(plan: LogicalPlan, top: Option<&ast::Top>) -> Result<LogicalPlan> {
+    let Some(top) = top else {
+        return Ok(plan);
+    };
+    if top.percent {
+        return Err(sql_err("TOP PERCENT is unsupported; use LIMIT or FETCH"));
+    }
+    if top.with_ties {
+        return Err(sql_err("TOP WITH TIES is unsupported; use FETCH WITH TIES"));
+    }
+    let quantity = top
+        .quantity
+        .as_ref()
+        .ok_or_else(|| sql_err("TOP requires a row count"))?;
+    let count = match quantity {
+        ast::TopQuantity::Constant(value) => {
+            usize::try_from(*value).map_err(|_| sql_err("TOP row count is too large"))?
+        }
+        ast::TopQuantity::Expr(expr) => ast_expr_to_usize(expr)?,
+    };
+    Ok(LogicalPlan::Limit {
+        input: Box::new(plan),
+        count,
+    })
+}
+
 fn build_limit_offset(
     plan: LogicalPlan,
     limit: &Option<ast::Expr>,
@@ -2692,6 +2745,52 @@ fn ast_expr_to_usize(expr: &ast::Expr) -> Result<usize> {
 /// Days since 1970-01-01 for a `YYYY-MM-DD` string (proleptic Gregorian).
 fn parse_date_days(value: &str) -> Option<i64> {
     kaveon_core::predicate::date_literal_days(value)
+}
+
+/// Normalize the numeric U.S. date forms accepted by SQL Server styles 1 and
+/// 101 into the ISO representation understood by the Arrow Date32 cast. This
+/// is intentionally literal-only; column-wise locale parsing remains an
+/// explicit compatibility boundary rather than an implicit guess.
+fn parse_convert_us_date(value: &str) -> Option<String> {
+    let textual = value.replace(',', " ");
+    let textual_parts = textual.split_whitespace().collect::<Vec<_>>();
+    if textual_parts.len() == 3 {
+        let month = match textual_parts[0].to_ascii_lowercase().as_str() {
+            "jan" | "january" => 1,
+            "feb" | "february" => 2,
+            "mar" | "march" => 3,
+            "apr" | "april" => 4,
+            "may" => 5,
+            "jun" | "june" => 6,
+            "jul" | "july" => 7,
+            "aug" | "august" => 8,
+            "sep" | "sept" | "september" => 9,
+            "oct" | "october" => 10,
+            "nov" | "november" => 11,
+            "dec" | "december" => 12,
+            _ => 0,
+        };
+        if month != 0 {
+            let day = textual_parts[1].parse::<u32>().ok()?;
+            let year = textual_parts[2].parse::<i32>().ok()?;
+            let iso = format!("{year:04}-{month:02}-{day:02}");
+            return parse_date_days(&iso).map(|_| iso);
+        }
+    }
+    let mut parts = value.split('/');
+    let month = parts.next()?.parse::<u32>().ok()?;
+    let day = parts.next()?.parse::<u32>().ok()?;
+    let year_text = parts.next()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let year = match year_text.len() {
+        2 => 2000 + year_text.parse::<i32>().ok()?,
+        4 => year_text.parse::<i32>().ok()?,
+        _ => return None,
+    };
+    let iso = format!("{year:04}-{month:02}-{day:02}");
+    parse_date_days(&iso).map(|_| iso)
 }
 
 fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
@@ -3036,6 +3135,80 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }),
 
         // ── CAST ────────────────────────────────────────────────────────
+        ast::Expr::Convert {
+            is_try,
+            expr,
+            data_type: Some(data_type),
+            charset: None,
+            target_before_value: true,
+            styles,
+        } => {
+            if styles.len() > 1 {
+                return Err(sql_err("CONVERT accepts at most one style argument"));
+            }
+            if let Some(style) = styles.first() {
+                match style {
+                    ast::Expr::Value(ast::Value::Number(value, _))
+                        if value == "0" || value == "1" || value == "101" => {}
+                    _ => return Err(sql_err("CONVERT style must be 0, 1, or 101")),
+                }
+            }
+            let target = ast_data_type_to_cast_target(data_type)?;
+            let inner = ast_expr_to_expr(expr)?;
+            if *is_try {
+                Ok(Expr::Function {
+                    name: format!("TRY_CAST_{}", cast_target_name(target)),
+                    args: vec![inner],
+                })
+            } else {
+                Ok(Expr::Cast {
+                    expr: Box::new(inner),
+                    data_type: target,
+                })
+            }
+        }
+        // DuckDB's grammar (which Kaveon uses for its broad SQL surface)
+        // represents MSSQL's `CONVERT(type, value)` as `expr=type` plus a
+        // custom data type containing the value. Normalize that AST shape as
+        // well, while requiring the first token to be a supported type.
+        ast::Expr::Convert {
+            is_try,
+            expr: target_expr,
+            data_type: Some(ast::DataType::Custom(source_name, source_tokens)),
+            charset: None,
+            target_before_value: false,
+            styles,
+        } => {
+            if styles.len() > 1 {
+                return Err(sql_err("CONVERT accepts at most one style argument"));
+            }
+            if let Some(style) = styles.first() {
+                match style {
+                    ast::Expr::Value(ast::Value::Number(value, _))
+                        if value == "0" || value == "1" || value == "101" => {}
+                    _ => return Err(sql_err("CONVERT style must be 0, 1, or 101")),
+                }
+            }
+            let target = tsql_cast_target(target_expr)?;
+            let value = duckdb_convert_source_expr(source_name, source_tokens)?;
+            if *is_try {
+                Ok(Expr::Function {
+                    name: format!("TRY_CAST_{}", cast_target_name(target)),
+                    args: vec![value],
+                })
+            } else {
+                Ok(Expr::Cast {
+                    expr: Box::new(value),
+                    data_type: target,
+                })
+            }
+        }
+        ast::Expr::Convert {
+            charset: Some(_), ..
+        } => Err(sql_err("CONVERT character encodings are unsupported")),
+        ast::Expr::Convert { .. } => Err(sql_err(
+            "CONVERT requires a target type in MSSQL/Fabric syntax",
+        )),
         ast::Expr::Cast {
             kind,
             expr,
@@ -3096,6 +3269,37 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
 
         _ => Err(sql_err(format!("unsupported expression: {expr}"))),
     }
+}
+
+fn duckdb_convert_source_expr(
+    source_name: &ast::ObjectName,
+    source_tokens: &[String],
+) -> Result<Expr> {
+    let [source] = source_name.0.as_slice() else {
+        return Err(sql_err("CONVERT source must be a single expression"));
+    };
+    if source_tokens.is_empty() {
+        return Ok(Expr::Column(source.value.clone()));
+    }
+    let expression = format!("{}({})", source.value, source_tokens.join(" "));
+    let statement = parse_sql(&format!("SELECT {expression}"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| sql_err("CONVERT source expression is empty"))?;
+    let ast::Statement::Query(query) = statement else {
+        return Err(sql_err(
+            "CONVERT source expression is not a query expression",
+        ));
+    };
+    let ast::SetExpr::Select(select) = query.body.as_ref() else {
+        return Err(sql_err("CONVERT source expression is not a projection"));
+    };
+    let Some(ast::SelectItem::UnnamedExpr(expr)) = select.projection.first() else {
+        return Err(sql_err(
+            "CONVERT source expression is not a scalar expression",
+        ));
+    };
+    ast_expr_to_expr(expr)
 }
 
 /// Lower SQL's null-safe comparisons into the existing CASE/null predicate
@@ -3426,8 +3630,8 @@ fn parse_decimal_literal(text: &str) -> Result<ScalarValue> {
     {
         return Err(sql_err(format!("invalid DECIMAL literal: '{text}'")));
     }
-    let scale = i8::try_from(fraction.len())
-        .map_err(|_| sql_err("DECIMAL literal scale is too large"))?;
+    let scale =
+        i8::try_from(fraction.len()).map_err(|_| sql_err("DECIMAL literal scale is too large"))?;
     let digits = format!("{whole}{fraction}");
     let magnitude = digits
         .parse::<i128>()
@@ -3488,6 +3692,167 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         _ => return Err(sql_err(format!("unsupported function arguments in {name}"))),
     };
 
+    // SQL Server/Fabric date functions use a date-part token as their first
+    // argument (`DATEADD(day, 1, event_date)`).  Kaveon's executor already
+    // has vectorized DATE_ADD_*, DATE_PART, and DATE_DIFF kernels; normalize
+    // the T-SQL spelling here so local, distributed, and spill paths share
+    // those implementations.
+    if matches!(
+        name.as_str(),
+        "DATEADD" | "DATEDIFF" | "DATEPART" | "YEAR" | "MONTH" | "DAY"
+    ) {
+        let raw = function_expression_args(func, &name)?;
+        match name.as_str() {
+            "DATEADD" => {
+                if raw.len() != 3 {
+                    return Err(sql_err("DATEADD requires datepart, number, and date"));
+                }
+                let unit = tsql_date_part(raw[0])?;
+                let delta = ast_expr_to_expr(raw[1])?;
+                let source = ast_expr_to_expr(raw[2])?;
+                let (kernel, multiplier) = match unit.as_str() {
+                    "YEAR" | "YY" | "YYYY" => ("DATE_ADD_MONTHS", 12_i64),
+                    "QUARTER" | "QQ" | "Q" => ("DATE_ADD_MONTHS", 3_i64),
+                    "MONTH" | "MM" | "M" => ("DATE_ADD_MONTHS", 1_i64),
+                    "WEEK" | "WK" | "WW" => ("DATE_ADD_DAYS", 7_i64),
+                    "DAY" | "DD" | "D" | "DAYOFYEAR" | "DY" | "Y" | "WEEKDAY" | "DW" => {
+                        ("DATE_ADD_DAYS", 1_i64)
+                    }
+                    "HOUR" | "HH" => ("DATE_ADD_SECONDS", 3_600_i64),
+                    "MINUTE" | "MI" | "N" => ("DATE_ADD_SECONDS", 60_i64),
+                    "SECOND" | "SS" | "S" => ("DATE_ADD_SECONDS", 1_i64),
+                    unsupported => {
+                        return Err(sql_err(format!(
+                            "DATEADD datepart '{unsupported}' is unsupported"
+                        )));
+                    }
+                };
+                let delta = if multiplier == 1 {
+                    delta
+                } else {
+                    Expr::BinaryOp {
+                        left: Box::new(delta),
+                        op: BinaryOp::Multiply,
+                        right: Box::new(Expr::Literal(ScalarValue::Int64(multiplier))),
+                    }
+                };
+                return Ok(Expr::Function {
+                    name: kernel.into(),
+                    args: vec![source, delta],
+                });
+            }
+            "DATEDIFF" => {
+                if raw.len() != 3 {
+                    return Err(sql_err(
+                        "DATEDIFF requires datepart, startdate, and enddate",
+                    ));
+                }
+                let unit = canonical_tsql_date_part(&tsql_date_part(raw[0])?)?;
+                return Ok(Expr::Function {
+                    name: "DATE_DIFF".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8(unit)),
+                        ast_expr_to_expr(raw[1])?,
+                        ast_expr_to_expr(raw[2])?,
+                    ],
+                });
+            }
+            "DATEPART" => {
+                if raw.len() != 2 {
+                    return Err(sql_err("DATEPART requires datepart and date"));
+                }
+                let unit = canonical_tsql_date_part(&tsql_date_part(raw[0])?)?;
+                return Ok(Expr::Function {
+                    name: "DATE_PART".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8(unit)),
+                        ast_expr_to_expr(raw[1])?,
+                    ],
+                });
+            }
+            name @ ("YEAR" | "MONTH" | "DAY") => {
+                if raw.len() != 1 {
+                    return Err(sql_err(format!(
+                        "{name} requires exactly one date argument"
+                    )));
+                }
+                return Ok(Expr::Function {
+                    name: "DATE_PART".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8(name.to_owned())),
+                        ast_expr_to_expr(raw[0])?,
+                    ],
+                });
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    if matches!(name.as_str(), "GETDATE" | "GETUTCDATE") {
+        if !args.is_empty() {
+            return Err(sql_err(format!("{name} takes no arguments")));
+        }
+        return Ok(Expr::Function {
+            name: "NOW".into(),
+            args: Vec::new(),
+        });
+    }
+
+    if matches!(name.as_str(), "CONVERT" | "TRY_CONVERT") {
+        let raw = function_expression_args(func, &name)?;
+        if !(2..=3).contains(&raw.len()) {
+            return Err(sql_err(format!(
+                "{name} requires a target type and expression"
+            )));
+        }
+        if raw.len() == 3 {
+            // SQL Server's style argument is intentionally narrow here. The
+            // underlying Arrow casts determine date/string formatting; reject
+            // non-literal styles instead of silently changing their meaning.
+            match raw[2] {
+                ast::Expr::Value(ast::Value::Number(style, _))
+                    if style == "0" || style == "1" || style == "101" => {}
+                _ => return Err(sql_err(format!("{name} style must be 0, 1, or 101"))),
+            }
+        }
+        let target = tsql_cast_target(raw[0])?;
+        if raw.len() == 3
+            && matches!(&target, CastTarget::Date32)
+            && let ast::Expr::Value(ast::Value::Number(style, _)) = raw[2]
+            && (style == "0" || style == "1" || style == "101")
+            && let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = raw[1]
+            && let Some(iso) = parse_convert_us_date(value)
+        {
+            return Ok(Expr::Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(iso))),
+                data_type: CastTarget::Date32,
+            });
+        }
+        let value = ast_expr_to_expr(raw[1])?;
+        if name == "TRY_CONVERT" {
+            return Ok(Expr::Function {
+                name: format!("TRY_CAST_{}", cast_target_name(target)),
+                args: vec![value],
+            });
+        }
+        return Ok(Expr::Cast {
+            expr: Box::new(value),
+            data_type: target,
+        });
+    }
+
+    // SQL Server/Fabric's ISNULL(value, fallback) has the same null-selection
+    // semantics as Kaveon's vectorized COALESCE implementation for its
+    // two-argument form. Lower it in the logical plan so every execution path
+    // (local, distributed, spill, and final merge) reuses one implementation.
+    // Keep the strict arity check: unlike COALESCE, T-SQL ISNULL is binary.
+    if name == "ISNULL" {
+        if args.len() != 2 {
+            return Err(sql_err("ISNULL requires exactly two arguments"));
+        }
+        name = "COALESCE".to_owned();
+    }
+
     // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A
     // safe cast is the most common and most useful form in lake queries, and
     // JSON_PARSE has the same row-local failure contract.  Lower both forms
@@ -3520,9 +3885,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             Expr::Function {
                 name: inner_name,
                 args: inner_args,
-            } if inner_args.len() == 2
-                && inner_name.eq_ignore_ascii_case("JSON_ARRAY_GET") =>
-            {
+            } if inner_args.len() == 2 && inner_name.eq_ignore_ascii_case("JSON_ARRAY_GET") => {
                 Ok(Expr::Function {
                     name: "TRY_JSON_ARRAY_GET".into(),
                     args: inner_args,
@@ -3579,9 +3942,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         // still require separate semantics.  Value windows carry IGNORE NULLS
         // in the internal name so the executor can apply it to the frame.
         if !func.within_group.is_empty() {
-            return Err(sql_err(
-                "window WITHIN GROUP is unsupported",
-            ));
+            return Err(sql_err("window WITHIN GROUP is unsupported"));
         }
         let window_name = match func.null_treatment {
             None | Some(ast::NullTreatment::RespectNulls) => name.clone(),
@@ -3665,6 +4026,98 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         args
     };
     Ok(Expr::Function { name, args })
+}
+
+fn function_expression_args<'a>(func: &'a ast::Function, name: &str) -> Result<Vec<&'a ast::Expr>> {
+    let ast::FunctionArguments::List(list) = &func.args else {
+        return Err(sql_err(format!("{name} requires positional arguments")));
+    };
+    list.args
+        .iter()
+        .map(|arg| match arg {
+            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) => Ok(expr),
+            _ => Err(sql_err(format!("{name} requires positional expressions"))),
+        })
+        .collect()
+}
+
+fn tsql_date_part(expr: &ast::Expr) -> Result<String> {
+    let value = match expr {
+        ast::Expr::Identifier(identifier) => identifier.value.clone(),
+        ast::Expr::Value(ast::Value::SingleQuotedString(value))
+        | ast::Expr::Value(ast::Value::DoubleQuotedString(value)) => value.clone(),
+        ast::Expr::Nested(inner) => return tsql_date_part(inner),
+        _ => {
+            return Err(sql_err("T-SQL datepart must be a literal date-part token"));
+        }
+    };
+    Ok(value.to_uppercase())
+}
+
+fn canonical_tsql_date_part(value: &str) -> Result<String> {
+    let canonical = match value {
+        "YY" | "YYYY" => "YEAR",
+        "QQ" | "Q" => "QUARTER",
+        "MM" | "M" => "MONTH",
+        "DD" | "D" | "DY" | "Y" => "DAY",
+        "WK" | "WW" => "WEEK",
+        "DW" => "DAYOFWEEK",
+        "HH" => "HOUR",
+        "MI" | "N" => "MINUTE",
+        "SS" | "S" => "SECOND",
+        other
+            if matches!(
+                other,
+                "YEAR"
+                    | "QUARTER"
+                    | "MONTH"
+                    | "WEEK"
+                    | "DAY"
+                    | "DAYOFYEAR"
+                    | "DAYOFWEEK"
+                    | "HOUR"
+                    | "MINUTE"
+                    | "SECOND"
+                    | "DOW"
+                    | "DOY"
+                    | "EPOCH"
+            ) =>
+        {
+            other
+        }
+        unsupported => {
+            return Err(sql_err(format!(
+                "T-SQL datepart '{unsupported}' is unsupported"
+            )));
+        }
+    };
+    Ok(canonical.to_owned())
+}
+
+fn tsql_cast_target(expr: &ast::Expr) -> Result<CastTarget> {
+    let value = match expr {
+        ast::Expr::Identifier(identifier) => identifier.value.to_uppercase(),
+        ast::Expr::Value(ast::Value::SingleQuotedString(value))
+        | ast::Expr::Value(ast::Value::DoubleQuotedString(value)) => value.to_uppercase(),
+        ast::Expr::Nested(inner) => return tsql_cast_target(inner),
+        _ => return Err(sql_err("CONVERT target type must be a type token")),
+    };
+    match value.as_str() {
+        "BIT" | "BOOLEAN" => Ok(CastTarget::Boolean),
+        "TINYINT" | "SMALLINT" | "INT" | "INTEGER" => Ok(CastTarget::Int32),
+        "BIGINT" => Ok(CastTarget::Int64),
+        "REAL" | "FLOAT" | "DOUBLE" | "DOUBLE PRECISION" => Ok(CastTarget::Float64),
+        "CHAR" | "NCHAR" | "VARCHAR" | "NVARCHAR" | "TEXT" => Ok(CastTarget::Utf8),
+        "DATE" => Ok(CastTarget::Date32),
+        "DATETIME" | "DATETIME2" | "SMALLDATETIME" | "TIMESTAMP" => {
+            Ok(CastTarget::TimestampMicros {
+                with_timezone: false,
+            })
+        }
+        unsupported => Err(sql_err(format!(
+            "CONVERT target type '{unsupported}' is unsupported"
+        ))),
+    }
 }
 
 /// Lower a supported aggregate `FILTER (WHERE predicate)` into the existing
@@ -4147,7 +4600,10 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                     relations.push(table.rsplit('.').next().unwrap().to_owned());
                 }
             }
-            LogicalPlan::Unnest { expressions: values, .. } => expressions.extend(values),
+            LogicalPlan::Unnest {
+                expressions: values,
+                ..
+            } => expressions.extend(values),
             LogicalPlan::Filter { input, predicate } => {
                 expressions.push(predicate);
                 visit(input, relations, expressions);
@@ -4358,9 +4814,8 @@ mod tests {
 
     #[test]
     fn order_by_select_ordinal_resolves_to_the_projected_output() {
-        let plan =
-            sql_to_logical_plan("SELECT k, COUNT(*) AS n FROM t GROUP BY k ORDER BY 2 DESC")
-                .unwrap();
+        let plan = sql_to_logical_plan("SELECT k, COUNT(*) AS n FROM t GROUP BY k ORDER BY 2 DESC")
+            .unwrap();
         let LogicalPlan::Sort { order_by, .. } = plan else {
             panic!("sort");
         };
@@ -4945,10 +5400,8 @@ mod tests {
 
     #[test]
     fn parses_constant_array_unnest_with_zero_based_offset() {
-        let plan = sql_to_logical_plan(
-            "SELECT * FROM UNNEST(ARRAY['a', 'b']) WITH OFFSET AS n",
-        )
-        .unwrap();
+        let plan =
+            sql_to_logical_plan("SELECT * FROM UNNEST(ARRAY['a', 'b']) WITH OFFSET AS n").unwrap();
         assert!(matches!(
             plan,
             LogicalPlan::Unnest {
@@ -5137,10 +5590,9 @@ mod tests {
 
     #[test]
     fn lowers_join_using_to_qualified_equality_keys() {
-        let plan = sql_to_logical_plan(
-            "SELECT u.id, o.amount FROM users u JOIN orders o USING (id)",
-        )
-        .unwrap();
+        let plan =
+            sql_to_logical_plan("SELECT u.id, o.amount FROM users u JOIN orders o USING (id)")
+                .unwrap();
         let LogicalPlan::Project { input, .. } = plan else {
             panic!("unexpected plan: {plan:?}")
         };
@@ -5159,11 +5611,14 @@ mod tests {
 
     #[test]
     fn rejects_using_over_a_composite_left_relation_until_bound() {
-        let error = sql_to_logical_plan(
-            "SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)",
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("single base relation on the left"));
+        let error =
+            sql_to_logical_plan("SELECT * FROM (SELECT id FROM users) u JOIN orders o USING (id)")
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("single base relation on the left")
+        );
     }
 
     #[test]
@@ -5625,9 +6080,9 @@ mod tests {
     fn try_rejects_unsupported_expression_with_actionable_error() {
         let error = sql_to_logical_plan("SELECT TRY(value / divisor) FROM t").unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET")
+            error.to_string().contains(
+                "TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET"
+            )
         );
     }
 
@@ -6196,10 +6651,7 @@ mod tests {
     #[test]
     fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
         for (sql, expected) in [
-            (
-                "SELECT * FROM UNNEST(1, 2)",
-                "constant ARRAY expressions",
-            ),
+            ("SELECT * FROM UNNEST(1, 2)", "constant ARRAY expressions"),
             (
                 "SELECT * FROM UNNEST(values) AS t(value)",
                 "constant ARRAY expression",
