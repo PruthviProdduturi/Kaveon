@@ -6,10 +6,13 @@ from urllib.parse import urlparse
 import httpx
 
 SCHEMA_VERSION=1; MAX_RESPONSE_BYTES=8*1024*1024; REQUIRED_ROLE="Admin"
-CHECK_NAMES=("health","catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history","datasets_point","charts_point","dashboards_point","saved_query_point","chat_history_point","theme","dlm_get","dlm_context","dlm_ask","chat_serving")
+CHECK_NAMES=("health","catalog_sources","data_sources","datasets","charts","dashboards","query_history","saved_queries","recents","favorites","chat_history","datasets_point","charts_point","dashboards_point","saved_query_point","chat_history_point","theme","dlm_get","dlm_context","dlm_ask","legacy_chat_absent")
 NONEMPTY_CHECKS=frozenset(("catalog_sources","datasets","charts","dashboards","query_history"))
-ABSENT_POINT_CHECKS=frozenset(("saved_query_point","chat_history_point"))
-RETIRED_CHECKS={"chat_serving"}
+ABSENT_POINT_CHECKS=frozenset(("saved_query_point","chat_history_point","legacy_chat_absent"))
+# Nothing is merely retired any more. The legacy chat endpoint used to answer
+# 503 and was allowed to; it is now removed, so it belongs with the checks that
+# prove a point is absent rather than politely refusing.
+RETIRED_CHECKS=frozenset()
 
 def _canonical(value):return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
 def _digest(value):return hashlib.sha256(_canonical(value)).hexdigest()
@@ -112,13 +115,13 @@ def collect(base_url,email,proxy_secret,question,dataset_id,*,ca_cert=None,clien
  ask,item=probe.request("dlm_ask","/api/v1/dlm/ask",method="POST",body={"question":question,"limit":3})
  if not isinstance(ask,dict) or ask.get("ok") is not True:raise RuntimeError("DLM ask did not serve an answer")
  checks.append(item)
+ # The legacy direct-chat endpoint is removed, not refused. This probe used
+ # to accept a 503 with the right wording; absence is the stronger result, so
+ # anything that answers here means the route came back.
  chat_body={"question":question}
  if dataset_id.isdecimal():chat_body["dataset_id"]=int(dataset_id)
- chat,item=probe.request("chat_serving","/api/v1/chat",method="POST",body=chat_body,allow_statuses={503})
- if item["status"]==503:
-  detail=chat.get("detail") if isinstance(chat,dict) else None
-  if not isinstance(detail,str) or "DLM context API" not in detail:raise RuntimeError("legacy chat retirement response is invalid")
- elif not isinstance(chat,dict) or chat.get("route") in {None,"error","no_match"}:raise RuntimeError("chat did not serve from migrated product state")
+ _chat,item=probe.request("legacy_chat_absent","/api/v1/chat",method="POST",body=chat_body,allow_statuses={404,405})
+ if item["status"] not in {404,405}:raise RuntimeError("the legacy chat endpoint is still served")
  checks.append(item)
  at=(now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00","Z")
  report={"schema_version":SCHEMA_VERSION,"status":"passed","checked_at":at,"authority":"kaveondb","check_count":len(checks),"checks":checks}

@@ -171,7 +171,7 @@ class RouteInventoryTests(unittest.TestCase):
         "DELETE /api/v1/lab/query/{query_id}", "POST /api/v1/lab/switch-database",
         "DELETE /api/v1/lab/query-history", "POST /api/v1/lab/record-query",
         "POST /api/v1/sql/generate", "DELETE /api/v1/sql/async/{job_id}",
-        "POST /api/v1/dlm/ask", "POST /api/v1/dlm/serve-chart", "POST /api/v1/chat",
+        "POST /api/v1/dlm/ask", "POST /api/v1/dlm/serve-chart",
     }
     STATEMENT = {
         "POST /api/v1/lab/execute": "sql", "POST /api/v1/lab/query": "query",

@@ -85,7 +85,6 @@ from routers import (
     setup,
     users,
     user_recents,
-    chat,
     chat_history,
     dlm,
 )
@@ -271,7 +270,6 @@ app.include_router(setup.router,            prefix="/api/v1")
 app.include_router(users.router,            prefix="/api/v1")
 app.include_router(user_recents.router,     prefix="/api/v1")
 app.include_router(dlm.router,              prefix="/api/v1")
-app.include_router(chat.router,             prefix="/api/v1")
 app.include_router(chat_history.router,     prefix="/api/v1")
 
 
