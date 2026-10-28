@@ -85,6 +85,15 @@ function resourceGroup(q: QueryRecord) {
   return <>{rg.name}<span className={s.na}> · {limits}</span></>;
 }
 
+function recommendation(q: QueryRecord, comparison: QueryComparison | null): React.ReactNode {
+  if (q.state === "FAILED") return <><b>Investigate the failure first.</b> A failed run is not a valid performance baseline.</>;
+  if (q.admission_wait_ms && q.admission_wait_ms > 0) return <><b>Check resource pressure.</b> This statement waited {ms(q.admission_wait_ms)} before admission; compare queue depth and concurrent workload before rewriting SQL.</>;
+  if (q.execution?.mode === "cache") return <><b>Result-cache hit.</b> This duration measures cache delivery, not the underlying SQL execution.</>;
+  if (comparison?.p95_ms && q.elapsed_ms > comparison.p95_ms) return <><b>Outlier run.</b> This execution is above the comparable P95; inspect storage reads, stage hotspots, and concurrent load before changing the query.</>;
+  if (q.scans.some(sc => (sc.compressed_bytes_read ?? 0) > 0 && sc.compressed_bytes_read === sc.compressed_bytes_selected)) return <><b>Read-bound candidate.</b> The scan read all selected compressed bytes; inspect pruning, projection, and table layout.</>;
+  return <><b>No immediate action.</b> Keep the SQL unchanged unless repeated comparable runs miss the target.</>;
+}
+
 function Definitions({ rows }: { rows: [string, React.ReactNode][] }) {
   return <dl className={s.dl}>{rows.map(([k, v]) => <div key={k} style={{ display: "contents" }}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;
 }
@@ -241,6 +250,10 @@ export default function EngineQueryPage() {
                     </div>
                   </>
                 ) : <div className={s.note}><b>Not enough comparable history.</b> KaveonDB needs another successful execution of the same statement to establish a baseline.</div>}
+              </section>
+              <section className={s.panel}>
+                <h2 className={s.panelTitle}>Evidence-based next step</h2>
+                <div className={s.note}>{recommendation(q, comparison)}</div>
               </section>
               <div className={s.two}>
                 <section className={s.panel}>
