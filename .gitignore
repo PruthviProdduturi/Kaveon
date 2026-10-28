@@ -82,6 +82,9 @@ test-*.py
 test-*.ts
 **/__tests__/
 **/tests/
+# The SQL crate's compatibility corpus is source, not generated output.
+!engine/crates/sql/tests/
+!engine/crates/sql/tests/*.rs
 
 # ---------------------------------------------------------
 # Temporary Files

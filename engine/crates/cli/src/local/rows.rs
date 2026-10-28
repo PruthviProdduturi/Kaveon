@@ -225,10 +225,13 @@ mod tests {
         let map = DataType::Map(
             Field::new(
                 "entries",
-                DataType::Struct(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int64, true),
-                ].into()),
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int64, true),
+                    ]
+                    .into(),
+                ),
                 false,
             )
             .into(),

@@ -48,6 +48,12 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   const { filterLogic, layout } = ctx;
   const dashboardFilters = filtersOverride ?? ctx.dashboardFilters;
   const updateDashboardFilter = onUpdateFilter ?? ctx.updateDashboardFilter;
+  // A cross-filter -- clicking a country on a map, a bar on a chart -- filters
+  // every tile but is not one of these filters, so this bar used to under-report
+  // and under-clear. It is owned by the dashboard, so an override bar (the
+  // full-screen sandbox, editing a local filter set) leaves it alone.
+  const ownsCrossFilters = !filtersOverride;
+  const crossFilterCount = ownsCrossFilters ? Object.keys(ctx.crossFilters).length : 0;
 
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -335,6 +341,7 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   };
 
   const clearAll = () => {
+    if (ownsCrossFilters) ctx.clearAllCrossFilters();
     dashboardFilters.forEach((f) => {
       if (f.filterType === 'date_range') {
         updateDashboardFilter(f.id, { value: '', valueKey: '', dateFrom: '', dateTo: '' });
@@ -345,7 +352,8 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
     resetEdit();
   };
 
-  const activeCount = dashboardFilters.filter((f) => f.enabled && String(f.value ?? '').trim()).length;
+  const activeCount =
+    dashboardFilters.filter((f) => f.enabled && String(f.value ?? '').trim()).length + crossFilterCount;
 
   const getFilterLabel = (filter: DashboardFilter): string => {
     const name = filter.label?.trim() || filter.column.split('.').pop() || filter.column;
@@ -380,11 +388,23 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
         <span className={styles.headLabel}>Filters</span>
         {activeCount > 0 && (
           <span className={styles.headCount}>
-            {activeCount} of {dashboardFilters.length} applied
+            {activeCount - crossFilterCount} of {dashboardFilters.length} applied
+            {crossFilterCount > 0 && (
+              <> · {crossFilterCount} from {crossFilterCount === 1 ? 'a chart' : 'charts'}</>
+            )}
           </span>
         )}
         {activeCount > 0 && (
-          <button type="button" className={styles.clear} onClick={clearAll} title="Reset every filter to AllUp">
+          <button
+            type="button"
+            className={styles.clear}
+            onClick={clearAll}
+            title={
+              crossFilterCount > 0
+                ? 'Reset every filter to AllUp and clear the filters set by clicking a chart'
+                : 'Reset every filter to AllUp'
+            }
+          >
             <i className="fas fa-rotate-left" style={{ fontSize: 10 }} />
             Clear all
           </button>

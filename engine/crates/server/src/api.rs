@@ -13866,6 +13866,9 @@ pub(crate) fn batches_to_json(
                     DataType::LargeUtf8 => {
                         serde_json::Value::String(arr.as_string::<i64>().value(row).to_owned())
                     }
+                    DataType::Utf8View => {
+                        serde_json::Value::String(arr.as_string_view().value(row).to_owned())
+                    }
                     // Complex values must remain JSON-native at the API boundary. Falling
                     // through to Arrow's Debug representation makes arrays, maps and rows
                     // unusable to SQL Lab and clients (and is not Trino-compatible).
@@ -14073,6 +14076,7 @@ fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
         DataType::Float64 => serde_json::json!(array.as_primitive::<Float64Type>().value(0)),
         DataType::Utf8 => serde_json::json!(array.as_string::<i32>().value(0)),
         DataType::LargeUtf8 => serde_json::json!(array.as_string::<i64>().value(0)),
+        DataType::Utf8View => serde_json::json!(array.as_string_view().value(0)),
         _ => serde_json::Value::String(format!("{:?}", array.slice(0, 1))),
     }
 }
@@ -22758,6 +22762,30 @@ mod streamed_root_tests {
         assert_eq!(
             batches_to_json(&[batch]),
             vec![vec![serde_json::Value::Null]]
+        );
+    }
+
+    #[test]
+    fn result_rows_encode_utf8_view_as_json_string() {
+        use arrow::array::{ArrayRef, StringViewArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec!["Bronx", "Brooklyn"]));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "borough",
+                DataType::Utf8View,
+                false,
+            )])),
+            vec![values],
+        )
+        .unwrap();
+        assert_eq!(
+            batches_to_json(&[batch]),
+            vec![
+                vec![serde_json::json!("Bronx")],
+                vec![serde_json::json!("Brooklyn")]
+            ]
         );
     }
 

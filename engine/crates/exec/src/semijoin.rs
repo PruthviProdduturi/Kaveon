@@ -777,11 +777,7 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
                 TimeUnit::Millisecond => array
                     .as_primitive::<arrow::datatypes::Time32MillisecondType>()
                     .value(row),
-                _ => {
-                    return Err(KaveonError::Execution(
-                        "unsupported TIME32 unit".into(),
-                    ))
-                }
+                _ => return Err(KaveonError::Execution("unsupported TIME32 unit".into())),
             } as i128,
             0,
         )),
@@ -793,11 +789,7 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
                 TimeUnit::Nanosecond => array
                     .as_primitive::<arrow::datatypes::Time64NanosecondType>()
                     .value(row),
-                _ => {
-                    return Err(KaveonError::Execution(
-                        "unsupported TIME64 unit".into(),
-                    ))
-                }
+                _ => return Err(KaveonError::Execution("unsupported TIME64 unit".into())),
             } as i128,
             0,
         )),
@@ -882,7 +874,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::Int64Array,
-        datatypes::{i256, DataType, Field, Schema},
+        datatypes::{DataType, Field, Schema, i256},
     };
     use std::sync::Arc;
     struct Source {
@@ -1052,11 +1044,9 @@ mod tests {
             ])],
         )
         .unwrap();
-        let right = RecordBatch::try_new(
-            schema,
-            vec![array(vec![Some(i256::from_i128(125)), None])],
-        )
-        .unwrap();
+        let right =
+            RecordBatch::try_new(schema, vec![array(vec![Some(i256::from_i128(125)), None])])
+                .unwrap();
         let mut op = SemiJoinOperator::new(
             Box::new(Source {
                 schema: left.schema(),

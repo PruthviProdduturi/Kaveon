@@ -517,9 +517,9 @@ impl HybridFinalMerge {
         }
         let merger_memory = self.merger_memory.clone();
         loop {
-            let merger = self.merger.get_or_insert_with(|| {
-                IncrementalAggregateMerger::new(merger_memory.clone())
-            });
+            let merger = self
+                .merger
+                .get_or_insert_with(|| IncrementalAggregateMerger::new(merger_memory.clone()));
             match merger.push_selected_batch(batch, selected) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
@@ -684,11 +684,7 @@ impl HybridFinalMerge {
 
 /// The rows of a grouped-state batch whose key hashes to thread `index`,
 /// or None when there are none; the batch itself when they all do.
-fn selected_rows(
-    batch: &RecordBatch,
-    selector: &ThreadSelector,
-    index: usize,
-) -> Result<Vec<u32>> {
+fn selected_rows(batch: &RecordBatch, selector: &ThreadSelector, index: usize) -> Result<Vec<u32>> {
     let keys = batch
         .column(0)
         .as_any()

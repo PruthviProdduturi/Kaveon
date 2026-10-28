@@ -1,0 +1,465 @@
+{
+  "endpoint": "http://127.0.0.1:8081/v1/statement",
+  "repetitions": 2,
+  "cases": [
+    {
+      "id": "TSQL-004",
+      "rows": 1,
+      "columns": [
+        "d",
+        "y",
+        "dd",
+        "n",
+        "bad"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 6.76,
+        "median": 11.02,
+        "max": 15.28
+      }
+    },
+    {
+      "id": "TSQL-005",
+      "rows": 1,
+      "columns": [
+        "d",
+        "daypart",
+        "converted"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.41,
+        "median": 15.76,
+        "max": 16.11
+      }
+    },
+    {
+      "id": "TSQL-010",
+      "rows": 5,
+      "columns": [
+        "borough",
+        "y",
+        "rn"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.72,
+        "median": 15.99,
+        "max": 16.26
+      }
+    },
+    {
+      "id": "TSQL-011",
+      "rows": 5,
+      "columns": [
+        "year",
+        "y",
+        "c"
+      ],
+      "server_elapsed_ms": 11,
+      "client_ms": {
+        "min": 14.42,
+        "median": 20.18,
+        "max": 25.94
+      }
+    },
+    {
+      "id": "TSQL-012",
+      "rows": 2,
+      "columns": [
+        "year"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.57,
+        "median": 18.77,
+        "max": 21.96
+      }
+    },
+    {
+      "id": "TSQL-013",
+      "rows": 1,
+      "columns": [
+        "ts",
+        "h"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.58,
+        "median": 15.76,
+        "max": 15.94
+      }
+    },
+    {
+      "id": "TSQL-014",
+      "rows": 1,
+      "columns": [
+        "y",
+        "m",
+        "d"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.6,
+        "median": 15.87,
+        "max": 16.13
+      }
+    },
+    {
+      "id": "TSQL-015",
+      "rows": 1,
+      "columns": [
+        "local_now",
+        "utc_now"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 2.01,
+        "median": 8.96,
+        "max": 15.9
+      }
+    },
+    {
+      "id": "TSQL-016",
+      "rows": 2,
+      "columns": [
+        "borough",
+        "trips",
+        "rn"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 12.86,
+        "median": 14.43,
+        "max": 15.99
+      }
+    },
+    {
+      "id": "TSQL-017",
+      "rows": 1,
+      "columns": [
+        "y",
+        "q",
+        "w",
+        "m",
+        "s"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.78,
+        "median": 15.79,
+        "max": 15.79
+      }
+    },
+    {
+      "id": "TSQL-018",
+      "rows": 1,
+      "columns": [
+        "b",
+        "f",
+        "v",
+        "bad"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.59,
+        "median": 15.63,
+        "max": 15.68
+      }
+    },
+    {
+      "id": "TSQL-019",
+      "rows": 1,
+      "columns": [
+        "d",
+        "c"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.61,
+        "median": 15.74,
+        "max": 15.87
+      }
+    },
+    {
+      "id": "TSQL-020",
+      "rows": 2,
+      "columns": [
+        "trips",
+        "tag"
+      ],
+      "server_elapsed_ms": 9,
+      "client_ms": {
+        "min": 24.82,
+        "median": 28.23,
+        "max": 31.64
+      }
+    },
+    {
+      "id": "TSQL-021",
+      "rows": 4,
+      "columns": [
+        "trips",
+        "n"
+      ],
+      "server_elapsed_ms": 9,
+      "client_ms": {
+        "min": 30.56,
+        "median": 30.87,
+        "max": 31.18
+      }
+    },
+    {
+      "id": "TSQL-022",
+      "rows": 1,
+      "columns": [
+        "d",
+        "rows",
+        "actions"
+      ],
+      "server_elapsed_ms": 9,
+      "client_ms": {
+        "min": 31.53,
+        "median": 31.83,
+        "max": 32.14
+      }
+    },
+    {
+      "id": "TSQL-023",
+      "rows": 3,
+      "columns": [
+        "y",
+        "region",
+        "actions"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.51,
+        "median": 18.26,
+        "max": 21.02
+      }
+    },
+    {
+      "id": "TSQL-024",
+      "rows": 1,
+      "columns": [
+        "leap_day",
+        "month_end"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 2.0,
+        "median": 7.8,
+        "max": 13.61
+      }
+    },
+    {
+      "id": "TSQL-025",
+      "rows": 1,
+      "columns": [
+        "converted_null",
+        "date_null"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.91,
+        "median": 16.29,
+        "max": 16.66
+      }
+    },
+    {
+      "id": "TSQL-026",
+      "rows": 1,
+      "columns": [
+        "q",
+        "m",
+        "y"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.54,
+        "median": 15.88,
+        "max": 16.23
+      }
+    },
+    {
+      "id": "TSQL-027",
+      "rows": 1,
+      "columns": [
+        "d",
+        "bad_ts"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.5,
+        "median": 15.67,
+        "max": 15.84
+      }
+    },
+    {
+      "id": "TSQL-028",
+      "rows": 1,
+      "columns": [
+        "big_delta"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 2.22,
+        "median": 9.04,
+        "max": 15.86
+      }
+    },
+    {
+      "id": "TSQL-029",
+      "rows": 1,
+      "columns": [
+        "us_date"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 12.75,
+        "median": 14.5,
+        "max": 16.24
+      }
+    },
+    {
+      "id": "TSQL-030",
+      "rows": 1,
+      "columns": [
+        "us_date"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.5,
+        "median": 15.61,
+        "max": 15.72
+      }
+    },
+    {
+      "id": "TSQL-031",
+      "rows": 1,
+      "columns": [
+        "us_date"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.84,
+        "median": 15.94,
+        "max": 16.04
+      }
+    },
+    {
+      "id": "TSQL-032",
+      "rows": 1,
+      "columns": [
+        "invalid_date"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.68,
+        "median": 15.73,
+        "max": 15.78
+      }
+    },
+    {
+      "id": "TSQL-033",
+      "rows": 1,
+      "columns": [
+        "ts"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.36,
+        "median": 15.89,
+        "max": 16.42
+      }
+    },
+    {
+      "id": "TSQL-034",
+      "rows": 3,
+      "columns": [
+        "platform",
+        "actions",
+        "rows"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 3.08,
+        "median": 15.26,
+        "max": 27.43
+      }
+    },
+    {
+      "id": "TSQL-035",
+      "rows": 5,
+      "columns": [
+        "region",
+        "platform",
+        "actions"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.48,
+        "median": 16.02,
+        "max": 16.56
+      }
+    },
+    {
+      "id": "TSQL-036",
+      "rows": 3,
+      "columns": [
+        "platform",
+        "actions"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 14.52,
+        "median": 15.06,
+        "max": 15.6
+      }
+    },
+    {
+      "id": "TSQL-037",
+      "rows": 1,
+      "columns": [
+        "users",
+        "regions"
+      ],
+      "server_elapsed_ms": 13,
+      "client_ms": {
+        "min": 27.89,
+        "median": 30.42,
+        "max": 32.96
+      }
+    },
+    {
+      "id": "TSQL-038",
+      "rows": 6,
+      "columns": [
+        "region",
+        "users"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.86,
+        "median": 16.66,
+        "max": 17.45
+      }
+    },
+    {
+      "id": "TSQL-039",
+      "rows": 3,
+      "columns": [
+        "region",
+        "users"
+      ],
+      "server_elapsed_ms": 0,
+      "client_ms": {
+        "min": 15.1,
+        "median": 15.45,
+        "max": 15.8
+      }
+    }
+  ]
+}

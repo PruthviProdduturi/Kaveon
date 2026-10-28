@@ -1,29 +1,22 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
-    Decimal128Array,
-    Decimal128Builder,
-    Float32Array, Float64Array, Float64Builder,
-    Int16Array, Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder,
-    Int8Array, LargeListArray, LargeListBuilder, LargeStringArray, LargeStringBuilder,
-    ListArray, GenericListArray, OffsetSizeTrait,
-    ListBuilder, MapArray,
-    NullBuilder, PrimitiveArray, PrimitiveBuilder,
-    StringArray,
-    StringBuilder, StructArray,
+    Decimal128Array, Decimal128Builder, Float32Array, Float64Array, Float64Builder,
+    GenericListArray, Int8Array, Int16Array, Int32Array, Int32Builder, Int32DictionaryArray,
+    Int64Array, Int64Builder, LargeListArray, LargeListBuilder, LargeStringArray,
+    LargeStringBuilder, ListArray, ListBuilder, MapArray, NullBuilder, OffsetSizeTrait,
+    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, Float32Type, Float64Type, Int32Type,
-    Int64Type,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
-    Int16Type, Int8Type,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -761,7 +754,10 @@ fn large_string_arrays_overlap(
     if saw_null { None } else { Some(false) }
 }
 
-fn string_arrays_overlap(left: &arrow::array::StringArray, right: &arrow::array::StringArray) -> Option<bool> {
+fn string_arrays_overlap(
+    left: &arrow::array::StringArray,
+    right: &arrow::array::StringArray,
+) -> Option<bool> {
     let saw_null = left.null_count() > 0 || right.null_count() > 0;
     for left_index in 0..left.len() {
         if left.is_null(left_index) {
@@ -920,12 +916,8 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
                 }
                 if !decided {
                     ordered = Some(match kind {
-                        CompareKind::Lt | CompareKind::Le => {
-                            left_values.len() < right_values.len()
-                        }
-                        CompareKind::Gt | CompareKind::Ge => {
-                            left_values.len() > right_values.len()
-                        }
+                        CompareKind::Lt | CompareKind::Le => left_values.len() < right_values.len(),
+                        CompareKind::Gt | CompareKind::Ge => left_values.len() > right_values.len(),
                         CompareKind::Eq | CompareKind::Ne => unreachable!(),
                     });
                 }
@@ -1045,7 +1037,10 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
                 "ROW values must have matching fields for comparison".into(),
             ));
         }
-        if matches!(kind, CompareKind::Lt | CompareKind::Le | CompareKind::Gt | CompareKind::Ge) {
+        if matches!(
+            kind,
+            CompareKind::Lt | CompareKind::Le | CompareKind::Gt | CompareKind::Ge
+        ) {
             let mut rows = Vec::with_capacity(left.len());
             for row in 0..left.len() {
                 let mut result = Some(false);
@@ -1323,7 +1318,10 @@ fn text_value<'a>(arr: &'a ArrayRef, row: usize) -> Result<Option<&'a str>> {
 
 fn split_text_parts(value: &str, delimiter: &str, limit: Option<usize>) -> Vec<String> {
     if delimiter.is_empty() {
-        let characters = value.chars().map(|character| character.to_string()).collect::<Vec<_>>();
+        let characters = value
+            .chars()
+            .map(|character| character.to_string())
+            .collect::<Vec<_>>();
         if let Some(limit) = limit.filter(|limit| *limit < characters.len()) {
             let mut parts = characters[..limit - 1].to_vec();
             parts.push(characters[limit - 1..].concat());
@@ -1613,19 +1611,23 @@ fn eval_in_list(
 
 fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<ArrayRef> {
     let arr = evaluate(expr, batch)?;
-    if matches!(target, CastTarget::TimestampMicros { with_timezone: true }) {
+    if matches!(
+        target,
+        CastTarget::TimestampMicros {
+            with_timezone: true
+        }
+    ) {
         // Arrow's string parser requires the optional chrono-tz feature for
         // named zones such as UTC. Parse the instant as a naive timestamp,
         // then attach the Engine's canonical UTC metadata without changing
         // the microsecond value.
-        let naive = compute::cast(
-            &arr,
-            &DataType::Timestamp(TimeUnit::Microsecond, None),
-        )?;
+        let naive = compute::cast(&arr, &DataType::Timestamp(TimeUnit::Microsecond, None))?;
         let values = naive
             .as_any()
             .downcast_ref::<TimestampMicrosecondArray>()
-            .ok_or_else(|| KaveonError::Execution("timestamp cast produced an invalid array".into()))?
+            .ok_or_else(|| {
+                KaveonError::Execution("timestamp cast produced an invalid array".into())
+            })?
             .clone()
             .with_timezone("UTC");
         return Ok(Arc::new(values));
@@ -1675,7 +1677,7 @@ fn eval_array_quantified_compare(
             other => {
                 return Err(KaveonError::Execution(format!(
                     "{name} requires an ARRAY/List value, found {other}"
-                )))
+                )));
             }
         };
         let list_is_null = match args[0].data_type() {
@@ -1714,7 +1716,13 @@ fn eval_array_quantified_compare(
                     break;
                 }
             }
-            if matched { Some(true) } else if saw_null { None } else { Some(false) }
+            if matched {
+                Some(true)
+            } else if saw_null {
+                None
+            } else {
+                Some(false)
+            }
         } else {
             let mut failed = false;
             for index in 0..comparisons.len() {
@@ -1725,7 +1733,13 @@ fn eval_array_quantified_compare(
                     break;
                 }
             }
-            if failed { Some(false) } else if saw_null { None } else { Some(true) }
+            if failed {
+                Some(false)
+            } else if saw_null {
+                None
+            } else {
+                Some(true)
+            }
         };
         result.append_option(reduced);
     }
@@ -1881,47 +1895,6 @@ fn arrays_overlap_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(rows))
 }
 
-fn array_join_text<L: OffsetSizeTrait>(
-    list: &GenericListArray<L>,
-    delimiter: &ArrayRef,
-    replacement: Option<&ArrayRef>,
-) -> Result<ArrayRef> {
-    let result: StringArray = (0..list.len())
-        .map(|row| {
-            if list.is_null(row) {
-                return Ok(None);
-            }
-            let Some(delimiter) = text_value(delimiter, row)? else {
-                return Ok(None);
-            };
-            let values = list.value(row);
-            let values = compute::cast(&values, &DataType::Utf8).map_err(|error| {
-                KaveonError::Execution(format!("ARRAY_JOIN cannot cast list elements to VARCHAR: {error}"))
-            })?;
-            let values = values.as_string::<i32>();
-            let mut joined = String::new();
-            let mut emitted = false;
-            for index in 0..values.len() {
-                let value = if values.is_null(index) {
-                    replacement
-                        .map(|replacement| text_value(replacement, row))
-                        .transpose()?
-                        .flatten()
-                } else {
-                    Some(values.value(index))
-                };
-                let Some(value) = value else { continue };
-                if emitted { joined.push_str(delimiter); }
-                joined.push_str(value);
-                emitted = true;
-            }
-            Ok(Some(joined))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into();
-    Ok(Arc::new(result))
-}
-
 fn array_position_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -2007,10 +1980,7 @@ fn contains_nested<L: OffsetSizeTrait>(
     Ok(Arc::new(result))
 }
 
-fn contains_primitive<L, T>(
-    list: &GenericListArray<L>,
-    needle: &ArrayRef,
-) -> Result<ArrayRef>
+fn contains_primitive<L, T>(list: &GenericListArray<L>, needle: &ArrayRef) -> Result<ArrayRef>
 where
     L: OffsetSizeTrait,
     T: ArrowPrimitiveType,
@@ -2119,9 +2089,7 @@ fn contains_large_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(result))
 }
 
-fn array_distinct_nested<L: OffsetSizeTrait>(
-    list: &GenericListArray<L>,
-) -> Result<ArrayRef> {
+fn array_distinct_nested<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let mut selected = Vec::<ArrayRef>::new();
     let mut offsets = vec![L::zero()];
     let mut valid = Vec::with_capacity(list.len());
@@ -2184,9 +2152,7 @@ fn array_distinct_nested<L: OffsetSizeTrait>(
     )?))
 }
 
-fn array_reverse_generic<L: OffsetSizeTrait>(
-    list: &GenericListArray<L>,
-) -> Result<ArrayRef> {
+fn array_reverse_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
     let mut selected = Vec::<ArrayRef>::new();
     let mut offsets = vec![L::zero()];
     let mut valid = Vec::with_capacity(list.len());
@@ -2296,9 +2262,11 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
         selected.extend(entries.into_iter().map(|value| {
             value.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1))
         }));
-        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
-            KaveonError::Execution("ARRAY_SORT result offset overflow".into())
-        })?);
+        offsets.push(
+            L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_SORT result offset overflow".into())
+            })?,
+        );
     }
     let values = if selected.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
@@ -2343,7 +2311,9 @@ fn array_slice_generic<L: OffsetSizeTrait>(
         let length = inner.len() as i64;
         let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
         if step == 0 {
-            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+            return Err(KaveonError::Execution(
+                "ARRAY_SLICE stride cannot be zero".into(),
+            ));
         }
         let start = lower
             .is_valid(row)
@@ -2371,9 +2341,11 @@ fn array_slice_generic<L: OffsetSizeTrait>(
             }
         }
         valid.push(true);
-        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
-            KaveonError::Execution("ARRAY_SLICE result offset overflow".into())
-        })?);
+        offsets.push(
+            L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_SLICE result offset overflow".into())
+            })?,
+        );
     }
     let values = if selected.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
@@ -2438,7 +2410,11 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
             let replace = match best.as_ref() {
                 None => true,
                 Some(current) => {
-                    let kind = if take_max { CompareKind::Gt } else { CompareKind::Lt };
+                    let kind = if take_max {
+                        CompareKind::Gt
+                    } else {
+                        CompareKind::Lt
+                    };
                     comparison(&candidate, current, kind)
                         .map(|value| !value.is_null(0) && value.value(0))
                         .unwrap_or(false)
@@ -2448,9 +2424,7 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
                 best = Some(candidate);
             }
         }
-        selected.push(
-            best.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1)),
-        );
+        selected.push(best.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1)));
     }
     let chunks = selected
         .iter()
@@ -2458,7 +2432,6 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
         .collect::<Vec<_>>();
     Ok(compute::concat(&chunks)?)
 }
-
 
 #[derive(Clone, Copy)]
 enum ArraySetOp {
@@ -2590,9 +2563,11 @@ fn array_concat_variadic<L: OffsetSizeTrait>(
     for row in 0..num_rows {
         if arrays.iter().any(|array| array.is_null(row)) {
             valid.push(false);
-            offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
-                || KaveonError::Execution("ARRAY_CONCAT result offset overflow".into()),
-            )?);
+            offsets.push(
+                L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_CONCAT result offset overflow".into())
+                })?,
+            );
             continue;
         }
         valid.push(true);
@@ -2600,9 +2575,11 @@ fn array_concat_variadic<L: OffsetSizeTrait>(
             chunks.push(array.value(row));
         }
         let length = chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
-        offsets.push(L::from_usize(length).ok_or_else(|| {
-            KaveonError::Execution("ARRAY_CONCAT result offset overflow".into())
-        })?);
+        offsets.push(
+            L::from_usize(length).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_CONCAT result offset overflow".into())
+            })?,
+        );
     }
     let values = if chunks.is_empty() {
         arrow::array::new_empty_array(&first.value_type())
@@ -2634,9 +2611,11 @@ fn array_flatten<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Array
     for row in 0..list.len() {
         if list.is_null(row) {
             valid.push(false);
-            offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
-                || KaveonError::Execution("flatten result offset overflow".into()),
-            )?);
+            offsets.push(
+                L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(|| {
+                    KaveonError::Execution("flatten result offset overflow".into())
+                })?,
+            );
             continue;
         }
         let nested = list.value(row);
@@ -2674,20 +2653,20 @@ fn array_flatten<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Array
             other => {
                 return Err(KaveonError::Execution(format!(
                     "flatten requires ARRAY of ARRAY values, got {other}"
-                )))
+                )));
             }
         }
         if !row_valid {
             chunks.truncate(row_start);
         }
         valid.push(row_valid);
-        offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
-            || KaveonError::Execution("flatten result offset overflow".into()),
-        )?);
+        offsets.push(
+            L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum())
+                .ok_or_else(|| KaveonError::Execution("flatten result offset overflow".into()))?,
+        );
     }
-    let element_type = element_type.ok_or_else(|| {
-        KaveonError::Execution("flatten requires ARRAY of ARRAY values".into())
-    })?;
+    let element_type = element_type
+        .ok_or_else(|| KaveonError::Execution("flatten requires ARRAY of ARRAY values".into()))?;
     let values = if chunks.is_empty() {
         arrow::array::new_empty_array(&element_type)
     } else {
@@ -2725,9 +2704,11 @@ fn array_trim<L: OffsetSizeTrait>(
     for row in 0..list.len() {
         if list.is_null(row) || counts.is_null(row) {
             valid.push(false);
-            offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
-                || KaveonError::Execution("TRIM_ARRAY result offset overflow".into()),
-            )?);
+            offsets.push(
+                L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(|| {
+                    KaveonError::Execution("TRIM_ARRAY result offset overflow".into())
+                })?,
+            );
             continue;
         }
         let trim = counts.value(row);
@@ -2742,9 +2723,11 @@ fn array_trim<L: OffsetSizeTrait>(
             .saturating_sub(usize::try_from(trim).unwrap_or(usize::MAX));
         chunks.push(inner.slice(0, keep));
         valid.push(true);
-        offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
-            || KaveonError::Execution("TRIM_ARRAY result offset overflow".into()),
-        )?);
+        offsets.push(
+            L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(|| {
+                KaveonError::Execution("TRIM_ARRAY result offset overflow".into())
+            })?,
+        );
     }
     let values = if chunks.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
@@ -2814,14 +2797,22 @@ fn array_zip<L: OffsetSizeTrait>(arrays: &[&GenericListArray<L>]) -> Result<Arra
     for row in 0..rows {
         if arrays.iter().any(|array| array.is_null(row)) {
             valid.push(false);
-            offsets.push(L::from_usize(
-                field_chunks.first().map(|chunks| chunks.len()).unwrap_or_default(),
-            )
-            .ok_or_else(|| KaveonError::Execution("ZIP result offset overflow".into()))?);
+            offsets.push(
+                L::from_usize(
+                    field_chunks
+                        .first()
+                        .map(|chunks| chunks.len())
+                        .unwrap_or_default(),
+                )
+                .ok_or_else(|| KaveonError::Execution("ZIP result offset overflow".into()))?,
+            );
             continue;
         }
         valid.push(true);
-        let inners = arrays.iter().map(|array| array.value(row)).collect::<Vec<_>>();
+        let inners = arrays
+            .iter()
+            .map(|array| array.value(row))
+            .collect::<Vec<_>>();
         let width = inners.iter().map(|inner| inner.len()).max().unwrap_or(0);
         for index in 0..width {
             for (field, inner) in inners.iter().enumerate() {
@@ -2833,8 +2824,13 @@ fn array_zip<L: OffsetSizeTrait>(arrays: &[&GenericListArray<L>]) -> Result<Arra
             }
         }
         offsets.push(
-            L::from_usize(field_chunks.first().map(|chunks| chunks.len()).unwrap_or_default())
-                .ok_or_else(|| KaveonError::Execution("ZIP result offset overflow".into()))?,
+            L::from_usize(
+                field_chunks
+                    .first()
+                    .map(|chunks| chunks.len())
+                    .unwrap_or_default(),
+            )
+            .ok_or_else(|| KaveonError::Execution("ZIP result offset overflow".into()))?,
         );
     }
     let mut fields = Vec::with_capacity(arrays.len());
@@ -2857,7 +2853,11 @@ fn array_zip<L: OffsetSizeTrait>(arrays: &[&GenericListArray<L>]) -> Result<Arra
         columns.push(values);
     }
     let values = Arc::new(StructArray::new(fields.into(), columns, None)) as ArrayRef;
-    let field = Arc::new(arrow::datatypes::Field::new("item", values.data_type().clone(), true));
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
     Ok(Arc::new(GenericListArray::<L>::try_new(
         field,
         OffsetBuffer::new(ScalarBuffer::from(offsets)),
@@ -2885,9 +2885,7 @@ fn array_sequence(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let mut builder = ListBuilder::new(Int64Builder::new());
     const MAX_SEQUENCE_ELEMENTS: usize = 1_000_000;
     for row in 0..num_rows {
-        if starts.is_null(row)
-            || stops.is_null(row)
-            || steps.is_some_and(|step| step.is_null(row))
+        if starts.is_null(row) || stops.is_null(row) || steps.is_some_and(|step| step.is_null(row))
         {
             builder.append(false);
             continue;
@@ -2920,9 +2918,9 @@ fn array_sequence(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
             if value == stop {
                 break;
             }
-            value = value.checked_add(step).ok_or_else(|| {
-                KaveonError::Execution("SEQUENCE value overflows BIGINT".into())
-            })?;
+            value = value
+                .checked_add(step)
+                .ok_or_else(|| KaveonError::Execution("SEQUENCE value overflows BIGINT".into()))?;
             if (ascending && value > stop) || (!ascending && value < stop) {
                 break;
             }
@@ -2950,9 +2948,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             .cloned()
             .unwrap_or(DataType::Null);
         if data_type == DataType::Int64
-            && args
-                .iter()
-                .any(|arg| arg.data_type() == &DataType::Float64)
+            && args.iter().any(|arg| arg.data_type() == &DataType::Float64)
         {
             data_type = DataType::Float64;
         }
@@ -2990,9 +2986,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         other => {
                             return Err(KaveonError::Execution(format!(
                                 "ARRAY elements must have one common type, found {other}"
-                            )))
+                            )));
                         }
-
                     };
                     child_chunks.push(chunk);
                 }
@@ -3179,10 +3174,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             builder.values().append_null();
                             continue;
                         }
-                        let values = arg
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .ok_or_else(|| {
+                        let values =
+                            arg.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
                                 KaveonError::Execution(
                                     "ARRAY element type could not be decoded".into(),
                                 )
@@ -3240,14 +3233,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             builder.values().append_null();
                             continue;
                         }
-                        let values = arg
-                            .as_any()
-                            .downcast_ref::<Decimal128Array>()
-                            .ok_or_else(|| {
-                                KaveonError::Execution(
-                                    "ARRAY element type could not be decoded".into(),
-                                )
-                            })?;
+                        let values =
+                            arg.as_any()
+                                .downcast_ref::<Decimal128Array>()
+                                .ok_or_else(|| {
+                                    KaveonError::Execution(
+                                        "ARRAY element type could not be decoded".into(),
+                                    )
+                                })?;
                         if values.is_null(row) {
                             builder.values().append_null();
                         } else {
@@ -3290,11 +3283,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .iter()
                 .map(|arg| match arg.data_type() {
                     DataType::LargeList(_) => Ok(Arc::clone(arg)),
-                    DataType::List(field) => compute::cast(
-                        arg,
-                        &DataType::LargeList(field.clone()),
-                    )
-                    .map_err(KaveonError::from),
+                    DataType::List(field) => {
+                        compute::cast(arg, &DataType::LargeList(field.clone()))
+                            .map_err(KaveonError::from)
+                    }
                     other => Err(KaveonError::Execution(format!(
                         "ZIP requires ARRAY/List values, got {other}"
                     ))),
@@ -3303,9 +3295,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let lists = normalized
                 .iter()
                 .map(|arg| {
-                    arg.as_any().downcast_ref::<LargeListArray>().ok_or_else(|| {
-                        KaveonError::Execution("ZIP requires matching ARRAY/List values".into())
-                    })
+                    arg.as_any()
+                        .downcast_ref::<LargeListArray>()
+                        .ok_or_else(|| {
+                            KaveonError::Execution("ZIP requires matching ARRAY/List values".into())
+                        })
                 })
                 .collect::<Result<Vec<_>>>()?;
             return array_zip(&lists);
@@ -3367,7 +3361,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             "FLATTEN requires an ARRAY of ARRAY values".into(),
         ));
     }
-    if matches!(upper.as_str(), "ARRAY_UNION" | "ARRAY_INTERSECT" | "ARRAY_EXCEPT") {
+    if matches!(
+        upper.as_str(),
+        "ARRAY_UNION" | "ARRAY_INTERSECT" | "ARRAY_EXCEPT"
+    ) {
         check_arity(name, args, 2)?;
         let operation = match upper.as_str() {
             "ARRAY_UNION" => ArraySetOp::Union,
@@ -3382,11 +3379,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .iter()
                 .map(|arg| match arg.data_type() {
                     DataType::LargeList(_) => Ok(Arc::clone(arg)),
-                    DataType::List(field) => compute::cast(
-                        arg,
-                        &DataType::LargeList(field.clone()),
-                    )
-                    .map_err(KaveonError::from),
+                    DataType::List(field) => {
+                        compute::cast(arg, &DataType::LargeList(field.clone()))
+                            .map_err(KaveonError::from)
+                    }
                     other => Err(KaveonError::Execution(format!(
                         "{upper} requires ARRAY/List values, got {other}"
                     ))),
@@ -3420,7 +3416,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         return Err(KaveonError::Execution(format!(
             "{upper} requires matching ARRAY/List values"
-        )))
+        )));
     }
     if upper == "ARRAY_REPEAT" {
         check_arity(name, args, 2)?;
@@ -3429,12 +3425,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         const MAX_ARRAY_REPEAT: i64 = 1_000_000;
         macro_rules! repeat_primitive {
             ($array_ty:ty, $builder:expr, $value:expr) => {{
-                let elements = args[0].as_any().downcast_ref::<$array_ty>().ok_or_else(|| {
-                    KaveonError::Execution(format!(
-                        "ARRAY_REPEAT does not support element type {}",
-                        args[0].data_type()
-                    ))
-                })?;
+                let elements = args[0]
+                    .as_any()
+                    .downcast_ref::<$array_ty>()
+                    .ok_or_else(|| {
+                        KaveonError::Execution(format!(
+                            "ARRAY_REPEAT does not support element type {}",
+                            args[0].data_type()
+                        ))
+                    })?;
                 let mut builder = ListBuilder::new($builder);
                 for row in 0..num_rows {
                     if counts.is_null(row) {
@@ -3462,23 +3461,89 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }};
         }
         return match args[0].data_type() {
-            DataType::Boolean => repeat_primitive!(BooleanArray, BooleanBuilder::new(), |a: &BooleanArray, r| a.value(r)),
-            DataType::Int8 => repeat_primitive!(Int8Array, PrimitiveBuilder::<Int8Type>::new(), |a: &Int8Array, r| a.value(r)),
-            DataType::Int16 => repeat_primitive!(Int16Array, PrimitiveBuilder::<Int16Type>::new(), |a: &Int16Array, r| a.value(r)),
-            DataType::Int32 => repeat_primitive!(Int32Array, Int32Builder::new(), |a: &Int32Array, r| a.value(r)),
-            DataType::Int64 => repeat_primitive!(Int64Array, Int64Builder::new(), |a: &Int64Array, r| a.value(r)),
-            DataType::UInt8 => repeat_primitive!(UInt8Array, PrimitiveBuilder::<UInt8Type>::new(), |a: &UInt8Array, r| a.value(r)),
-            DataType::UInt16 => repeat_primitive!(UInt16Array, PrimitiveBuilder::<UInt16Type>::new(), |a: &UInt16Array, r| a.value(r)),
-            DataType::UInt32 => repeat_primitive!(UInt32Array, PrimitiveBuilder::<UInt32Type>::new(), |a: &UInt32Array, r| a.value(r)),
-            DataType::UInt64 => repeat_primitive!(UInt64Array, PrimitiveBuilder::<UInt64Type>::new(), |a: &UInt64Array, r| a.value(r)),
-            DataType::Float32 => repeat_primitive!(Float32Array, PrimitiveBuilder::<Float32Type>::new(), |a: &Float32Array, r| a.value(r)),
-            DataType::Float64 => repeat_primitive!(Float64Array, Float64Builder::new(), |a: &Float64Array, r| a.value(r)),
-            DataType::Date32 => repeat_primitive!(Date32Array, PrimitiveBuilder::<Date32Type>::new(), |a: &Date32Array, r| a.value(r)),
-            DataType::Date64 => repeat_primitive!(Date64Array, PrimitiveBuilder::<Date64Type>::new(), |a: &Date64Array, r| a.value(r)),
-            DataType::Time32(TimeUnit::Second) => repeat_primitive!(Time32SecondArray, PrimitiveBuilder::<Time32SecondType>::new(), |a: &Time32SecondArray, r| a.value(r)),
-            DataType::Time32(TimeUnit::Millisecond) => repeat_primitive!(Time32MillisecondArray, PrimitiveBuilder::<Time32MillisecondType>::new(), |a: &Time32MillisecondArray, r| a.value(r)),
-            DataType::Time64(TimeUnit::Microsecond) => repeat_primitive!(Time64MicrosecondArray, PrimitiveBuilder::<Time64MicrosecondType>::new(), |a: &Time64MicrosecondArray, r| a.value(r)),
-            DataType::Time64(TimeUnit::Nanosecond) => repeat_primitive!(Time64NanosecondArray, PrimitiveBuilder::<Time64NanosecondType>::new(), |a: &Time64NanosecondArray, r| a.value(r)),
+            DataType::Boolean => repeat_primitive!(
+                BooleanArray,
+                BooleanBuilder::new(),
+                |a: &BooleanArray, r| a.value(r)
+            ),
+            DataType::Int8 => repeat_primitive!(
+                Int8Array,
+                PrimitiveBuilder::<Int8Type>::new(),
+                |a: &Int8Array, r| a.value(r)
+            ),
+            DataType::Int16 => repeat_primitive!(
+                Int16Array,
+                PrimitiveBuilder::<Int16Type>::new(),
+                |a: &Int16Array, r| a.value(r)
+            ),
+            DataType::Int32 => {
+                repeat_primitive!(Int32Array, Int32Builder::new(), |a: &Int32Array, r| a
+                    .value(r))
+            }
+            DataType::Int64 => {
+                repeat_primitive!(Int64Array, Int64Builder::new(), |a: &Int64Array, r| a
+                    .value(r))
+            }
+            DataType::UInt8 => repeat_primitive!(
+                UInt8Array,
+                PrimitiveBuilder::<UInt8Type>::new(),
+                |a: &UInt8Array, r| a.value(r)
+            ),
+            DataType::UInt16 => repeat_primitive!(
+                UInt16Array,
+                PrimitiveBuilder::<UInt16Type>::new(),
+                |a: &UInt16Array, r| a.value(r)
+            ),
+            DataType::UInt32 => repeat_primitive!(
+                UInt32Array,
+                PrimitiveBuilder::<UInt32Type>::new(),
+                |a: &UInt32Array, r| a.value(r)
+            ),
+            DataType::UInt64 => repeat_primitive!(
+                UInt64Array,
+                PrimitiveBuilder::<UInt64Type>::new(),
+                |a: &UInt64Array, r| a.value(r)
+            ),
+            DataType::Float32 => repeat_primitive!(
+                Float32Array,
+                PrimitiveBuilder::<Float32Type>::new(),
+                |a: &Float32Array, r| a.value(r)
+            ),
+            DataType::Float64 => repeat_primitive!(
+                Float64Array,
+                Float64Builder::new(),
+                |a: &Float64Array, r| a.value(r)
+            ),
+            DataType::Date32 => repeat_primitive!(
+                Date32Array,
+                PrimitiveBuilder::<Date32Type>::new(),
+                |a: &Date32Array, r| a.value(r)
+            ),
+            DataType::Date64 => repeat_primitive!(
+                Date64Array,
+                PrimitiveBuilder::<Date64Type>::new(),
+                |a: &Date64Array, r| a.value(r)
+            ),
+            DataType::Time32(TimeUnit::Second) => repeat_primitive!(
+                Time32SecondArray,
+                PrimitiveBuilder::<Time32SecondType>::new(),
+                |a: &Time32SecondArray, r| a.value(r)
+            ),
+            DataType::Time32(TimeUnit::Millisecond) => repeat_primitive!(
+                Time32MillisecondArray,
+                PrimitiveBuilder::<Time32MillisecondType>::new(),
+                |a: &Time32MillisecondArray, r| a.value(r)
+            ),
+            DataType::Time64(TimeUnit::Microsecond) => repeat_primitive!(
+                Time64MicrosecondArray,
+                PrimitiveBuilder::<Time64MicrosecondType>::new(),
+                |a: &Time64MicrosecondArray, r| a.value(r)
+            ),
+            DataType::Time64(TimeUnit::Nanosecond) => repeat_primitive!(
+                Time64NanosecondArray,
+                PrimitiveBuilder::<Time64NanosecondType>::new(),
+                |a: &Time64NanosecondArray, r| a.value(r)
+            ),
             DataType::Utf8 => {
                 let elements = args[0].as_string::<i32>();
                 let mut builder = ListBuilder::new(StringBuilder::new());
@@ -3707,10 +3772,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 let entry = u32::try_from(entry).map_err(|_| {
                     KaveonError::Execution("MAP_FROM_ENTRIES has too many entries".into())
                 })?;
-                if selected[row_start..]
-                    .iter()
-                    .any(|candidate| map_keys_equal(&keys, *candidate as usize, entry as usize).unwrap_or(false))
-                {
+                if selected[row_start..].iter().any(|candidate| {
+                    map_keys_equal(&keys, *candidate as usize, entry as usize).unwrap_or(false)
+                }) {
                     return Err(KaveonError::Execution(
                         "MAP_FROM_ENTRIES does not allow duplicate keys".into(),
                     ));
@@ -3760,9 +3824,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         let mut keys = Vec::new();
         let mut values = Vec::new();
         for row in 0..num_rows {
-            if sources.is_null(row)
-                || entry_delimiters.is_null(row)
-                || key_delimiters.is_null(row)
+            if sources.is_null(row) || entry_delimiters.is_null(row) || key_delimiters.is_null(row)
             {
                 valid.push(false);
                 offsets.push(keys.len() as i32);
@@ -3823,9 +3885,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         let mut keys = Vec::new();
         let mut values = Vec::new();
         for row in 0..num_rows {
-            if sources.is_null(row)
-                || entry_delimiters.is_null(row)
-                || key_delimiters.is_null(row)
+            if sources.is_null(row) || entry_delimiters.is_null(row) || key_delimiters.is_null(row)
             {
                 valid.push(false);
                 map_offsets.push(keys.len() as i32);
@@ -3904,9 +3964,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         let maps = args
             .iter()
             .map(|arg| {
-                arg.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
-                    KaveonError::Execution("MAP_CONCAT requires MAP values".into())
-                })
+                arg.as_any()
+                    .downcast_ref::<MapArray>()
+                    .ok_or_else(|| KaveonError::Execution("MAP_CONCAT requires MAP values".into()))
             })
             .collect::<Result<Vec<_>>>()?;
         let key_type = maps[0].keys().data_type().clone();
@@ -4243,31 +4303,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_ARRAY_LENGTH" => {
             check_arity(name, args, 1)?;
-            let documents = &args[0];
+            let documents = as_string_array(&args[0])?;
             let result: Int64Array = (0..num_rows)
                 .map(|row| {
-                    let Some(document) = text_value(documents, row)? else {
-                        return Ok(None);
-                    };
-                    Ok(match serde_json::from_str::<serde_json::Value>(document) {
-                        Ok(serde_json::Value::Array(values)) => Some(values.len() as i64),
+                    if documents.is_null(row) {
+                        return None;
+                    }
+                    match serde_json::from_str::<serde_json::Value>(documents.value(row)).ok()? {
+                        serde_json::Value::Array(values) => Some(values.len() as i64),
                         _ => None,
-                    })
+                    }
                 })
-                .collect::<Result<Vec<_>>>()?
-                .into();
+                .collect();
             Ok(Arc::new(result))
         }
         "JSON_ARRAY_CONTAINS" => {
             check_arity(name, args, 2)?;
-            let documents = &args[0];
+            let documents = as_string_array(&args[0])?;
             let mut values = Vec::with_capacity(num_rows);
             for row in 0..num_rows {
-                let Some(document) = text_value(documents, row)? else {
-                    values.push(None);
-                    continue;
-                };
-                if args[1].is_null(row) {
+                if documents.is_null(row) || args[1].is_null(row) {
                     values.push(None);
                     continue;
                 }
@@ -4275,7 +4330,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     values.push(None);
                     continue;
                 };
-                let Ok(document) = serde_json::from_str::<serde_json::Value>(document) else {
+                let Ok(document) = serde_json::from_str::<serde_json::Value>(documents.value(row))
+                else {
                     values.push(None);
                     continue;
                 };
@@ -4290,80 +4346,52 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "JSON_SIZE" => {
             check_arity(name, args, 2)?;
-            let documents = &args[0];
-            let paths = &args[1];
+            let documents = as_string_array(&args[0])?;
+            let paths = as_string_array(&args[1])?;
             let result: Int64Array = (0..num_rows)
                 .map(|row| {
-                    let (Some(document), Some(path)) =
-                        (text_value(documents, row)?, text_value(paths, row)?)
-                    else {
-                        return Ok(None);
-                    };
-                    let value = json_extract_value(document, path);
-                    Ok(value.map(|value| match value {
+                    if documents.is_null(row) || paths.is_null(row) {
+                        return None;
+                    }
+                    let value = json_extract_value(documents.value(row), paths.value(row))?;
+                    Some(match value {
                         serde_json::Value::Array(values) => values.len() as i64,
                         serde_json::Value::Object(values) => values.len() as i64,
                         _ => 0,
-                    }))
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into();
-            Ok(Arc::new(result))
-        }
-        "JSON_EXISTS" => {
-            check_arity(name, args, 2)?;
-            let documents = &args[0];
-            let paths = &args[1];
-            let result: BooleanArray = (0..num_rows)
-                .map(|row| {
-                    let (Some(document), Some(path)) =
-                        (text_value(documents, row)?, text_value(paths, row)?)
-                    else {
-                        return Ok(None);
-                    };
-                    Ok(Some(json_extract_value(document, path).is_some()))
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into();
-            Ok(Arc::new(result))
-        }
-        "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" | "JSON_QUERY" | "JSON_VALUE" => {
-            check_arity(name, args, 2)?;
-            let documents = &args[0];
-            let paths = &args[1];
-            let result: StringArray = (0..num_rows)
-                .map(|row| {
-                    let (Some(document), Some(path)) =
-                        (text_value(documents, row)?, text_value(paths, row)?)
-                    else {
-                        return Ok(None);
-                    };
-                    Ok(if upper == "JSON_EXTRACT" {
-                        json_extract(document, path)
-                    } else if upper == "JSON_QUERY" {
-                        match json_extract_value(document, path) {
-                            Some(serde_json::Value::Array(_) | serde_json::Value::Object(_)) =>
-                                json_extract(document, path),
-                            _ => None,
-                        }
-                    } else {
-                        json_extract_scalar(document, path)
                     })
                 })
-                .collect::<Result<Vec<_>>>()?
-                .into();
+                .collect();
+            Ok(Arc::new(result))
+        }
+        "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" => {
+            check_arity(name, args, 2)?;
+            let documents = as_string_array(&args[0])?;
+            let paths = as_string_array(&args[1])?;
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if documents.is_null(row) || paths.is_null(row) {
+                        return None;
+                    }
+                    if upper == "JSON_EXTRACT" {
+                        json_extract(documents.value(row), paths.value(row))
+                    } else {
+                        json_extract_scalar(documents.value(row), paths.value(row))
+                    }
+                })
+                .collect();
             Ok(Arc::new(result))
         }
         "JSON_PARSE" | "TRY_JSON_PARSE" => {
             check_arity(name, args, 1)?;
-            let documents = &args[0];
+            let documents = as_string_array(&args[0])?;
             let try_parse = upper == "TRY_JSON_PARSE";
             let mut result = StringBuilder::new();
             for row in 0..num_rows {
-                let Some(document) = text_value(documents, row)? else {
+                if documents.is_null(row) {
                     result.append_null();
                     continue;
-                };
+                }
+                let document = documents.value(row);
                 if serde_json::from_str::<serde_json::Value>(document).is_ok() {
                     result.append_value(document);
                 } else if try_parse {
@@ -4372,75 +4400,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     return Err(KaveonError::Execution(format!(
                         "invalid JSON value at row {row}"
                     )));
-                }
-            }
-            Ok(Arc::new(result.finish()))
-        }
-        "JSON_FORMAT" | "TRY_JSON_FORMAT" => {
-            check_arity(name, args, 1)?;
-            let try_format = upper == "TRY_JSON_FORMAT";
-            let documents = &args[0];
-            let mut result = StringBuilder::new();
-            for row in 0..num_rows {
-                let Some(document) = text_value(documents, row)? else {
-                    result.append_null();
-                    continue;
-                };
-                let value = match serde_json::from_str::<serde_json::Value>(document) {
-                    Ok(value) => value,
-                    Err(_) if try_format => {
-                        result.append_null();
-                        continue;
-                    }
-                    Err(_) => {
-                        return Err(KaveonError::Execution(format!(
-                            "invalid JSON value at row {row}"
-                        )))
-                    }
-                };
-                result.append_value(value.to_string());
-            }
-            Ok(Arc::new(result.finish()))
-        }
-        "JSON_ARRAY_GET" | "TRY_JSON_ARRAY_GET" => {
-            check_arity(name, args, 2)?;
-            let try_get = upper == "TRY_JSON_ARRAY_GET";
-            let documents = &args[0];
-            let indices = compute::cast(&args[1], &DataType::Int64)?;
-            let indices = indices.as_primitive::<arrow::datatypes::Int64Type>();
-            let mut result = StringBuilder::new();
-            for row in 0..num_rows {
-                let (Some(document), Some(index)) =
-                    (text_value(documents, row)?, indices.is_valid(row).then(|| indices.value(row)))
-                else {
-                    result.append_null();
-                    continue;
-                };
-                let parsed = match serde_json::from_str::<serde_json::Value>(document) {
-                    Ok(value) => value,
-                    Err(_error) if try_get => {
-                        result.append_null();
-                        continue;
-                    }
-                    Err(error) => {
-                        return Err(KaveonError::Execution(format!(
-                            "invalid JSON value at row {row}: {error}"
-                        )))
-                    }
-                };
-                let serde_json::Value::Array(values) = parsed else {
-                    result.append_null();
-                    continue;
-                };
-                let position = if index < 0 {
-                    values.len() as i64 + index
-                } else {
-                    index
-                };
-                if position < 0 || position >= values.len() as i64 {
-                    result.append_null();
-                } else {
-                    result.append_value(values[position as usize].to_string());
                 }
             }
             Ok(Arc::new(result.finish()))
@@ -4681,7 +4640,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             } else {
                 None
             };
-            let groups = groups.as_ref().map(|array| array.as_primitive::<Int64Type>());
+            let groups = groups
+                .as_ref()
+                .map(|array| array.as_primitive::<Int64Type>());
             let result: StringArray = (0..num_rows)
                 .map(|row| {
                     if values.is_null(row) || patterns.is_null(row) {
@@ -4703,7 +4664,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let regex = compiled_regex_for("REGEXP_EXTRACT", patterns.value(row))?;
                     let captures = regex.captures(values.value(row));
                     Ok(captures.and_then(|captures| {
-                        captures.get(group).map(|matched| matched.as_str().to_owned())
+                        captures
+                            .get(group)
+                            .map(|matched| matched.as_str().to_owned())
                     }))
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -4730,36 +4693,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REPLACE" => {
             check_arity(name, args, 3)?;
-            let arr = as_string_array(&args[0])?;
-            let from = as_string_array(&args[1])?;
-            let to = as_string_array(&args[2])?;
             let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
-                if arr.is_null(index) || from.is_null(index) || to.is_null(index) {
+                let Some(source) = text_value(&args[0], index)? else {
                     return Ok(total);
-                }
-                let source = arr.value(index);
-                let matches = if from.value(index).is_empty() {
-                    source.chars().count() + 1
-                } else {
-                    source.len() / from.value(index).len()
                 };
-                (matches as u64)
-                    .checked_mul(to.value(index).len() as u64)
-                    .and_then(|bytes| bytes.checked_add(source.len() as u64))
-                    .and_then(|bytes| total.checked_add(bytes))
+                total
+                    .checked_add(source.len() as u64)
                     .ok_or_else(|| KaveonError::Execution("REPLACE output size overflow".into()))
             })?;
             reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || from.is_null(i) || to.is_null(i) {
-                        None
-                    } else {
-                        Some(arr.value(i).replace(from.value(i), to.value(i)))
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    match (
+                        text_value(&args[0], row)?,
+                        text_value(&args[1], row)?,
+                        text_value(&args[2], row)?,
+                    ) {
+                        (Some(source), Some(from), Some(to)) => {
+                            result.append_value(source.replace(from, to))
+                        }
+                        _ => result.append_null(),
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    match (
+                        text_value(&args[0], row)?,
+                        text_value(&args[1], row)?,
+                        text_value(&args[2], row)?,
+                    ) {
+                        (Some(source), Some(from), Some(to)) => {
+                            result.append_value(source.replace(from, to))
+                        }
+                        _ => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "TRANSLATE" => {
             check_arity(name, args, 3)?;
@@ -4778,7 +4751,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let to_chars = to.value(row).chars().collect::<Vec<_>>();
                     let mut mapping = std::collections::HashMap::new();
                     for (index, character) in from_chars.into_iter().enumerate() {
-                        mapping.entry(character).or_insert(to_chars.get(index).copied());
+                        mapping
+                            .entry(character)
+                            .or_insert(to_chars.get(index).copied());
                     }
                     Some(
                         source
@@ -4816,7 +4791,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let arr = args[0]
                         .as_any()
                         .downcast_ref::<LargeStringArray>()
-                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                        .ok_or_else(|| {
+                            KaveonError::Execution("expected large string array".into())
+                        })?;
                     let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
                     for row in 0..num_rows {
                         if arr.is_null(row) || lens.is_null(row) {
@@ -4861,14 +4838,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let arr = args[0]
                         .as_any()
                         .downcast_ref::<LargeStringArray>()
-                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                        .ok_or_else(|| {
+                            KaveonError::Execution("expected large string array".into())
+                        })?;
                     let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
                     for row in 0..num_rows {
                         if arr.is_null(row) || lens.is_null(row) {
                             result.append_null();
                         } else {
                             let value = arr.value(row);
-                            let skip = value.chars().count().saturating_sub(lens.value(row).max(0) as usize);
+                            let skip = value
+                                .chars()
+                                .count()
+                                .saturating_sub(lens.value(row).max(0) as usize);
                             result.append_value(value.chars().skip(skip).collect::<String>());
                         }
                     }
@@ -4914,7 +4896,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     } else if pad.is_empty() {
                         result.append_value(value);
                     } else {
-                        let prefix = pad.chars().cycle().take(target - current).collect::<String>();
+                        let prefix = pad
+                            .chars()
+                            .cycle()
+                            .take(target - current)
+                            .collect::<String>();
                         result.append_value(format!("{prefix}{value}"));
                     }
                 }
@@ -4935,7 +4921,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     } else if pad.is_empty() {
                         result.append_value(value);
                     } else {
-                        let prefix = pad.chars().cycle().take(target - current).collect::<String>();
+                        let prefix = pad
+                            .chars()
+                            .cycle()
+                            .take(target - current)
+                            .collect::<String>();
                         result.append_value(format!("{prefix}{value}"));
                     }
                 }
@@ -4977,7 +4967,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     } else if pad.is_empty() {
                         result.append_value(value);
                     } else {
-                        let suffix = pad.chars().cycle().take(target - current).collect::<String>();
+                        let suffix = pad
+                            .chars()
+                            .cycle()
+                            .take(target - current)
+                            .collect::<String>();
                         result.append_value(format!("{value}{suffix}"));
                     }
                 }
@@ -4998,7 +4992,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     } else if pad.is_empty() {
                         result.append_value(value);
                     } else {
-                        let suffix = pad.chars().cycle().take(target - current).collect::<String>();
+                        let suffix = pad
+                            .chars()
+                            .cycle()
+                            .take(target - current)
+                            .collect::<String>();
                         result.append_value(format!("{value}{suffix}"));
                     }
                 }
@@ -5009,10 +5007,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             let mut result = Vec::with_capacity(num_rows);
             for row in 0..num_rows {
-                result.push(match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
-                    (Some(value), Some(prefix)) => Some(value.starts_with(prefix)),
-                    _ => None,
-                });
+                result.push(
+                    match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
+                        (Some(value), Some(prefix)) => Some(value.starts_with(prefix)),
+                        _ => None,
+                    },
+                );
             }
             Ok(Arc::new(BooleanArray::from(result)))
         }
@@ -5020,10 +5020,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             let mut result = Vec::with_capacity(num_rows);
             for row in 0..num_rows {
-                result.push(match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
-                    (Some(value), Some(suffix)) => Some(value.ends_with(suffix)),
-                    _ => None,
-                });
+                result.push(
+                    match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
+                        (Some(value), Some(suffix)) => Some(value.ends_with(suffix)),
+                        _ => None,
+                    },
+                );
             }
             Ok(Arc::new(BooleanArray::from(result)))
         }
@@ -5040,12 +5042,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     DataType::Float64 => contains_primitive::<_, Float64Type>(list, &args[1]),
                     DataType::Date32 => contains_primitive::<_, Date32Type>(list, &args[1]),
                     DataType::Date64 => contains_primitive::<_, Date64Type>(list, &args[1]),
-                    DataType::Time32(TimeUnit::Second) =>
-                        contains_primitive::<_, Time32SecondType>(list, &args[1]),
-                    DataType::Time32(TimeUnit::Millisecond) =>
-                        contains_primitive::<_, Time32MillisecondType>(list, &args[1]),
-                    DataType::Timestamp(TimeUnit::Microsecond, _) =>
-                        contains_primitive::<_, TimestampMicrosecondType>(list, &args[1]),
+                    DataType::Time32(TimeUnit::Second) => {
+                        contains_primitive::<_, Time32SecondType>(list, &args[1])
+                    }
+                    DataType::Time32(TimeUnit::Millisecond) => {
+                        contains_primitive::<_, Time32MillisecondType>(list, &args[1])
+                    }
+                    DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                        contains_primitive::<_, TimestampMicrosecondType>(list, &args[1])
+                    }
                     DataType::Boolean => contains_boolean(list, &args[1]),
                     DataType::Utf8 => contains_utf8(list, &args[1]),
                     DataType::LargeUtf8 => contains_large_utf8(list, &args[1]),
@@ -5165,10 +5170,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     DataType::Date32 => contains_primitive!(Date32Type, DataType::Date32),
                     DataType::Date64 => contains_primitive!(Date64Type, DataType::Date64),
-                    DataType::Time32(TimeUnit::Second) => contains_primitive!(
-                        Time32SecondType,
-                        DataType::Time32(TimeUnit::Second)
-                    ),
+                    DataType::Time32(TimeUnit::Second) => {
+                        contains_primitive!(Time32SecondType, DataType::Time32(TimeUnit::Second))
+                    }
                     DataType::Time32(TimeUnit::Millisecond) => contains_primitive!(
                         Time32MillisecondType,
                         DataType::Time32(TimeUnit::Millisecond)
@@ -5178,10 +5182,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         DataType::Timestamp(TimeUnit::Microsecond, timezone.clone())
                     ),
                     DataType::Decimal128(precision, scale) => {
-                        let needle = compute::cast(
-                            &args[1],
-                            &DataType::Decimal128(precision, scale),
-                        )?;
+                        let needle =
+                            compute::cast(&args[1], &DataType::Decimal128(precision, scale))?;
                         let needle = needle.as_primitive::<arrow::datatypes::Decimal128Type>();
                         let result: BooleanArray = (0..num_rows)
                             .map(|row| {
@@ -5189,8 +5191,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                     return None;
                                 }
                                 let values = list.value(row);
-                                let values = values
-                                    .as_primitive::<arrow::datatypes::Decimal128Type>();
+                                let values =
+                                    values.as_primitive::<arrow::datatypes::Decimal128Type>();
                                 let mut saw_null = false;
                                 for index in 0..values.len() {
                                     if values.is_null(index) {
@@ -5272,22 +5274,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 })
                 .collect();
             Ok(Arc::new(result))
-        }
-        "ARRAY_JOIN" => {
-            if args.len() < 2 || args.len() > 3 {
-                return Err(KaveonError::Execution(
-                    "ARRAY_JOIN requires 2 or 3 arguments".into(),
-                ));
-            }
-            let replacement = args.get(2);
-            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
-                return array_join_text(list, &args[1], replacement);
-            }
-            let list = args[0]
-                .as_any()
-                .downcast_ref::<arrow::array::ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into()))?;
-            array_join_text(list, &args[1], replacement)
         }
         "ARRAY_POSITION" => {
             check_arity(name, args, 2)?;
@@ -5403,10 +5389,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 DataType::Date32 => position_primitive!(Date32Type, DataType::Date32),
                 DataType::Date64 => position_primitive!(Date64Type, DataType::Date64),
-                DataType::Time32(TimeUnit::Second) => position_primitive!(
-                    Time32SecondType,
-                    DataType::Time32(TimeUnit::Second)
-                ),
+                DataType::Time32(TimeUnit::Second) => {
+                    position_primitive!(Time32SecondType, DataType::Time32(TimeUnit::Second))
+                }
                 DataType::Time32(TimeUnit::Millisecond) => position_primitive!(
                     Time32MillisecondType,
                     DataType::Time32(TimeUnit::Millisecond)
@@ -5416,10 +5401,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     DataType::Timestamp(TimeUnit::Microsecond, timezone.clone())
                 ),
                 DataType::Decimal128(precision, scale) => {
-                    let needle = compute::cast(
-                        &args[1],
-                        &DataType::Decimal128(precision, scale),
-                    )?;
+                    let needle = compute::cast(&args[1], &DataType::Decimal128(precision, scale))?;
                     let needle = needle.as_primitive::<arrow::datatypes::Decimal128Type>();
                     (0..num_rows)
                         .map(|row| {
@@ -5427,8 +5409,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 return None;
                             }
                             let values = list.value(row);
-                            let values = values
-                                .as_primitive::<arrow::datatypes::Decimal128Type>();
+                            let values = values.as_primitive::<arrow::datatypes::Decimal128Type>();
                             (0..values.len())
                                 .find(|&index| {
                                     if needle.is_null(row) {
@@ -5504,28 +5485,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_DISTINCT" => {
             check_arity(name, args, 1)?;
-            let normalized_large_list = if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
-                if matches!(
-                    list.value_type(),
-                    DataType::List(_)
-                        | DataType::LargeList(_)
-                        | DataType::Struct(_)
-                        | DataType::Map(_, _)
-                ) {
-                    return array_distinct_nested(list);
-                }
-                let element_type = match list.value_type() {
-                    DataType::LargeUtf8 => DataType::Utf8,
-                    other => other.clone(),
+            let normalized_large_list =
+                if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                    if matches!(
+                        list.value_type(),
+                        DataType::List(_)
+                            | DataType::LargeList(_)
+                            | DataType::Struct(_)
+                            | DataType::Map(_, _)
+                    ) {
+                        return array_distinct_nested(list);
+                    }
+                    let element_type = match list.value_type() {
+                        DataType::LargeUtf8 => DataType::Utf8,
+                        other => other.clone(),
+                    };
+                    let field = Field::new("item", element_type, true);
+                    Some(compute::cast(&args[0], &DataType::List(Arc::new(field)))?)
+                } else {
+                    None
                 };
-                let field = Field::new("item", element_type, true);
-                Some(compute::cast(
-                    &args[0],
-                    &DataType::List(Arc::new(field)),
-                )?)
-            } else {
-                None
-            };
             let list = normalized_large_list
                 .as_ref()
                 .map(|array| {
@@ -5535,7 +5514,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         .expect("large-list normalization produces ListArray")
                 })
                 .or_else(|| args[0].as_any().downcast_ref::<ListArray>())
-                .ok_or_else(|| KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into())
+                })?;
             if matches!(
                 list.value_type(),
                 DataType::List(_)
@@ -5569,10 +5550,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
-                DataType::Int32 => distinct_primitive!(
-                    Int32Type,
-                    PrimitiveBuilder::<Int32Type>::new()
-                ),
+                DataType::Int32 => {
+                    distinct_primitive!(Int32Type, PrimitiveBuilder::<Int32Type>::new())
+                }
                 DataType::Int64 => {
                     let mut builder = ListBuilder::new(Int64Builder::new());
                     for row in 0..num_rows {
@@ -5617,14 +5597,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
-                DataType::Date32 => distinct_primitive!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => distinct_primitive!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    distinct_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    distinct_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => distinct_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -5674,7 +5652,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row).as_string::<i32>().clone();
                         let mut seen = Vec::<Option<String>>::new();
                         for index in 0..values.len() {
-                            let value = values.is_valid(index).then(|| values.value(index).to_owned());
+                            let value = values
+                                .is_valid(index)
+                                .then(|| values.value(index).to_owned());
                             if !seen.iter().any(|existing| existing == &value) {
                                 seen.push(value.clone());
                                 builder.values().append_option(value.as_deref());
@@ -5694,7 +5674,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_string::<i64>();
                         let mut sorted = (0..values.len())
-                            .map(|index| values.is_valid(index).then(|| values.value(index).to_owned()))
+                            .map(|index| {
+                                values
+                                    .is_valid(index)
+                                    .then(|| values.value(index).to_owned())
+                            })
                             .collect::<Vec<_>>();
                         sorted.sort_by(|left, right| match (left, right) {
                             (None, None) => std::cmp::Ordering::Equal,
@@ -5742,7 +5726,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_SORT requires an ARRAY/List value".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_SORT requires an ARRAY/List value".into())
+                })?;
             macro_rules! sort_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let mut builder = ListBuilder::new($builder);
@@ -5812,9 +5798,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             (None, None) => std::cmp::Ordering::Equal,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (Some(_), None) => std::cmp::Ordering::Less,
-                            (Some(left), Some(right)) => left
-                                .partial_cmp(right)
-                                .unwrap_or(std::cmp::Ordering::Equal),
+                            (Some(left), Some(right)) => {
+                                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+                            }
                         });
                         for value in sorted {
                             builder.values().append_option(value);
@@ -5823,14 +5809,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
-                DataType::Date32 => sort_primitive!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => sort_primitive!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    sort_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    sort_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => sort_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -5882,7 +5866,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_string::<i32>();
                         let mut sorted = (0..values.len())
-                            .map(|index| values.is_valid(index).then(|| values.value(index).to_owned()))
+                            .map(|index| {
+                                values
+                                    .is_valid(index)
+                                    .then(|| values.value(index).to_owned())
+                            })
                             .collect::<Vec<_>>();
                         sorted.sort_by(|left, right| match (left, right) {
                             (None, None) => std::cmp::Ordering::Equal,
@@ -5935,7 +5923,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_REVERSE requires an ARRAY/List value".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_REVERSE requires an ARRAY/List value".into())
+                })?;
             if matches!(
                 list.value_type(),
                 DataType::List(_)
@@ -5994,20 +5984,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_primitive::<Float64Type>();
                         for index in (0..values.len()).rev() {
-                            builder.values().append_option(values.is_valid(index).then(|| values.value(index)));
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         builder.append(true);
                     }
                     Ok(Arc::new(builder.finish()))
                 }
-                DataType::Date32 => reverse_primitive!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => reverse_primitive!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    reverse_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    reverse_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => reverse_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -6033,9 +6023,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
                         for index in (0..values.len()).rev() {
-                            builder.values().append_option(
-                                values.is_valid(index).then(|| values.value(index)),
-                            );
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         builder.append(true);
                     }
@@ -6051,7 +6041,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_string::<i32>();
                         for index in (0..values.len()).rev() {
-                            builder.values().append_option(values.is_valid(index).then(|| values.value(index)));
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         builder.append(true);
                     }
@@ -6067,9 +6059,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_string::<i64>();
                         for index in (0..values.len()).rev() {
-                            builder.values().append_option(
-                                values.is_valid(index).then(|| values.value(index)),
-                            );
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         builder.append(true);
                     }
@@ -6085,7 +6077,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_boolean();
                         for index in (0..values.len()).rev() {
-                            builder.values().append_option(values.is_valid(index).then(|| values.value(index)));
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         builder.append(true);
                     }
@@ -6110,7 +6104,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_SLICE requires an ARRAY/List value".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_SLICE requires an ARRAY/List value".into())
+                })?;
             if matches!(
                 list.value_type(),
                 DataType::List(_)
@@ -6141,10 +6137,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .then(|| upper.value(row))
                             .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
-                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
-                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
                         if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
@@ -6181,15 +6187,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .then(|| upper.value(row))
                             .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
-                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
-                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
                         if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
-                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
                                 index += step;
                             }
                         }
@@ -6217,7 +6235,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .then(|| upper.value(row))
                             .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
                         let first = if step > 0 {
                             start.max(1).min(length + 1)
@@ -6233,7 +6253,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
-                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
                                 index += step;
                             }
                         }
@@ -6241,14 +6263,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
-                DataType::Date32 => slice_primitive!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => slice_primitive!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    slice_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    slice_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => slice_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -6284,10 +6304,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .then(|| upper.value(row))
                             .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
-                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
-                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
                         if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
@@ -6322,7 +6352,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .then(|| upper.value(row))
                             .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
                         let first = if step > 0 {
                             start.max(1).min(length + 1)
@@ -6338,7 +6370,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
-                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
                                 index += step;
                             }
                         }
@@ -6366,7 +6400,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .then(|| upper.value(row))
                             .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
                         let first = if step > 0 {
                             start.max(1).min(length + 1)
@@ -6382,7 +6418,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
-                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
                                 index += step;
                             }
                         }
@@ -6401,18 +6439,36 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = values.as_boolean();
                         let length = values.len() as i64;
                         let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        let start = lower.is_valid(row).then(|| lower.value(row)).unwrap_or(if step < 0 { length } else { 1 });
-                        let end = upper.is_valid(row).then(|| upper.value(row)).unwrap_or(if step < 0 { 1 } else { length });
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
                         if step == 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                            return Err(KaveonError::Execution(
+                                "ARRAY_SLICE stride cannot be zero".into(),
+                            ));
                         }
-                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
-                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
                         if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
-                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
                                 index += step;
                             }
                         }
@@ -6420,7 +6476,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
-                other => Err(KaveonError::Execution(format!("ARRAY_SLICE does not support list element type {other}"))),
+                other => Err(KaveonError::Execution(format!(
+                    "ARRAY_SLICE does not support list element type {other}"
+                ))),
             }
         }
         "ELEMENT_AT" => {
@@ -6692,7 +6750,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             } else {
                 None
             };
-            let limits = limits.as_ref().map(|array| array.as_primitive::<Int64Type>());
+            let limits = limits
+                .as_ref()
+                .map(|array| array.as_primitive::<Int64Type>());
             for row in 0..num_rows {
                 if let Some(limits) = limits {
                     if !limits.is_null(row) && limits.value(row) <= 0 {
@@ -6759,8 +6819,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let arr = args[0]
                         .as_any()
                         .downcast_ref::<LargeStringArray>()
-                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
-                    let mut result = LargeStringBuilder::with_capacity(num_rows, arr.value_offsets().len());
+                        .ok_or_else(|| {
+                            KaveonError::Execution("expected large string array".into())
+                        })?;
+                    let mut result =
+                        LargeStringBuilder::with_capacity(num_rows, arr.value_offsets().len());
                     for row in 0..num_rows {
                         if arr.is_null(row) {
                             result.append_null();
@@ -6788,7 +6851,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let bytes = (arr.value(index).len() as u64)
                             .checked_mul(counts.value(index).max(0) as u64)
                             .and_then(|bytes| total.checked_add(bytes))
-                            .ok_or_else(|| KaveonError::Execution("REPEAT output size overflow".into()))?;
+                            .ok_or_else(|| {
+                                KaveonError::Execution("REPEAT output size overflow".into())
+                            })?;
                         Ok::<_, KaveonError>(bytes)
                     })?;
                     reserve_string_expansion(bytes, num_rows)?;
@@ -6807,7 +6872,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let arr = args[0]
                         .as_any()
                         .downcast_ref::<LargeStringArray>()
-                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                        .ok_or_else(|| {
+                            KaveonError::Execution("expected large string array".into())
+                        })?;
                     let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
                         if arr.is_null(index) || counts.is_null(index) {
                             return Ok(total);
@@ -6815,7 +6882,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let bytes = (arr.value(index).len() as u64)
                             .checked_mul(counts.value(index).max(0) as u64)
                             .and_then(|bytes| total.checked_add(bytes))
-                            .ok_or_else(|| KaveonError::Execution("REPEAT output size overflow".into()))?;
+                            .ok_or_else(|| {
+                                KaveonError::Execution("REPEAT output size overflow".into())
+                            })?;
                         Ok::<_, KaveonError>(bytes)
                     })?;
                     reserve_string_expansion(bytes, num_rows)?;
@@ -6824,7 +6893,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         if arr.is_null(row) || counts.is_null(row) {
                             result.append_null();
                         } else {
-                            result.append_value(arr.value(row).repeat(counts.value(row).max(0) as usize));
+                            result.append_value(
+                                arr.value(row).repeat(counts.value(row).max(0) as usize),
+                            );
                         }
                     }
                     Ok(Arc::new(result.finish()))
@@ -6999,16 +7070,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 num_rows
             ])))
         }
-        "DATE_TRUNC" => {
-            if args.len() != 2 {
-                return Err(KaveonError::Execution(
-                    "DATE_TRUNC requires 2 arguments (unit, timestamp)".into(),
-                ));
-            }
-            let unit_arr = as_string_array(&args[0])?;
-            let ts = &args[1];
-            eval_date_trunc(unit_arr, ts, num_rows)
-        }
         "TIME_LITERAL" => {
             check_arity(name, args, 1)?;
             let values = as_string_array(&args[0])?;
@@ -7027,6 +7088,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Arc::new(Time64MicrosecondArray::from(result)))
+        }
+        "DATE_TRUNC" => {
+            if args.len() != 2 {
+                return Err(KaveonError::Execution(
+                    "DATE_TRUNC requires 2 arguments (unit, timestamp)".into(),
+                ));
+            }
+            let unit_arr = as_string_array(&args[0])?;
+            let ts = &args[1];
+            eval_date_trunc(unit_arr, ts, num_rows)
         }
         "DATE_ADD_DAYS" => {
             check_arity(name, args, 2)?;
@@ -7075,10 +7146,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         return Ok(None);
                     }
                     let micros = seconds.value(row) * 1_000_000.0;
-                    if !micros.is_finite()
-                        || micros < i64::MIN as f64
-                        || micros > i64::MAX as f64
-                    {
+                    if !micros.is_finite() || micros < i64::MIN as f64 || micros > i64::MAX as f64 {
                         return Err(KaveonError::Execution(
                             "FROM_UNIXTIME value is outside the timestamp range".into(),
                         ));
@@ -7090,10 +7158,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "TO_UNIXTIME" => {
             check_arity(name, args, 1)?;
-            let timestamp = compute::cast(
-                &args[0],
-                &DataType::Timestamp(TimeUnit::Microsecond, None),
-            )?;
+            let timestamp =
+                compute::cast(&args[0], &DataType::Timestamp(TimeUnit::Microsecond, None))?;
             let timestamp = timestamp
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
@@ -7128,7 +7194,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 _ => None,
             });
             if string_array && boolean_array {
-                return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
+                return Err(KaveonError::Execution(
+                    "ARRAY elements must share a type".into(),
+                ));
             }
             if let Some(element_type) = temporal_type {
                 if args.iter().any(|arg| {
@@ -7201,7 +7269,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .iter()
                     .any(|arg| !matches!(arg.data_type(), DataType::Boolean | DataType::Null))
                 {
-                    return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
+                    return Err(KaveonError::Execution(
+                        "ARRAY elements must share a type".into(),
+                    ));
                 }
                 let values = args
                     .iter()
@@ -7293,11 +7363,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .iter()
                     .map(|arg| match arg.data_type() {
                         DataType::LargeList(_) => Ok(Arc::clone(arg)),
-                        DataType::List(field) => compute::cast(
-                            arg,
-                            &DataType::LargeList(field.clone()),
-                        )
-                        .map_err(KaveonError::from),
+                        DataType::List(field) => {
+                            compute::cast(arg, &DataType::LargeList(field.clone()))
+                                .map_err(KaveonError::from)
+                        }
                         other => Err(KaveonError::Execution(format!(
                             "ARRAY_CONCAT requires ARRAY/List values, got {other}"
                         ))),
@@ -7306,11 +7375,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 let lists = normalized
                     .iter()
                     .map(|arg| {
-                        arg.as_any().downcast_ref::<LargeListArray>().ok_or_else(|| {
-                            KaveonError::Execution(
-                                "ARRAY_CONCAT requires matching ARRAY/List values".into(),
-                            )
-                        })
+                        arg.as_any()
+                            .downcast_ref::<LargeListArray>()
+                            .ok_or_else(|| {
+                                KaveonError::Execution(
+                                    "ARRAY_CONCAT requires matching ARRAY/List values".into(),
+                                )
+                            })
                     })
                     .collect::<Result<Vec<_>>>()?;
                 return array_concat_variadic(&lists, num_rows);
@@ -7338,14 +7409,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let left = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_CONCAT requires ARRAY/List values".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_CONCAT requires ARRAY/List values".into())
+                })?;
             let right = args[1]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_CONCAT requires ARRAY/List values".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_CONCAT requires ARRAY/List values".into())
+                })?;
             if left.len() != right.len() || left.value_type() != right.value_type() {
                 return Err(KaveonError::Execution(
-                    "ARRAY_CONCAT requires arrays with matching row counts and element types".into(),
+                    "ARRAY_CONCAT requires arrays with matching row counts and element types"
+                        .into(),
                 ));
             }
             // Complex element types (nested arrays, ROWs, and MAPs) cannot
@@ -7416,12 +7492,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let right_values = right_inner.as_primitive::<$ty>();
                         for index in 0..left_values.len() {
                             builder.values().append_option(
-                                left_values.is_valid(index).then(|| left_values.value(index)),
+                                left_values
+                                    .is_valid(index)
+                                    .then(|| left_values.value(index)),
                             );
                         }
                         for index in 0..right_values.len() {
                             builder.values().append_option(
-                                right_values.is_valid(index).then(|| right_values.value(index)),
+                                right_values
+                                    .is_valid(index)
+                                    .then(|| right_values.value(index)),
                             );
                         }
                         builder.append(true);
@@ -7432,8 +7512,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             match left.value_type() {
                 DataType::Int64 => concat_primitive!(Int64Type, Int64Builder::new()),
                 DataType::Float64 => concat_primitive!(Float64Type, Float64Builder::new()),
-                DataType::Date32 => concat_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new()),
-                DataType::Date64 => concat_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new()),
+                DataType::Date32 => {
+                    concat_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    concat_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => concat_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -7459,16 +7543,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         }
                         let left_inner = left.value(row);
                         let right_inner = right.value(row);
-                        let left_values = left_inner.as_primitive::<arrow::datatypes::Decimal128Type>();
-                        let right_values = right_inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let left_values =
+                            left_inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let right_values =
+                            right_inner.as_primitive::<arrow::datatypes::Decimal128Type>();
                         for index in 0..left_values.len() {
                             builder.values().append_option(
-                                left_values.is_valid(index).then(|| left_values.value(index)),
+                                left_values
+                                    .is_valid(index)
+                                    .then(|| left_values.value(index)),
                             );
                         }
                         for index in 0..right_values.len() {
                             builder.values().append_option(
-                                right_values.is_valid(index).then(|| right_values.value(index)),
+                                right_values
+                                    .is_valid(index)
+                                    .then(|| right_values.value(index)),
                             );
                         }
                         builder.append(true);
@@ -7488,12 +7578,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let right_values = right_inner.as_string::<i32>();
                         for index in 0..left_values.len() {
                             builder.values().append_option(
-                                left_values.is_valid(index).then(|| left_values.value(index)),
+                                left_values
+                                    .is_valid(index)
+                                    .then(|| left_values.value(index)),
                             );
                         }
                         for index in 0..right_values.len() {
                             builder.values().append_option(
-                                right_values.is_valid(index).then(|| right_values.value(index)),
+                                right_values
+                                    .is_valid(index)
+                                    .then(|| right_values.value(index)),
                             );
                         }
                         builder.append(true);
@@ -7513,12 +7607,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let right_values = right_inner.as_boolean();
                         for index in 0..left_values.len() {
                             builder.values().append_option(
-                                left_values.is_valid(index).then(|| left_values.value(index)),
+                                left_values
+                                    .is_valid(index)
+                                    .then(|| left_values.value(index)),
                             );
                         }
                         for index in 0..right_values.len() {
                             builder.values().append_option(
-                                right_values.is_valid(index).then(|| right_values.value(index)),
+                                right_values
+                                    .is_valid(index)
+                                    .then(|| right_values.value(index)),
                             );
                         }
                         builder.append(true);
@@ -7538,10 +7636,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution(format!("{name} requires an ARRAY/List value")))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!("{name} requires an ARRAY/List value"))
+                })?;
             let prepend = name == "ARRAY_PREPEND";
             if args[1].len() != num_rows {
-                return Err(KaveonError::Execution(format!("{name} requires one value per row")));
+                return Err(KaveonError::Execution(format!(
+                    "{name} requires one value per row"
+                )));
             }
             if matches!(
                 list.value_type(),
@@ -7620,19 +7722,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_primitive::<$ty>();
                         if prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         for index in 0..values.len() {
-                            builder.values().append_option(
-                                values.is_valid(index).then(|| values.value(index)),
-                            );
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         if !prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         builder.append(true);
                     }
@@ -7642,14 +7744,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             match list.value_type() {
                 DataType::Int64 => append_primitive!(Int64Type, Int64Builder::new()),
                 DataType::Float64 => append_primitive!(Float64Type, Float64Builder::new()),
-                DataType::Date32 => append_primitive!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => append_primitive!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    append_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    append_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => append_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -7678,19 +7778,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
                         if prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         for index in 0..values.len() {
-                            builder.values().append_option(
-                                values.is_valid(index).then(|| values.value(index)),
-                            );
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         if !prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         builder.append(true);
                     }
@@ -7708,19 +7808,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_string::<i32>();
                         if prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         for index in 0..values.len() {
-                            builder.values().append_option(
-                                values.is_valid(index).then(|| values.value(index)),
-                            );
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         if !prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         builder.append(true);
                     }
@@ -7738,19 +7838,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let inner = list.value(row);
                         let values = inner.as_boolean();
                         if prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         for index in 0..values.len() {
-                            builder.values().append_option(
-                                values.is_valid(index).then(|| values.value(index)),
-                            );
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
                         }
                         if !prepend {
-                            builder.values().append_option(
-                                scalar.is_valid(row).then(|| scalar.value(row)),
-                            );
+                            builder
+                                .values()
+                                .append_option(scalar.is_valid(row).then(|| scalar.value(row)));
                         }
                         builder.append(true);
                     }
@@ -7769,9 +7869,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_REMOVE requires an ARRAY/List value".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_REMOVE requires an ARRAY/List value".into())
+                })?;
             if args[1].len() != num_rows {
-                return Err(KaveonError::Execution("ARRAY_REMOVE requires one value per row".into()));
+                return Err(KaveonError::Execution(
+                    "ARRAY_REMOVE requires one value per row".into(),
+                ));
             }
             if matches!(
                 list.value_type(),
@@ -7864,14 +7968,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             match list.value_type() {
                 DataType::Int64 => remove_primitive!(Int64Type, Int64Builder::new()),
                 DataType::Float64 => remove_primitive!(Float64Type, Float64Builder::new()),
-                DataType::Date32 => remove_primitive!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => remove_primitive!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    remove_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    remove_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => remove_primitive!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -8058,14 +8160,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(result.finish()))
                 }
-                DataType::Date32 => temporal_extrema!(
-                    Date32Type,
-                    PrimitiveBuilder::<Date32Type>::new()
-                ),
-                DataType::Date64 => temporal_extrema!(
-                    Date64Type,
-                    PrimitiveBuilder::<Date64Type>::new()
-                ),
+                DataType::Date32 => {
+                    temporal_extrema!(Date32Type, PrimitiveBuilder::<Date32Type>::new())
+                }
+                DataType::Date64 => {
+                    temporal_extrema!(Date64Type, PrimitiveBuilder::<Date64Type>::new())
+                }
                 DataType::Time32(TimeUnit::Second) => temporal_extrema!(
                     Time32SecondType,
                     PrimitiveBuilder::<Time32SecondType>::new()
@@ -8171,7 +8271,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 if left.len() != right.len() || left.value_type() != right.value_type() {
                     return Err(KaveonError::Execution(
-                        "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+                        "ARRAYS_OVERLAP requires arrays with matching row counts and element types"
+                            .into(),
                     ));
                 }
                 return match left.value_type() {
@@ -8180,12 +8281,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     DataType::Float64 => arrays_overlap_primitive::<_, Float64Type>(left, right),
                     DataType::Date32 => arrays_overlap_primitive::<_, Date32Type>(left, right),
                     DataType::Date64 => arrays_overlap_primitive::<_, Date64Type>(left, right),
-                    DataType::Time32(TimeUnit::Second) =>
-                        arrays_overlap_primitive::<_, Time32SecondType>(left, right),
-                    DataType::Time32(TimeUnit::Millisecond) =>
-                        arrays_overlap_primitive::<_, Time32MillisecondType>(left, right),
-                    DataType::Timestamp(TimeUnit::Microsecond, _) =>
-                        arrays_overlap_primitive::<_, TimestampMicrosecondType>(left, right),
+                    DataType::Time32(TimeUnit::Second) => {
+                        arrays_overlap_primitive::<_, Time32SecondType>(left, right)
+                    }
+                    DataType::Time32(TimeUnit::Millisecond) => {
+                        arrays_overlap_primitive::<_, Time32MillisecondType>(left, right)
+                    }
+                    DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                        arrays_overlap_primitive::<_, TimestampMicrosecondType>(left, right)
+                    }
                     DataType::Boolean => arrays_overlap_boolean(left, right),
                     DataType::Utf8 => arrays_overlap_utf8(left, right),
                     DataType::LargeUtf8 => {
@@ -8210,14 +8314,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let left = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into())
+                })?;
             let right = args[1]
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into()))?;
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into())
+                })?;
             if left.len() != right.len() || left.value_type() != right.value_type() {
                 return Err(KaveonError::Execution(
-                    "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+                    "ARRAYS_OVERLAP requires arrays with matching row counts and element types"
+                        .into(),
                 ));
             }
             if matches!(
@@ -8282,8 +8391,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             return None;
                         }
                         primitive_arrays_overlap(
-                            left.value(row).as_primitive::<arrow::datatypes::Decimal128Type>(),
-                            right.value(row).as_primitive::<arrow::datatypes::Decimal128Type>(),
+                            left.value(row)
+                                .as_primitive::<arrow::datatypes::Decimal128Type>(),
+                            right
+                                .value(row)
+                                .as_primitive::<arrow::datatypes::Decimal128Type>(),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -8296,14 +8408,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let right_inner = right.value(row);
                         let left_values = left_inner.as_boolean();
                         let right_values = right_inner.as_boolean();
-                        let saw_null = left_values.null_count() > 0 || right_values.null_count() > 0;
+                        let saw_null =
+                            left_values.null_count() > 0 || right_values.null_count() > 0;
                         for left_index in 0..left_values.len() {
                             if left_values.is_null(left_index) {
                                 continue;
                             }
                             for right_index in 0..right_values.len() {
                                 if right_values.is_null(right_index) {
-                                } else if left_values.value(left_index) == right_values.value(right_index) {
+                                } else if left_values.value(left_index)
+                                    == right_values.value(right_index)
+                                {
                                     return Some(true);
                                 }
                             }
@@ -8336,10 +8451,33 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 other => {
                     return Err(KaveonError::Execution(format!(
                         "ARRAYS_OVERLAP does not support list element type {other}"
-                    )))
+                    )));
                 }
             };
             Ok(Arc::new(BooleanArray::from(rows)))
+        }
+        "ARRAY_JOIN" => {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "ARRAY_JOIN requires 2 or 3 arguments".into(),
+                ));
+            }
+            let delimiters = as_string_array(&args[1])?;
+            let replacements = if args.len() == 3 {
+                Some(as_string_array(&args[2])?)
+            } else {
+                None
+            };
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return Ok(Arc::new(array_join_list(list, &delimiters, replacements)?));
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into())
+                })?;
+            Ok(Arc::new(array_join_list(list, &delimiters, replacements)?))
         }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
@@ -8472,15 +8610,6 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
                 .expect("boolean JSON needle")
                 .value(row),
         ),
-        DataType::Int8 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<Int8Array>().expect("int8 JSON needle").value(row) as i64,
-        )),
-        DataType::Int16 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<Int16Array>().expect("int16 JSON needle").value(row) as i64,
-        )),
-        DataType::Int32 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<Int32Array>().expect("int32 JSON needle").value(row) as i64,
-        )),
         DataType::Int64 => serde_json::Value::Number(serde_json::Number::from(
             array
                 .as_any()
@@ -8488,31 +8617,6 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
                 .expect("int64 JSON needle")
                 .value(row),
         )),
-        DataType::UInt8 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<UInt8Array>().expect("uint8 JSON needle").value(row) as u64,
-        )),
-        DataType::UInt16 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<UInt16Array>().expect("uint16 JSON needle").value(row) as u64,
-        )),
-        DataType::UInt32 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<UInt32Array>().expect("uint32 JSON needle").value(row) as u64,
-        )),
-        DataType::UInt64 => serde_json::Value::Number(serde_json::Number::from(
-            array.as_any().downcast_ref::<UInt64Array>().expect("uint64 JSON needle").value(row),
-        )),
-        DataType::Float32 => {
-            let number = array
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .expect("float32 JSON needle")
-                .value(row) as f64;
-            let Some(number) = serde_json::Number::from_f64(number) else {
-                return Err(KaveonError::Execution(
-                    "JSON_ARRAY_CONTAINS does not accept NaN or infinity needles".into(),
-                ));
-            };
-            serde_json::Value::Number(number)
-        }
         DataType::Float64 => {
             let number = array
                 .as_any()
@@ -8524,20 +8628,6 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
                     "JSON_ARRAY_CONTAINS does not accept NaN or infinity needles".into(),
                 ));
             };
-            serde_json::Value::Number(number)
-        }
-        DataType::Decimal128(_, scale) => {
-            let value = array
-                .as_any()
-                .downcast_ref::<Decimal128Array>()
-                .expect("decimal128 JSON needle")
-                .value(row);
-            let text = format_decimal_for_array_join(value, *scale);
-            let number = serde_json::from_str::<serde_json::Number>(&text).map_err(|error| {
-                KaveonError::Execution(format!(
-                    "JSON_ARRAY_CONTAINS could not encode decimal needle {text}: {error}"
-                ))
-            })?;
             serde_json::Value::Number(number)
         }
         DataType::Utf8 => serde_json::Value::String(
@@ -8559,7 +8649,7 @@ fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::
         data_type => {
             return Err(KaveonError::Execution(format!(
                 "JSON_ARRAY_CONTAINS does not support needle type {data_type}"
-            )))
+            )));
         }
     };
     Ok(Some(value))
@@ -8582,9 +8672,7 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
     let mut segments = Vec::new();
     while !remainder.is_empty() {
         if let Some(after_dot) = remainder.strip_prefix('.') {
-            let end = after_dot
-                .find(['.', '['])
-                .unwrap_or(after_dot.len());
+            let end = after_dot.find(['.', '[']).unwrap_or(after_dot.len());
             let key = &after_dot[..end];
             if key.is_empty() {
                 return None;
@@ -8594,35 +8682,6 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
             continue;
         }
         if let Some(after_open) = remainder.strip_prefix('[') {
-            if let Some(quote @ ('\'' | '"')) = after_open.chars().next() {
-                let mut key = String::new();
-                let mut escaped = false;
-                let mut close = None;
-                for (offset, character) in after_open[quote.len_utf8()..].char_indices() {
-                    if escaped {
-                        key.push(character);
-                        escaped = false;
-                        continue;
-                    }
-                    if character == '\\' {
-                        escaped = true;
-                        continue;
-                    }
-                    if character == quote {
-                        let end = quote.len_utf8() + offset + character.len_utf8();
-                        if after_open[end..].starts_with(']') {
-                            close = Some(end);
-                            break;
-                        }
-                        return None;
-                    }
-                    key.push(character);
-                }
-                let close = close?;
-                segments.push(Segment::Key(key));
-                remainder = &after_open[close + 1..];
-                continue;
-            }
             let close = after_open.find(']')?;
             let index = after_open[..close].parse::<usize>().ok()?;
             segments.push(Segment::Index(index));
@@ -8677,11 +8736,11 @@ fn array_append_generic<L: OffsetSizeTrait>(
             selected.push(inner);
             selected.push(scalar);
         }
-        offsets.push(L::from_usize(
-            selected.iter().map(|chunk| chunk.len()).sum(),
-        ).ok_or_else(|| {
-            KaveonError::Execution("ARRAY_APPEND/ARRAY_PREPEND result offset overflow".into())
-        })?);
+        offsets.push(
+            L::from_usize(selected.iter().map(|chunk| chunk.len()).sum()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_APPEND/ARRAY_PREPEND result offset overflow".into())
+            })?,
+        );
     }
     let values = if selected.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
@@ -8747,9 +8806,11 @@ fn array_remove_generic<L: OffsetSizeTrait>(
                 selected.push(inner.slice(index, 1));
             }
         }
-        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
-            KaveonError::Execution("ARRAY_REMOVE result offset overflow".into())
-        })?);
+        offsets.push(
+            L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_REMOVE result offset overflow".into())
+            })?,
+        );
     }
     let values = if selected.is_empty() {
         arrow::array::new_empty_array(&list.value_type())
@@ -8771,6 +8832,83 @@ fn array_remove_generic<L: OffsetSizeTrait>(
         values,
         Some(arrow::buffer::NullBuffer::from(valid)),
     )?))
+}
+
+fn array_join_list<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    delimiters: &StringArray,
+    replacements: Option<&StringArray>,
+) -> Result<StringArray> {
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || delimiters.is_null(row) {
+                return Ok(None);
+            }
+            let replacement =
+                replacements.and_then(|values| (!values.is_null(row)).then(|| values.value(row)));
+            let values = list.value(row);
+            let mut parts = Vec::with_capacity(values.len());
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    if let Some(replacement) = replacement {
+                        parts.push(replacement.to_owned());
+                    }
+                } else {
+                    parts.push(array_join_value(&values, index)?);
+                }
+            }
+            Ok(Some(parts.join(delimiters.value(row))))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(result.into())
+}
+
+fn array_join_value(array: &ArrayRef, index: usize) -> Result<String> {
+    Ok(match array.data_type() {
+        DataType::Boolean => array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("boolean list values")
+            .value(index)
+            .to_string(),
+        DataType::Int64 => array
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("int64 list values")
+            .value(index)
+            .to_string(),
+        DataType::Float64 => array
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("float64 list values")
+            .value(index)
+            .to_string(),
+        DataType::Utf8 => array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("utf8 list values")
+            .value(index)
+            .to_owned(),
+        DataType::LargeUtf8 => array
+            .as_any()
+            .downcast_ref::<arrow::array::LargeStringArray>()
+            .expect("large utf8 list values")
+            .value(index)
+            .to_owned(),
+        DataType::Decimal128(_, scale) => {
+            let value = array
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .expect("decimal list values")
+                .value(index);
+            format_decimal_for_array_join(value, *scale)
+        }
+        other => {
+            return Err(KaveonError::Execution(format!(
+                "ARRAY_JOIN does not support list element type {other}"
+            )));
+        }
+    })
 }
 
 fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Result<bool> {
@@ -8801,14 +8939,17 @@ fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Res
         other => {
             return Err(KaveonError::Execution(format!(
                 "MAP_CONCAT does not support key type {other}"
-            )))
+            )));
         }
     })
 }
 
 fn format_decimal_for_array_join(value: i128, scale: i8) -> String {
     if scale <= 0 {
-        return value.checked_mul(10_i128.pow((-scale) as u32)).map(|value| value.to_string()).unwrap_or_else(|| value.to_string());
+        return value
+            .checked_mul(10_i128.pow((-scale) as u32))
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| value.to_string());
     }
     let negative = value < 0;
     let digits = value.unsigned_abs().to_string();
@@ -8909,14 +9050,15 @@ fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Re
                         return Ok(None);
                     }
                     let unit = unit_arr.value(i).to_uppercase();
-                    if !matches!(unit.as_str(), "YEAR" | "QUARTER" | "MONTH" | "WEEK" | "DAY")
-                    {
+                    if !matches!(unit.as_str(), "YEAR" | "QUARTER" | "MONTH" | "WEEK" | "DAY") {
                         return Err(KaveonError::Execution(format!(
                             "DATE_TRUNC unit '{unit}' is not valid for DATE values"
                         )));
                     }
                     let micros = i64::from(values.value(i)).saturating_mul(86_400_000_000);
-                    Ok(Some((truncate_micros(micros, &unit) / 86_400_000_000) as i32))
+                    Ok(Some(
+                        (truncate_micros(micros, &unit) / 86_400_000_000) as i32,
+                    ))
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Arc::new(Date32Array::from(result)))
@@ -8980,10 +9122,7 @@ fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Re
 }
 
 fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
-    let delta = delta
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .ok_or_else(|| KaveonError::Execution("DATE_ADD_DAYS requires an integer day count".into()))?;
+    let delta = date_delta_as_i64(delta, num_rows, "DATE_ADD_DAYS", "day")?;
     let day_at = |i: usize| -> Option<i64> {
         if delta.is_null(i) {
             None
@@ -8992,6 +9131,23 @@ fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> R
         }
     };
     match source.data_type() {
+        // The SQL planner represents DATE literals as epoch-day INT64 values
+        // before a table schema is available. Preserve that compact shape for
+        // DATEADD(day|week, ...) instead of forcing a lossy cast to a runtime
+        // timestamp array.
+        DataType::Int64 => {
+            let values = source.as_primitive::<Int64Type>();
+            let result = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) {
+                        None
+                    } else {
+                        day_at(i).and_then(|days| values.value(i).checked_add(days))
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Int64Array::from(result)))
+        }
         DataType::Date32 => {
             let values = source.as_primitive::<Date32Type>();
             let result = (0..num_rows)
@@ -9012,32 +9168,44 @@ fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> R
         DataType::Date64 => {
             let values = source.as_primitive::<Date64Type>();
             let result = (0..num_rows)
-                .map(|i| day_at(i).and_then(|days| {
-                    values
-                        .value(i)
-                        .checked_add(days.checked_mul(86_400_000)?)
-                }))
+                .map(|i| {
+                    day_at(i)
+                        .and_then(|days| values.value(i).checked_add(days.checked_mul(86_400_000)?))
+                })
                 .collect::<Vec<_>>();
             Ok(Arc::new(Date64Array::from(result)))
         }
-        DataType::Timestamp(TimeUnit::Second, tz) => {
-            add_timestamp_days::<TimestampSecondType, TimestampSecondArray>(
-                source, delta, num_rows, 86_400, tz.clone()
-            )
-        }
+        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_days::<
+            TimestampSecondType,
+            TimestampSecondArray,
+        >(
+            source, &delta, num_rows, 86_400, tz.clone()
+        ),
         DataType::Timestamp(TimeUnit::Millisecond, tz) => {
             add_timestamp_days::<TimestampMillisecondType, TimestampMillisecondArray>(
-                source, delta, num_rows, 86_400_000, tz.clone()
+                source,
+                &delta,
+                num_rows,
+                86_400_000,
+                tz.clone(),
             )
         }
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             add_timestamp_days::<TimestampMicrosecondType, TimestampMicrosecondArray>(
-                source, delta, num_rows, 86_400_000_000, tz.clone()
+                source,
+                &delta,
+                num_rows,
+                86_400_000_000,
+                tz.clone(),
             )
         }
         DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
             add_timestamp_days::<TimestampNanosecondType, TimestampNanosecondArray>(
-                source, delta, num_rows, 86_400_000_000_000, tz.clone()
+                source,
+                &delta,
+                num_rows,
+                86_400_000_000_000,
+                tz.clone(),
             )
         }
         other => Err(KaveonError::Execution(format!(
@@ -9047,11 +9215,24 @@ fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> R
 }
 
 fn eval_date_add_months(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
-    let delta = delta
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .ok_or_else(|| KaveonError::Execution("DATE_ADD_MONTHS requires an integer month count".into()))?;
+    let delta = date_delta_as_i64(delta, num_rows, "DATE_ADD_MONTHS", "month")?;
     match source.data_type() {
+        // See the DATEADD(day, ...) Int64 literal path above. Month shifts on
+        // DATE literals retain epoch-day representation and month-end clamp
+        // semantics through the same calendar helper used by Date32.
+        DataType::Int64 => {
+            let values = source.as_primitive::<Int64Type>();
+            let result = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) || delta.is_null(i) {
+                        None
+                    } else {
+                        Some(add_months_to_days(values.value(i), delta.value(i)))
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Int64Array::from(result)))
+        }
         DataType::Date32 => {
             let values = source.as_primitive::<Date32Type>();
             let result = (0..num_rows)
@@ -9059,7 +9240,8 @@ fn eval_date_add_months(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) ->
                     if values.is_null(i) || delta.is_null(i) {
                         None
                     } else {
-                        i32::try_from(add_months_to_days(values.value(i).into(), delta.value(i))).ok()
+                        i32::try_from(add_months_to_days(values.value(i).into(), delta.value(i)))
+                            .ok()
                     }
                 })
                 .collect::<Vec<_>>();
@@ -9078,18 +9260,39 @@ fn eval_date_add_months(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) ->
                 .collect::<Vec<_>>();
             Ok(Arc::new(Date64Array::from(result)))
         }
-        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_months::<TimestampSecondType, TimestampSecondArray>(
-            source, delta, num_rows, 86_400, tz.clone()
+        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_months::<
+            TimestampSecondType,
+            TimestampSecondArray,
+        >(
+            source, &delta, num_rows, 86_400, tz.clone()
         ),
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => add_timestamp_months::<TimestampMillisecondType, TimestampMillisecondArray>(
-            source, delta, num_rows, 86_400_000, tz.clone()
-        ),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => add_timestamp_months::<TimestampMicrosecondType, TimestampMicrosecondArray>(
-            source, delta, num_rows, 86_400_000_000, tz.clone()
-        ),
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => add_timestamp_months::<TimestampNanosecondType, TimestampNanosecondArray>(
-            source, delta, num_rows, 86_400_000_000_000, tz.clone()
-        ),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            add_timestamp_months::<TimestampMillisecondType, TimestampMillisecondArray>(
+                source,
+                &delta,
+                num_rows,
+                86_400_000,
+                tz.clone(),
+            )
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            add_timestamp_months::<TimestampMicrosecondType, TimestampMicrosecondArray>(
+                source,
+                &delta,
+                num_rows,
+                86_400_000_000,
+                tz.clone(),
+            )
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            add_timestamp_months::<TimestampNanosecondType, TimestampNanosecondArray>(
+                source,
+                &delta,
+                num_rows,
+                86_400_000_000_000,
+                tz.clone(),
+            )
+        }
         other => Err(KaveonError::Execution(format!(
             "DATE_ADD_MONTHS requires DATE or timestamp input, got {other}"
         ))),
@@ -9097,19 +9300,85 @@ fn eval_date_add_months(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) ->
 }
 
 fn eval_date_add_seconds(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
-    let delta = delta
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .ok_or_else(|| KaveonError::Execution("DATE_ADD_SECONDS requires an integer second count".into()))?;
+    let delta = date_delta_as_i64(delta, num_rows, "DATE_ADD_SECONDS", "second")?;
     match source.data_type() {
-        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_seconds::<TimestampSecondType, TimestampSecondArray>(source, delta, num_rows, 1, tz.clone()),
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => add_timestamp_seconds::<TimestampMillisecondType, TimestampMillisecondArray>(source, delta, num_rows, 1_000, tz.clone()),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => add_timestamp_seconds::<TimestampMicrosecondType, TimestampMicrosecondArray>(source, delta, num_rows, 1_000_000, tz.clone()),
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => add_timestamp_seconds::<TimestampNanosecondType, TimestampNanosecondArray>(source, delta, num_rows, 1_000_000_000, tz.clone()),
+        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_seconds::<
+            TimestampSecondType,
+            TimestampSecondArray,
+        >(
+            source, &delta, num_rows, 1, tz.clone()
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            add_timestamp_seconds::<TimestampMillisecondType, TimestampMillisecondArray>(
+                source,
+                &delta,
+                num_rows,
+                1_000,
+                tz.clone(),
+            )
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            add_timestamp_seconds::<TimestampMicrosecondType, TimestampMicrosecondArray>(
+                source,
+                &delta,
+                num_rows,
+                1_000_000,
+                tz.clone(),
+            )
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            add_timestamp_seconds::<TimestampNanosecondType, TimestampNanosecondArray>(
+                source,
+                &delta,
+                num_rows,
+                1_000_000_000,
+                tz.clone(),
+            )
+        }
         other => Err(KaveonError::Execution(format!(
             "DATE_ADD_SECONDS requires a timestamp input, got {other}"
         ))),
     }
+}
+
+fn date_delta_as_i64(
+    delta: &ArrayRef,
+    _num_rows: usize,
+    function: &str,
+    unit: &str,
+) -> Result<Int64Array> {
+    if let Some(values) = delta.as_any().downcast_ref::<Int64Array>() {
+        return Ok(values.clone());
+    }
+    if matches!(
+        delta.data_type(),
+        DataType::Null
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+    ) {
+        let cast = compute::cast(delta, &DataType::Int64).map_err(|error| {
+            KaveonError::Execution(format!(
+                "{function} requires an integer {unit} count: {error}"
+            ))
+        })?;
+        return cast
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .cloned()
+            .ok_or_else(|| {
+                KaveonError::Execution(format!(
+                    "{function} could not materialize an integer {unit} count"
+                ))
+            });
+    }
+    Err(KaveonError::Execution(format!(
+        "{function} requires an integer {unit} count"
+    )))
 }
 
 fn add_timestamp_seconds<T, A>(
@@ -9129,16 +9398,47 @@ where
             if values.is_null(i) || delta.is_null(i) {
                 None
             } else {
-                delta.value(i).checked_mul(scale).and_then(|offset| values.value(i).checked_add(offset))
+                delta
+                    .value(i)
+                    .checked_mul(scale)
+                    .and_then(|offset| values.value(i).checked_add(offset))
             }
         })
         .collect::<Vec<_>>();
     let array: ArrayRef = Arc::new(A::from(result));
     Ok(match source.data_type() {
-        DataType::Timestamp(TimeUnit::Second, _) => Arc::new(array.as_any().downcast_ref::<TimestampSecondArray>().unwrap().clone().with_timezone_opt(timezone)),
-        DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap().clone().with_timezone_opt(timezone)),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap().clone().with_timezone_opt(timezone)),
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap().clone().with_timezone_opt(timezone)),
+        DataType::Timestamp(TimeUnit::Second, _) => Arc::new(
+            array
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(
+            array
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(
+            array
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(
+            array
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
+        ),
         _ => array,
     })
 }
@@ -9193,16 +9493,36 @@ where
     let array: ArrayRef = Arc::new(A::from(result));
     Ok(match source.data_type() {
         DataType::Timestamp(TimeUnit::Second, _) => Arc::new(
-            array.as_any().downcast_ref::<TimestampSecondArray>().unwrap().clone().with_timezone_opt(timezone),
+            array
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
         ),
         DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(
-            array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap().clone().with_timezone_opt(timezone),
+            array
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
         ),
         DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(
-            array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap().clone().with_timezone_opt(timezone),
+            array
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
         ),
         DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(
-            array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap().clone().with_timezone_opt(timezone),
+            array
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap()
+                .clone()
+                .with_timezone_opt(timezone),
         ),
         _ => array,
     })
@@ -9359,6 +9679,19 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 }
             };
             match source.data_type() {
+                // DATE literals are carried as epoch-day INT64 values until
+                // a table schema gives them a concrete Arrow Date32 type.
+                DataType::Int64 => {
+                    let values = source.as_primitive::<Int64Type>();
+                    if values.is_null(i) {
+                        Ok(None)
+                    } else {
+                        Ok(Some(extract_from_micros(
+                            values.value(i).saturating_mul(86_400_000_000),
+                            field,
+                        )))
+                    }
+                }
                 DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
                     let ts = source.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
                     if ts.is_null(i) {
@@ -9397,50 +9730,57 @@ fn temporal_nanoseconds(source: &ArrayRef, row: usize) -> Result<Option<i128>> {
         // planner before a table schema is available.
         DataType::Int64 => {
             let values = source.as_primitive::<Int64Type>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some((values.value(row) as i128) * 86_400_000_000_000i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some((values.value(row) as i128) * 86_400_000_000_000i128))
         }
         DataType::Date32 => {
             let values = source.as_primitive::<Date32Type>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some((values.value(row) as i128) * 86_400_000_000_000i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some((values.value(row) as i128) * 86_400_000_000_000i128))
         }
         DataType::Date64 => {
             let values = source.as_primitive::<Date64Type>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some((values.value(row) as i128) * 1_000_000i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000_000i128))
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
             let values = source.as_primitive::<TimestampSecondType>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some((values.value(row) as i128) * 1_000_000_000i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000_000_000i128))
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
             let values = source.as_primitive::<TimestampMillisecondType>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some((values.value(row) as i128) * 1_000_000i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000_000i128))
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             let values = source.as_primitive::<TimestampMicrosecondType>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some((values.value(row) as i128) * 1_000i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some((values.value(row) as i128) * 1_000i128))
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             let values = source.as_primitive::<TimestampNanosecondType>();
-            values.is_null(row).then_some(None).unwrap_or_else(|| {
-                Some(values.value(row) as i128)
-            })
+            values
+                .is_null(row)
+                .then_some(None)
+                .unwrap_or_else(|| Some(values.value(row) as i128))
         }
         other => {
             return Err(KaveonError::Execution(format!(
                 "DATE_DIFF requires DATE or timestamp inputs, got {other}"
-            )))
+            )));
         }
     };
     Ok(value)
@@ -9524,16 +9864,14 @@ fn temporal_calendar_position(
     };
     let day = nanoseconds.div_euclid(86_400_000_000_000i128);
     let remainder = nanoseconds.rem_euclid(86_400_000_000_000i128);
-    let day = i64::try_from(day)
-        .map_err(|_| KaveonError::Execution("DATE_DIFF date is outside the supported range".into()))?;
+    let day = i64::try_from(day).map_err(|_| {
+        KaveonError::Execution("DATE_DIFF date is outside the supported range".into())
+    })?;
     let (year, month, date) = days_to_ymd(day);
     Ok(Some((year, month, date, remainder)))
 }
 
-fn calendar_month_difference(
-    start: (i32, u32, u32, i128),
-    end: (i32, u32, u32, i128),
-) -> i64 {
+fn calendar_month_difference(start: (i32, u32, u32, i128), end: (i32, u32, u32, i128)) -> i64 {
     let start_month = i64::from(start.0) * 12 + i64::from(start.1) - 1;
     let end_month = i64::from(end.0) * 12 + i64::from(end.1) - 1;
     let raw = end_month - start_month;
@@ -9824,9 +10162,11 @@ mod tests {
         let source_ms = 1_715_780_055_123_i64;
         let input = RecordBatch::try_new(
             schema,
-            vec![Arc::new(
-                TimestampMillisecondArray::from(vec![Some(source_ms), None, Some(-1)]),
-            )],
+            vec![Arc::new(TimestampMillisecondArray::from(vec![
+                Some(source_ms),
+                None,
+                Some(-1),
+            ]))],
         )
         .unwrap();
         let values = evaluate(
@@ -9874,9 +10214,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            values
-                .as_primitive::<TimestampNanosecondType>()
-                .value(0),
+            values.as_primitive::<TimestampNanosecondType>().value(0),
             (source_ms / 1_000) * 1_000_000_000
         );
 
@@ -9929,7 +10267,11 @@ mod tests {
         ]));
         let input = RecordBatch::try_new(
             schema,
-            vec![Arc::new(Date32Array::from(vec![Some(19_858), None, Some(-1)]))],
+            vec![Arc::new(Date32Array::from(vec![
+                Some(19_858),
+                None,
+                Some(-1),
+            ]))],
         )
         .unwrap();
         let values = evaluate(
@@ -9957,7 +10299,10 @@ mod tests {
         ]));
         let timestamp = RecordBatch::try_new(
             timestamp_schema,
-            vec![Arc::new(TimestampMillisecondArray::from(vec![Some(0), None]))],
+            vec![Arc::new(TimestampMillisecondArray::from(vec![
+                Some(0),
+                None,
+            ]))],
         )
         .unwrap();
         let values = evaluate(
@@ -9974,6 +10319,17 @@ mod tests {
         let result = values.as_primitive::<TimestampMillisecondType>();
         assert_eq!(result.value(0), -86_400_000);
         assert!(result.is_null(1));
+
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_DAYS".into(),
+                args: vec![Expr::Column("day".into()), Expr::Literal(ScalarValue::Null)],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_primitive::<Date32Type>();
+        assert!(result.iter().all(|value| value.is_none()));
     }
 
     #[test]
@@ -10116,7 +10472,10 @@ mod tests {
             &input,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("unsupported DATE_DIFF unit"), "{error}");
+        assert!(
+            error.to_string().contains("unsupported DATE_DIFF unit"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -10126,7 +10485,11 @@ mod tests {
         ]));
         let input = RecordBatch::try_new(
             schema,
-            vec![Arc::new(Date32Array::from(vec![Some(19_753), None, Some(19_782)]))],
+            vec![Arc::new(Date32Array::from(vec![
+                Some(19_753),
+                None,
+                Some(19_782),
+            ]))],
         )
         .unwrap();
         let values = evaluate(
@@ -10188,7 +10551,10 @@ mod tests {
         )
         .unwrap();
         let result = values.as_primitive::<TimestampMillisecondType>();
-        assert_eq!(result.value(0), 19_753_i64 * 86_400_000 + time_of_day + 7_200_000);
+        assert_eq!(
+            result.value(0),
+            19_753_i64 * 86_400_000 + time_of_day + 7_200_000
+        );
         assert!(result.is_null(1));
     }
 
@@ -10307,7 +10673,10 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(value.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true); 3]);
+        assert_eq!(
+            value.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true); 3]
+        );
 
         let value = evaluate(
             &Expr::BinaryOp {
@@ -10356,10 +10725,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            value
-                .as_primitive::<Int64Type>()
-                .iter()
-                .collect::<Vec<_>>(),
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(2), Some(2)]
         );
     }
@@ -10384,9 +10750,15 @@ mod tests {
         .unwrap();
         let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(arrays.value_type(), DataType::Int64);
-        assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values(), &[1, 1]);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 1]
+        );
         assert_eq!(arrays.value(1).null_count(), 2);
-        assert_eq!(arrays.value(2).as_primitive::<Int64Type>().values(), &[3, 3]);
+        assert_eq!(
+            arrays.value(2).as_primitive::<Int64Type>().values(),
+            &[3, 3]
+        );
 
         let error = evaluate(
             &Expr::Function {
@@ -10411,12 +10783,16 @@ mod tests {
         .unwrap();
         let values = Arc::new(LargeStringArray::from(vec![Some("wide"), None])) as ArrayRef;
         let counts = Arc::new(Int64Array::from(vec![2, 1])) as ArrayRef;
-        let result = eval_scalar_function("ARRAY_REPEAT", &[values, counts], batch.num_rows())
-            .unwrap();
+        let result =
+            eval_scalar_function("ARRAY_REPEAT", &[values, counts], batch.num_rows()).unwrap();
         let repeated = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(repeated.value_type(), DataType::LargeUtf8);
         assert_eq!(
-            repeated.value(0).as_string::<i64>().iter().collect::<Vec<_>>(),
+            repeated
+                .value(0)
+                .as_string::<i64>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some("wide"), Some("wide")]
         );
         assert_eq!(repeated.value(1).null_count(), 1);
@@ -10430,11 +10806,19 @@ mod tests {
         let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(arrays.value_type(), DataType::LargeUtf8);
         assert_eq!(
-            arrays.value(0).as_string::<i64>().iter().collect::<Vec<_>>(),
+            arrays
+                .value(0)
+                .as_string::<i64>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some("a"), Some("b")]
         );
         assert_eq!(
-            arrays.value(1).as_string::<i64>().iter().collect::<Vec<_>>(),
+            arrays
+                .value(1)
+                .as_string::<i64>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![None, Some("c")]
         );
     }
@@ -10447,18 +10831,20 @@ mod tests {
         let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(arrays.value_type(), DataType::LargeUtf8);
         assert_eq!(
-            arrays.value(0).as_string::<i64>().iter().collect::<Vec<_>>(),
+            arrays
+                .value(0)
+                .as_string::<i64>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some("n"), Some("w")]
         );
     }
 
     #[test]
     fn array_set_operations_deduplicate_and_match_nulls() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let left = Expr::Function {
             name: "ARRAY".into(),
             args: vec![
@@ -10490,7 +10876,14 @@ mod tests {
             )
             .unwrap();
             let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(arrays.value(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), expected);
+            assert_eq!(
+                arrays
+                    .value(0)
+                    .as_primitive::<Int64Type>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                expected
+            );
         }
     }
 
@@ -10522,7 +10915,14 @@ mod tests {
             )
             .unwrap();
             let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
-            assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values().as_ref(), expected);
+            assert_eq!(
+                arrays
+                    .value(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .as_ref(),
+                expected
+            );
 
             // Rebuild the inputs for the next operation.
             let mut next_narrow = ListBuilder::new(Int64Builder::new());
@@ -10540,11 +10940,9 @@ mod tests {
 
     #[test]
     fn array_concat_accepts_variadic_typed_lists() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: &[i64]| Expr::Function {
             name: "ARRAY".into(),
             args: values
@@ -10590,16 +10988,17 @@ mod tests {
         )
         .unwrap();
         let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
-        assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
+        );
     }
 
     #[test]
     fn flatten_concatenates_nested_typed_arrays() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let inner = |values: &[i64]| Expr::Function {
             name: "ARRAY".into(),
             args: values
@@ -10629,11 +11028,9 @@ mod tests {
 
     #[test]
     fn trim_array_removes_requested_suffix_and_rejects_negative_counts() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = Expr::Function {
             name: "ARRAY".into(),
             args: vec![
@@ -10651,7 +11048,10 @@ mod tests {
         )
         .unwrap();
         let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2]
+        );
         let error = evaluate(
             &Expr::Function {
                 name: "TRIM_ARRAY".into(),
@@ -10687,11 +11087,9 @@ mod tests {
 
     #[test]
     fn zip_builds_typed_rows_and_pads_shorter_arrays_with_nulls() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: Vec<Expr>| Expr::Function {
             name: "ARRAY".into(),
             args: values,
@@ -10713,7 +11111,13 @@ mod tests {
         let rows = value.as_any().downcast_ref::<ListArray>().unwrap().value(0);
         let rows = rows.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows.column(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(1), Some(2)]);
+        assert_eq!(
+            rows.column(0)
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
         let text = rows.column(1).as_string::<i32>();
         assert_eq!(text.iter().collect::<Vec<_>>(), vec![Some("a"), None]);
     }
@@ -10738,36 +11142,64 @@ mod tests {
             1,
         )
         .unwrap();
-        let rows = result.as_any().downcast_ref::<LargeListArray>().unwrap().value(0);
+        let rows = result
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap()
+            .value(0);
         let rows = rows.as_any().downcast_ref::<StructArray>().unwrap();
-        assert_eq!(rows.column(0).as_primitive::<Int64Type>().values().as_ref(), &[1]);
-        assert_eq!(rows.column(1).as_primitive::<Int64Type>().values().as_ref(), &[2]);
+        assert_eq!(
+            rows.column(0).as_primitive::<Int64Type>().values().as_ref(),
+            &[1]
+        );
+        assert_eq!(
+            rows.column(1).as_primitive::<Int64Type>().values().as_ref(),
+            &[2]
+        );
     }
 
     #[test]
     fn sequence_infers_direction_and_validates_steps() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         for (args, expected) in [
             (
-                vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(3))],
+                vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(3)),
+                ],
                 vec![1, 2, 3],
             ),
             (
-                vec![Expr::Literal(ScalarValue::Int64(3)), Expr::Literal(ScalarValue::Int64(1))],
+                vec![
+                    Expr::Literal(ScalarValue::Int64(3)),
+                    Expr::Literal(ScalarValue::Int64(1)),
+                ],
                 vec![3, 2, 1],
             ),
             (
-                vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(6)), Expr::Literal(ScalarValue::Int64(2))],
+                vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(6)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
                 vec![1, 3, 5],
             ),
         ] {
-            let value = evaluate(&Expr::Function { name: "SEQUENCE".into(), args }, &batch).unwrap();
+            let value = evaluate(
+                &Expr::Function {
+                    name: "SEQUENCE".into(),
+                    args,
+                },
+                &batch,
+            )
+            .unwrap();
             let list = value.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(list.value(0).as_primitive::<Int64Type>().values(), expected.as_slice());
+            assert_eq!(
+                list.value(0).as_primitive::<Int64Type>().values(),
+                expected.as_slice()
+            );
         }
         let error = evaluate(
             &Expr::Function {
@@ -10786,11 +11218,9 @@ mod tests {
 
     #[test]
     fn array_slice_preserves_bounds_stride_and_null_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let value = evaluate(
             &Expr::Function {
                 name: "ARRAY_SLICE".into(),
@@ -10845,11 +11275,9 @@ mod tests {
 
     #[test]
     fn array_distinct_keeps_first_occurrence_and_one_null() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let value = evaluate(
             &Expr::Function {
                 name: "ARRAY_DISTINCT".into(),
@@ -10871,7 +11299,10 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = list.value(0);
         let values = inner.as_primitive::<Int64Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2), None, Some(1)]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(2), None, Some(1)]
+        );
 
         let value = evaluate(
             &Expr::Function {
@@ -10891,7 +11322,10 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = list.value(0);
         let values = inner.as_string::<i32>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("b"), Some("a")]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("b"), Some("a")]
+        );
     }
 
     #[test]
@@ -10960,7 +11394,11 @@ mod tests {
         .unwrap();
 
         for (left, right, expected) in [
-            ("first_second", "second_second", DataType::Timestamp(TimeUnit::Second, None)),
+            (
+                "first_second",
+                "second_second",
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
             (
                 "first_millis",
                 "second_millis",
@@ -10975,10 +11413,7 @@ mod tests {
             let value = evaluate(
                 &Expr::Function {
                     name: "ARRAY".into(),
-                    args: vec![
-                        Expr::Column(left.into()),
-                        Expr::Column(right.into()),
-                    ],
+                    args: vec![Expr::Column(left.into()), Expr::Column(right.into())],
                 },
                 &batch,
             )
@@ -11019,11 +11454,9 @@ mod tests {
 
     #[test]
     fn array_sort_orders_values_and_places_nulls_last() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let value = evaluate(
             &Expr::Function {
                 name: "ARRAY_SORT".into(),
@@ -11043,16 +11476,17 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = list.value(0);
         let values = inner.as_primitive::<Int64Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1), Some(2), Some(3), None]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3), None]
+        );
     }
 
     #[test]
     fn array_reverse_preserves_null_elements_and_reverses_order() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let value = evaluate(
             &Expr::Function {
                 name: "ARRAY_REVERSE".into(),
@@ -11071,7 +11505,10 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = list.value(0);
         let values = inner.as_string::<i32>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("b"), None, Some("a")]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("b"), None, Some("a")]
+        );
     }
 
     #[test]
@@ -11095,7 +11532,10 @@ mod tests {
         .unwrap();
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(list.value_type(), DataType::Boolean);
-        assert_eq!(list.value(0).as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), None, Some(false)]);
+        assert_eq!(
+            list.value(0).as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), None, Some(false)]
+        );
 
         let contains = evaluate(
             &Expr::Function {
@@ -11111,7 +11551,10 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(contains.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true)]);
+        assert_eq!(
+            contains.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true)]
+        );
 
         let position = evaluate(
             &Expr::Function {
@@ -11284,11 +11727,7 @@ mod tests {
             ],
             None,
         );
-        let map_field = Arc::new(Field::new(
-            "entries",
-            DataType::Struct(fields),
-            false,
-        ));
+        let map_field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
         let map = Arc::new(
             MapArray::try_new(
                 map_field,
@@ -11301,45 +11740,25 @@ mod tests {
         ) as ArrayRef;
         let needle = Arc::new(LargeStringArray::from(vec![Some("wide")])) as ArrayRef;
 
-        let contains = eval_scalar_function("CONTAINS_KEY", &[Arc::clone(&map), Arc::clone(&needle)], 1)
-            .unwrap();
-        assert_eq!(contains.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+        let contains =
+            eval_scalar_function("CONTAINS_KEY", &[Arc::clone(&map), Arc::clone(&needle)], 1)
+                .unwrap();
+        assert_eq!(
+            contains.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
         let value = eval_scalar_function(
             "MAP_ELEMENT_AT",
             &[Arc::clone(&map), Arc::clone(&needle)],
             1,
         )
         .unwrap();
-        assert_eq!(value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
-    }
-
-    #[test]
-    fn element_at_accepts_large_utf8_map_keys() {
-        let fields: arrow::datatypes::Fields = vec![
-            Arc::new(Field::new("key", DataType::LargeUtf8, false)),
-            Arc::new(Field::new("value", DataType::Int64, true)),
-        ]
-        .into();
-        let entries = StructArray::new(
-            fields.clone(),
-            vec![
-                Arc::new(LargeStringArray::from(vec![Some("wide")])) as ArrayRef,
-                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
-            ],
-            None,
+        assert_eq!(
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(7)]
         );
-        let map = Arc::new(
-            MapArray::try_new(
-                Arc::new(Field::new("entries", DataType::Struct(fields), false)),
-                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
-                entries,
-                None,
-                false,
-            )
-            .unwrap(),
-        ) as ArrayRef;
-        let needle = Arc::new(LargeStringArray::from(vec![Some("wide")])) as ArrayRef;
-        let value = eval_scalar_function("ELEMENT_AT", &[map, needle], 1).unwrap();
+        let value = eval_scalar_function("ELEMENT_AT", &[Arc::clone(&map), Arc::clone(&needle)], 1)
+            .unwrap();
         assert_eq!(
             value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(7)]
@@ -11441,13 +11860,22 @@ mod tests {
         };
         let result = eval_scalar_function(
             "MAP_CONCAT",
-            &[build_map(&["a", "b"], &[1, 2]), build_map(&["b", "c"], &[20, 3])],
+            &[
+                build_map(&["a", "b"], &[1, 2]),
+                build_map(&["b", "c"], &[20, 3]),
+            ],
             1,
         )
         .unwrap();
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(map.keys().as_string::<i64>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("c")]);
-        assert_eq!(map.values().as_primitive::<Int64Type>().values().as_ref(), &[1, 20, 3]);
+        assert_eq!(
+            map.keys().as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]
+        );
+        assert_eq!(
+            map.values().as_primitive::<Int64Type>().values().as_ref(),
+            &[1, 20, 3]
+        );
     }
 
     #[test]
@@ -11467,8 +11895,14 @@ mod tests {
         };
         let result = evaluate(&expression, &batch).unwrap();
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(map.keys().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("a"), Some("b")]);
-        assert_eq!(map.values().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("1"), Some("2"), Some("1"), Some("2")]);
+        assert_eq!(
+            map.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("a"), Some("b")]
+        );
+        assert_eq!(
+            map.values().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("1"), Some("2"), Some("1"), Some("2")]
+        );
 
         let duplicate = Expr::Function {
             name: "SPLIT_TO_MAP".into(),
@@ -11478,10 +11912,12 @@ mod tests {
                 Expr::Literal(ScalarValue::Utf8(":".into())),
             ],
         };
-        assert!(evaluate(&duplicate, &batch)
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate key"));
+        assert!(
+            evaluate(&duplicate, &batch)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate key")
+        );
     }
 
     #[test]
@@ -11501,10 +11937,27 @@ mod tests {
         };
         let result = evaluate(&expression, &batch).unwrap();
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(map.keys().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("a"), Some("b")]);
+        assert_eq!(
+            map.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("a"), Some("b")]
+        );
         let values = map.values().as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(values.value(0).as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("1"), Some("3")]);
-        assert_eq!(values.value(1).as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("2")]);
+        assert_eq!(
+            values
+                .value(0)
+                .as_string::<i32>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("1"), Some("3")]
+        );
+        assert_eq!(
+            values
+                .value(1)
+                .as_string::<i32>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("2")]
+        );
     }
 
     #[test]
@@ -11542,10 +11995,18 @@ mod tests {
         )
         .unwrap();
         let result = result.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(result.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
-            vec![Some("a"), Some("b"), Some("c")]);
-        assert_eq!(result.values().as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
-            vec![Some(1), Some(20), Some(3)]);
+        assert_eq!(
+            result.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]
+        );
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(20), Some(3)]
+        );
     }
 
     #[test]
@@ -11635,8 +12096,18 @@ mod tests {
         )
         .unwrap();
         let result = result.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(result.keys().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b")]);
-        assert_eq!(result.values().as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(1), Some(2)]);
+        assert_eq!(
+            result.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
+        );
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
         assert!(result.is_null(1));
 
         let duplicate_rows = StructArray::new(
@@ -11658,7 +12129,8 @@ mod tests {
             None,
         );
         let duplicate_input =
-            RecordBatch::try_from_iter([("entries", Arc::new(duplicate_list) as ArrayRef)]).unwrap();
+            RecordBatch::try_from_iter([("entries", Arc::new(duplicate_list) as ArrayRef)])
+                .unwrap();
         let error = evaluate(
             &Expr::Function {
                 name: "MAP_FROM_ENTRIES".into(),
@@ -11704,7 +12176,10 @@ mod tests {
             &input,
         )
         .unwrap();
-        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true), Some(true)]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(true)]
+        );
 
         let null_key = evaluate(
             &Expr::Function {
@@ -11782,11 +12257,9 @@ mod tests {
 
     #[test]
     fn ordered_map_comparison_fails_with_stable_diagnostic() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let map = || Expr::Function {
             name: "MAP".into(),
             args: vec![
@@ -11821,10 +12294,7 @@ mod tests {
         empty_values.append(true);
         let empty_array = Arc::new(empty_values.finish()) as ArrayRef;
         let batch = RecordBatch::try_from_iter([
-            (
-                "id",
-                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-            ),
+            ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
             ("empty_values", empty_array),
         ])
         .unwrap();
@@ -11845,17 +12315,29 @@ mod tests {
 
         let any = evaluate_quantified(
             "ARRAY_ANY_GT",
-            vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(3))],
+            vec![
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Int64(3)),
+            ],
             ScalarValue::Int64(2),
         );
-        assert_eq!(any.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+        assert_eq!(
+            any.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
 
         let all = evaluate_quantified(
             "ARRAY_ALL_LT",
-            vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(2))],
+            vec![
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
             ScalarValue::Int64(3),
         );
-        assert_eq!(all.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+        assert_eq!(
+            all.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
 
         let empty = evaluate(
             &Expr::Function {
@@ -11868,7 +12350,10 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(empty.as_boolean().iter().collect::<Vec<_>>(), vec![Some(false)]);
+        assert_eq!(
+            empty.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false)]
+        );
         let empty_all = evaluate(
             &Expr::Function {
                 name: "ARRAY_ALL_GT".into(),
@@ -11880,7 +12365,10 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(empty_all.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+        assert_eq!(
+            empty_all.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
 
         let nullable = evaluate_quantified(
             "ARRAY_ANY_GT",
@@ -11895,11 +12383,9 @@ mod tests {
 
     #[test]
     fn nested_array_literals_materialize_as_lists_of_lists() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: Vec<Expr>| Expr::Function {
             name: "ARRAY".into(),
             args: values,
@@ -11925,11 +12411,9 @@ mod tests {
 
     #[test]
     fn arrays_of_rows_materialize_typed_struct_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let row = |value: i64| Expr::Function {
             name: "ROW".into(),
             args: vec![Expr::Literal(ScalarValue::Int64(value))],
@@ -11951,11 +12435,9 @@ mod tests {
 
     #[test]
     fn arrays_of_maps_materialize_typed_map_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let map = |key: &str, value: i64| Expr::Function {
             name: "MAP".into(),
             args: vec![
@@ -11982,17 +12464,18 @@ mod tests {
         let maps = maps.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(maps.len(), 2);
         let keys = maps.keys().as_string::<i32>();
-        assert_eq!((0..keys.len()).map(|i| keys.value(i)).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(
+            (0..keys.len()).map(|i| keys.value(i)).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
         assert_eq!(maps.values().as_primitive::<Int64Type>().values(), &[1, 2]);
     }
 
     #[test]
     fn array_concat_preserves_nested_array_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: Vec<Expr>| Expr::Function {
             name: "ARRAY".into(),
             args: values,
@@ -12094,11 +12577,9 @@ mod tests {
 
     #[test]
     fn array_distinct_deduplicates_nested_array_elements_in_order() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: Vec<Expr>| Expr::Function {
             name: "ARRAY".into(),
             args: values,
@@ -12126,11 +12607,9 @@ mod tests {
 
     #[test]
     fn array_position_finds_nested_row_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let row = |value: i64| Expr::Function {
             name: "ROW".into(),
             args: vec![Expr::Literal(ScalarValue::Int64(value))],
@@ -12154,11 +12633,9 @@ mod tests {
 
     #[test]
     fn contains_matches_nested_row_elements_with_null_propagation() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let row = |value: i64| Expr::Function {
             name: "ROW".into(),
             args: vec![Expr::Literal(ScalarValue::Int64(value))],
@@ -12182,11 +12659,9 @@ mod tests {
 
     #[test]
     fn arrays_overlap_matches_nested_row_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let row = |value: i64| Expr::Function {
             name: "ROW".into(),
             args: vec![Expr::Literal(ScalarValue::Int64(value))],
@@ -12210,8 +12685,7 @@ mod tests {
     fn arrays_overlap_accepts_large_lists_of_nested_values() {
         use arrow::array::{Int64Builder, LargeListBuilder, ListBuilder};
 
-        let mut left_builder =
-            LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        let mut left_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         left_builder.values().values().append_value(1);
         left_builder.values().append(true);
         left_builder.values().values().append_value(2);
@@ -12219,8 +12693,7 @@ mod tests {
         left_builder.append(true);
         let left = Arc::new(left_builder.finish()) as ArrayRef;
 
-        let mut right_builder =
-            LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        let mut right_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         right_builder.values().values().append_value(2);
         right_builder.values().append(true);
         right_builder.values().values().append_value(3);
@@ -12305,11 +12778,13 @@ mod tests {
         .unwrap();
         assert!(result.as_boolean().value(0));
 
-        let mut large_text_overlap_left = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_overlap_left =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_overlap_left.values().append_value("alpha");
         large_text_overlap_left.values().append_null();
         large_text_overlap_left.append(true);
-        let mut large_text_overlap_right = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_overlap_right =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_overlap_right.values().append_value("beta");
         large_text_overlap_right.append(true);
         let result = eval_scalar_function(
@@ -12323,7 +12798,8 @@ mod tests {
         .unwrap();
         assert!(result.as_boolean().is_null(0));
 
-        let mut large_text_position = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_position =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_position.values().append_value("alpha");
         large_text_position.values().append_null();
         large_text_position.values().append_value("beta");
@@ -12366,7 +12842,10 @@ mod tests {
         )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
-        assert_eq!(result.value(0).as_primitive::<Int64Type>().values(), &[3, 1]);
+        assert_eq!(
+            result.value(0).as_primitive::<Int64Type>().values(),
+            &[3, 1]
+        );
 
         let mut large_text_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_builder.values().append_value("z");
@@ -12383,7 +12862,10 @@ mod tests {
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = result.value(0);
         let values = inner.as_string::<i32>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("z"), None, Some("a")]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("z"), None, Some("a")]
+        );
 
         let mut text_extrema_builder = ListBuilder::new(arrow::array::LargeStringBuilder::new());
         text_extrema_builder.values().append_value("zulu");
@@ -12439,7 +12921,8 @@ mod tests {
         .unwrap();
         assert_eq!(result.as_string::<i32>().value(0), "alpha,?,beta");
 
-        let mut large_text_remove_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_remove_builder =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_remove_builder.values().append_value("alpha");
         large_text_remove_builder.values().append_null();
         large_text_remove_builder.values().append_value("beta");
@@ -12458,7 +12941,8 @@ mod tests {
         let values = inner.as_string::<i64>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![None, Some("beta")]);
 
-        let mut large_text_append_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_append_builder =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_append_builder.values().append_value("alpha");
         large_text_append_builder.append(true);
         let result = eval_scalar_function(
@@ -12473,9 +12957,13 @@ mod tests {
         let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         let inner = result.value(0);
         let values = inner.as_string::<i64>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("alpha"), Some("beta")]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("beta")]
+        );
 
-        let mut large_text_sort_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_sort_builder =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_sort_builder.values().append_value("z");
         large_text_sort_builder.values().append_null();
         large_text_sort_builder.values().append_value("a");
@@ -12489,9 +12977,13 @@ mod tests {
         let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         let inner = result.value(0);
         let values = inner.as_string::<i64>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("a"), Some("z"), None]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("z"), None]
+        );
 
-        let mut large_text_reverse_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_reverse_builder =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_reverse_builder.values().append_value("alpha");
         large_text_reverse_builder.values().append_null();
         large_text_reverse_builder.values().append_value("beta");
@@ -12505,9 +12997,13 @@ mod tests {
         let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         let inner = result.value(0);
         let values = inner.as_string::<i64>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("beta"), None, Some("alpha")]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("beta"), None, Some("alpha")]
+        );
 
-        let mut large_text_slice_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        let mut large_text_slice_builder =
+            LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_slice_builder.values().append_value("alpha");
         large_text_slice_builder.values().append_null();
         large_text_slice_builder.values().append_value("beta");
@@ -12542,7 +13038,10 @@ mod tests {
         .unwrap();
         let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         let reversed_values = result.value(0);
-        let reversed_values = reversed_values.as_any().downcast_ref::<ListArray>().unwrap();
+        let reversed_values = reversed_values
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
         assert_eq!(reversed_values.len(), 3);
         for (index, expected) in [3_i64, 2, 1].into_iter().enumerate() {
             let value = reversed_values.value(index);
@@ -12598,23 +13097,16 @@ mod tests {
             Arc::new(builder.finish()) as ArrayRef
         };
         for (name, expected) in [("ARRAY_MIN", 1_i64), ("ARRAY_MAX", 9_i64)] {
-            let result = eval_scalar_function(
-                name,
-                &[extrema()],
-                1,
-            )
-            .unwrap();
+            let result = eval_scalar_function(name, &[extrema()], 1).unwrap();
             assert_eq!(result.as_primitive::<Int64Type>().value(0), expected);
         }
     }
 
     #[test]
     fn array_equality_is_elementwise_and_null_preserving() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: Vec<Expr>| Expr::Function {
             name: "ARRAY".into(),
             args: values,
@@ -12665,11 +13157,9 @@ mod tests {
 
     #[test]
     fn ordered_array_comparison_is_lexicographic_and_null_preserving() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let array = |values: Vec<Expr>| Expr::Function {
             name: "ARRAY".into(),
             args: values,
@@ -13362,10 +13852,12 @@ mod tests {
                 Expr::Literal(ScalarValue::Int64(-1)),
             ],
         };
-        assert!(evaluate(&invalid_group, &batch)
-            .unwrap_err()
-            .to_string()
-            .contains("group must be non-negative"));
+        assert!(
+            evaluate(&invalid_group, &batch)
+                .unwrap_err()
+                .to_string()
+                .contains("group must be non-negative")
+        );
     }
 
     #[test]
@@ -13876,11 +14368,9 @@ mod tests {
 
     #[test]
     fn decimal_array_literals_preserve_exact_element_type() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let decimal = |value: i128| {
             Expr::Literal(ScalarValue::Decimal128 {
                 value,
@@ -14045,7 +14535,12 @@ mod tests {
                 },
             ],
         };
-        assert!(evaluate(&null_overlap, &batch).unwrap().as_boolean().is_null(0));
+        assert!(
+            evaluate(&null_overlap, &batch)
+                .unwrap()
+                .as_boolean()
+                .is_null(0)
+        );
 
         let concat = Expr::Function {
             name: "ARRAY_CONCAT".into(),
@@ -14094,7 +14589,9 @@ mod tests {
                 .value(0);
             let updated = updated.as_primitive::<arrow::datatypes::Decimal128Type>();
             assert_eq!(
-                (0..updated.len()).map(|index| updated.value(index)).collect::<Vec<_>>(),
+                (0..updated.len())
+                    .map(|index| updated.value(index))
+                    .collect::<Vec<_>>(),
                 expected
             );
         }
@@ -14104,7 +14601,12 @@ mod tests {
             args: vec![
                 Expr::Function {
                     name: "ARRAY".into(),
-                    args: vec![decimal(1), decimal(2), decimal(1), Expr::Literal(ScalarValue::Null)],
+                    args: vec![
+                        decimal(1),
+                        decimal(2),
+                        decimal(1),
+                        Expr::Literal(ScalarValue::Null),
+                    ],
                 },
                 decimal(1),
             ],
@@ -14171,10 +14673,12 @@ mod tests {
             name: "CODEPOINT".into(),
             args: vec![Expr::Literal(ScalarValue::Utf8("AB".into()))],
         };
-        assert!(evaluate(&invalid, &batch)
-            .unwrap_err()
-            .to_string()
-            .contains("exactly one Unicode code point"));
+        assert!(
+            evaluate(&invalid, &batch)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly one Unicode code point")
+        );
     }
 
     #[test]
@@ -14222,10 +14726,12 @@ mod tests {
                 Expr::Literal(ScalarValue::Int64(0)),
             ],
         };
-        assert!(evaluate(&invalid, &batch)
-            .unwrap_err()
-            .to_string()
-            .contains("index must be greater than zero"));
+        assert!(
+            evaluate(&invalid, &batch)
+                .unwrap_err()
+                .to_string()
+                .contains("index must be greater than zero")
+        );
     }
 
     #[test]
@@ -14253,10 +14759,12 @@ mod tests {
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 5);
         let result = evaluate(&expr(4), &batch).unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 0);
-        assert!(evaluate(&expr(0), &batch)
-            .unwrap_err()
-            .to_string()
-            .contains("instance must not be zero"));
+        assert!(
+            evaluate(&expr(0), &batch)
+                .unwrap_err()
+                .to_string()
+                .contains("instance must not be zero")
+        );
     }
 
     #[test]
@@ -14371,10 +14879,12 @@ mod tests {
                 Expr::Literal(ScalarValue::Int64(0)),
             ],
         };
-        assert!(evaluate(&invalid_limit, &batch)
-            .unwrap_err()
-            .to_string()
-            .contains("limit must be greater than zero"));
+        assert!(
+            evaluate(&invalid_limit, &batch)
+                .unwrap_err()
+                .to_string()
+                .contains("limit must be greater than zero")
+        );
     }
 
     #[test]
@@ -14579,11 +15089,9 @@ mod tests {
         assert_eq!(timestamps.value(0), 20_000);
         assert!(timestamps.is_null(1));
 
-        let literal_batch = RecordBatch::try_from_iter([(
-            "row",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let literal_batch =
+            RecordBatch::try_from_iter([("row", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let result = evaluate(
             &Expr::Cast {
                 expr: Box::new(Expr::Literal(ScalarValue::Utf8(
@@ -14597,7 +15105,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result.data_type(), &DataType::Timestamp(TimeUnit::Microsecond, None));
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
 
         let result = evaluate(
             &Expr::Cast {
@@ -14615,9 +15126,7 @@ mod tests {
             result.data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
-        let utc_value = result
-            .as_primitive::<TimestampMicrosecondType>()
-            .value(0);
+        let utc_value = result.as_primitive::<TimestampMicrosecondType>().value(0);
 
         // Offset-bearing input is accepted by the same timestamp parser and
         // retains the timezone-bearing output type.
@@ -14638,9 +15147,7 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
         assert_eq!(
-            result
-                .as_primitive::<TimestampMicrosecondType>()
-                .value(0),
+            result.as_primitive::<TimestampMicrosecondType>().value(0),
             utc_value - 19_800_000_000
         );
     }
@@ -14724,7 +15231,10 @@ mod tests {
         let lists = result.as_list::<i32>();
         let inner = lists.value(0);
         let values = inner.as_primitive::<Int64Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1), None, Some(3)]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(1), None, Some(3)]
+        );
     }
 
     #[test]
@@ -14743,8 +15253,22 @@ mod tests {
         )
         .unwrap();
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<Int32Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
-        assert_eq!(lists.value(1).as_primitive::<Int32Type>().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(
+            lists
+                .value(0)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(7)]
+        );
+        assert_eq!(
+            lists
+                .value(1)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None]
+        );
     }
 
     #[test]
@@ -14769,11 +15293,10 @@ mod tests {
                 &batch,
             )
             .unwrap();
-            assert_eq!(result.data_type(), &DataType::List(Arc::new(Field::new(
-                "item",
-                data_type,
-                true,
-            ))));
+            assert_eq!(
+                result.data_type(),
+                &DataType::List(Arc::new(Field::new("item", data_type, true,)))
+            );
             assert_eq!(result.as_list::<i32>().value(0).len(), 1);
             assert!(result.as_list::<i32>().value(1).is_null(0));
         }
@@ -14891,16 +15414,32 @@ mod tests {
         )
         .unwrap();
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<arrow::datatypes::Date32Type>().iter().collect::<Vec<_>>(), vec![Some(10)]);
-        assert_eq!(lists.value(1).as_primitive::<arrow::datatypes::Date32Type>().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(
+            lists
+                .value(0)
+                .as_primitive::<arrow::datatypes::Date32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(10)]
+        );
+        assert_eq!(
+            lists
+                .value(1)
+                .as_primitive::<arrow::datatypes::Date32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None]
+        );
     }
 
     #[test]
     fn evaluates_date64_array_elements() {
         let batch = RecordBatch::try_from_iter([(
             "day",
-            Arc::new(arrow::array::Date64Array::from(vec![Some(86_400_000), None]))
-                as ArrayRef,
+            Arc::new(arrow::array::Date64Array::from(vec![
+                Some(86_400_000),
+                None,
+            ])) as ArrayRef,
         )])
         .unwrap();
         let result = evaluate(
@@ -14912,16 +15451,29 @@ mod tests {
         )
         .unwrap();
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<arrow::datatypes::Date64Type>().iter().collect::<Vec<_>>(), vec![Some(86_400_000)]);
-        assert_eq!(lists.value(1).as_primitive::<arrow::datatypes::Date64Type>().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(
+            lists
+                .value(0)
+                .as_primitive::<arrow::datatypes::Date64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(86_400_000)]
+        );
+        assert_eq!(
+            lists
+                .value(1)
+                .as_primitive::<arrow::datatypes::Date64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None]
+        );
     }
 
     #[test]
     fn evaluates_time32_array_elements() {
         let batch = RecordBatch::try_from_iter([(
             "time",
-            Arc::new(arrow::array::Time32SecondArray::from(vec![Some(42), None]))
-                as ArrayRef,
+            Arc::new(arrow::array::Time32SecondArray::from(vec![Some(42), None])) as ArrayRef,
         )])
         .unwrap();
         let result = evaluate(
@@ -14933,8 +15485,22 @@ mod tests {
         )
         .unwrap();
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<Time32SecondType>().iter().collect::<Vec<_>>(), vec![Some(42)]);
-        assert_eq!(lists.value(1).as_primitive::<Time32SecondType>().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(
+            lists
+                .value(0)
+                .as_primitive::<Time32SecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(42)]
+        );
+        assert_eq!(
+            lists
+                .value(1)
+                .as_primitive::<Time32SecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None]
+        );
     }
 
     #[test]
@@ -15075,10 +15641,7 @@ mod tests {
         .unwrap();
         let array = Expr::Function {
             name: "ARRAY".into(),
-            args: vec![
-                Expr::Column("day".into()),
-                Expr::Column("later_day".into()),
-            ],
+            args: vec![Expr::Column("day".into()), Expr::Column("later_day".into())],
         };
         for (name, expected) in [("ARRAY_MIN", 10), ("ARRAY_MAX", 20)] {
             let result = evaluate(
@@ -15090,7 +15653,12 @@ mod tests {
             )
             .unwrap();
             assert_eq!(result.data_type(), &DataType::Date32);
-            assert_eq!(result.as_primitive::<arrow::datatypes::Date32Type>().value(0), expected);
+            assert_eq!(
+                result
+                    .as_primitive::<arrow::datatypes::Date32Type>()
+                    .value(0),
+                expected
+            );
         }
     }
 
@@ -15134,7 +15702,11 @@ mod tests {
     fn reverse_preserves_large_utf8_columns_and_nulls() {
         let batch = RecordBatch::try_from_iter([(
             "text",
-            Arc::new(LargeStringArray::from(vec![Some("Kaveon"), None, Some("世界")])) as ArrayRef,
+            Arc::new(LargeStringArray::from(vec![
+                Some("Kaveon"),
+                None,
+                Some("世界"),
+            ])) as ArrayRef,
         )])
         .unwrap();
         let result = evaluate(
@@ -15303,15 +15875,21 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(result.data_type(), &DataType::LargeList(Arc::new(arrow::datatypes::Field::new(
-            "item",
-            DataType::LargeUtf8,
-            true,
-        ))));
+        assert_eq!(
+            result.data_type(),
+            &DataType::LargeList(Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::LargeUtf8,
+                true,
+            )))
+        );
         let values = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         let first = values.value(0);
         let first = first.as_any().downcast_ref::<LargeStringArray>().unwrap();
-        assert_eq!(first.iter().collect::<Vec<_>>(), vec![Some("a"), Some("b界c")]);
+        assert_eq!(
+            first.iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b界c")]
+        );
         assert!(values.is_null(1));
     }
 
@@ -15384,7 +15962,10 @@ mod tests {
             .unwrap()
             .value(0);
         let values = inner.as_primitive::<arrow::datatypes::Date32Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20), None]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(10), Some(20), None]
+        );
     }
 
     #[test]
@@ -15538,7 +16119,10 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
     }
 
     #[test]
@@ -15624,7 +16208,13 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(2)]);
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2)]
+        );
     }
 
     #[test]
@@ -15660,7 +16250,10 @@ mod tests {
             &batch,
         )
         .unwrap();
-        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true)]
+        );
     }
 
     #[test]
@@ -15715,10 +16308,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            first
-                .as_primitive::<Int64Type>()
-                .iter()
-                .collect::<Vec<_>>(),
+            first.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(10), Some(10)]
         );
         let last = evaluate(
@@ -15730,9 +16320,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            last.as_primitive::<Int64Type>()
-                .iter()
-                .collect::<Vec<_>>(),
+            last.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(30), Some(30)]
         );
     }
@@ -15746,11 +16334,8 @@ mod tests {
             }
             builder.append(true);
         }
-        let batch = RecordBatch::try_from_iter([(
-            "items",
-            Arc::new(builder.finish()) as ArrayRef,
-        )])
-        .unwrap();
+        let batch = RecordBatch::try_from_iter([("items", Arc::new(builder.finish()) as ArrayRef)])
+            .unwrap();
         let first = evaluate(
             &Expr::Function {
                 name: "ELEMENT_AT".into(),
@@ -15798,144 +16383,6 @@ mod tests {
                 .to_string()
                 .contains("CARDINALITY currently supports ARRAY/List values only")
         );
-    }
-
-    #[test]
-    fn evaluates_array_join_with_null_replacement() {
-        let mut builder = ListBuilder::new(StringBuilder::new());
-        builder.values().append_value("a");
-        builder.values().append_null();
-        builder.values().append_value("b");
-        builder.append(true);
-        builder.append(false);
-        let batch = RecordBatch::try_from_iter([
-            ("items", Arc::new(builder.finish()) as ArrayRef),
-            ("delimiter", Arc::new(StringArray::from(vec![Some(","), Some(",")])) as ArrayRef),
-            ("replacement", Arc::new(StringArray::from(vec![Some("<null>"), Some("<null>")])) as ArrayRef),
-        ])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "ARRAY_JOIN".into(),
-            args: vec![
-                Expr::Column("items".into()),
-                Expr::Column("delimiter".into()),
-                Expr::Column("replacement".into()),
-            ],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        let values = result.as_string::<i32>();
-        assert_eq!(values.value(0), "a,<null>,b");
-        assert!(values.is_null(1));
-
-        let mut numeric_builder = ListBuilder::new(Int64Builder::new());
-        numeric_builder.values().append_value(10);
-        numeric_builder.values().append_null();
-        numeric_builder.values().append_value(30);
-        numeric_builder.append(true);
-        let numeric_batch = RecordBatch::try_from_iter([
-            ("items", Arc::new(numeric_builder.finish()) as ArrayRef),
-            ("delimiter", Arc::new(StringArray::from(vec![Some("|")])) as ArrayRef),
-        ])
-        .unwrap();
-        let numeric_expr = Expr::Function {
-            name: "ARRAY_JOIN".into(),
-            args: vec![Expr::Column("items".into()), Expr::Column("delimiter".into())],
-        };
-        let numeric_result = evaluate(&numeric_expr, &numeric_batch).unwrap();
-        assert_eq!(numeric_result.as_string::<i32>().value(0), "10|30");
-    }
-
-    #[test]
-    fn evaluates_json_exists_for_present_missing_and_null_paths() {
-        let batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(StringArray::from(vec![
-                    Some(r#"{"a":null}"#),
-                    Some(r#"{"a":1}"#),
-                    Some(r#"{"b":1}"#),
-                    None,
-                ])) as ArrayRef,
-            ),
-            (
-                "path",
-                Arc::new(StringArray::from(vec![
-                    Some("$.a"),
-                    Some("$.a"),
-                    Some("$.a"),
-                    Some("$.a"),
-                ])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "JSON_EXISTS".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        let values = result.as_boolean();
-        assert_eq!(values.value(0), true);
-        assert_eq!(values.value(1), true);
-        assert_eq!(values.value(2), false);
-        assert!(values.is_null(3));
-    }
-
-    #[test]
-    fn evaluates_json_query_and_value_aliases() {
-        let batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(StringArray::from(vec![
-                    Some(r#"{"customer":{"id":42,"tags":["a","b"]}}"#),
-                    Some(r#"{"customer":{"id":null}}"#),
-                ])) as ArrayRef,
-            ),
-            (
-                "path",
-                Arc::new(StringArray::from(vec![
-                    Some("$.customer"),
-                    Some("$.customer.id"),
-                ])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let query = Expr::Function {
-            name: "JSON_QUERY".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
-        };
-        let query_result = evaluate(&query, &batch).unwrap();
-        let query_values = query_result.as_string::<i32>();
-        assert_eq!(query_values.value(0), r#"{"id":42,"tags":["a","b"]}"#);
-        assert!(query_values.is_null(1));
-
-        let value = Expr::Function {
-            name: "JSON_VALUE".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
-        };
-        let value_result = evaluate(&value, &batch).unwrap();
-        let value_values = value_result.as_string::<i32>();
-        assert!(value_values.is_null(0));
-        assert!(value_values.is_null(1));
-
-        let quoted_batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(StringArray::from(vec![Some(
-                    r#"{"customer-name":{"id":42}}"#,
-                )])) as ArrayRef,
-            ),
-            (
-                "path",
-                Arc::new(StringArray::from(vec![Some("$['customer-name'].id")])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let quoted = Expr::Function {
-            name: "JSON_VALUE".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
-        };
-        let quoted_result = evaluate(&quoted, &quoted_batch).unwrap();
-        assert_eq!(quoted_result.as_string::<i32>().value(0), "42");
     }
 
     #[test]
@@ -16000,29 +16447,6 @@ mod tests {
     }
 
     #[test]
-    fn evaluates_json_value_with_large_utf8_document_and_path() {
-        let batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(LargeStringArray::from(vec![Some(
-                    r#"{"customer-name":{"id":42}}"#,
-                )])) as ArrayRef,
-            ),
-            (
-                "path",
-                Arc::new(LargeStringArray::from(vec![Some("$['customer-name'].id")])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "JSON_VALUE".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        assert_eq!(result.as_string::<i32>().value(0), "42");
-    }
-
-    #[test]
     fn json_parse_validates_documents_and_try_parse_returns_null() {
         let batch = RecordBatch::try_from_iter([(
             "document",
@@ -16049,88 +16473,6 @@ mod tests {
         assert_eq!(values.value(0), r#"{"x":1}"#);
         assert!(values.is_null(1));
         assert!(values.is_null(2));
-    }
-
-    #[test]
-    fn evaluates_json_parse_with_large_utf8_input() {
-        let batch = RecordBatch::try_from_iter([(
-            "document",
-            Arc::new(LargeStringArray::from(vec![
-                Some(r#"{"large":true}"#),
-                Some("not-json"),
-                None,
-            ])) as ArrayRef,
-        )])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "TRY_JSON_PARSE".into(),
-            args: vec![Expr::Column("document".into())],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        let values = result.as_string::<i32>();
-        assert_eq!(values.value(0), r#"{"large":true}"#);
-        assert!(values.is_null(1));
-        assert!(values.is_null(2));
-    }
-
-    #[test]
-    fn evaluates_json_format_canonicalizes_documents_and_preserves_nulls() {
-        let batch = RecordBatch::try_from_iter([(
-            "document",
-            Arc::new(StringArray::from(vec![
-                Some(r#"{ "b": 2, "a": [true, null] }"#),
-                None,
-                Some("not-json"),
-            ])) as ArrayRef,
-        )])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "JSON_FORMAT".into(),
-            args: vec![Expr::Column("document".into())],
-        };
-        let error = evaluate(&expr, &batch).unwrap_err();
-        assert!(error.to_string().contains("invalid JSON value at row 2"));
-
-        let valid_batch = RecordBatch::try_from_iter([(
-            "document",
-            Arc::new(StringArray::from(vec![
-                Some(r#"{ "b": 2, "a": [true, null] }"#),
-                None,
-            ])) as ArrayRef,
-        )])
-        .unwrap();
-        let result = evaluate(&expr, &valid_batch).unwrap();
-        let values = result.as_string::<i32>();
-        assert_eq!(values.value(0), r#"{"a":[true,null],"b":2}"#);
-        assert!(values.is_null(1));
-
-        let large_batch = RecordBatch::try_from_iter([(
-            "document",
-            Arc::new(LargeStringArray::from(vec![Some(r#"{ "n": 7 }"#), None])) as ArrayRef,
-        )])
-        .unwrap();
-        let large_expr = Expr::Function {
-            name: "JSON_FORMAT".into(),
-            args: vec![Expr::Column("document".into())],
-        };
-        let large_result = evaluate(&large_expr, &large_batch).unwrap();
-        let large_values = large_result.as_string::<i32>();
-        assert_eq!(large_values.value(0), r#"{"n":7}"#);
-        assert!(large_values.is_null(1));
-
-        let invalid_batch = RecordBatch::try_from_iter([(
-            "document",
-            Arc::new(StringArray::from(vec![Some("not-json"), None])) as ArrayRef,
-        )])
-        .unwrap();
-        let try_format = Expr::Function {
-            name: "TRY_JSON_FORMAT".into(),
-            args: vec![Expr::Column("document".into())],
-        };
-        let try_result = evaluate(&try_format, &invalid_batch).unwrap();
-        let try_values = try_result.as_string::<i32>();
-        assert!(try_values.is_null(0));
-        assert!(try_values.is_null(1));
     }
 
     #[test]
@@ -16169,69 +16511,6 @@ mod tests {
     }
 
     #[test]
-    fn evaluates_json_array_get_with_negative_indexes_and_nulls() {
-        let batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(StringArray::from(vec![
-                    Some(r#"["a", {"x": 1}, null]"#),
-                    Some(r#"[1, 2]"#),
-                    None,
-                ])) as ArrayRef,
-            ),
-            (
-                "index",
-                Arc::new(Int64Array::from(vec![1, -1, 0])) as ArrayRef,
-            ),
-        ])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "JSON_ARRAY_GET".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("index".into())],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        let values = result.as_string::<i32>();
-        assert_eq!(values.value(0), r#"{"x":1}"#);
-        assert_eq!(values.value(1), "2");
-        assert!(values.is_null(2));
-
-        let invalid_batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(StringArray::from(vec![Some("not-json")])) as ArrayRef,
-            ),
-            ("index", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
-        ])
-        .unwrap();
-        let try_get = Expr::Function {
-            name: "TRY_JSON_ARRAY_GET".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("index".into())],
-        };
-        assert!(evaluate(&try_get, &invalid_batch)
-            .unwrap()
-            .as_string::<i32>()
-            .is_null(0));
-    }
-
-    #[test]
-    fn evaluates_json_array_get_with_large_utf8_document_and_int32_index() {
-        let batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(LargeStringArray::from(vec![Some(r#"["wide"]"#)])) as ArrayRef,
-            ),
-            ("index", Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef),
-        ])
-        .unwrap();
-        let expr = Expr::Function {
-            name: "JSON_ARRAY_GET".into(),
-            args: vec![Expr::Column("document".into()), Expr::Column("index".into())],
-        };
-        let result = evaluate(&expr, &batch).unwrap();
-        assert_eq!(result.as_string::<i32>().value(0), "\"wide\"");
-    }
-
-    #[test]
     fn evaluates_json_array_length_with_non_arrays_as_null() {
         let batch = RecordBatch::try_from_iter([(
             "document",
@@ -16252,7 +16531,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(3), None, None, None]
         );
     }
@@ -16299,8 +16581,7 @@ mod tests {
         let string_batch = RecordBatch::try_from_iter([
             (
                 "document",
-                Arc::new(StringArray::from(vec![Some(r#"["alpha", "beta"]"#)]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![Some(r#"["alpha", "beta"]"#)])) as ArrayRef,
             ),
             (
                 "needle",
@@ -16319,62 +16600,12 @@ mod tests {
             &string_batch,
         )
         .unwrap();
-        assert!(result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap()
-            .value(0));
-
-        let numeric_batch = RecordBatch::try_from_iter([
-            ("document", Arc::new(StringArray::from(vec![Some(r#"[1,2,3]"#)])) as ArrayRef),
-            ("needle", Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef),
-        ])
-        .unwrap();
-        let numeric_result = evaluate(
-            &Expr::Function {
-                name: "JSON_ARRAY_CONTAINS".into(),
-                args: vec![Expr::Column("document".into()), Expr::Column("needle".into())],
-            },
-            &numeric_batch,
-        )
-        .unwrap();
-        assert!(numeric_result.as_boolean().value(0));
-    }
-
-    #[test]
-    fn evaluates_json_array_contains_for_decimal_needles() {
-        let mut needle = Decimal128Array::from(vec![Some(1234_i128), Some(-50_i128)]);
-        needle = needle.with_precision_and_scale(10, 2).unwrap();
-        let batch = RecordBatch::try_from_iter([
-            (
-                "document",
-                Arc::new(StringArray::from(vec![
-                    Some(r#"[12.34, -0.5]"#),
-                    Some(r#"[12.34]"#),
-                ])) as ArrayRef,
-            ),
-            ("needle", Arc::new(needle) as ArrayRef),
-        ])
-        .unwrap();
-        let result = evaluate(
-            &Expr::Function {
-                name: "JSON_ARRAY_CONTAINS".into(),
-                args: vec![
-                    Expr::Column("document".into()),
-                    Expr::Column("needle".into()),
-                ],
-            },
-            &batch,
-        )
-        .unwrap();
-        assert_eq!(
+        assert!(
             result
                 .as_any()
                 .downcast_ref::<BooleanArray>()
                 .unwrap()
-                .iter()
-                .collect::<Vec<_>>(),
-            vec![Some(true), Some(false)]
+                .value(0)
         );
     }
 
@@ -16408,9 +16639,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(2), Some(0), None]
         );
+    }
+
+    #[test]
+    fn evaluates_array_join_with_null_replacement() {
+        let mut items = ListBuilder::new(Int64Builder::new());
+        items.values().append_value(1);
+        items.values().append_null();
+        items.values().append_value(3);
+        items.append(true);
+        items.append(false);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(items.finish()) as ArrayRef),
+            (
+                "delimiter",
+                Arc::new(StringArray::from(vec![",", ";"])) as ArrayRef,
+            ),
+            (
+                "replacement",
+                Arc::new(StringArray::from(vec![Some("?"), Some("-")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ARRAY_JOIN".into(),
+            args: vec![
+                Expr::Column("items".into()),
+                Expr::Column("delimiter".into()),
+                Expr::Column("replacement".into()),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "1,?,3");
+        assert_eq!(values.value(1), "");
     }
 
     #[test]
@@ -16418,13 +16686,19 @@ mod tests {
         let batch = RecordBatch::try_from_iter([
             (
                 "value",
-                Arc::new(StringArray::from(vec![Some("alpha-17"), Some("beta"), None]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some("alpha-17"),
+                    Some("beta"),
+                    None,
+                ])) as ArrayRef,
             ),
             (
                 "pattern",
-                Arc::new(StringArray::from(vec![Some(r"^alpha-\d+$"), Some("^alpha"), Some("^x")]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some(r"^alpha-\d+$"),
+                    Some("^alpha"),
+                    Some("^x"),
+                ])) as ArrayRef,
             ),
         ])
         .unwrap();
@@ -16444,8 +16718,14 @@ mod tests {
         );
 
         let invalid = RecordBatch::try_from_iter([
-            ("value", Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef),
-            ("pattern", Arc::new(StringArray::from(vec![Some("[a")])) as ArrayRef),
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(StringArray::from(vec![Some("[a")])) as ArrayRef,
+            ),
         ])
         .unwrap();
         let error = evaluate(&expr, &invalid).unwrap_err();
@@ -16457,13 +16737,11 @@ mod tests {
         let batch = RecordBatch::try_from_iter([
             (
                 "value",
-                Arc::new(StringArray::from(vec![Some("banana"), Some("aaaa"), None]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("banana"), Some("aaaa"), None])) as ArrayRef,
             ),
             (
                 "pattern",
-                Arc::new(StringArray::from(vec![Some("ana"), Some("aa"), Some("a")]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("ana"), Some("aa"), Some("a")])) as ArrayRef,
             ),
         ])
         .unwrap();
@@ -16483,12 +16761,20 @@ mod tests {
         );
 
         let invalid = RecordBatch::try_from_iter([
-            ("value", Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef),
-            ("pattern", Arc::new(StringArray::from(vec![Some("[")])) as ArrayRef),
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(StringArray::from(vec![Some("[")])) as ArrayRef,
+            ),
         ])
         .unwrap();
         let error = evaluate(&expr, &invalid).unwrap_err();
-        assert!(error.to_string().contains("REGEXP_COUNT") && error.to_string().contains("invalid"));
+        assert!(
+            error.to_string().contains("REGEXP_COUNT") && error.to_string().contains("invalid")
+        );
     }
 
     #[test]
@@ -16496,13 +16782,19 @@ mod tests {
         let batch = RecordBatch::try_from_iter([
             (
                 "value",
-                Arc::new(StringArray::from(vec![Some("id=12 id=34"), Some("abc"), None]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some("id=12 id=34"),
+                    Some("abc"),
+                    None,
+                ])) as ArrayRef,
             ),
             (
                 "pattern",
-                Arc::new(StringArray::from(vec![Some(r"id=(\d+)"), Some("."), Some("." )]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some(r"id=(\d+)"),
+                    Some("."),
+                    Some("."),
+                ])) as ArrayRef,
             ),
         ])
         .unwrap();
@@ -16514,10 +16806,16 @@ mod tests {
         let values = result.as_any().downcast_ref::<ListArray>().unwrap();
         let first_value = values.value(0);
         let first = first_value.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(first.iter().collect::<Vec<_>>(), vec![Some("12"), Some("34")]);
+        assert_eq!(
+            first.iter().collect::<Vec<_>>(),
+            vec![Some("12"), Some("34")]
+        );
         let second_value = values.value(1);
         let second = second_value.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(second.iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("c")]);
+        assert_eq!(
+            second.iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]
+        );
         assert!(values.is_null(2));
     }
 }

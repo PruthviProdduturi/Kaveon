@@ -39,7 +39,7 @@ class WritePathTests(unittest.TestCase):
     def _write(self, owner="owner@example.test"):
         payload = {"sql_text": "SELECT 1", "status": "success", "database_name": "OpenSource"}
         with patch("services.product_read_authority.enabled", return_value=True), \
-             patch.object(history.product_store, "list_records",
+             patch.object(history.product_store, "list_records_capped",
                           side_effect=AssertionError("the write path listed history")), \
              patch.object(history, "_schedule_retention") as scheduled, \
              patch.object(history.product_store, "transact") as transact:
@@ -129,8 +129,8 @@ class SweepTests(unittest.TestCase):
 
     def test_a_sweep_below_the_bound_counts_and_deletes_nothing(self):
         owner = "owner@example.test"
-        with patch.object(history.product_store, "list_records",
-                          return_value=_records(owner, 400)), \
+        with patch.object(history.product_store, "list_records_capped",
+                          return_value=(_records(owner, 400), False)), \
              patch.object(history.product_store, "transact") as transact:
             self.assertEqual(history.run_retention_sweep(owner), 0)
         transact.assert_not_called()
@@ -138,8 +138,8 @@ class SweepTests(unittest.TestCase):
 
     def test_a_sweep_at_the_bound_trims_a_batch_and_clears_the_bound(self):
         owner = "owner@example.test"
-        with patch.object(history.product_store, "list_records",
-                          return_value=_records(owner, history.MAX_HISTORY_PER_OWNER)), \
+        with patch.object(history.product_store, "list_records_capped",
+                          return_value=(_records(owner, history.MAX_HISTORY_PER_OWNER), False)), \
              patch.object(history.product_store, "transact") as transact:
             trimmed = history.run_retention_sweep(owner)
         mutations = transact.call_args.args[0]
@@ -162,8 +162,8 @@ class SweepTests(unittest.TestCase):
             "id": f"q{index}", "user_email": owner,
             "executed_at": (start + timedelta(minutes=index)).isoformat()}}
             for index in range(history.MAX_HISTORY_PER_OWNER)]
-        with patch.object(history.product_store, "list_records",
-                          return_value=list(reversed(records))), \
+        with patch.object(history.product_store, "list_records_capped",
+                          return_value=(list(reversed(records)), False)), \
              patch.object(history.product_store, "transact") as transact:
             history.run_retention_sweep(owner)
         removed = [item.record_id for item in transact.call_args.args[0]]
@@ -174,7 +174,7 @@ class SweepTests(unittest.TestCase):
         owner = "owner@example.test"
         records = _records(owner, history.MAX_HISTORY_PER_OWNER)
         records[0]["document"]["user_email"] = "someone@else.test"
-        with patch.object(history.product_store, "list_records", return_value=records), \
+        with patch.object(history.product_store, "list_records_capped", return_value=(records, False)), \
              patch.object(history.product_store, "transact") as transact:
             with self.assertRaisesRegex(RuntimeError, "retention state is invalid"):
                 history.run_retention_sweep(owner)
@@ -188,8 +188,8 @@ class SweepTests(unittest.TestCase):
         listing is simply re-read."""
         owner = "owner@example.test"
         moved = HTTPException(409, "KaveonDB product list changed during pagination")
-        with patch.object(history.product_store, "list_records",
-                          side_effect=[moved, moved, _records(owner, 400)]) as listed, \
+        with patch.object(history.product_store, "list_records_capped",
+                          side_effect=[moved, moved, (_records(owner, 400), False)]) as listed, \
              patch.object(history.time, "sleep"), \
              patch.object(history.product_store, "transact"):
             self.assertEqual(history.run_retention_sweep(owner), 0)
@@ -199,7 +199,7 @@ class SweepTests(unittest.TestCase):
     def test_a_listing_that_never_settles_gives_up_rather_than_spinning(self):
         owner = "owner@example.test"
         moved = HTTPException(409, "KaveonDB product list changed during pagination")
-        with patch.object(history.product_store, "list_records",
+        with patch.object(history.product_store, "list_records_capped",
                           side_effect=moved) as listed, \
              patch.object(history.time, "sleep"):
             with self.assertRaises(HTTPException):
@@ -208,7 +208,7 @@ class SweepTests(unittest.TestCase):
 
     def test_a_failure_that_is_not_a_lost_snapshot_is_not_retried(self):
         owner = "owner@example.test"
-        with patch.object(history.product_store, "list_records",
+        with patch.object(history.product_store, "list_records_capped",
                           side_effect=HTTPException(503, "bound exceeded")) as listed:
             with self.assertRaises(HTTPException):
                 history.run_retention_sweep(owner)
@@ -218,7 +218,7 @@ class SweepTests(unittest.TestCase):
         owner = "owner@example.test"
         records = _records(owner, history.MAX_HISTORY_PER_OWNER)
         records[0]["revision"] = None
-        with patch.object(history.product_store, "list_records", return_value=records), \
+        with patch.object(history.product_store, "list_records_capped", return_value=(records, False)), \
              patch.object(history.product_store, "transact") as transact:
             with self.assertRaisesRegex(RuntimeError, "retention state is invalid"):
                 history.run_retention_sweep(owner)
@@ -227,3 +227,142 @@ class SweepTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnOwnerPastTheCeilingCanGetBackUnder(unittest.TestCase):
+    """The case that was unrecoverable.
+
+    `list_records` raises the moment a family passes the bound it is given, so
+    a sweep asking for `MAX_HISTORY_PER_OWNER` could not see an owner who was
+    already over it -- and the sweep is the only thing that would have brought
+    them back under. Every read of their history answered 503, the repair
+    answered 503, and the population could only grow.
+    """
+
+    def setUp(self):
+        history._HISTORY_COUNTS.clear()
+        self.addCleanup(history._HISTORY_COUNTS.clear)
+
+    def test_the_sweep_trims_an_owner_it_cannot_fully_see(self):
+        owner = "owner@example.test"
+        visible = _records(owner, history.HISTORY_LIST_CEILING)
+        with patch.object(history.product_store, "list_records_capped",
+                          return_value=(visible, True)) as listed, \
+             patch.object(history.product_store, "transact") as transact:
+            trimmed = history.run_retention_sweep(owner)
+        # Asked at the transport ceiling, not the retention bound: asking for
+        # 800 is what made this owner invisible to their own repair.
+        self.assertEqual(listed.call_args.kwargs["limit"], history.HISTORY_LIST_CEILING)
+        self.assertGreater(trimmed, 0)
+        self.assertTrue(transact.called)
+
+    def test_a_truncated_reading_does_not_become_a_remembered_count(self):
+        """The population is unknown while truncated, and a count recorded
+        from a partial listing would be wrong in the direction that stops the
+        next sweep from running."""
+        owner = "owner@example.test"
+        with patch.object(history.product_store, "list_records_capped",
+                          return_value=(_records(owner, history.HISTORY_LIST_CEILING), True)), \
+             patch.object(history.product_store, "transact"):
+            history.run_retention_sweep(owner)
+        self.assertNotIn(owner, history._HISTORY_COUNTS)
+        # Unknown reads as "worth checking", so the next write schedules a sweep.
+        self.assertTrue(history._at_retention_bound(owner))
+
+    def test_an_exact_reading_is_still_remembered(self):
+        owner = "owner@example.test"
+        with patch.object(history.product_store, "list_records_capped",
+                          return_value=(_records(owner, 400), False)), \
+             patch.object(history.product_store, "transact"):
+            self.assertEqual(history.run_retention_sweep(owner), 0)
+        self.assertEqual(history._HISTORY_COUNTS[owner], 400)
+
+
+class TheHistoryPanelShowsSomethingPastTheCeiling(unittest.TestCase):
+    """The symptom: "Your query history is not configured on this server".
+
+    It was configured. The store raises rather than truncating once a family
+    passes the bound it was given, the panel renders that status as a verdict
+    about configuration, and history is owner-scoped -- so the person who has
+    run the most queries is the one who loses the panel, and loses it whole.
+    """
+
+    def _read(self, records, truncated):
+        with patch("services.product_read_authority.enabled", return_value=True), \
+             patch.object(history.product_store, "list_records_capped",
+                          return_value=(records, truncated)), \
+             patch.object(history.product_store, "list_records",
+                          side_effect=AssertionError("the read must not use the raising listing")):
+            return history.list_history("alice", 3)
+
+    def _record(self, identity, stamp):
+        return {"document": {"id": identity, "user_email": "alice",
+                             "sql_text": "SELECT 1", "executed_at": stamp}}
+
+    def test_a_truncated_listing_still_answers(self):
+        records = [self._record(f"q{i}", f"2026-01-01T00:{i:02d}:00Z") for i in range(5)]
+        rows = self._read(records, True)
+        self.assertEqual(len(rows), 3)
+
+    def test_the_newest_come_first_whatever_order_the_store_used(self):
+        """The store returns its own order, so the read has to sort: taking
+        the first N of an arbitrary order would show an arbitrary three."""
+        records = [self._record("old", "2026-01-01T00:00:00Z"),
+                   self._record("newest", "2026-03-01T00:00:00Z"),
+                   self._record("middle", "2026-02-01T00:00:00Z")]
+        rows = self._read(records, False)
+        self.assertEqual([row["id"] for row in rows], ["newest", "middle", "old"])
+
+    def test_an_empty_history_is_still_empty(self):
+        self.assertEqual(self._read([], False), [])
+
+
+class AListingSurvivesTheSnapshotMoving(unittest.TestCase):
+    """Reading a busy family must not fail because it is busy.
+
+    A listing pages a hundred at a time, so a family at the ceiling is ten
+    round trips, and `query_history` takes a write on every statement a person
+    runs. The snapshot moved mid-pagination and the Engine refused the next
+    cursor with an upstream 400 the bridge reported as 502 -- so the panel
+    said the server "did not answer" when what had happened was that the
+    reader's own queries were being recorded.
+    """
+
+    def _drifted(self):
+        return HTTPException(502, "Engine rejected the request (upstream HTTP 400): "
+                                  "ENGINE_ERROR - product cursor belongs to a different snapshot")
+
+    def test_a_drifted_cursor_restarts_the_listing(self):
+        from services import product_store
+        answers = [self._drifted(), ([{"document": {"id": "1"}}], False)]
+
+        def once(*_args, **_kwargs):
+            answer = answers.pop(0)
+            if isinstance(answer, HTTPException):
+                raise answer
+            return answer
+
+        with patch.object(product_store, "_list_capped_once", side_effect=once) as passes:
+            records, truncated = product_store.list_records_capped(
+                "query_history", "alice", "Viewer", limit=10)
+        self.assertEqual(len(records), 1)
+        self.assertFalse(truncated)
+        self.assertEqual(passes.call_count, 2)
+
+    def test_a_listing_that_never_settles_surfaces_the_failure(self):
+        from services import product_store
+        with patch.object(product_store, "_list_capped_once",
+                          side_effect=self._drifted()) as passes:
+            with self.assertRaises(HTTPException):
+                product_store.list_records_capped("query_history", "alice", "Viewer", limit=10)
+        self.assertEqual(passes.call_count, product_store._LIST_RESTARTS)
+
+    def test_a_real_failure_is_not_retried(self):
+        """Restarting is only right for a moved snapshot. A refused credential
+        or an unreachable Engine is not improved by asking twice more."""
+        from services import product_store
+        with patch.object(product_store, "_list_capped_once",
+                          side_effect=HTTPException(502, "Engine is unavailable")) as passes:
+            with self.assertRaises(HTTPException):
+                product_store.list_records_capped("query_history", "alice", "Viewer", limit=10)
+        self.assertEqual(passes.call_count, 1)

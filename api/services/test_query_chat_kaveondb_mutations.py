@@ -40,8 +40,8 @@ def test_query_history_retention_sweep_deletes_a_batch_under_revision_checks():
     old = {"revision": 3, "document": {
         "id": "old", "user_email": "alice", "executed_at": "2026-01-01T00:00:00Z"}}
     mutations = []
-    with patch.object(query_history.product_store, "list_records",
-                      return_value=[old] * query_history.MAX_HISTORY_PER_OWNER), \
+    with patch.object(query_history.product_store, "list_records_capped",
+                      return_value=([old] * query_history.MAX_HISTORY_PER_OWNER, False)), \
          patch.object(query_history.product_store, "transact",
                       side_effect=lambda values, *_: mutations.extend(values) or {}):
         assert query_history.run_retention_sweep("alice") == len(mutations)
