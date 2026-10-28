@@ -83,6 +83,14 @@ test-*.ts
 **/__tests__/
 **/tests/
 
+# Rust integration tests are a crate's public surface, not scratch: Cargo only
+# runs `tests/` and there is nowhere else to put them. The blanket rule above
+# hid `engine/crates/sql/tests/tsql_compat.rs` -- it sat on one disk where
+# `git status` could not see it and no ordinary `git add` would take it. Keep
+# the Rust test directories.
+!engine/crates/*/tests/
+!engine/crates/*/tests/**
+
 # ---------------------------------------------------------
 # Temporary Files
 # ---------------------------------------------------------
