@@ -39,6 +39,8 @@ pub struct ScanMetricsSnapshot {
     /// The difference is what a row filter over the offset index left
     /// unread.
     pub compressed_bytes_read: u64,
+    /// Bytes fetched from an object store over range/object requests.
+    pub remote_bytes_read: u64,
     /// Rows a decoder-side row filter examined (rows of the row groups it
     /// ran on) and admitted to the rest of the projection.
     pub row_filter_rows_examined: u64,
@@ -108,6 +110,7 @@ struct ScanMetricsInner {
     rows_emitted: AtomicU64,
     compressed_bytes_selected: AtomicU64,
     compressed_bytes_read: AtomicU64,
+    remote_bytes_read: AtomicU64,
     row_filter_rows_examined: AtomicU64,
     row_filter_rows_admitted: AtomicU64,
     runtime_filters_applied: AtomicU64,
@@ -146,6 +149,7 @@ impl ScanMetrics {
             rows_emitted: self.load(&self.0.rows_emitted),
             compressed_bytes_selected: self.load(&self.0.compressed_bytes_selected),
             compressed_bytes_read: self.load(&self.0.compressed_bytes_read),
+            remote_bytes_read: self.load(&self.0.remote_bytes_read),
             row_filter_rows_examined: self.load(&self.0.row_filter_rows_examined),
             row_filter_rows_admitted: self.load(&self.0.row_filter_rows_admitted),
             runtime_filters_applied: self.load(&self.0.runtime_filters_applied),
@@ -267,6 +271,12 @@ impl ScanMetrics {
             .compressed_bytes_read
             .fetch_add(bytes as u64, Ordering::Relaxed);
     }
+    pub(crate) fn remote_bytes_read(&self, bytes: usize) {
+        self.0
+            .remote_bytes_read
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+        self.bytes_read(bytes);
+    }
     pub(crate) fn row_filter_examined(&self, rows: usize) {
         self.0
             .row_filter_rows_examined
@@ -324,5 +334,14 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.runtime_filters_applied, 2);
         assert_eq!(snapshot.runtime_filter_values, 5);
+    }
+
+    #[test]
+    fn remote_bytes_are_a_subset_of_read_bytes() {
+        let metrics = ScanMetrics::default();
+        metrics.remote_bytes_read(128);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.remote_bytes_read, 128);
+        assert_eq!(snapshot.compressed_bytes_read, 128);
     }
 }

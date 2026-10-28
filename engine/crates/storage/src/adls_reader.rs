@@ -519,7 +519,7 @@ impl AsyncFileReader for AdlsObjectReader {
         &mut self,
         range: std::ops::Range<usize>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
-        self.metrics.bytes_read(range.len());
+        self.metrics.remote_bytes_read(range.len());
         if self.shared.is_none() {
             let store = self.store.clone();
             let path = self.path.clone();
@@ -561,7 +561,7 @@ impl AsyncFileReader for AdlsObjectReader {
         ranges: Vec<std::ops::Range<usize>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
         self.metrics
-            .bytes_read(ranges.iter().map(std::ops::Range::len).sum());
+            .remote_bytes_read(ranges.iter().map(std::ops::Range::len).sum());
         if self.shared.is_none() {
             let store = self.store.clone();
             let path = self.path.clone();

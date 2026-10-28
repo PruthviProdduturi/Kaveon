@@ -321,6 +321,7 @@ export default function EngineQueryPage() {
                           ["Rows emitted", sc.rows_emitted.toLocaleString()],
                           ["Rows in selected groups", sc.rows_selected.toLocaleString()],
                           ["Compressed data read", bytes(sc.compressed_bytes_selected)],
+                          ["Remote object bytes", sc.remote_bytes_read ? bytes(sc.remote_bytes_read) : "Not measured"],
                           ["Decoder cache", `${(sc.decoded_batch_cache_hits ?? 0).toLocaleString()} hits · ${(sc.decoded_batch_cache_misses ?? 0).toLocaleString()} misses`],
                           ["Read throughput", rate(sc.compressed_bytes_per_second, "B/s")],
                           ["Row throughput", rate(sc.rows_per_second, "rows/s")],
