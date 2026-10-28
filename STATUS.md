@@ -2,7 +2,12 @@
 
 > Branch: `dev` (default)
 > Module: Analyze module of the Kaveon suite
-> Deploy: Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) + Azure PostgreSQL (`kaveonmeta` + `kaveon`) · [kaveon.vercel.app](https://kaveon.vercel.app)
+> Deploy: Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) · [kaveon.io](https://kaveon.io)
+> Control plane: the Engine's transaction API over object storage when
+> `KAVEON_POSTGRESQL_RETIREMENT_MODE` is set, which `docker-compose.yml`
+> sets for the local stack; Azure PostgreSQL (`kaveonmeta` + `kaveon`)
+> otherwise. One switch decides it, so say which one rather than naming a
+> database the installation may not be using.
 
 ---
 

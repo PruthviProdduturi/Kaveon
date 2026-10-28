@@ -1,7 +1,7 @@
 # Kaveon — Deployment Guide
 
 > **Stack:** Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) + Azure PostgreSQL (`kaveonmeta` + `kaveon`)
-> **Live:** [kaveon.vercel.app](https://kaveon.vercel.app)
+> **Live:** [kaveon.io](https://kaveon.io)
 
 ---
 

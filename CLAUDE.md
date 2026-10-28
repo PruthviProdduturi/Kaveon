@@ -8,7 +8,7 @@ Pruthvi Prodduturi — Engineering Lead & Platform Architect. Types fast with ty
 
 ## What is Kaveon
 
-A **unified, self-hosted, open-source data intelligence platform** (MIT). Tagline *"Talk to your data."* Public demo **kaveon.vercel.app**. Ship target **Nov 26, 2026**. Competitive frame: Microsoft Fabric, but open-source, with a deterministic Data Language Model instead of Copilot and a purpose-built engine instead of rented Spark. Not a dashboard tool, not an LLM wrapper, not a wrapper over someone else's engine.
+A **unified, self-hosted, open-source data intelligence platform** (MIT). Tagline *"Talk to your data."* Public demo **kaveon.io** (the old `kaveon.vercel.app` host answers 404). Ship target **Nov 26, 2026**. Competitive frame: Microsoft Fabric, but open-source, with a deterministic Data Language Model instead of Copilot and a purpose-built engine instead of rented Spark. Not a dashboard tool, not an LLM wrapper, not a wrapper over someone else's engine.
 
 ## Three pillars
 
@@ -26,7 +26,7 @@ A **unified, self-hosted, open-source data intelligence platform** (MIT). Taglin
 
 ## Engine state
 
-Local Parquet + local Delta (JSON commit replay from v0; **no checkpoints**), own SQL parser and logical plan, filter pushdown, projection/join pruning, Trino-style catalog (`~/.kaveon/config.toml`, SHOW/USE), remote-first `kaveon` CLI (embedded needs `--local`), HTTP statement API, coordinator + worker cluster. Distributed today: scan/filter/project, partial/final grouped and global aggregates (COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT), Sort/TopN, repartitioned and broadcast hash joins, Arrow IPC exchange, retry/cancellation, spill-aware Sort/TopN. Not done: ADLS Gen2/S3, cloud Delta/Iceberg, aggregate/join spill, exchange flow control, admission/resource groups, engine HTTP auth + TLS. Gates: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, plus a clean two-worker Docker run. **Never publish single-run timings as benchmark claims.**
+Local Parquet + local Delta (JSON commit replay from v0; **no checkpoints**), own SQL parser and logical plan, filter pushdown, projection/join pruning, Trino-style catalog (`~/.kaveon/config.toml`, SHOW/USE), remote-first `kaveon` CLI (embedded needs `--local`), HTTP statement API, coordinator + worker cluster. Distributed today: scan/filter/project, partial/final grouped and global aggregates (COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT), Sort/TopN, repartitioned and broadcast hash joins, Arrow IPC exchange, retry/cancellation, spill-aware Sort/TopN. Implemented since that list was written — **verify before quoting any of it as a gap**: ADLS Gen2 (`adls_reader.rs`, `adls_commit.rs`), object-store Delta and Iceberg (`object_delta.rs`, `iceberg_reader.rs`), partitioned aggregate/join/Sort/TopN spill, exchange flow control (bounded replayable spool), admission queue + resource groups (`resource_groups.rs`), Engine HTTP auth (`security.rs` — bridge token, principals, Entra delegated tokens, roles) and TLS (rustls, `KAVEON_TLS_CERT_PATH`/`_KEY_PATH`). **Genuinely not done:** an S3 *reader* (S3 is only registerable as a catalog storage type), and no numbered Engine release — tags are `cli-v0.3.0` plus rolling `engine-dev`/`engine-preview`. **Implemented but not cluster-qualified:** see `engine/DISTRIBUTED_EXECUTION_STATUS.md`, which carries the remaining release gate per workstream; several read "measured locally" or "in process" and need the AKS cluster. That is the real gap, and it is a qualification gap rather than an implementation one. Gates: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, plus a clean two-worker Docker run. **Never publish single-run timings as benchmark claims.**
 
 ## DLM
 
@@ -38,7 +38,7 @@ Deterministic NL→SQL with no hosted model. Self-migrating tables in `kaveonmet
 
 ## Deploy
 
-Vercel (`prodduturi-labs/kaveon`) for Studio + Azure Container Apps (`kaveon-api`, ACR `kaveonacr`, RG `kaveon-rg`) + Azure PostgreSQL Flexible Server PG 18, split into **`kaveonmeta`** (control plane + DLM/context) and **`kaveon`** (data warehouse). DB auth is **Entra managed identity — there is no stored DB password**; local dev uses your `az login`. Secrets in Key Vault `kaveon-kv`. Workflows: `ci.yml` (platform + Vercel deploy), `deploy.yml` (API → ACA), `engine.yml`, `containers.yml`.
+Vercel (`prodduturi-labs/kaveon`) for Studio + Azure Container Apps (`kaveon-api`, ACR `kaveonacr`, RG `kaveon-rg`) + the control plane is the Engine's transaction API over object storage when `KAVEON_POSTGRESQL_RETIREMENT_MODE` is set — `docker-compose.yml` sets it for the local stack, and the hosted value lives in Azure configuration, not in this repo. Otherwise Azure PostgreSQL Flexible Server PG 18, split into **`kaveonmeta`** (control plane + DLM/context) and **`kaveon`** (data warehouse), with **Entra managed identity — there is no stored DB password**; local dev uses your `az login`. Secrets in Key Vault `kaveon-kv`. Workflows: `ci.yml` (platform + Vercel deploy), `deploy.yml` (API → ACA), `engine.yml`, `containers.yml`.
 
 **`az acr build` runs classic Docker with NO BuildKit** — `RUN --mount=type=cache` in a Dockerfile fails there even though it works in local/Compose builds.
 

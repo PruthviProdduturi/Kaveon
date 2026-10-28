@@ -423,7 +423,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#ff5f57" }} />
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#28c840" }} />
-              <span style={{ flex: 1, textAlign: "center", fontSize: 11, color: "#444" }}>kaveon.vercel.app</span>
+              <span style={{ flex: 1, textAlign: "center", fontSize: 11, color: "#444" }}>kaveon.io</span>
             </div>
             <div style={{ display: "flex" }}>
               {/* Mini sidebar */}
@@ -921,7 +921,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
                   fontSize: 11, padding: "3px 14px", borderRadius: 6,
                   background: showcaseTheme === "dark" ? "rgba(255,255,255,0.04)" : "#e5e7eb",
                   color: showcaseTheme === "dark" ? "#555" : "#999",
-                }}>kaveon.vercel.app</span>
+                }}>kaveon.io</span>
               </div>
             </div>
             {/* Screenshot — crossfade, active image sets height */}

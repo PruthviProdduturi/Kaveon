@@ -85,7 +85,7 @@ generated fresh:
 
 ```
 KAVEON_API_HOST=<public DNS name for the API>
-KAVEON_WEB_URL=https://kaveon.vercel.app
+KAVEON_WEB_URL=https://kaveon.io
 KAVEON_PROXY_SECRET=
 KAVEON_POSTGRES_PASSWORD=
 KAVEON_ENGINE_BRIDGE_TOKEN=
