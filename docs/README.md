@@ -27,6 +27,7 @@ are planned rather than executable.
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Deploy and connect to the Engine on AKS](engineering/azure-deployment-guide.md)
 - [Build cached Engine images in ACR](engineering/engine-acr-build-cache.md)
+- [Query troubleshooting](guides/query-troubleshooting.md)
 - [CLI compatibility and remaining gaps](engineering/cli-compatibility.md)
 - [Cut a CLI release (tag, winget, Homebrew)](engineering/cli-release.md)
 - [Engine UI access and query attribution](engineering/engine-ui-access.md)
