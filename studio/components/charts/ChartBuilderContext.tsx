@@ -1010,6 +1010,11 @@ export interface SqlPreviewState {
   // estimated so the tile answers at once; the number — and, where groups sit
   // close together, their order — is an estimate, and must say so.
   approx?: boolean;
+  // Whether the source returned more rows than the result holds. The API caps
+  // every statement, and a map more tightly than a table, so a map can be
+  // showing the largest N regions of many more -- which looks identical to
+  // showing all of them unless it is said.
+  resultTruncated?: boolean;
   rowCount: number | null;
   // Saved SQL text from database (loaded when opening existing chart)
   savedSql: string | null;
@@ -3842,6 +3847,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         durationMs: totalDurationMs,
         fabricDurationMs,
         approx: executeJson?.approx === true,
+        resultTruncated: executeJson?.truncated === true,
         rowCount: Array.isArray(rows) ? rows.length : 0,
         savedSql: sqlPreview.savedSql,
       });
