@@ -555,6 +555,8 @@ struct TaskScanMetrics {
     compressed_bytes_read: u64,
     #[serde(default)]
     remote_bytes_read: u64,
+    #[serde(default)]
+    local_bytes_read: u64,
     row_filter_rows_examined: u64,
     row_filter_rows_admitted: u64,
     runtime_filters_applied: u64,
@@ -631,6 +633,8 @@ struct ScanTelemetry {
     compressed_bytes_read: u64,
     #[serde(default)]
     remote_bytes_read: u64,
+    #[serde(default)]
+    local_bytes_read: u64,
     /// Rows a decoder-side row filter examined and admitted to the rest of
     /// the projection.
     row_filter_rows_examined: u64,
@@ -14997,6 +15001,7 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
         compressed_bytes_selected: snapshot.compressed_bytes_selected,
         compressed_bytes_read: snapshot.compressed_bytes_read,
         remote_bytes_read: snapshot.remote_bytes_read,
+        local_bytes_read: snapshot.local_bytes_read,
         row_filter_rows_examined: snapshot.row_filter_rows_examined,
         row_filter_rows_admitted: snapshot.row_filter_rows_admitted,
         runtime_filters_applied: snapshot.runtime_filters_applied,
@@ -15062,6 +15067,7 @@ fn merge_task_scan_metrics<'a>(
         total.compressed_bytes_selected += snapshot.compressed_bytes_selected;
         total.compressed_bytes_read += snapshot.compressed_bytes_read;
         total.remote_bytes_read += snapshot.remote_bytes_read;
+        total.local_bytes_read += snapshot.local_bytes_read;
         total.row_filter_rows_examined += snapshot.row_filter_rows_examined;
         total.row_filter_rows_admitted += snapshot.row_filter_rows_admitted;
         total.runtime_filters_applied += snapshot.runtime_filters_applied;
@@ -15258,6 +15264,7 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             compressed_bytes_selected: total.compressed_bytes_selected,
             compressed_bytes_read: total.compressed_bytes_read,
             remote_bytes_read: total.remote_bytes_read,
+            local_bytes_read: total.local_bytes_read,
             row_filter_rows_examined: total.row_filter_rows_examined,
             row_filter_rows_admitted: total.row_filter_rows_admitted,
             runtime_filters_applied: total.runtime_filters_applied,
