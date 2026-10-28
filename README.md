@@ -12,9 +12,9 @@ Kaveon combines a columnar analytical engine, deterministic data intelligence, a
 [![Engine](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/engine.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/engine.yml)
 [![Platform](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml/badge.svg)](https://github.com/PruthviProdduturi/Kaveon/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-10b981.svg)](LICENSE)
-[![Preview](https://img.shields.io/badge/live-kaveon.vercel.app-4A9EE8.svg)](https://kaveon.vercel.app)
+[![Preview](https://img.shields.io/badge/live-kaveon.io-4A9EE8.svg)](https://kaveon.io)
 
-[**Open Kaveon**](https://kaveon.vercel.app) · [**Read the docs**](https://kaveon.vercel.app/docs) · [**Architecture**](ARCHITECTURE.md) · [**Project status**](STATUS.md)
+[**Open Kaveon**](https://kaveon.io) · [**Read the docs**](https://kaveon.io/docs) · [**Architecture**](ARCHITECTURE.md) · [**Project status**](STATUS.md)
 
 </div>
 

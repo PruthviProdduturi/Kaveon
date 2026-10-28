@@ -27,7 +27,7 @@ export default function AuthDocs() {
       </table>
       <p>Also required: <code>AUTH_SECRET</code> (session signing). The OAuth callback URL is <code>{"{origin}"}/api/auth/callback/{"{provider}"}</code> — register it on each provider app.</p>
       <Callout type="warn">
-        Each provider&rsquo;s app must list your exact origins as redirect URIs (e.g. <code>https://kaveon.vercel.app/…</code>
+        Each provider&rsquo;s app must list your exact origins as redirect URIs (e.g. <code>https://kaveon.io/…</code>
         and <code>http://localhost:3000/…</code>). A missing origin is the usual cause of a
         &ldquo;redirect_uri not associated&rdquo; error.
       </Callout>

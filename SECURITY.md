@@ -4,7 +4,7 @@
 
 Kaveon is an **open-source, self-hosted analytics platform**. You run it on your own
 infrastructure and point it at your own databases; there is also a hosted preview at
-[kaveon.vercel.app](https://kaveon.vercel.app). It's built to be deployed however you
+[kaveon.io](https://kaveon.io). It's built to be deployed however you
 like — a private internal tool *or* a public site. The Studio/API path includes
 application controls, but the alpha Engine HTTP server must remain behind a trusted
 boundary because it has no authentication, authorization, or TLS.
