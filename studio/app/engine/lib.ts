@@ -77,11 +77,35 @@ export interface ScanTelemetry {
   /** Decoder lanes across the workers and the lightest and heaviest lane anywhere. */
   lanes?: number; lane_rows_min?: number; lane_rows_max?: number;
   lane_read_ns_min?: number; lane_read_ns_max?: number;
+  decoded_batch_cache_hits?: number; decoded_batch_cache_misses?: number;
+  decoded_batch_cache_evictions?: number; decoded_batch_cache_singleflight_waits?: number;
+}
+
+export interface TaskExecutionMetrics {
+  compute_cpu_us?: number | null; compute_wall_us?: number; compute_queue_us?: number;
+  admission_wait_us?: number; exchange_input_payloads?: number; exchange_input_bytes?: number;
+  exchange_fetch_us?: number; exchange_decode_batches?: number; exchange_decode_bytes?: number;
+  exchange_decode_us?: number; exchange_output_copies?: number; exchange_output_bytes?: number;
+  exchange_hash_us?: number; exchange_copy_us?: number; exchange_copy_allocations?: number;
+  exchange_copied_bytes?: number; exchange_encode_us?: number; exchange_upload_us?: number;
+  memory_peak_bytes?: number; memory_reservation_bytes?: number;
+  aggregate_input_rows?: number; aggregate_groups_created?: number;
+  spill_peak_bytes?: number; spill_bytes_written?: number; spill_runs_written?: number;
+  spill_compactions?: number; spill_write_us?: number; spill_read_us?: number;
+  join_spill_bytes_written?: number; join_spill_partitions?: number; join_spill_depth?: number;
+  join_spill_skew_ratio?: number | null;
+}
+
+export interface TaskScanMetrics {
+  files_opened?: number; files_skipped?: number; rows_selected?: number; rows_emitted?: number;
+  compressed_bytes_read?: number; read_ns?: number; row_groups_read?: number;
 }
 
 export interface TaskTelemetry {
   task_id: string; node_id: string; partition_index: number;
   elapsed_us: number; output_rows: number; output_batches: number; output_bytes: number;
+  execution?: TaskExecutionMetrics;
+  scan?: TaskScanMetrics;
 }
 
 export interface StageTelemetry {
@@ -180,6 +204,17 @@ export interface QueryRecord {
   context: QueryContext;
 }
 
+export interface QueryComparison {
+  query_id: string;
+  comparable_runs: number;
+  min_ms?: number | null;
+  median_ms?: number | null;
+  p95_ms?: number | null;
+  max_ms?: number | null;
+  current_ms: number;
+  cache_hits_excluded: number;
+}
+
 // ── Transport ─────────────────────────────────────────────────────────────────
 
 export class EngineUnavailable extends Error {
@@ -199,6 +234,7 @@ async function get<T>(path: string): Promise<T> {
 export const fetchCluster = () => get<Cluster>("/cluster");
 export const fetchQueries = () => get<QueryRecord[]>("/queries");
 export const fetchQuery = (id: string) => get<QueryRecord>(`/queries/${encodeURIComponent(id)}`);
+export const fetchQueryComparison = (id: string) => get<QueryComparison>(`/queries/${encodeURIComponent(id)}/comparison`);
 
 // ── Presentation helpers ──────────────────────────────────────────────────────
 

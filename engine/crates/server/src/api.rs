@@ -415,6 +415,18 @@ struct QueryListOptions {
     summary: Option<bool>,
 }
 
+#[derive(Serialize)]
+struct QueryComparison {
+    query_id: String,
+    comparable_runs: usize,
+    min_ms: Option<u64>,
+    median_ms: Option<u64>,
+    p95_ms: Option<u64>,
+    max_ms: Option<u64>,
+    current_ms: u64,
+    cache_hits_excluded: usize,
+}
+
 #[derive(Clone, Serialize)]
 struct StageTelemetry {
     stage_id: u32,
@@ -1167,6 +1179,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/query", get(list_queries))
         .route("/v1/query/{query_id}", get(get_query))
+        .route("/v1/query/{query_id}/comparison", get(compare_query))
         .route("/v1/query/{query_id}/results/{page}", get(get_result_page))
         .route("/v1/query/{query_id}", delete(cancel_query))
         .route("/v1/cluster", get(get_cluster))
@@ -11396,6 +11409,61 @@ async fn get_query(
         )
             .into_response(),
     }
+}
+
+/// Compares a completed query with comparable successful runs in the local
+/// history. This deliberately uses exact normalized SQL plus catalog/schema
+/// rather than pretending a hash is a semantic equivalence proof. Cache hits
+/// are excluded because they measure delivery, not the underlying execution.
+async fn compare_query(
+    Path(query_id): Path<String>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    let store = QUERY_STORE.read().await;
+    let Some(current) = store.queries.get(&query_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !identity.can_view(current.context.principal.as_deref()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let normalized = current.sql.trim().to_ascii_lowercase();
+    let catalog = current.context.catalog.as_str();
+    let schema = current.context.schema.as_str();
+    let mut samples = Vec::new();
+    let mut cache_hits_excluded = 0;
+    for candidate in store.queries.values() {
+        if !identity.can_view(candidate.context.principal.as_deref())
+            || !matches!(candidate.state, QueryState::Finished)
+            || candidate.sql.trim().to_ascii_lowercase() != normalized
+            || candidate.context.catalog != catalog
+            || candidate.context.schema != schema
+        {
+            continue;
+        }
+        if candidate.execution.mode == "cache" {
+            cache_hits_excluded += 1;
+            continue;
+        }
+        samples.push(candidate.elapsed_ms);
+    }
+    samples.sort_unstable();
+    let percentile = |p: usize| {
+        samples
+            .get((samples.len() * p).div_ceil(100).saturating_sub(1))
+            .copied()
+    };
+    let median = samples.get(samples.len().saturating_sub(1) / 2).copied();
+    Json(QueryComparison {
+        query_id,
+        comparable_runs: samples.len(),
+        min_ms: samples.first().copied(),
+        median_ms: median,
+        p95_ms: percentile(95),
+        max_ms: samples.last().copied(),
+        current_ms: current.elapsed_ms,
+        cache_hits_excluded,
+    })
+    .into_response()
 }
 
 async fn cancel_query(

@@ -5,8 +5,8 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import s from "../../engine.module.css";
 import {
-  ApproximateNote, EngineUnavailable, PlanNode, QueryRecord,
-  absoluteTime, bytes, clientLabel, fetchQuery, inProgress, ms, ns, rate, us, userLabel,
+  ApproximateNote, EngineUnavailable, PlanNode, QueryComparison, QueryRecord,
+  absoluteTime, bytes, clientLabel, fetchQuery, fetchQueryComparison, inProgress, ms, ns, rate, us, userLabel,
 } from "../../lib";
 import { LastKnown, UnknownPanel, reasonFromStatus } from "../../../../components/Reading";
 
@@ -130,12 +130,18 @@ export default function EngineQueryPage() {
   const { id } = useParams<{ id: string }>();
   const queryId = decodeURIComponent(id);
   const [q, setQ] = useState<QueryRecord | null>(null);
+  const [comparison, setComparison] = useState<QueryComparison | null>(null);
   const [error, setError] = useState<EngineUnavailable | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [copied, setCopied] = useState("");
 
   const load = useCallback(async () => {
-    try { setQ(await fetchQuery(queryId)); setError(null); }
+    try {
+      const record = await fetchQuery(queryId);
+      setQ(record);
+      setError(null);
+      try { setComparison(await fetchQueryComparison(queryId)); } catch { setComparison(null); }
+    }
     catch (e) { setError(e instanceof EngineUnavailable ? e : new EngineUnavailable(0, "The console could not reach the server.")); }
   }, [queryId]);
 
@@ -218,6 +224,24 @@ export default function EngineQueryPage() {
                 <h2 className={s.panelTitle}>Where the time went</h2>
                 <Timeline q={q} />
               </section>
+              <section className={s.panel}>
+                <h2 className={s.panelTitle}>Comparable query history</h2>
+                {comparison && comparison.comparable_runs > 0 ? (
+                  <>
+                    <div className={s.note}><b>Evidence, not a guess.</b> Exact normalized SQL in the same catalog and schema; result-cache hits are excluded.</div>
+                    <div className={s.metrics}>
+                      {[
+                        ["This run", ms(comparison.current_ms)],
+                        ["Comparable runs", comparison.comparable_runs.toLocaleString()],
+                        ["Minimum", ms(comparison.min_ms)],
+                        ["Median", ms(comparison.median_ms)],
+                        ["P95", ms(comparison.p95_ms)],
+                        ["Maximum", ms(comparison.max_ms)],
+                      ].map(([k, v]) => <div key={k} className={s.metric}><div className={s.metricLabel}>{k}</div><div className={s.metricValue}>{v}</div></div>)}
+                    </div>
+                  </>
+                ) : <div className={s.note}><b>Not enough comparable history.</b> KaveonDB needs another successful execution of the same statement to establish a baseline.</div>}
+              </section>
               <div className={s.two}>
                 <section className={s.panel}>
                   <h2 className={s.panelTitle}>Session</h2>
@@ -282,6 +306,7 @@ export default function EngineQueryPage() {
                           ["Rows emitted", sc.rows_emitted.toLocaleString()],
                           ["Rows in selected groups", sc.rows_selected.toLocaleString()],
                           ["Compressed data read", bytes(sc.compressed_bytes_selected)],
+                          ["Decoder cache", `${(sc.decoded_batch_cache_hits ?? 0).toLocaleString()} hits · ${(sc.decoded_batch_cache_misses ?? 0).toLocaleString()} misses`],
                           ["Read throughput", rate(sc.compressed_bytes_per_second, "B/s")],
                           ["Row throughput", rate(sc.rows_per_second, "rows/s")],
                           ["Delta snapshot", ns(sc.snapshot_ns)], ["Parquet footers", ns(sc.footer_ns)], ["Read and decode", ns(sc.read_ns)],
@@ -309,11 +334,17 @@ export default function EngineQueryPage() {
               {q.stages.length ? q.stages.map(st => (
                 <section key={st.stage_id} className={s.panel}>
                   <h2 className={s.panelTitle}>Stage {st.stage_id} · {st.state} · {st.completed_tasks} / {st.task_count} tasks · {us(st.elapsed_us)}</h2>
+                  <div className={s.note}><b>Hotspots are measured per task.</b> Queue, CPU, exchange, memory, and spill values come from the worker that executed each task.</div>
                   <div className={s.grid}>
                     <table>
-                      <thead><tr><th>Task</th><th>Worker</th><th>Partition</th><th>Elapsed</th><th>Rows</th><th>Batches</th><th>Arrow bytes</th></tr></thead>
+                      <thead><tr><th>Task</th><th>Worker</th><th>Partition</th><th>Elapsed</th><th>CPU</th><th>Queue</th><th>Peak memory</th><th>Spill</th><th>Rows</th><th>Batches</th><th>Arrow bytes</th></tr></thead>
                       <tbody>{st.tasks.map(t => (
-                        <tr key={t.task_id}><td>{t.task_id}</td><td>{t.node_id}</td><td>{t.partition_index}</td><td>{us(t.elapsed_us)}</td><td>{t.output_rows.toLocaleString()}</td><td>{t.output_batches.toLocaleString()}</td><td>{bytes(t.output_bytes)}</td></tr>
+                        <tr key={t.task_id}>
+                          <td>{t.task_id}</td><td>{t.node_id}</td><td>{t.partition_index}</td><td>{us(t.elapsed_us)}</td>
+                          <td>{us(t.execution?.compute_cpu_us)}</td><td>{us(t.execution?.compute_queue_us)}</td>
+                          <td>{bytes(t.execution?.memory_peak_bytes)}</td><td>{bytes(t.execution?.spill_bytes_written)}</td>
+                          <td>{t.output_rows.toLocaleString()}</td><td>{t.output_batches.toLocaleString()}</td><td>{bytes(t.output_bytes)}</td>
+                        </tr>
                       ))}</tbody>
                     </table>
                   </div>
