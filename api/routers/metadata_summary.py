@@ -1,6 +1,5 @@
 """Metadata summary router — GET /api/v1/metadata/summary."""
 
-import os
 import concurrent.futures
 from fastapi import APIRouter, Response, HTTPException, Depends
 
@@ -10,7 +9,6 @@ import services.charts as charts_svc
 import services.dashboards as dashboards_svc
 import services.favorites as favorites_svc
 import services.saved_queries as saved_queries_svc
-from services import postgresql_retirement_runtime
 
 router = APIRouter()
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
@@ -20,11 +18,11 @@ NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "n
 def metadata_summary(response: Response, ctx: UserContext = Depends(require_user_context)):
     response.headers.update(NO_CACHE)
 
-    # Return empty payload while app is in setup mode — the frontend shows the setup overlay
-    db_type = os.environ.get("METADATA_DB_TYPE") or "fabric_sql"
-    has_connection = os.environ.get("METADATA_ENDPOINT") if db_type in ("fabric_sql", "azure_sql") else os.environ.get("METADATA_HOST")
-    if (not has_connection or not os.environ.get("METADATA_DATABASE")) and not postgresql_retirement_runtime.requested():
-        return {"datasets": [], "charts": [], "dashboards": [], "favorites": [], "savedQueries": []}
+    # There was a setup-mode guard here that returned an empty payload while
+    # METADATA_* was unconfigured, so the frontend could show a setup overlay.
+    # Those variables configured an external metadata database that no longer
+    # exists; the services below read KaveonDB, which is ready whenever the
+    # Engine is.
 
     # Fetch all in parallel using threads (pyodbc is synchronous)
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:

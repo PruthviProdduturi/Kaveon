@@ -47,49 +47,30 @@ class AbsenceIsNotAVerdictTests(unittest.TestCase):
 
 
 class ErrorBodiesCarryNoInternalsTests(unittest.TestCase):
-    def test_health_does_not_echo_the_driver_message(self):
-        """`/api/health` carries no authentication — it is what the container
-        platform probes — and a psycopg or pyodbc connection failure names the
-        host, port, database and user it tried."""
-        failure = RuntimeError(
-            'connection to server at "kaveon-pg.postgres.database.azure.com", '
-            'port 5432 failed: FATAL: password authentication failed for user "kaveon"')
-        with patch.object(health.postgresql_retirement_runtime, "requested", return_value=False), \
-             patch.object(health.db, "query", side_effect=failure):
+    def test_health_cannot_echo_a_driver_message(self):
+        """This pinned that a psycopg or pyodbc failure -- which names the host,
+        port, database and user it tried -- did not reach an unauthenticated
+        caller. There is no driver on this path any more, so the failure it
+        guarded against cannot be produced. What remains is that the Engine's
+        own failure is reported by class and not by message."""
+        with patch.object(health.postgresql_retirement_runtime, "probe",
+                          side_effect=RuntimeError("secret path /mnt/evidence")):
             result = health.health()
         self.assertIsInstance(result, JSONResponse)
         self.assertEqual(result.status_code, 503)
-        self.assertNotIn(b"kaveon-pg", result.body)
-        self.assertNotIn(b"password authentication", result.body)
+        self.assertNotIn(b"secret path", result.body)
+        self.assertNotIn(b"/mnt/evidence", result.body)
+        self.assertFalse(hasattr(health, "db"))
 
-    def test_setup_status_publishes_the_class_of_failure_and_nothing_else(self):
-        """Unauthenticated, so what it returns is public: it used to classify
-        the driver's message and then return the message, the endpoint and the
-        database name with it."""
-        failure = RuntimeError('login failed for user "kaveon" on sql-prod.database.windows.net')
-        with patch.dict(os.environ, {"KAVEON_POSTGRESQL_RETIREMENT_MODE": "false"}), \
-             patch.object(setup, "_read_env_vars", return_value={
-                 "db_type": "azure_sql", "endpoint": "sql-prod.database.windows.net",
-                 "database": "kaveonmeta", "host": "", "port": ""}), \
-             patch.object(setup.pool, "execute_query", side_effect=failure):
-            answer = setup.setup_status()
-        self.assertEqual(answer["status"], "auth_failed")
-        body = str(answer)
-        self.assertNotIn("sql-prod.database.windows.net", body)
-        self.assertNotIn("kaveonmeta", body)
-        self.assertNotIn("login failed", body)
-        # The classification a reader can act on is still there.
-        self.assertEqual(answer["errors"][0]["error_type"], "auth_failed")
-
-    def test_setup_status_does_not_publish_the_location_when_the_schema_is_absent(self):
-        with patch.dict(os.environ, {"KAVEON_POSTGRESQL_RETIREMENT_MODE": "false"}), \
-             patch.object(setup, "_read_env_vars", return_value={
-                 "db_type": "azure_sql", "endpoint": "sql-prod.database.windows.net",
-                 "database": "kaveonmeta", "host": "", "port": ""}), \
-             patch.object(setup.pool, "execute_query",
-                          return_value={"rows_objects": [{"cnt": 0}]}):
-            answer = setup.setup_status()
-        self.assertEqual(answer, {"status": "schema_missing"})
+    def test_setup_status_can_no_longer_publish_a_location(self):
+        """These two tests used to pin that a failed metadata probe did not
+        return the driver's message, the endpoint or the database name with its
+        classification. The probe is gone: `/setup/status` is a constant, so it
+        cannot leak a location whatever happens around it. That is the stronger
+        guarantee, and this is what is left to assert."""
+        answer = setup.setup_status()
+        self.assertEqual(answer, {"status": "ok", "authority": "kaveondb"})
+        self.assertFalse(hasattr(setup, "pool"), "no database to leak a host from")
 
     def test_ctas_failure_is_not_reported_as_a_bad_request_with_the_driver_text(self):
         from models.lab import CtasBody
