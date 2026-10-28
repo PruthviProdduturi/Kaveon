@@ -543,6 +543,17 @@ def _determine_filtering_strategy(
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
+# Kept in step with `MAX_GEOGRAPHIC_ROWS` in `api/routers/sql.py`, which caps
+# the same results at execution. Bounding the statement as well means a large
+# warehouse never materialises the rows in the first place; bounding the
+# execution means a chart whose SQL was saved before this existed is still
+# bounded.
+MAX_GEOGRAPHIC_ROWS = 1000
+
+# Chart types that render onto a map's features.
+GEOGRAPHIC_CHART_TYPES = {"world_map", "map", "choropleth"}
+
+
 def build_chart_preview_query(params: dict) -> Optional[str]:
     try:
         raw_datasource = params.get("datasource") or ""
@@ -680,6 +691,14 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
 
         portable_limit = db_type in ("postgresql", "mysql", "kaveon")
         row_cap = int(row_limit) if row_limit and int(row_limit) > 0 else None
+        # A map has no cap today unless the chart sets one, so a geography
+        # column with pathological cardinality -- a free-text place name, a
+        # mis-picked column -- produced an unbounded grouped result. The cap
+        # cannot truncate a map that was ever drawable; see MAX_GEOGRAPHIC_ROWS.
+        geographic = (params.get("chart_type") or "").lower() in GEOGRAPHIC_CHART_TYPES
+        capped_for_map = geographic and not row_cap
+        if capped_for_map:
+            row_cap = MAX_GEOGRAPHIC_ROWS
         select_clause = f"SELECT {'' if portable_limit or not row_cap else f'TOP {row_cap} '}{', '.join(select_parts)}"
         from_clause = f"FROM {fact_source}"
         join_clause = " ".join(join_clauses)
@@ -871,6 +890,17 @@ def build_chart_preview_query(params: dict) -> Optional[str]:
             # Sort by the projected alias. Distributed Engine stages no longer
             # retain the pre-projection source name after `expr AS date`.
             order_by_clause = f"ORDER BY {quote_alias('date')} ASC"
+        elif capped_for_map and metric_list:
+            # Without this the fallback below orders by the grouped dimension,
+            # so a capped map would drop regions alphabetically -- Zimbabwe
+            # every time, however large its value. Rank by the metric so the
+            # cap keeps the regions that matter. The alias is used rather than
+            # the aggregate because the Engine's distributed final projection
+            # can only sort a retained output.
+            first = metric_list[0]
+            metric_alias = first.get("label") or first.get("name") or first.get("column") or "value"
+            _nulls = " NULLS LAST" if db_type in ("postgresql", "kaveon") else ""
+            order_by_clause = f"ORDER BY {quote_alias(metric_alias)} DESC{_nulls}"
         elif group_by_parts:
             order_by_clause = f"ORDER BY {group_by_parts[0]}"
         else:

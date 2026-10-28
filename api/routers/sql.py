@@ -32,6 +32,17 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 MAX_RESULT_ROWS = 5000   # the most any Studio surface renders from one statement
+
+# A choropleth draws at most one region per map feature, and the largest map
+# Kaveon ships has 215 of them (`studio/public/geo/world.json`; usa.json has
+# 52, nyc.json has 5). A cap of 1,000 therefore cannot truncate a map that was
+# ever drawable, while a result above it has at least 785 values no map can
+# show -- and those rows were being transferred, parsed and handed to ECharts
+# only to be collapsed onto regions that already had a value.
+MAX_GEOGRAPHIC_ROWS = 1000
+
+# Chart types that render onto a map's features.
+GEOGRAPHIC_CHART_TYPES = {"world_map", "map", "choropleth"}
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
 # ── Query result cache ──────────────────────────────────────────────────────
@@ -433,6 +444,9 @@ def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))
         "engine_virtual_source": engine_catalog,
         "engine_source": engine_catalog,
         "db_type": db_type,
+        # The generator could not tell a map from a table, so it could not
+        # bound one differently.
+        "chart_type": chart_type,
     }
 
     sql_text = build_chart_preview_query(params)
@@ -661,12 +675,20 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
         cached = _cache_get(ck, cache_ttl)
         if cached is not None:
             row_count = cached.get("row_count") or 0
+            cached_truncated = bool(cached.get("truncated"))
             return {
                 "columns": cached.get("columns") or [],
                 "rows": cached.get("rows") or [],
-                "message": f"Returned {row_count} rows (cached)" if row_count else None,
+                # A cached result used to drop `truncated`, so the one surface
+                # that reads the cache -- a dashboard tile -- was the one
+                # surface that never said its result had been cut.
+                "message": (
+                    f"Showing the first {row_count:,} rows (cached)" if cached_truncated
+                    else f"Returned {row_count} rows (cached)"
+                ) if row_count else None,
                 "duration_ms": 0,
                 "from_cache": True,
+                "truncated": cached_truncated,
             }
 
     start_time = int(time.time() * 1000)
@@ -674,6 +696,11 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     # surface renders, and an unbounded SELECT over a large table must never
     # be materialised in the API.
     hard_limit = min(max(1, int(row_limit)), MAX_RESULT_ROWS) if row_limit else MAX_RESULT_ROWS
+    # A map is bounded by its own features, not by what a table can scroll. An
+    # explicit row_limit from the chart still wins when it is lower -- this
+    # only lowers the ceiling, it never raises one the caller asked for.
+    if (chart_type or "").lower() in GEOGRAPHIC_CHART_TYPES:
+        hard_limit = min(hard_limit, MAX_GEOGRAPHIC_ROWS)
     try:
         result = pool.execute_query(sql_text, database, max_rows=hard_limit)
     except Exception as e:
@@ -695,7 +722,12 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     duration_ms = int(time.time() * 1000) - start_time
 
     if use_cache:
-        _cache_set(ck, {"columns": result.get("columns") or [], "rows": result.get("rows") or [], "row_count": result.get("row_count") or 0})
+        _cache_set(ck, {
+            "columns": result.get("columns") or [],
+            "rows": result.get("rows") or [],
+            "row_count": result.get("row_count") or 0,
+            "truncated": bool(result.get("truncated")),
+        })
 
     try:
         history_svc.create_history({
@@ -882,6 +914,10 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     # and the response cache behind it.
     hard_limit = (min(max(1, int(data.row_limit)), MAX_RESULT_ROWS)
                   if data.row_limit else MAX_RESULT_ROWS)
+    # And the same map-sized ceiling, for the same reason: the two execution
+    # routes must not disagree about how large a map result is.
+    if (data.chart_type or "").lower() in GEOGRAPHIC_CHART_TYPES:
+        hard_limit = min(hard_limit, MAX_GEOGRAPHIC_ROWS)
     truncated = len(rows) > hard_limit
     rows = rows[:hard_limit]
     approximate = _engine_approximate(result)

@@ -296,7 +296,57 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   const triggerGlobalRefresh = useCallback(() => setGlobalRefreshTick((t) => t + 1), []);
 
   // Cross-filter state
+  //
+  // Kept per dashboard for the lifetime of the tab. A cross-filter is a
+  // reading position -- "show me Kenya" -- and losing it on a reload or on a
+  // trip to a chart and back meant finding Kenya again on every return.
+  // sessionStorage rather than localStorage on purpose: a selection that
+  // followed the reader into a new session would silently narrow a dashboard
+  // they believed they had opened fresh.
   const [crossFilters, setCrossFiltersState] = useState<Record<string, { column: string | null; value: string }>>({});
+  const crossFilterKey = dashboardId === null ? null : `kaveon:dashboard:${dashboardId}:crossFilters`;
+  const crossFiltersRestoredFor = useRef<string | null>(null);
+
+  // The dashboard id arrives after mount for a loaded dashboard, so the restore
+  // waits for it and happens once per identity. Until it has happened the save
+  // below holds off, or an empty initial state would erase what was stored.
+  useEffect(() => {
+    if (!crossFilterKey || crossFiltersRestoredFor.current === crossFilterKey) return;
+    crossFiltersRestoredFor.current = crossFilterKey;
+    try {
+      const raw = sessionStorage.getItem(crossFilterKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      // These values become query predicates, so anything that is not the
+      // shape this code wrote is dropped rather than trusted.
+      const restored: Record<string, { column: string | null; value: string }> = {};
+      for (const [itemId, entry] of Object.entries(parsed as Record<string, unknown>)) {
+        if (!entry || typeof entry !== 'object') continue;
+        const { column, value } = entry as { column?: unknown; value?: unknown };
+        if (typeof value !== 'string' || !value.trim()) continue;
+        if (column !== null && typeof column !== 'string') continue;
+        restored[itemId] = { column: (column as string | null) ?? null, value };
+      }
+      if (Object.keys(restored).length) setCrossFiltersState(restored);
+    } catch {
+      // A blocked or unparseable store is not a reason to fail to open a
+      // dashboard -- it just opens unfiltered.
+    }
+  }, [crossFilterKey]);
+
+  useEffect(() => {
+    if (!crossFilterKey || crossFiltersRestoredFor.current !== crossFilterKey) return;
+    try {
+      if (Object.keys(crossFilters).length) {
+        sessionStorage.setItem(crossFilterKey, JSON.stringify(crossFilters));
+      } else {
+        sessionStorage.removeItem(crossFilterKey);
+      }
+    } catch {
+      // Same: persistence is a convenience, not a precondition.
+    }
+  }, [crossFilterKey, crossFilters]);
 
   const setCrossFilter = useCallback((sourceItemId: string, column: string | null, value: string) => {
     setCrossFiltersState((prev) => ({ ...prev, [sourceItemId]: { column, value } }));
