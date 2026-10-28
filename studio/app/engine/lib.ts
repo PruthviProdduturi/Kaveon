@@ -213,6 +213,8 @@ export interface QueryComparison {
   max_ms?: number | null;
   current_ms: number;
   cache_hits_excluded: number;
+  queue_wait_runs: number;
+  max_admission_wait_ms: number;
 }
 
 // ── Transport ─────────────────────────────────────────────────────────────────
