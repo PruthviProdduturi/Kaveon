@@ -427,6 +427,15 @@ struct QueryComparison {
     cache_hits_excluded: usize,
     queue_wait_runs: usize,
     max_admission_wait_ms: u64,
+    pressure_events: Vec<QueryPressureEvent>,
+}
+
+#[derive(Serialize)]
+struct QueryPressureEvent {
+    query_id: String,
+    submitted_at_ms: u64,
+    admission_wait_ms: u64,
+    resource_group: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -11443,6 +11452,7 @@ async fn compare_query(
     let mut cache_hits_excluded = 0;
     let mut queue_wait_runs = 0;
     let mut max_admission_wait_ms = 0;
+    let mut pressure_events = Vec::new();
     for candidate in store.queries.values() {
         if !identity.can_view(candidate.context.principal.as_deref())
             || !matches!(candidate.state, QueryState::Finished)
@@ -11459,10 +11469,18 @@ async fn compare_query(
         if candidate.admission_wait_ms > 0 {
             queue_wait_runs += 1;
             max_admission_wait_ms = max_admission_wait_ms.max(candidate.admission_wait_ms);
+            pressure_events.push(QueryPressureEvent {
+                query_id: candidate.id.clone(),
+                submitted_at_ms: candidate.submitted_at_ms,
+                admission_wait_ms: candidate.admission_wait_ms,
+                resource_group: candidate.context.resource_group.name.clone(),
+            });
         }
         samples.push(candidate.elapsed_ms);
     }
     samples.sort_unstable();
+    pressure_events.sort_unstable_by_key(|event| std::cmp::Reverse(event.submitted_at_ms));
+    pressure_events.truncate(20);
     let percentile = |p: usize| {
         samples
             .get((samples.len() * p).div_ceil(100).saturating_sub(1))
@@ -11480,6 +11498,7 @@ async fn compare_query(
         cache_hits_excluded,
         queue_wait_runs,
         max_admission_wait_ms,
+        pressure_events,
     })
     .into_response()
 }

@@ -215,6 +215,7 @@ export interface QueryComparison {
   cache_hits_excluded: number;
   queue_wait_runs: number;
   max_admission_wait_ms: number;
+  pressure_events: { query_id: string; submitted_at_ms: number; admission_wait_ms: number; resource_group: string }[];
 }
 
 // ── Transport ─────────────────────────────────────────────────────────────────

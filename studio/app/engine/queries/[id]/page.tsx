@@ -250,6 +250,19 @@ export default function EngineQueryPage() {
                         ["Max queue wait", ms(comparison.max_admission_wait_ms)],
                       ].map(([k, v]) => <div key={k} className={s.metric}><div className={s.metricLabel}>{k}</div><div className={s.metricValue}>{v}</div></div>)}
                     </div>
+                    {comparison.pressure_events.length > 0 && (
+                      <div className={s.grid} style={{ marginTop: 12 }}>
+                        <table>
+                          <thead><tr><th>Pressure event</th><th>Resource group</th><th>Admission wait</th></tr></thead>
+                          <tbody>{comparison.pressure_events.map(event => (
+                            <tr key={`${event.query_id}-${event.submitted_at_ms}`}>
+                              <td><Link href={`/engine/queries/${encodeURIComponent(event.query_id)}`}>{event.query_id}</Link></td>
+                              <td>{event.resource_group}</td><td>{ms(event.admission_wait_ms)}</td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                    )}
                   </>
                 ) : <div className={s.note}><b>Not enough comparable history.</b> KaveonDB needs another successful execution of the same statement to establish a baseline.</div>}
               </section>
