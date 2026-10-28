@@ -1306,6 +1306,62 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     return tables.find((t) => t.id === selectedTableId) || null;
   };
 
+  /*
+   * Which dialect the editor is writing in.
+   *
+   * The statement builders below already branch on this, but until now nothing
+   * said so on screen: switching from a Fabric source to a Kaveon catalog
+   * silently changed the rules, and the first sign of it was a parse error on
+   * a `SELECT TOP` that had worked a moment earlier.
+   *
+   * What is supported deliberately lives in /docs/sql-compatibility rather than
+   * here. A second copy of that list would go stale the first time the Engine
+   * gained a function, and a stale claim about support is worse than a link.
+   */
+  const dialect: { label: string; note: string; href: string } | null = usingEngine
+    ? {
+        label: "Kaveon SQL",
+        note: "Statements run on the Kaveon Engine. Identifiers are double-quoted and a row cap is LIMIT. T-SQL is a different dialect — see the compatibility matrix for what the Engine executes.",
+        href: "/docs/sql-compatibility",
+      }
+    : ((): { label: string; note: string; href: string } | null => {
+        const type = (currentDataSource?.type || "").toLowerCase();
+        if (type === "fabric_sql" || type === "azure_sql") {
+          return {
+            label: "T-SQL",
+            note: "Statements run on the connected SQL source, which governs the syntax. Identifiers are bracketed and a row cap is TOP.",
+            href: "/docs/connectors",
+          };
+        }
+        if (type === "postgresql") {
+          return {
+            label: "PostgreSQL",
+            note: "Statements run on the connected PostgreSQL source, which governs the syntax. Identifiers are double-quoted and a row cap is LIMIT.",
+            href: "/docs/connectors",
+          };
+        }
+        if (type === "mysql" || type === "starrocks") {
+          return {
+            label: type === "starrocks" ? "StarRocks" : "MySQL",
+            note: "Statements run on the connected source over the MySQL protocol, which governs the syntax. Identifiers are backquoted and a row cap is LIMIT.",
+            href: "/docs/connectors",
+          };
+        }
+        // An unrecognised source type gets no chip rather than a guessed one.
+        return null;
+      })();
+
+  /*
+   * Does this failure look like the dialect, rather than the data?
+   *
+   * Only a refusal that reads like syntax gets the dialect line. Attaching it
+   * to a timeout or a permission error would send the reader to rewrite a
+   * statement that was fine.
+   */
+  const looksLikeSyntaxRefusal = (message: string): boolean =>
+    /\b(syntax|parse|parser|unsupported|unexpected token|not supported|unrecognized|unrecognised|expected)\b/i
+      .test(message);
+
   const buildQualifiedName = (table: TableInfo | null) => {
     if (!table) return "";
     if (usingEngine) return `${table.schema}.${table.name}`;
@@ -3142,6 +3198,23 @@ return;
                     {estimateError}
                   </span>
                 )}
+                {dialect && (
+                  <a
+                    href={dialect.href}
+                    title={dialect.note}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 5,
+                      padding: "0.2rem 0.5rem", borderRadius: 5,
+                      border: "1px solid var(--border)", background: "transparent",
+                      color: "var(--text-secondary)", fontSize: "0.72rem",
+                      fontWeight: 600, letterSpacing: "0.01em",
+                      textDecoration: "none", whiteSpace: "nowrap",
+                    }}
+                  >
+                    <i className="fas fa-code" style={{ fontSize: "0.65rem", opacity: 0.7 }} />
+                    {dialect.label}
+                  </a>
+                )}
                 <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
                 <button
                   type="button"
@@ -3481,6 +3554,19 @@ return;
                     <i className="fas fa-exclamation-triangle" />
                     <h3>Error</h3>
                     <p role="alert">{resultError}</p>
+                    {dialect && looksLikeSyntaxRefusal(resultError) && (
+                      // The source's own message stays first and unedited. This
+                      // only adds the thing it cannot know: which dialect the
+                      // statement was read in, and where the supported surface
+                      // is written down.
+                      <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                        This statement was read as {dialect.label}.{" "}
+                        <a href={dialect.href} style={{ color: "var(--text-secondary)" }}>
+                          See what is supported
+                        </a>
+                        .
+                      </p>
+                    )}
                   </div>
                 )}
 
