@@ -41,6 +41,7 @@ pub struct ScanMetricsSnapshot {
     pub compressed_bytes_read: u64,
     /// Bytes fetched from an object store over range/object requests.
     pub remote_bytes_read: u64,
+    pub local_bytes_read: u64,
     /// Rows a decoder-side row filter examined (rows of the row groups it
     /// ran on) and admitted to the rest of the projection.
     pub row_filter_rows_examined: u64,
@@ -111,6 +112,7 @@ struct ScanMetricsInner {
     compressed_bytes_selected: AtomicU64,
     compressed_bytes_read: AtomicU64,
     remote_bytes_read: AtomicU64,
+    local_bytes_read: AtomicU64,
     row_filter_rows_examined: AtomicU64,
     row_filter_rows_admitted: AtomicU64,
     runtime_filters_applied: AtomicU64,
@@ -150,6 +152,7 @@ impl ScanMetrics {
             compressed_bytes_selected: self.load(&self.0.compressed_bytes_selected),
             compressed_bytes_read: self.load(&self.0.compressed_bytes_read),
             remote_bytes_read: self.load(&self.0.remote_bytes_read),
+            local_bytes_read: self.load(&self.0.local_bytes_read),
             row_filter_rows_examined: self.load(&self.0.row_filter_rows_examined),
             row_filter_rows_admitted: self.load(&self.0.row_filter_rows_admitted),
             runtime_filters_applied: self.load(&self.0.runtime_filters_applied),
@@ -274,6 +277,12 @@ impl ScanMetrics {
     pub(crate) fn remote_bytes_read(&self, bytes: usize) {
         self.0
             .remote_bytes_read
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+        self.bytes_read(bytes);
+    }
+    pub(crate) fn local_bytes_read(&self, bytes: usize) {
+        self.0
+            .local_bytes_read
             .fetch_add(bytes as u64, Ordering::Relaxed);
         self.bytes_read(bytes);
     }

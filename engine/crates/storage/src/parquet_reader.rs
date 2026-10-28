@@ -11,12 +11,13 @@ use parquet::bloom_filter::Sbbf;
 use parquet::data_type::ByteArray;
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::properties::ReaderProperties;
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::reader::{ChunkReader, FileReader, Length, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::file::statistics::Statistics;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -60,9 +61,68 @@ pub struct ParquetBatchIterator {
 
 enum ParquetBatchInner {
     File(ParquetRecordBatchReader),
-    Deferred(ParquetRecordBatchReaderBuilder<File>),
+    Deferred(ParquetRecordBatchReaderBuilder<CountingFile>),
     Directory(Box<DirectoryFiles>),
     Empty,
+}
+
+/// Local Parquet reader that records bytes fetched from the local filesystem.
+/// It is separate from object-store counters so diagnostics can distinguish
+/// data locality without inferring a zero from an unmeasured reader.
+#[derive(Clone)]
+struct CountingFile {
+    file: Arc<File>,
+    metrics: ScanMetrics,
+}
+
+struct CountingReader {
+    reader: BufReader<File>,
+    metrics: ScanMetrics,
+}
+
+impl Read for CountingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let read = self.reader.read(buffer)?;
+        self.metrics.local_bytes_read(read);
+        Ok(read)
+    }
+}
+
+impl Length for CountingFile {
+    fn len(&self) -> u64 {
+        self.file.metadata().map(|meta| meta.len()).unwrap_or(0)
+    }
+}
+
+impl ChunkReader for CountingFile {
+    type T = CountingReader;
+
+    fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        let mut file = self
+            .file
+            .try_clone()
+            .map_err(|error| parquet::errors::ParquetError::General(error.to_string()))?;
+        file.seek(SeekFrom::Start(start))
+            .map_err(|error| parquet::errors::ParquetError::General(error.to_string()))?;
+        Ok(CountingReader {
+            reader: BufReader::new(file),
+            metrics: self.metrics.clone(),
+        })
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<bytes::Bytes> {
+        let mut file = self
+            .file
+            .try_clone()
+            .map_err(|error| parquet::errors::ParquetError::General(error.to_string()))?;
+        file.seek(SeekFrom::Start(start))
+            .map_err(|error| parquet::errors::ParquetError::General(error.to_string()))?;
+        let mut buffer = vec![0; length];
+        file.read_exact(&mut buffer)
+            .map_err(|error| parquet::errors::ParquetError::General(error.to_string()))?;
+        self.metrics.local_bytes_read(length);
+        Ok(buffer.into())
+    }
 }
 
 /// One file of a local directory scan, after pruning.
@@ -454,7 +514,7 @@ impl ParquetReader {
     /// row groups, and the caller's column order.
     fn finish(
         &self,
-        builder: ParquetRecordBatchReaderBuilder<File>,
+        builder: ParquetRecordBatchReaderBuilder<CountingFile>,
         metrics: ScanMetrics,
     ) -> Result<ParquetBatchIterator> {
         let builder = self.configure_builder(builder, &metrics)?;
@@ -631,7 +691,7 @@ impl ParquetReader {
         Ok(combined)
     }
 
-    fn open_builder(&self) -> Result<ParquetRecordBatchReaderBuilder<File>> {
+    fn open_builder(&self) -> Result<ParquetRecordBatchReaderBuilder<CountingFile>> {
         if self.batch_size == 0 {
             return Err(storage_error("batch size must be greater than zero"));
         }
@@ -651,6 +711,10 @@ impl ParquetReader {
         // a column index but no offset index (a writer with page statistics
         // and the offset index disabled), so the index is loaded only when
         // every column chunk has one.
+        let file = CountingFile {
+            file: Arc::new(file),
+            metrics: self.metrics.clone().unwrap_or_default(),
+        };
         let metadata = parquet::file::metadata::ParquetMetaDataReader::new()
             .parse_and_finish(&file)
             .map_err(parquet_error)?;
@@ -710,11 +774,11 @@ impl ParquetReader {
         )))
     }
 
-    fn configure_builder(
+    fn configure_builder<T: ChunkReader>(
         &self,
-        mut builder: ParquetRecordBatchReaderBuilder<File>,
+        mut builder: ParquetRecordBatchReaderBuilder<T>,
         metrics: &ScanMetrics,
-    ) -> Result<ParquetRecordBatchReaderBuilder<File>> {
+    ) -> Result<ParquetRecordBatchReaderBuilder<T>> {
         let schema = Arc::clone(builder.schema());
         builder = builder.with_batch_size(self.batch_size);
 
