@@ -39,9 +39,11 @@ values per role, so `helm upgrade` reproduces the running StatefulSets.
    production.
 7. Complete the troubleshooting surface: task-level CPU, queue, exchange,
    memory, spill and scan-cache counters are recorded when workers report
-   them; the Studio detail view exposes those measured hotspots. Remaining
-   work is live operator attribution for in-flight tasks and historical
-   percentile comparisons across comparable query runs.
+   them; the Studio detail view exposes those measured hotspots. Object-store
+   reads now report `remote_bytes_read`; local-reader bytes remain explicitly
+   unavailable until measured by the local reader. Remaining work is live
+   operator attribution for in-flight tasks and richer historical percentile
+   comparisons across comparable query runs.
 
 See the [validation checkpoint](../engineering/checkpoint-2026-09-08.md),
 [AKS deployment record](../engineering/aks-test-deployment.md),
