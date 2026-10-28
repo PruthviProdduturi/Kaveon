@@ -425,6 +425,8 @@ struct QueryComparison {
     max_ms: Option<u64>,
     current_ms: u64,
     cache_hits_excluded: usize,
+    queue_wait_runs: usize,
+    max_admission_wait_ms: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -11431,6 +11433,8 @@ async fn compare_query(
     let schema = current.context.schema.as_str();
     let mut samples = Vec::new();
     let mut cache_hits_excluded = 0;
+    let mut queue_wait_runs = 0;
+    let mut max_admission_wait_ms = 0;
     for candidate in store.queries.values() {
         if !identity.can_view(candidate.context.principal.as_deref())
             || !matches!(candidate.state, QueryState::Finished)
@@ -11443,6 +11447,10 @@ async fn compare_query(
         if candidate.execution.mode == "cache" {
             cache_hits_excluded += 1;
             continue;
+        }
+        if candidate.admission_wait_ms > 0 {
+            queue_wait_runs += 1;
+            max_admission_wait_ms = max_admission_wait_ms.max(candidate.admission_wait_ms);
         }
         samples.push(candidate.elapsed_ms);
     }
@@ -11462,6 +11470,8 @@ async fn compare_query(
         max_ms: samples.last().copied(),
         current_ms: current.elapsed_ms,
         cache_hits_excluded,
+        queue_wait_runs,
+        max_admission_wait_ms,
     })
     .into_response()
 }

@@ -246,6 +246,8 @@ export default function EngineQueryPage() {
                         ["Median", ms(comparison.median_ms)],
                         ["P95", ms(comparison.p95_ms)],
                         ["Maximum", ms(comparison.max_ms)],
+                        ["Runs with queue wait", comparison.queue_wait_runs.toLocaleString()],
+                        ["Max queue wait", ms(comparison.max_admission_wait_ms)],
                       ].map(([k, v]) => <div key={k} className={s.metric}><div className={s.metricLabel}>{k}</div><div className={s.metricValue}>{v}</div></div>)}
                     </div>
                   </>
