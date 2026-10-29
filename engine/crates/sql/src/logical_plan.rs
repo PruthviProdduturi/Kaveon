@@ -5669,7 +5669,7 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
                 value[8..10].parse::<u32>().ok()?,
             )
         }
-        120 | 121 => {
+        20 | 120 | 21 | 121 => {
             if value.len() < 19 || value.as_bytes().get(10) != Some(&b' ') {
                 return None;
             }
@@ -9150,6 +9150,14 @@ mod tests {
                 "SELECT TRY_CONVERT(DATE, '2024-12-31T23:59:59.123', 126) FROM t",
                 "2024-12-31",
             ),
+            (
+                "SELECT CONVERT(DATE, '2024-12-31 23:59:59', 20) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT TRY_CONVERT(DATE, '2024-12-31 23:59:59.123', 21) FROM t",
+                "2024-12-31",
+            ),
         ] {
             let plan = sql_to_logical_plan(sql).expect("styled CONVERT should lower");
             assert!(format!("{plan:?}").contains(expected), "{plan:?}");
@@ -9166,7 +9174,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 65);
+        assert_eq!(cases.len(), 66);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

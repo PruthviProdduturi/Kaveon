@@ -1610,7 +1610,7 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
                 value[8..10].parse::<u32>().ok()?,
             )
         }
-        120 | 121 => {
+        20 | 120 | 21 | 121 => {
             if value.len() < 19 || value.as_bytes().get(10) != Some(&b' ') {
                 return None;
             }
@@ -25706,6 +25706,8 @@ mod tests {
         for (style, value, expected) in [
             (120, "2024-12-30 12:00:00", 20_087),
             (121, "2024-12-30 12:00:00.123", 20_087),
+            (20, "2024-12-30 12:00:00", 20_087),
+            (21, "2024-12-30 12:00:00.123", 20_087),
             (126, "2024-12-31T12:00:00.123", 20_088),
         ] {
             let result = evaluate(
