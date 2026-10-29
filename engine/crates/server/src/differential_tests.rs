@@ -7717,6 +7717,27 @@ fn events_catalog(directory: &std::path::Path) -> CatalogManager {
     catalog.register_table("events", meta).unwrap();
     let users_meta = write(directory, "users.parquet", &batch(&users(), true));
     catalog.register_table("events", users_meta).unwrap();
+    let timestamp_values = Columns {
+        names: vec!["user_id", "value"],
+        text: BTreeMap::from([(
+            "value",
+            vec![
+                Some("2024-12-31T23:59:59.123".into()),
+                Some("12/31/2024".into()),
+                Some("2024-12-30 12:00:00.123".into()),
+                Some("not-a-timestamp".into()),
+                None,
+            ],
+        )]),
+        ints: BTreeMap::from([("user_id", vec![1, 2, 3, 4, 5])]),
+        dates: Vec::new(),
+    };
+    let timestamp_meta = write(
+        directory,
+        "timestamp_events.parquet",
+        &batch(&timestamp_values, true),
+    );
+    catalog.register_table("events", timestamp_meta).unwrap();
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
     manager
@@ -7754,6 +7775,30 @@ fn distributed_tsql_isdate_matches_local_and_rejects_numeric_coercion() {
             .iter()
             .all(|row| row.contains("true") && row.contains("false"))
     );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_runtime_timestamp_styles_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-timestamp-style-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, TRY_CONVERT(DATETIME2, value, 126) AS iso_ts, TRY_CONVERT(DATETIME2, value, 101) AS us_date FROM timestamp_events ORDER BY user_id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-timestamp-style-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
