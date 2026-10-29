@@ -33,6 +33,7 @@
     {"id": "sysdatetime", "sql": "SELECT SYSDATETIME() FROM t", "status": "planner_qualified"},
     {"id": "convert_unstyled", "sql": "SELECT CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "try_convert_unstyled", "sql": "SELECT TRY_CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
+    {"id": "try_cast", "sql": "SELECT TRY_CAST(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "convert_date_style_us", "sql": "SELECT CONVERT(DATE, '12/31/2024', 101)", "status": "planner_qualified"},
     {"id": "convert_date_style_text", "sql": "SELECT CONVERT(DATE, 'Dec 31 2024', 0)", "status": "planner_qualified"},
     {"id": "convert_date_style_iso_compact", "sql": "SELECT CONVERT(DATE, '20241231', 112)", "status": "planner_qualified"},
