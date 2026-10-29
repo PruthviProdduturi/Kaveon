@@ -202,12 +202,15 @@ server or a general row-store protocol.
 | `DELETE` | Revision-checked deletion of one product document; `id` and `revision` are required in `WHERE` |
 | `COMMIT` | Publishes a prepared immutable catalog snapshot through the configured product store |
 | `ROLLBACK` | Discards the session without publishing its staged changes |
+| `SAVEPOINT name` | Captures the staged product write set inside the transaction |
+| `ROLLBACK TO SAVEPOINT name` | Restores the staged write set while retaining the savepoint |
+| `RELEASE SAVEPOINT name` | Removes a savepoint without changing staged writes |
 
 Each request carries one statement and a transaction ID after `BEGIN`. Product
 operations are authenticated, owner-isolated, revision-checked, and limited to
 the supported product families. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. `INSERT ... SELECT`,
-`RETURNING`, `ON CONFLICT`, savepoints, transaction modifiers, arbitrary user
+`RETURNING`, `ON CONFLICT`, transaction modifiers, arbitrary user
 tables, and lake-table DML are rejected explicitly. Statement execution and the
 authenticated product transaction endpoint accept typed positional (`$1`, `?`)
 and named (`:name`) scalar or JSON-array parameters through the HTTP API; values

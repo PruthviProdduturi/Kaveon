@@ -10048,7 +10048,7 @@ async fn analyze_failure(
 #[derive(Debug, Serialize)]
 struct TransactionCapabilities {
     enabled: bool,
-    supported_statements: [&'static str; 6],
+    supported_statements: [&'static str; 9],
     single_statement_per_request: bool,
     parameter_binding: bool,
     multi_row_insert: bool,
@@ -10066,7 +10066,10 @@ fn transaction_api_guidance(
     let supported = match parsed {
         NativeTransactionalStatement::Begin
         | NativeTransactionalStatement::Commit
-        | NativeTransactionalStatement::Rollback => true,
+        | NativeTransactionalStatement::Rollback
+        | NativeTransactionalStatement::Savepoint(_)
+        | NativeTransactionalStatement::RollbackToSavepoint(_)
+        | NativeTransactionalStatement::ReleaseSavepoint(_) => true,
         NativeTransactionalStatement::Dml(dml) => adapt_product_dml_batch(&dml).is_ok(),
     };
     if !supported {
@@ -10147,12 +10150,15 @@ async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabili
                 "DELETE product record",
                 "COMMIT",
                 "ROLLBACK",
+                "SAVEPOINT",
+                "ROLLBACK TO SAVEPOINT",
+                "RELEASE SAVEPOINT",
             ],
             single_statement_per_request: true,
             parameter_binding: true,
             multi_row_insert: true,
             returning: false,
-            savepoints: false,
+            savepoints: true,
             explicit_isolation_modes: false,
             arbitrary_table_dml: false,
         },

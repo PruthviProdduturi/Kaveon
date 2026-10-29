@@ -212,6 +212,53 @@ impl TransactionRegistry {
         Ok(session.transaction.snapshot().clone())
     }
 
+    async fn savepoint(&self, owner: &str, id: &str, name: &str) -> Result<(), RegistryError> {
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        session
+            .transaction
+            .savepoint(name.to_owned())
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        session.expires_at = Instant::now() + self.ttl;
+        Ok(())
+    }
+
+    async fn rollback_to_savepoint(
+        &self,
+        owner: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<CatalogSnapshot, RegistryError> {
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        session
+            .transaction
+            .rollback_to_savepoint(name)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        session.document_bytes = session.transaction.staged_document_bytes();
+        session.expires_at = Instant::now() + self.ttl;
+        Ok(session.transaction.snapshot().clone())
+    }
+
+    async fn release_savepoint(
+        &self,
+        owner: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<(), RegistryError> {
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        session
+            .transaction
+            .release_savepoint(name)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+        session.expires_at = Instant::now() + self.ttl;
+        Ok(())
+    }
+
     async fn take(&self, owner: &str, id: &str) -> Result<ProductTransaction, RegistryError> {
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
@@ -2188,6 +2235,33 @@ async fn execute_sql_request(
             let id = request.transaction_id.expect("checked");
             rollback_transaction(registry, owner, &id).await
         }
+        NativeTransactionalStatement::Savepoint(name) => {
+            let Some(id) = request.transaction_id else {
+                return error_response(RegistryError::Invalid("transaction_id is required".into()));
+            };
+            match registry.savepoint(owner, &id, &name).await {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => error_response(error),
+            }
+        }
+        NativeTransactionalStatement::RollbackToSavepoint(name) => {
+            let Some(id) = request.transaction_id else {
+                return error_response(RegistryError::Invalid("transaction_id is required".into()));
+            };
+            match registry.rollback_to_savepoint(owner, &id, &name).await {
+                Ok(snapshot) => Json(snapshot).into_response(),
+                Err(error) => error_response(error),
+            }
+        }
+        NativeTransactionalStatement::ReleaseSavepoint(name) => {
+            let Some(id) = request.transaction_id else {
+                return error_response(RegistryError::Invalid("transaction_id is required".into()));
+            };
+            match registry.release_savepoint(owner, &id, &name).await {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(error) => error_response(error),
+            }
+        }
         NativeTransactionalStatement::Dml(dml) => {
             let Some(id) = request.transaction_id else {
                 return error_response(RegistryError::Invalid("transaction_id is required".into()));
@@ -3300,6 +3374,86 @@ mod tests {
                 .product_record(ProductRecordKind::Dataset, "orders")
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_savepoint_rolls_back_staged_product_changes() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let id = begun.transaction_id.clone();
+        registry
+            .stage_product_command(
+                "alice",
+                &id,
+                ProductDmlCommand::Create {
+                    kind: "dataset".into(),
+                    id: "orders".into(),
+                    document_json: r#"{"name":"Orders"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let savepoint = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "SAVEPOINT before_extra".into(),
+                transaction_id: Some(id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(savepoint.status(), StatusCode::NO_CONTENT);
+        registry
+            .stage_product_command(
+                "alice",
+                &id,
+                ProductDmlCommand::Create {
+                    kind: "dataset".into(),
+                    id: "customers".into(),
+                    document_json: r#"{"name":"Customers"}"#.into(),
+                },
+            )
+            .await
+            .unwrap();
+        let rollback = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "ROLLBACK TO SAVEPOINT before_extra".into(),
+                transaction_id: Some(id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(rollback.status(), StatusCode::OK);
+        let commit = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(commit.status(), StatusCode::OK);
+        let snapshot = catalog.read_current().await.unwrap();
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "customers")
+                .unwrap()
+                .is_none()
         );
     }
 

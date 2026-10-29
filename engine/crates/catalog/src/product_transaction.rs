@@ -6,6 +6,7 @@
 //! session publishes nothing.
 
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::{
@@ -35,6 +36,7 @@ pub struct TransactionMetadata {
 pub enum TransactionError {
     CannotReadHead,
     InvalidWriteSet(String),
+    SavepointMissing(String),
 }
 
 impl fmt::Display for TransactionError {
@@ -42,6 +44,7 @@ impl fmt::Display for TransactionError {
         match self {
             Self::CannotReadHead => formatter.write_str("cannot read the current catalog head"),
             Self::InvalidWriteSet(message) => write!(formatter, "invalid transaction: {message}"),
+            Self::SavepointMissing(name) => write!(formatter, "savepoint does not exist: {name}"),
         }
     }
 }
@@ -53,6 +56,14 @@ impl std::error::Error for TransactionError {}
 pub struct ProductTransaction {
     catalog: ProductCatalogCommit,
     base: CatalogSnapshot,
+    request: PrepareChange,
+    documents: ProductDocuments,
+    preview: Option<CatalogSnapshot>,
+    savepoints: BTreeMap<String, SavepointState>,
+}
+
+#[derive(Clone)]
+struct SavepointState {
     request: PrepareChange,
     documents: ProductDocuments,
     preview: Option<CatalogSnapshot>,
@@ -81,6 +92,7 @@ impl ProductTransaction {
             base,
             documents: ProductDocuments::new(),
             preview: None,
+            savepoints: BTreeMap::new(),
         })
     }
 
@@ -124,6 +136,55 @@ impl ProductTransaction {
     /// and digest coverage is checked by the durable commit boundary.
     pub fn stage_document(&mut self, path: impl Into<String>, bytes: Vec<u8>) {
         self.documents.insert(path.into(), bytes);
+    }
+
+    /// Creates or replaces a named savepoint in the current transaction.
+    /// Savepoints are local to the session and never publish independently.
+    pub fn savepoint(&mut self, name: impl Into<String>) -> Result<(), TransactionError> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(TransactionError::InvalidWriteSet(
+                "savepoint name cannot be empty".to_owned(),
+            ));
+        }
+        self.savepoints.insert(
+            name,
+            SavepointState {
+                request: self.request.clone(),
+                documents: self.documents.clone(),
+                preview: self.preview.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Rolls the staged write set back to a savepoint while retaining that
+    /// savepoint for subsequent retries, matching SQL SAVEPOINT semantics.
+    pub fn rollback_to_savepoint(&mut self, name: &str) -> Result<(), TransactionError> {
+        let state = self
+            .savepoints
+            .get(name)
+            .cloned()
+            .ok_or_else(|| TransactionError::SavepointMissing(name.to_owned()))?;
+        self.request = state.request;
+        self.documents = state.documents;
+        self.preview = state.preview;
+        Ok(())
+    }
+
+    /// Releases a savepoint without changing the staged transaction.
+    pub fn release_savepoint(&mut self, name: &str) -> Result<(), TransactionError> {
+        self.savepoints
+            .remove(name)
+            .map(|_| ())
+            .ok_or_else(|| TransactionError::SavepointMissing(name.to_owned()))
+    }
+
+    /// Bytes currently staged for immutable product documents. The registry
+    /// uses this after a rollback-to-savepoint to restore its admission meter.
+    #[must_use]
+    pub fn staged_document_bytes(&self) -> usize {
+        self.documents.values().map(Vec::len).sum()
     }
 
     #[must_use]
@@ -340,6 +401,35 @@ mod tests {
         assert!(transaction.stage(change).is_err());
         assert_eq!(transaction.staged_change_count(), 1);
         assert_eq!(transaction.snapshot().tables.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn savepoint_restores_staged_snapshot_without_publishing() {
+        let catalog = catalog().await;
+        let mut transaction =
+            ProductTransaction::begin(catalog.clone(), "snapshot-1", "operation-1", DIGEST)
+                .await
+                .unwrap();
+        transaction
+            .stage(CatalogChange::Put {
+                table: "app.users".into(),
+                reference: table("users"),
+            })
+            .unwrap();
+        transaction.savepoint("before_orders").unwrap();
+        transaction
+            .stage(CatalogChange::Put {
+                table: "app.orders".into(),
+                reference: table("orders"),
+            })
+            .unwrap();
+        assert_eq!(transaction.snapshot().tables.len(), 2);
+        transaction.rollback_to_savepoint("before_orders").unwrap();
+        assert_eq!(transaction.snapshot().tables.len(), 1);
+        assert!(transaction.rollback_to_savepoint("missing").is_err());
+        transaction.release_savepoint("before_orders").unwrap();
+        assert!(transaction.release_savepoint("before_orders").is_err());
+        assert!(catalog.read_current().await.unwrap().tables.is_empty());
     }
 
     #[tokio::test]

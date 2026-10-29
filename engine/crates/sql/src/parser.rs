@@ -1274,6 +1274,9 @@ pub enum NativeTransactionalStatement {
     Begin,
     Commit,
     Rollback,
+    Savepoint(String),
+    RollbackToSavepoint(String),
+    ReleaseSavepoint(String),
     Dml(Box<NativeDmlStatement>),
 }
 
@@ -1589,11 +1592,18 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             chain: false,
             savepoint: None,
         } => Ok(NativeTransactionalStatement::Rollback),
-        Statement::Rollback { .. } => Err(sql_error(
-            "ROLLBACK TO SAVEPOINT and ROLLBACK AND CHAIN are not supported",
+        Statement::Rollback {
+            chain: false,
+            savepoint: Some(name),
+        } => Ok(NativeTransactionalStatement::RollbackToSavepoint(
+            name.value.clone(),
         )),
-        Statement::Savepoint { .. } | Statement::ReleaseSavepoint { .. } => Err(sql_error(
-            "SAVEPOINT and RELEASE SAVEPOINT are not supported",
+        Statement::Rollback { .. } => Err(sql_error("ROLLBACK AND CHAIN is not supported")),
+        Statement::Savepoint { name } => {
+            Ok(NativeTransactionalStatement::Savepoint(name.value.clone()))
+        }
+        Statement::ReleaseSavepoint { name } => Ok(NativeTransactionalStatement::ReleaseSavepoint(
+            name.value.clone(),
         )),
         Statement::SetTransaction { .. } => Err(sql_error(
             "SET TRANSACTION isolation and access modes are not supported",
@@ -2236,10 +2246,7 @@ mod tests {
             "UPDATE users SET name = old.name FROM old_users old WHERE users.id = old.id",
             "DELETE FROM users",
             "DELETE FROM users USING old_users WHERE users.id = old_users.id",
-            "ROLLBACK TO SAVEPOINT before_write",
             "COMMIT AND CHAIN",
-            "SAVEPOINT before_write",
-            "RELEASE SAVEPOINT before_write",
             "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
         ];
         for sql in cases {
@@ -2253,14 +2260,6 @@ mod tests {
     #[test]
     fn transaction_control_rejections_explain_the_unsupported_feature() {
         let cases = [
-            (
-                "SAVEPOINT checkpoint",
-                "SAVEPOINT and RELEASE SAVEPOINT are not supported",
-            ),
-            (
-                "RELEASE SAVEPOINT checkpoint",
-                "SAVEPOINT and RELEASE SAVEPOINT are not supported",
-            ),
             (
                 "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
                 "SET TRANSACTION isolation and access modes are not supported",
@@ -2279,6 +2278,22 @@ mod tests {
                 "{sql} did not report {expected}"
             );
         }
+    }
+
+    #[test]
+    fn accepts_savepoint_controls() {
+        assert!(matches!(
+            parse_native_transactional("SAVEPOINT checkpoint").unwrap(),
+            NativeTransactionalStatement::Savepoint(name) if name == "checkpoint"
+        ));
+        assert!(matches!(
+            parse_native_transactional("ROLLBACK TO SAVEPOINT checkpoint").unwrap(),
+            NativeTransactionalStatement::RollbackToSavepoint(name) if name == "checkpoint"
+        ));
+        assert!(matches!(
+            parse_native_transactional("RELEASE SAVEPOINT checkpoint").unwrap(),
+            NativeTransactionalStatement::ReleaseSavepoint(name) if name == "checkpoint"
+        ));
     }
 
     #[test]
