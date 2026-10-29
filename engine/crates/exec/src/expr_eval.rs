@@ -12228,6 +12228,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect::<Result<Vec<_>>>()?;
             Ok(Arc::new(Time64MicrosecondArray::from(result)))
         }
+        "TIME_FROM_PARTS" => {
+            check_arity(name, args, 5)?;
+            eval_time_from_parts(&args[0], &args[1], &args[2], &args[3], &args[4], num_rows)
+        }
         "DATE_ADD_DAYS" => {
             check_arity(name, args, 2)?;
             eval_date_add_days(&args[0], &args[1], num_rows)
@@ -14756,6 +14760,82 @@ fn parse_time_literal(text: &str) -> Option<i64> {
     Some(((hour * 3600 + minute * 60 + second) * 1_000_000) + micros)
 }
 
+fn eval_time_from_parts(
+    hour: &ArrayRef,
+    minute: &ArrayRef,
+    second: &ArrayRef,
+    fraction: &ArrayRef,
+    precision: &ArrayRef,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let hour = hour
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| KaveonError::Execution("TIMEFROMPARTS hour must be an integer".into()))?;
+    let minute = minute
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| KaveonError::Execution("TIMEFROMPARTS minute must be an integer".into()))?;
+    let second = second
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| KaveonError::Execution("TIMEFROMPARTS seconds must be an integer".into()))?;
+    let fraction = fraction
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| {
+            KaveonError::Execution("TIMEFROMPARTS fractions must be an integer".into())
+        })?;
+    let precision = precision
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| {
+            KaveonError::Execution("TIMEFROMPARTS precision must be an integer".into())
+        })?;
+    let result = (0..num_rows)
+        .map(|row| {
+            if hour.is_null(row)
+                || minute.is_null(row)
+                || second.is_null(row)
+                || fraction.is_null(row)
+                || precision.is_null(row)
+            {
+                return Ok(None);
+            }
+            let h = hour.value(row);
+            let m = minute.value(row);
+            let s = second.value(row);
+            let f = fraction.value(row);
+            let p = precision.value(row);
+            if !(0..=23).contains(&h) || !(0..=59).contains(&m) || !(0..=59).contains(&s) {
+                return Err(KaveonError::Execution(
+                    "TIMEFROMPARTS time fields are out of range".into(),
+                ));
+            }
+            if !(0..=6).contains(&p) {
+                return Err(KaveonError::Execution(
+                    "TIMEFROMPARTS precision must be between 0 and 6".into(),
+                ));
+            }
+            let scale = 10_i64.pow((6 - p) as u32);
+            let max_fraction = 10_i64.pow(p as u32);
+            if f < 0 || f >= max_fraction {
+                return Err(KaveonError::Execution(
+                    "TIMEFROMPARTS fractions are out of range for precision".into(),
+                ));
+            }
+            let micros = h
+                .checked_mul(3_600_000_000)
+                .and_then(|value| value.checked_add(m.checked_mul(60_000_000)?))
+                .and_then(|value| value.checked_add(s.checked_mul(1_000_000)?))
+                .and_then(|value| value.checked_add(f.checked_mul(scale)?))
+                .ok_or_else(|| KaveonError::Execution("TIMEFROMPARTS overflows TIME".into()))?;
+            Ok(Some(micros))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(Time64MicrosecondArray::from(result)))
+}
+
 fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
     match ts.data_type() {
         DataType::Date32 => {
@@ -16910,6 +16990,70 @@ mod tests {
         let result = values.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
         assert_eq!(result.value(0), 1_000_000_123);
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn time_from_parts_preserves_precision_ranges_and_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("hour", DataType::Int64, true),
+            arrow::datatypes::Field::new("minute", DataType::Int64, true),
+            arrow::datatypes::Field::new("second", DataType::Int64, true),
+            arrow::datatypes::Field::new("fraction", DataType::Int64, true),
+            arrow::datatypes::Field::new("precision", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(12), None])),
+                Arc::new(Int64Array::from(vec![Some(34), Some(0)])),
+                Arc::new(Int64Array::from(vec![Some(56), Some(0)])),
+                Arc::new(Int64Array::from(vec![Some(789), Some(0)])),
+                Arc::new(Int64Array::from(vec![Some(3), Some(3)])),
+            ],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "TIME_FROM_PARTS".into(),
+                args: vec![
+                    Expr::Column("hour".into()),
+                    Expr::Column("minute".into()),
+                    Expr::Column("second".into()),
+                    Expr::Column("fraction".into()),
+                    Expr::Column("precision".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_primitive::<arrow::datatypes::Time64MicrosecondType>();
+        assert_eq!(result.value(0), 45_296_789_000);
+        assert!(result.is_null(1));
+
+        let invalid = RecordBatch::try_from_iter([
+            ("hour", Arc::new(Int64Array::from(vec![24])) as ArrayRef),
+            ("minute", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+            ("second", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+            ("fraction", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+            ("precision", Arc::new(Int64Array::from(vec![3])) as ArrayRef),
+        ])
+        .unwrap();
+        assert!(
+            evaluate(
+                &Expr::Function {
+                    name: "TIME_FROM_PARTS".into(),
+                    args: vec![
+                        Expr::Column("hour".into()),
+                        Expr::Column("minute".into()),
+                        Expr::Column("second".into()),
+                        Expr::Column("fraction".into()),
+                        Expr::Column("precision".into()),
+                    ],
+                },
+                &invalid,
+            )
+            .is_err()
+        );
     }
 
     #[test]
