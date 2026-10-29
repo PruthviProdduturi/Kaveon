@@ -593,6 +593,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "CONTAINS",
     "STRPOS",
     "POSITION",
+    "CHARINDEX",
     "SPLIT_PART",
     "REVERSE",
     "REPEAT",
@@ -11251,6 +11252,49 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     let offset = instance.unsigned_abs() as usize;
                     (offset <= positions.len()).then(|| positions[positions.len() - offset])
                 };
+                result.push(Some(position.unwrap_or(0)));
+            }
+            Ok(Arc::new(Int64Array::from(result)))
+        }
+        "CHARINDEX" => {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "CHARINDEX requires 2 or 3 arguments".into(),
+                ));
+            }
+            let starts = if args.len() == 3 {
+                Some(compute::cast(&args[2], &DataType::Int64)?)
+            } else {
+                None
+            };
+            let starts = starts
+                .as_ref()
+                .map(|array| array.as_primitive::<Int64Type>());
+            let mut result = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let (Some(needle), Some(value)) =
+                    (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                else {
+                    result.push(None);
+                    continue;
+                };
+                if starts.is_some_and(|starts| starts.is_null(row)) {
+                    result.push(None);
+                    continue;
+                }
+                let start = starts
+                    .map_or(1, |starts| starts.value(row).max(1))
+                    .try_into()
+                    .unwrap_or(usize::MAX);
+                let Some((start_byte, _)) = value.char_indices().nth(start.saturating_sub(1))
+                else {
+                    result.push(Some(0));
+                    continue;
+                };
+                let suffix = &value[start_byte..];
+                let position = suffix
+                    .find(needle)
+                    .map(|byte| start as i64 + suffix[..byte].chars().count() as i64);
                 result.push(Some(position.unwrap_or(0)));
             }
             Ok(Arc::new(Int64Array::from(result)))
@@ -24414,6 +24458,29 @@ mod tests {
         .unwrap();
         assert_eq!(position.as_primitive::<Int64Type>().value(0), 1);
         assert!(position.as_primitive::<Int64Type>().is_null(1));
+    }
+
+    #[test]
+    fn charindex_uses_tsql_argument_order_and_unicode_positions() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![Some("é-é-é"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "CHARINDEX".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("é".into())),
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
+        assert!(result.as_primitive::<Int64Type>().is_null(1));
     }
 
     #[test]
