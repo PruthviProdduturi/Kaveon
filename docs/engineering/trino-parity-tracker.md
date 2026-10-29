@@ -39,6 +39,13 @@ qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`).
 
+The bounded product DML contract now also returns staged `document_json` on
+create/update statements; DELETE document projections remain explicitly
+rejected because deleted documents are not retained in the staged snapshot.
+Evidence: `track2-native-dml-returning-document-2026-10-29.md`.
+This supersedes the older Native DML row wording that listed all document
+projections as open; arbitrary expressions and lake-table DML remain open.
+
 ## Owner execution target — 2026-10-21
 
 The competitive goal is measured against a fixed corpus, not a blanket claim
