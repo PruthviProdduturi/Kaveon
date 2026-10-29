@@ -122,7 +122,12 @@ gate.
   is implemented from the staged revision/CAS write set. Savepoints are
   implemented for the product transaction session and covered by parser,
   catalog, and API tests.
-- [ ] Add durable journal/recovery, snapshot isolation, and restart tests.
+- [x] Qualify bounded snapshot isolation and transaction-session restart
+  behavior for KaveonDB-owned product records; see
+  `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
+- [ ] Add a durable journal/recovery qualification for cloud/object-store
+  failures and multi-coordinator restart. This remains distinct from the
+  bounded snapshot contract above.
 - [ ] Add constraints, indexes, and catalog-backed schema enforcement.
 - [x] Publish a supported transaction/isolation matrix rather than claiming
   PostgreSQL equivalence. The bounded product-record contract is recorded in
