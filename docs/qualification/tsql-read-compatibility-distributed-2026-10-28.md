@@ -9,7 +9,8 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 38 cases, including explicit fail-closed cases for `PIVOT`,
+- Corpus: 39 cases, including a planner-qualified bounded derived-source
+  `PIVOT` lowering and explicit fail-closed cases for unbounded `PIVOT`,
   `UNPIVOT`, correlated `APPLY`, `TOP WITH TIES` without an order, and
   runtime-column styled date conversion.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts

@@ -34,6 +34,10 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // planner rather than being accepted with unsafe or incomplete semantics.
     let normalized = normalize_bounded_linear_recursive_cte(&normalized)
         .unwrap_or_else(|| normalized.to_owned());
+    let normalized = match normalize_bounded_pivot(&normalized)? {
+        Some(pivot) => pivot,
+        None => normalized,
+    };
     reject_unsupported_tsql_relational_forms(&normalized)?;
     // BigQuery's grammar retains a table-shaped UNNEST node when the function
     // is correlated. DuckDB parses the same spelling as a generic function,
@@ -128,6 +132,321 @@ fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Lower one deliberately bounded SQL Server PIVOT shape to conditional
+/// aggregation before handing the statement to sqlparser.  The rewrite is
+/// intentionally narrow: the source must be a derived SELECT with simple
+/// columns, the aggregate must be one of the mergeable scalar aggregates, the
+/// pivot values must be static literals, and the output width is capped.  A
+/// broader PIVOT implementation needs schema-aware binding and a distributed
+/// pivot state contract, so unsupported shapes remain fail-closed.
+fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_ascii_uppercase();
+    let Some(pivot_marker) = find_top_level_keyword(&upper, "PIVOT") else {
+        return Ok(None);
+    };
+    if !upper.starts_with("SELECT * FROM (") {
+        return Ok(None);
+    }
+    let source_open = upper
+        .find('(')
+        .ok_or_else(|| sql_error("bounded PIVOT requires a derived source SELECT"))?;
+    let source_close = matching_delimiter(trimmed, source_open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded PIVOT has an unbalanced source SELECT"))?;
+    if pivot_marker <= source_close {
+        return Ok(None);
+    }
+    let source_sql = trimmed[source_open + 1..source_close].trim();
+    let after_source = trimmed[source_close + 1..pivot_marker].trim();
+    if after_source.is_empty() {
+        return Err(sql_error("bounded PIVOT requires a source alias"));
+    }
+    let pivot_open = trimmed[pivot_marker + "PIVOT".len()..]
+        .find('(')
+        .map(|offset| pivot_marker + "PIVOT".len() + offset)
+        .ok_or_else(|| sql_error("bounded PIVOT requires an aggregate specification"))?;
+    let pivot_close = matching_delimiter(trimmed, pivot_open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded PIVOT has an unbalanced specification"))?;
+    let body = trimmed[pivot_open + 1..pivot_close].trim();
+
+    let source_upper = source_sql.to_ascii_uppercase();
+    if !source_upper.starts_with("SELECT ") {
+        return Ok(None);
+    }
+    let Some(source_from) = find_top_level_keyword(&source_upper, "FROM") else {
+        return Ok(None);
+    };
+    let source_projection = source_sql["SELECT ".len()..source_from].trim();
+    let source_relation = source_sql[source_from + "FROM".len()..].trim();
+    if source_projection.is_empty() || source_relation.is_empty() {
+        return Ok(None);
+    }
+    let source_columns = split_top_level_commas(source_projection)?;
+    if source_columns.is_empty() || source_columns.len() > 128 {
+        return Err(sql_error(
+            "bounded PIVOT source projection exceeds the 128-column limit",
+        ));
+    }
+    let mut columns = Vec::with_capacity(source_columns.len());
+    for expression in source_columns {
+        let (expression, alias) = split_simple_alias(expression.trim())
+            .ok_or_else(|| sql_error("bounded PIVOT source columns must be simple identifiers"))?;
+        let name = alias.unwrap_or(expression);
+        if !is_simple_identifier(name) {
+            return Ok(None);
+        }
+        columns.push(name.to_owned());
+    }
+
+    let body_upper = body.to_ascii_uppercase();
+    let aggregate_open = body
+        .find('(')
+        .ok_or_else(|| sql_error("bounded PIVOT requires aggregate(column)"))?;
+    let aggregate_close = matching_delimiter(body, aggregate_open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded PIVOT aggregate is unbalanced"))?;
+    let aggregate = body[..aggregate_open].trim().to_ascii_uppercase();
+    if !matches!(aggregate.as_str(), "SUM" | "AVG" | "MIN" | "MAX" | "COUNT") {
+        return Ok(None);
+    }
+    let value_column = body[aggregate_open + 1..aggregate_close].trim();
+    let Some(for_pos) = find_top_level_keyword(&body_upper[aggregate_close + 1..], "FOR") else {
+        return Err(sql_error("bounded PIVOT requires FOR pivot_column"));
+    };
+    let for_pos = aggregate_close + 1 + for_pos;
+    let Some(in_pos_rel) = find_top_level_keyword(&body_upper[for_pos + "FOR".len()..], "IN")
+    else {
+        return Err(sql_error("bounded PIVOT requires an explicit IN list"));
+    };
+    let in_pos = for_pos + "FOR".len() + in_pos_rel;
+    let pivot_column = body[for_pos + "FOR".len()..in_pos].trim();
+    if !is_simple_identifier(value_column) || !is_simple_identifier(pivot_column) {
+        return Ok(None);
+    }
+    if !columns
+        .iter()
+        .any(|column| column.eq_ignore_ascii_case(value_column))
+        || !columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(pivot_column))
+    {
+        return Err(sql_error(
+            "bounded PIVOT columns must be present in the source projection",
+        ));
+    }
+    let list_open = body[in_pos + "IN".len()..]
+        .find('(')
+        .map(|offset| in_pos + "IN".len() + offset)
+        .ok_or_else(|| sql_error("bounded PIVOT requires an IN list"))?;
+    let list_close = matching_delimiter(body, list_open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded PIVOT IN list is unbalanced"))?;
+    if !body[list_close + 1..].trim().is_empty() {
+        return Ok(None);
+    }
+    let items = split_top_level_commas(body[list_open + 1..list_close].trim())?;
+    if items.is_empty() || items.len() > 128 {
+        return Err(sql_error(
+            "bounded PIVOT requires between 1 and 128 IN values",
+        ));
+    }
+    let mut parsed_items = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        let label = item
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .or_else(|| {
+                item.strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+            })
+            .unwrap_or(item);
+        if label.is_empty() || label.contains(['\r', '\n']) {
+            return Err(sql_error(
+                "bounded PIVOT IN values must be non-empty literals",
+            ));
+        }
+        let literal = if label.parse::<i128>().is_ok() {
+            label.to_owned()
+        } else {
+            format!("'{}'", label.replace('\'', "''"))
+        };
+        parsed_items.push((label.to_owned(), literal));
+    }
+    let group_columns = columns
+        .iter()
+        .filter(|column| {
+            !column.eq_ignore_ascii_case(value_column) && !column.eq_ignore_ascii_case(pivot_column)
+        })
+        .collect::<Vec<_>>();
+    let mut projection = group_columns
+        .iter()
+        .map(|column| (*column).to_owned())
+        .collect::<Vec<_>>();
+    for (label, literal) in parsed_items {
+        let value = if aggregate == "COUNT" {
+            "1".to_owned()
+        } else {
+            value_column.to_owned()
+        };
+        let aggregate_value = format!(
+            "{aggregate}(CASE WHEN {pivot_column} = {literal} THEN {value} END) AS \"{}\"",
+            label.replace('"', "\"\"")
+        );
+        projection.push(aggregate_value);
+    }
+    let mut rewritten = format!(
+        "SELECT {} FROM ({source_sql}) AS __kaveon_pivot_source",
+        projection.join(", ")
+    );
+    if !group_columns.is_empty() {
+        rewritten.push_str(" GROUP BY ");
+        rewritten.push_str(
+            &group_columns
+                .iter()
+                .map(|column| (*column).to_owned())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    Ok(Some(rewritten))
+}
+
+fn find_top_level_keyword(sql_upper: &str, keyword: &str) -> Option<usize> {
+    let bytes = sql_upper.as_bytes();
+    let keyword = keyword.as_bytes();
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                if index + 1 < bytes.len() && bytes[index + 1] == delimiter {
+                    index += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0
+            && index + keyword.len() <= bytes.len()
+            && bytes[index..index + keyword.len()].eq_ignore_ascii_case(keyword)
+            && (index == 0 || !is_sql_word_byte(bytes[index - 1]))
+            && (index + keyword.len() == bytes.len()
+                || !is_sql_word_byte(bytes[index + keyword.len()]))
+        {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn matching_delimiter(sql: &str, open: usize, opening: u8, closing: u8) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    if bytes.get(open).copied()? != opening {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut index = open;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                if index + 1 < bytes.len() && bytes[index + 1] == delimiter {
+                    index += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+        } else if byte == opening {
+            depth += 1;
+        } else if byte == closing {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn split_top_level_commas(sql: &str) -> Result<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let bytes = sql.as_bytes();
+    let mut depth = 0usize;
+    let mut quote = None;
+    for index in 0..bytes.len() {
+        let byte = bytes[index];
+        if let Some(delimiter) = quote {
+            if byte == delimiter && (index == 0 || bytes[index - 1] != delimiter) {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+        } else if byte == b'(' || byte == b'[' {
+            depth += 1;
+        } else if byte == b')' || byte == b']' {
+            depth = depth
+                .checked_sub(1)
+                .ok_or_else(|| sql_error("unbalanced delimiter"))?;
+        } else if byte == b',' && depth == 0 {
+            parts.push(sql[start..index].trim());
+            start = index + 1;
+        }
+    }
+    if quote.is_some() || depth != 0 {
+        return Err(sql_error("unbalanced delimiter"));
+    }
+    let tail = sql[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    Ok(parts)
+}
+
+fn split_simple_alias(expression: &str) -> Option<(&str, Option<&str>)> {
+    let upper = expression.to_ascii_uppercase();
+    if let Some(position) = find_top_level_keyword(&upper, "AS") {
+        let left = expression[..position].trim();
+        let right = expression[position + 2..].trim();
+        return (!left.is_empty() && !right.is_empty()).then_some((left, Some(right)));
+    }
+    Some((expression, None))
+}
+
+fn is_simple_identifier(identifier: &str) -> bool {
+    let identifier = identifier.trim().trim_matches('"');
+    !identifier.is_empty()
+        && identifier.chars().enumerate().all(|(index, character)| {
+            character == '_'
+                || character == '$'
+                || character.is_ascii_alphanumeric() && index > 0
+                || character.is_ascii_alphabetic() && index == 0
+        })
 }
 
 fn parse_bounded_map_casts(sql: &str) -> Option<Vec<Statement>> {
@@ -2783,10 +3102,6 @@ mod tests {
     fn rejects_unsupported_tsql_relational_forms_with_actionable_errors() {
         for (sql, message) in [
             (
-                "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p",
-                "PIVOT is not implemented",
-            ),
-            (
                 "SELECT * FROM t UNPIVOT (v FOR k IN (a)) u",
                 "UNPIVOT is not implemented",
             ),
@@ -2799,6 +3114,29 @@ mod tests {
             assert!(error.to_string().contains(message), "{sql}: {error}");
         }
         assert!(parse_sql("SELECT pivot_value FROM t").is_ok());
+    }
+
+    #[test]
+    fn bounded_pivot_lowers_to_conditional_aggregation() {
+        let sql = "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p";
+        let statements = parse_sql(sql).expect("bounded PIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("SUM(CASE WHEN month = 'Jan' THEN amount END)"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("SUM(CASE WHEN month = 'Feb' THEN amount END)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("GROUP BY region"), "{rendered}");
+    }
+
+    #[test]
+    fn pivot_keeps_unbounded_shapes_fail_closed() {
+        let error = parse_sql("SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p")
+            .expect_err("a non-derived PIVOT must remain unsupported");
+        assert!(error.to_string().contains("PIVOT is not implemented"));
     }
 
     #[test]

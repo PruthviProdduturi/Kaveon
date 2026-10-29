@@ -39,8 +39,10 @@ The authoritative capability details remain in:
   The current 37-case corpus has planner coverage and a completed exact
   three-worker differential sweep; evidence is retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
-- [ ] Keep `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected until
-  their semantics are implemented and qualified. `TOP PERCENT` and `TOP WITH
+- [ ] Keep unbounded `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected
+  until their semantics are implemented and qualified. A bounded derived-source
+  `PIVOT` lowers to conditional aggregation and has planner coverage; exact
+  local/distributed execution qualification remains open. `TOP PERCENT` and `TOP WITH
   TIES` are qualified only when their `ORDER BY` keys define a deterministic
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.

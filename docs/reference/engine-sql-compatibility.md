@@ -174,10 +174,12 @@ with NULL preservation.
 first-match behavior, unmapped-character preservation, source-only removal,
 and NULL propagation.
 
-`PIVOT`, `UNPIVOT`, and `CROSS/OUTER APPLY` are recognized and rejected with
-rewrite guidance rather than being treated as generic syntax failures. This
-is an intentional fail-closed boundary until their distributed semantics are
-implemented and qualified.
+`PIVOT` has one bounded planner lowering for a derived source with simple
+columns, one aggregate, and a static `IN` list of at most 128 values; it lowers
+to conditional aggregation. That shape is planner-qualified but not yet an
+exact local/distributed execution claim. Unbounded `PIVOT`, `UNPIVOT`, and
+`CROSS/OUTER APPLY` are recognized and rejected with rewrite guidance rather
+than being treated as generic syntax failures.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
