@@ -43,7 +43,9 @@ evidence pass.
 The corpus currently contains 63 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
-subsecond aliases (`MS`, `MCS`, `US`, and `NS`).
+subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
+`TRY_CONVERT(DATE, ..., 101|112)` is also qualified across the distributed
+Parquet differential (`docs/qualification/track2-tsql-convert-runtime-styles-2026-10-29.md`).
 
 The bounded product DML contract now also returns staged `document_json` on
 create/update statements; DELETE document projections remain explicitly
