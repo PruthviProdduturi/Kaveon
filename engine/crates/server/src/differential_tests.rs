@@ -340,6 +340,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datepart_week_quarter_alias",
+        "SELECT TOP 5 DATEPART(wk, event_date) AS week_number, DATEPART(qq, event_date) AS quarter_number FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datename_iso_week_alias",
         "SELECT TOP 5 DATENAME(isowk, event_date) AS iso_week_number FROM {T} ORDER BY event_date",
         true,

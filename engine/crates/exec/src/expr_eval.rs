@@ -15571,8 +15571,8 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "SECOND" | "SS" | "S" => DateField::Second,
                 "DOW" | "DAYOFWEEK" | "WEEKDAY" | "DW" | "W" => DateField::DayOfWeek,
                 "DOY" | "DAYOFYEAR" | "DY" | "Y" => DateField::DayOfYear,
-                "QUARTER" => DateField::Quarter,
-                "WEEK" => DateField::Week,
+                "QUARTER" | "QQ" | "Q" => DateField::Quarter,
+                "WEEK" | "WK" | "WW" => DateField::Week,
                 "ISO_WEEK" | "ISOWK" | "ISOWW" => DateField::IsoWeek,
                 "EPOCH" => DateField::Epoch,
                 _ => {
@@ -16640,6 +16640,35 @@ mod tests {
                 .value(0)
                 .to_owned();
             assert_eq!(values, canonical, "DATENAME day-of-year alias {alias}");
+        }
+    }
+
+    #[test]
+    fn date_part_accepts_tsql_week_and_quarter_aliases() {
+        let source = Arc::new(Date32Array::from(vec![Some(18_628)])) as ArrayRef;
+        let week = eval_date_part(&StringArray::from(vec![Some("WEEK")]), &source, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        let quarter = eval_date_part(&StringArray::from(vec![Some("QUARTER")]), &source, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        assert_eq!(week, 1);
+        assert_eq!(quarter, 1);
+        for alias in ["WK", "WW"] {
+            let value = eval_date_part(&StringArray::from(vec![Some(alias)]), &source, 1)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0);
+            assert_eq!(value, week, "DATEPART week alias {alias}");
+        }
+        for alias in ["QQ", "Q"] {
+            let value = eval_date_part(&StringArray::from(vec![Some(alias)]), &source, 1)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0);
+            assert_eq!(value, quarter, "DATEPART quarter alias {alias}");
         }
     }
 
