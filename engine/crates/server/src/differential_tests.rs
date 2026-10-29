@@ -320,6 +320,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_dateadd_microsecond",
+        "SELECT TOP 5 DATEADD(microsecond, 250, CAST(event_date AS TIMESTAMP)) AS shifted FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datediff",
         "SELECT TOP 5 DATEDIFF(dd, DATE '2026-01-01', event_date) AS days FROM {T} ORDER BY event_date",
         true,

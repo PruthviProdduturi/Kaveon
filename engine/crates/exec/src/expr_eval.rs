@@ -12240,6 +12240,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             eval_date_add_milliseconds(&args[0], &args[1], num_rows)
         }
+        "DATE_ADD_MICROSECONDS" => {
+            check_arity(name, args, 2)?;
+            eval_date_add_microseconds(&args[0], &args[1], num_rows)
+        }
         "DATE_ADD_MONTHS" => {
             check_arity(name, args, 2)?;
             eval_date_add_months(&args[0], &args[1], num_rows)
@@ -15106,6 +15110,40 @@ fn eval_date_add_milliseconds(
         )),
         other => Err(KaveonError::Execution(format!(
             "DATE_ADD_MILLISECONDS requires a timestamp input, got {other}"
+        ))),
+    }
+}
+
+fn eval_date_add_microseconds(
+    source: &ArrayRef,
+    delta: &ArrayRef,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let delta = delta.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+        KaveonError::Execution("DATE_ADD_MICROSECONDS requires an integer microsecond count".into())
+    })?;
+    match source.data_type() {
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => add_timestamp_seconds::<
+            TimestampMicrosecondType,
+            TimestampMicrosecondArray,
+        >(
+            source, delta, num_rows, 1, tz.clone()
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            add_timestamp_seconds::<TimestampNanosecondType, TimestampNanosecondArray>(
+                source,
+                delta,
+                num_rows,
+                1_000,
+                tz.clone(),
+            )
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _)
+        | DataType::Timestamp(TimeUnit::Second, _) => Err(KaveonError::Execution(
+            "DATE_ADD_MICROSECONDS requires a timestamp with microsecond precision or finer".into(),
+        )),
+        other => Err(KaveonError::Execution(format!(
+            "DATE_ADD_MICROSECONDS requires a timestamp input, got {other}"
         ))),
     }
 }

@@ -4872,6 +4872,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "minute" => ("DATE_ADD_SECONDS", 60),
             "second" => ("DATE_ADD_SECONDS", 1),
             "millisecond" => ("DATE_ADD_MILLISECONDS", 1),
+            "microsecond" => ("DATE_ADD_MICROSECONDS", 1),
             other => {
                 return Err(sql_err(format!(
                     "{function_name} does not support unit '{other}'"
@@ -5484,6 +5485,7 @@ fn normalize_tsql_date_unit(unit: &str) -> String {
         "mi" | "n" => "minute".into(),
         "ss" | "s" => "second".into(),
         "ms" => "millisecond".into(),
+        "mcs" | "us" => "microsecond".into(),
         other => other.into(),
     }
 }
@@ -6954,6 +6956,11 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{millis:?}").contains("DATE_ADD_MILLISECONDS"));
+        let micros = sql_to_logical_plan(
+            "SELECT DATEADD(microsecond, 250, CAST('2026-01-01 00:00:00' AS TIMESTAMP)) FROM t",
+        )
+        .unwrap();
+        assert!(format!("{micros:?}").contains("DATE_ADD_MICROSECONDS"));
     }
 
     #[test]
@@ -8946,7 +8953,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 49);
+        assert_eq!(cases.len(), 50);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
