@@ -34,9 +34,10 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 62 bounded T-SQL read cases, including the
+The corpus currently contains 63 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
-`DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`).
+`DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
+subsecond aliases (`MS`, `MCS`, `US`, and `NS`).
 
 ## Owner execution target — 2026-10-21
 
