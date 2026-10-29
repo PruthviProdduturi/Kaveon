@@ -220,7 +220,7 @@ server or a general row-store protocol.
 Each request carries one statement and a transaction ID after `BEGIN`. Product
 operations are authenticated, owner-isolated, revision-checked, and limited to
 the supported product families. Multi-row `VALUES` are expanded into bounded
-typed commands and committed atomically. `INSERT ... SELECT`, document
+typed commands and committed atomically. Source-backed `INSERT ... SELECT`, document
 projections in `RETURNING`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 Product `RETURNING id, revision` is evaluated from the staged revision/CAS
