@@ -3,7 +3,7 @@
 Kaveon Engine now accepts the bounded SQL Server/Fabric date-style forms over
 text columns:
 
-- `CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `103`, and `112`;
+- `CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `103`, `112`, `120`, `121`, and `126`;
 - `TRY_CONVERT(DATE, text, style)`, returning a typed NULL for malformed rows;
 - nullable UTF-8 and LargeUtf8 inputs, with canonical Date32 output.
 

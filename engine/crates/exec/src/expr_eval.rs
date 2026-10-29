@@ -1610,6 +1610,33 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
                 value[8..10].parse::<u32>().ok()?,
             )
         }
+        120 | 121 => {
+            if value.len() < 19 || value.as_bytes().get(10) != Some(&b' ') {
+                return None;
+            }
+            if value.as_bytes().get(4) != Some(&b'-') || value.as_bytes().get(7) != Some(&b'-') {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
+        }
+        126 => {
+            if value.len() < 19
+                || !matches!(value.as_bytes().get(10), Some(b'T') | Some(b' '))
+                || value.as_bytes().get(4) != Some(&b'-')
+                || value.as_bytes().get(7) != Some(&b'-')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
+        }
         112 => {
             if value.len() != 8 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
                 return None;
@@ -25676,6 +25703,25 @@ mod tests {
         assert_eq!(iso_dashed.value(0), 20_087);
         assert!(iso_dashed.is_null(1));
         assert!(iso_dashed.is_null(2));
+        for (style, value, expected) in [
+            (120, "2024-12-30 12:00:00", 20_087),
+            (121, "2024-12-30 12:00:00.123", 20_087),
+            (126, "2024-12-31T12:00:00.123", 20_088),
+        ] {
+            let result = evaluate(
+                &expression(&format!("TRY_CONVERT_DATE_STYLE_{style}")),
+                &RecordBatch::try_from_iter([(
+                    "value",
+                    Arc::new(StringArray::from(vec![Some(value), Some("bad"), None])) as ArrayRef,
+                )])
+                .unwrap(),
+            )
+            .unwrap();
+            let result = result.as_primitive::<Date32Type>();
+            assert_eq!(result.value(0), expected);
+            assert!(result.is_null(1));
+            assert!(result.is_null(2));
+        }
     }
 
     #[test]
