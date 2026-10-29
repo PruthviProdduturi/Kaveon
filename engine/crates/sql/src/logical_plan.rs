@@ -839,11 +839,23 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
     // an arbitrary three and then order those.
     let top = select_top(&query.body)?;
     let top_percent = select_top_percent(&query.body)?;
-    if top_percent.is_some() && (query.limit.is_some() || query.fetch.is_some()) {
+    let top_ties = select_top_with_ties(&query.body)?;
+    if (top_percent.is_some() || top_ties.is_some())
+        && (query.limit.is_some() || query.fetch.is_some())
+    {
         return Err(sql_err(
-            "TOP PERCENT and LIMIT cannot both bound one query; use one of them",
+            "TOP and LIMIT/FETCH cannot both bound one query; use one of them",
         ));
     }
+    if top_ties.is_some() && query.order_by.is_none() {
+        return Err(sql_err("TOP WITH TIES requires an ORDER BY clause"));
+    }
+    let top_fetch = top_ties.map(|count| ast::Fetch {
+        with_ties: true,
+        percent: false,
+        quantity: Some(count),
+    });
+    let fetch = query.fetch.as_ref().or(top_fetch.as_ref());
     let limit = match (top, &query.limit) {
         (Some(_), Some(_)) => {
             return Err(sql_err(
@@ -854,18 +866,12 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         (None, _) => None,
     };
     let plan = match limit {
-        Some(count) => build_limit_offset(
-            plan,
-            &Some(count),
-            &query.offset,
-            query.fetch.as_ref(),
-            None,
-        )?,
+        Some(count) => build_limit_offset(plan, &Some(count), &query.offset, fetch, None)?,
         None => build_limit_offset(
             plan,
             &query.limit,
             &query.offset,
-            query.fetch.as_ref(),
+            fetch,
             top_percent.as_ref(),
         )?,
     };
@@ -3491,7 +3497,7 @@ fn select_top(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
         return Ok(None);
     }
     if top.with_ties {
-        return Err(sql_err("TOP WITH TIES is unsupported; use TOP n"));
+        return Ok(None);
     }
     match &top.quantity {
         Some(ast::TopQuantity::Expr(expr)) => Ok(Some(expr.clone())),
@@ -3501,6 +3507,26 @@ fn select_top(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
         )))),
         // `TOP` with no quantity is not a bound at all.
         None => Err(sql_err("TOP requires a row count")),
+    }
+}
+
+fn select_top_with_ties(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
+    let ast::SetExpr::Select(select) = body else {
+        return Ok(None);
+    };
+    let Some(top) = &select.top else {
+        return Ok(None);
+    };
+    if !top.with_ties || top.percent {
+        return Ok(None);
+    }
+    match &top.quantity {
+        Some(ast::TopQuantity::Expr(expr)) => Ok(Some(expr.clone())),
+        Some(ast::TopQuantity::Constant(count)) => Ok(Some(ast::Expr::Value(ast::Value::Number(
+            count.to_string(),
+            false,
+        )))),
+        None => Err(sql_err("TOP WITH TIES requires a row count")),
     }
 }
 
@@ -9065,12 +9091,14 @@ mod tests {
     }
 
     #[test]
-    fn top_percent_is_lowered_but_top_with_ties_remains_explicitly_unsupported() {
+    fn top_percent_and_top_with_ties_are_lowered() {
         let percent = sql_to_logical_plan("SELECT TOP 10 PERCENT * FROM events").unwrap();
         assert!(format!("{percent:?}").contains("CEIL"), "{percent:?}");
-        let error = sql_to_logical_plan("SELECT TOP 3 WITH TIES * FROM events ORDER BY user_id")
-            .unwrap_err();
-        assert!(error.to_string().contains("TOP"), "{error}");
+        let ties =
+            sql_to_logical_plan("SELECT TOP 3 WITH TIES * FROM events ORDER BY user_id").unwrap();
+        assert!(format!("{ties:?}").contains("RANK"), "{ties:?}");
+        let error = sql_to_logical_plan("SELECT TOP 3 WITH TIES * FROM events").unwrap_err();
+        assert!(error.to_string().contains("ORDER BY"), "{error}");
     }
 
     #[test]
