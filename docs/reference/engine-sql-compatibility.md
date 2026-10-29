@@ -132,9 +132,12 @@ conversion styles `0`, `1`, `101`, and `112` are normalized to ISO dates;
 runtime column style evaluation remains bounded. Datepart abbreviations such
 as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical
 vectorized date operators. This is a read-compatibility layer, not a claim of
-general T-SQL parity. Unsupported `CONVERT` style codes, procedural T-SQL,
-and unsupported SQL Server functions remain rejected
-explicitly.
+general T-SQL parity. `ISNULL`, `DATEADD`, `DATEDIFF`, and `DATEPART` are
+qualified across the local and three-worker Parquet differential paths. The
+`TOP PERCENT` and `TOP WITH TIES` forms are planner-qualified only: global
+limit/rank behavior still needs distributed qualification across partitioned
+and clustered layouts. Unsupported `CONVERT` style codes, procedural T-SQL,
+and unsupported SQL Server functions remain rejected explicitly.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
