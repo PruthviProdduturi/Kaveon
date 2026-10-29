@@ -721,7 +721,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_runtime_date_style",
-        "SELECT TRY_CONVERT(DATE, value, 101) AS us_date, TRY_CONVERT(DATE, value, 112) AS iso_date FROM (VALUES ('12/31/2024'), ('20241230'), ('bad'), (NULL)) AS values_table(value)",
+        "SELECT TRY_CONVERT(DATE, value, 0) AS named_date, TRY_CONVERT(DATE, value, 1) AS us_short_date, TRY_CONVERT(DATE, value, 101) AS us_date, TRY_CONVERT(DATE, value, 112) AS iso_date FROM (VALUES ('Dec 31 2024'), ('12/31/2024'), ('20241230'), ('bad'), (NULL)) AS values_table(value)",
         false,
     ),
     (
