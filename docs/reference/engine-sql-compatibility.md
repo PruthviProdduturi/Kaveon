@@ -231,7 +231,10 @@ modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 Product `RETURNING id, revision` is evaluated from the staged revision/CAS
 write set. Product inserts also support the bounded `ON CONFLICT DO NOTHING`
 form, with an optional conflict target of `id`; a duplicate is a transaction-
-local no-op that can still be committed. `DO UPDATE`, named constraints, and
+local no-op that can still be committed. They also support the bounded
+`ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` form;
+an existing owned record is updated with revision CAS, while a missing record
+is created. Conflict predicates, named constraints, arbitrary assignments, and
 arbitrary conflict targets remain rejected. Statement execution and the
 authenticated product transaction endpoint accept typed positional (`$1`, `?`)
 and named (`:name`) scalar or JSON-array parameters through the HTTP API; values
