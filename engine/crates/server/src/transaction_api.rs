@@ -344,6 +344,33 @@ impl TransactionRegistry {
                         document_json,
                     }
                 }
+                kaveon_sql::parser::ProductDmlCommand::Upsert {
+                    kind,
+                    id: row_id,
+                    document_json,
+                } => {
+                    let product_kind = record_kind(&kind)?;
+                    let current = session
+                        .transaction
+                        .snapshot()
+                        .product_record(product_kind, &row_id)
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                    if let Some(current) = current {
+                        require_product_owner(current, owner)?;
+                        kaveon_sql::parser::ProductDmlCommand::Update {
+                            kind,
+                            id: row_id,
+                            expected_revision: current.revision,
+                            document_json,
+                        }
+                    } else {
+                        kaveon_sql::parser::ProductDmlCommand::Create {
+                            kind,
+                            id: row_id,
+                            document_json,
+                        }
+                    }
+                }
                 other => other,
             };
             // Migration batches are replayable.  A typed-row create that is
@@ -779,6 +806,39 @@ fn product_change(
                 },
                 Some(bytes),
             ))
+        }
+        ProductDmlCommand::Upsert {
+            kind,
+            id,
+            document_json,
+        } => {
+            let product_kind = record_kind(&kind)?;
+            let current = snapshot
+                .product_record(product_kind, &id)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+            if let Some(current) = current {
+                require_product_owner(current, owner)?;
+                product_change(
+                    snapshot,
+                    owner,
+                    ProductDmlCommand::Update {
+                        kind,
+                        id,
+                        expected_revision: current.revision,
+                        document_json,
+                    },
+                )
+            } else {
+                product_change(
+                    snapshot,
+                    owner,
+                    ProductDmlCommand::Create {
+                        kind,
+                        id,
+                        document_json,
+                    },
+                )
+            }
         }
         ProductDmlCommand::Update {
             kind,
@@ -2352,6 +2412,15 @@ fn product_returning_response(
                     expected_revision,
                     ..
                 } => (id.clone(), *expected_revision),
+                kaveon_sql::parser::ProductDmlCommand::Upsert { kind, id, .. } => {
+                    let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
+                    let revision = snapshot
+                        .product_record(product_kind, id)
+                        .map_err(|error| error.to_string())?
+                        .map(|record| record.revision)
+                        .unwrap_or(1);
+                    (id.clone(), revision)
+                }
             };
             let mut row = serde_json::Map::new();
             for column in columns {
@@ -3564,6 +3633,83 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(record.revision, 1);
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_on_conflict_do_update_revises_owned_product() {
+        let (registry, catalog) = registry().await;
+        let first = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}')"#.into(),
+                    transaction_id: Some(first.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(first.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let upsert = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Updated"}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision"#.into(),
+                transaction_id: Some(upsert.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "orders");
+        assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(upsert.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        let record = snapshot
+            .product_record(ProductRecordKind::Dataset, "orders")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.revision, 2);
     }
 
     #[tokio::test]
