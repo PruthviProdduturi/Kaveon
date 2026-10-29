@@ -174,10 +174,11 @@ with NULL preservation.
 first-match behavior, unmapped-character preservation, source-only removal,
 and NULL propagation.
 
-`PIVOT` and `UNPIVOT` have bounded planner lowerings for derived sources with
-simple columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
-conditional aggregation and `UNPIVOT` to `UNION ALL`. These shapes are
-planner-qualified but are not yet exact local/distributed execution claims.
+`PIVOT` and `UNPIVOT` have bounded lowerings for derived sources with simple
+columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
+conditional aggregation and `UNPIVOT` to `UNION ALL`; both have exact local
+and three-worker differential evidence in
+`docs/qualification/track2-tsql-pivot-unpivot-distributed-2026-10-28.md`.
 Unbounded forms and `CROSS/OUTER APPLY` are recognized and rejected with
 rewrite guidance rather than being treated as generic syntax failures.
 

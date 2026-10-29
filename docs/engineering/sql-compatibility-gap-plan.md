@@ -41,9 +41,10 @@ The authoritative capability details remain in:
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 - [ ] Keep unbounded `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected
   until their semantics are implemented and qualified. Bounded derived-source
-  `PIVOT` and `UNPIVOT` lower to conditional aggregation/`UNION ALL` and have
-  planner coverage; exact local/distributed execution qualification remains
-  open. `TOP PERCENT` and `TOP WITH
+  `PIVOT` and `UNPIVOT` lower to conditional aggregation/`UNION ALL` and are
+  qualified across local layouts and three-worker fragments; see
+  `docs/qualification/track2-tsql-pivot-unpivot-distributed-2026-10-28.md`.
+  `TOP PERCENT` and `TOP WITH
   TIES` are qualified only when their `ORDER BY` keys define a deterministic
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
