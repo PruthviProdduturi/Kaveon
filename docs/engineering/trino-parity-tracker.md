@@ -48,8 +48,8 @@ subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
 Parquet differential (`docs/qualification/track2-tsql-convert-runtime-styles-2026-10-29.md`).
 Runtime text-column timestamp conversion now has local vectorized evaluator
 coverage for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only
-style `101`; styles `126` and `101` also have exact three-worker differential
-evidence (`docs/qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md`).
+style `101`; all six styles also have exact three-worker differential evidence
+(`docs/qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md`).
 
 The bounded product DML contract now also returns staged `document_json` on
 create/update/upsert and revision-checked DELETE statements, including the

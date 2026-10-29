@@ -7786,7 +7786,7 @@ fn distributed_tsql_runtime_timestamp_styles_match_local() {
         uuid::Uuid::new_v4()
     ));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, TRY_CONVERT(DATETIME2, value, 126) AS iso_ts, TRY_CONVERT(DATETIME2, value, 101) AS us_date FROM timestamp_events ORDER BY user_id";
+    let statement = "SELECT user_id, TRY_CONVERT(DATETIME2, value, 20) AS ts_20, TRY_CONVERT(DATETIME2, value, 21) AS ts_21, TRY_CONVERT(DATETIME2, value, 120) AS ts_120, TRY_CONVERT(DATETIME2, value, 121) AS ts_121, TRY_CONVERT(DATETIME2, value, 126) AS ts_126, TRY_CONVERT(DATETIME2, value, 101) AS us_date FROM timestamp_events ORDER BY user_id";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-timestamp-style-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)

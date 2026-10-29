@@ -15,15 +15,15 @@ date-only styles use the existing exact date parser and midnight semantics.
 - Planner regression: `lowers_styled_tsql_timestamp_literals`.
 - Executor regression: `evaluates_tsql_runtime_timestamp_styles_with_try_nulls`.
 - Distributed differential: `distributed_tsql_runtime_timestamp_styles_match_local`
-  compares ISO style `126` and date-only style `101` across three workers.
+  compares ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only style
+  `101`, across three workers.
 - Corpus case: `convert_timestamp_styles_literal`.
 - The versioned corpus records this as `planner_qualified`; distributed
   qualification is intentionally not claimed for a literal-only planner shape.
 
 ## Boundary
 
-Styles `126` and `101` are qualified through the local and three-worker
-differential. Other implemented runtime styles remain local-only until their
-distributed cases are added. External-client qualification remains open. This
-does not claim full SQL Server temporal parsing, timezone conversion parity, or
-precision beyond the Engine's microsecond timestamp representation.
+Styles `20`, `21`, `120`, `121`, `126`, and `101` are qualified through the
+local and three-worker differential. External-client qualification remains
+open. This does not claim full SQL Server temporal parsing, timezone conversion
+parity, or precision beyond the Engine's microsecond timestamp representation.
