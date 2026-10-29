@@ -16,7 +16,7 @@ cargo test -p kaveon-server --bin kaveon-server \
   -- --nocapture
 ```
 
-Result: **1 passed, 0 failed** (1.28 seconds).
+Result: **1 passed, 0 failed** (1.24 seconds).
 
 The case compares local and three-worker execution over the supported Parquet
 layouts for:
