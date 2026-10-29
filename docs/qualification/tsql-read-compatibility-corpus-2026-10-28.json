@@ -11,6 +11,7 @@
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
     {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
+    {"id": "choose", "sql": "SELECT CHOOSE(2, region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "count_big", "sql": "SELECT COUNT_BIG(*) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "len", "sql": "SELECT LEN(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "iif", "sql": "SELECT IIF(actions > 10, 'yes', 'no') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
