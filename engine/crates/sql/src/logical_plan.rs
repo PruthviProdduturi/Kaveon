@@ -9841,4 +9841,13 @@ mod tests {
                 ]
         ));
     }
+
+    #[test]
+    fn bracketed_distinct_identifier_is_not_lowered_as_array() {
+        let plan = sql_to_logical_plan("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
+            .expect("SQL Server bracketed identifiers should lower as columns");
+        let debug = format!("{plan:?}");
+        assert!(!debug.contains("name: \"ARRAY\""), "{debug}");
+        assert!(debug.contains("year"), "{debug}");
+    }
 }
