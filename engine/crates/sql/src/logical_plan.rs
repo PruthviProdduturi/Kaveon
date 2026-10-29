@@ -4207,9 +4207,10 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         // SQL Server/Fabric's CONVERT/TRY_CONVERT uses the target type
         // before the value (`CONVERT(date, value)`).  Lower the unstyled
         // form into the same typed cast path as CAST so null/error behavior
-        // stays identical across dialect spellings.  Style codes and
-        // character-set conversions remain explicit boundaries until their
-        // date/text semantics are qualified.
+        // stays identical across dialect spellings.  The bounded DATE styles
+        // are normalized for literals and use a typed vectorized runtime
+        // function for text columns; character-set conversions remain an
+        // explicit boundary.
         ast::Expr::Convert {
             is_try,
             expr,
@@ -4251,9 +4252,13 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                             })?;
                         Expr::Literal(ScalarValue::Utf8(normalized))
                     } else {
-                        return Err(sql_err(
-                            "styled CONVERT DATE currently requires a string literal",
-                        ));
+                        return Ok(Expr::Function {
+                            name: format!(
+                                "{}DATE_STYLE_{style}",
+                                if *is_try { "TRY_CONVERT_" } else { "CONVERT_" }
+                            ),
+                            args: vec![ast_expr_to_expr(expr)?],
+                        });
                     }
                 } else {
                     return Err(sql_err(
@@ -8700,6 +8705,9 @@ mod tests {
             let plan = sql_to_logical_plan(sql).expect("styled CONVERT should lower");
             assert!(format!("{plan:?}").contains(expected), "{plan:?}");
         }
+        let plan = sql_to_logical_plan("SELECT TRY_CONVERT(DATE, value, 101) FROM t")
+            .expect("runtime DATE style should lower through the typed function");
+        assert!(format!("{plan:?}").contains("TRY_CONVERT_DATE_STYLE_101"));
     }
 
     #[test]

@@ -40,7 +40,7 @@
     {"id": "convert_date_style_us", "sql": "SELECT CONVERT(DATE, '12/31/2024', 101)", "status": "planner_qualified"},
     {"id": "convert_date_style_text", "sql": "SELECT CONVERT(DATE, 'Dec 31 2024', 0)", "status": "planner_qualified"},
     {"id": "convert_date_style_iso_compact", "sql": "SELECT CONVERT(DATE, '20241231', 112)", "status": "planner_qualified"},
-    {"id": "convert_style_runtime_column", "sql": "SELECT CONVERT(DATE, value, 101) FROM t", "status": "explicit_rejection"},
+    {"id": "convert_style_runtime_column", "sql": "SELECT TRY_CONVERT(DATE, value, 101) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_columns"},
     {"id": "pivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "pivot", "sql": "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p", "status": "explicit_rejection"},
     {"id": "unpivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},

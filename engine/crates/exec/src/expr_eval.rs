@@ -1,13 +1,14 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
-    Decimal128Array, Decimal128Builder, Float32Array, Float32Builder, Float64Array, Float64Builder,
-    GenericListArray, GenericListBuilder, GenericStringBuilder, Int8Array, Int16Array, Int32Array,
-    Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray, LargeListBuilder,
-    LargeStringArray, LargeStringBuilder, ListArray, ListBuilder, MapArray, NullBuilder,
-    OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date32Builder,
+    Date64Array, Decimal128Array, Decimal128Builder, Float32Array, Float32Builder, Float64Array,
+    Float64Builder, GenericListArray, GenericListBuilder, GenericStringBuilder, Int8Array,
+    Int16Array, Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder,
+    LargeListArray, LargeListBuilder, LargeStringArray, LargeStringBuilder, ListArray, ListBuilder,
+    MapArray, NullBuilder, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray,
+    StringBuilder, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
 #[cfg(test)]
 use arrow::array::{Time64NanosecondBuilder, TimestampMillisecondBuilder};
@@ -21,7 +22,7 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
-use kaveon_core::predicate::ScalarValue;
+use kaveon_core::predicate::{ScalarValue, date_literal_days};
 use kaveon_core::{BinaryOp, CastTarget, DateField, Expr, KaveonError, Result};
 use std::sync::Arc;
 
@@ -1550,6 +1551,85 @@ fn map_text_array(
         }
         Ok(Arc::new(result.finish()))
     }
+}
+
+/// Parse the bounded SQL Server DATE style forms used by CONVERT/TRY_CONVERT
+/// over a text column.  The parser returns canonical ISO text so the shared
+/// date-literal validator remains the single calendar implementation.
+fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
+    let value = value.trim();
+    let (year, month, day) = match style {
+        1 | 101 => {
+            let mut parts = value.split('/');
+            let month = parts.next()?.parse::<u32>().ok()?;
+            let day = parts.next()?.parse::<u32>().ok()?;
+            let year = parts.next()?.parse::<i32>().ok()?;
+            (year, month, day)
+        }
+        0 => {
+            let normalized = value.replace(',', " ");
+            let mut parts = normalized.split_whitespace();
+            let month = match parts.next()?.to_ascii_lowercase().as_str() {
+                "jan" | "january" => 1,
+                "feb" | "february" => 2,
+                "mar" | "march" => 3,
+                "apr" | "april" => 4,
+                "may" => 5,
+                "jun" | "june" => 6,
+                "jul" | "july" => 7,
+                "aug" | "august" => 8,
+                "sep" | "september" => 9,
+                "oct" | "october" => 10,
+                "nov" | "november" => 11,
+                "dec" | "december" => 12,
+                _ => return None,
+            };
+            (
+                parts.next()?.parse::<i32>().ok()?,
+                month,
+                parts.next()?.parse::<u32>().ok()?,
+            )
+        }
+        112 => {
+            if value.len() != 8 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[4..6].parse::<u32>().ok()?,
+                value[6..8].parse::<u32>().ok()?,
+            )
+        }
+        _ => return None,
+    };
+    let canonical = format!("{year:04}-{month:02}-{day:02}");
+    i32::try_from(date_literal_days(&canonical)?).ok()
+}
+
+fn eval_tsql_runtime_date_style(
+    name: &str,
+    source: &ArrayRef,
+    style: u32,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let try_mode = name.starts_with("TRY_");
+    let mut result = Date32Builder::with_capacity(num_rows);
+    for row in 0..num_rows {
+        let Some(value) = text_value(source, row)? else {
+            result.append_null();
+            continue;
+        };
+        match normalize_tsql_runtime_date_style(value, style) {
+            Some(days) => result.append_value(days),
+            None if try_mode => result.append_null(),
+            None => {
+                return Err(KaveonError::Execution(format!(
+                    "{name} could not parse row {row} with style {style}"
+                )));
+            }
+        }
+    }
+    Ok(Arc::new(result.finish()))
 }
 
 fn optional_string_value(arr: &StringArray, row: usize) -> Option<String> {
@@ -8015,6 +8095,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ..Default::default()
             },
         )?);
+    }
+    if let Some(style) = upper.strip_prefix("TRY_CONVERT_DATE_STYLE_") {
+        let style = style.parse::<u32>().map_err(|_| {
+            KaveonError::Execution(format!("unsupported TRY_CONVERT DATE style: {style}"))
+        })?;
+        check_arity(name, args, 1)?;
+        return eval_tsql_runtime_date_style(name, &args[0], style, num_rows);
+    }
+    if let Some(style) = upper.strip_prefix("CONVERT_DATE_STYLE_") {
+        let style = style.parse::<u32>().map_err(|_| {
+            KaveonError::Execution(format!("unsupported CONVERT DATE style: {style}"))
+        })?;
+        check_arity(name, args, 1)?;
+        return eval_tsql_runtime_date_style(name, &args[0], style, num_rows);
     }
     match upper.as_str() {
         "UPPER" => {
@@ -25140,6 +25234,36 @@ mod tests {
         let dates = result.as_primitive::<arrow::datatypes::Date32Type>();
         assert_eq!(dates.value(0), 20_000);
         assert!(dates.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_tsql_runtime_date_styles_with_try_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("12/31/2024"),
+                Some("20241230"),
+                Some("bad"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let expression = |name: &str| Expr::Function {
+            name: name.into(),
+            args: vec![Expr::Column("value".into())],
+        };
+        let us = evaluate(&expression("TRY_CONVERT_DATE_STYLE_101"), &batch).unwrap();
+        let us = us.as_primitive::<Date32Type>();
+        assert_eq!(us.value(0), 20_088);
+        assert!(us.is_null(1));
+        assert!(us.is_null(2));
+        assert!(us.is_null(3));
+        let iso = evaluate(&expression("TRY_CONVERT_DATE_STYLE_112"), &batch).unwrap();
+        let iso = iso.as_primitive::<Date32Type>();
+        assert!(iso.is_null(0));
+        assert_eq!(iso.value(1), 20_087);
+        assert!(iso.is_null(2));
+        assert!(iso.is_null(3));
     }
 
     #[test]
