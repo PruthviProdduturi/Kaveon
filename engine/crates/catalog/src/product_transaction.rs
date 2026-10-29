@@ -199,6 +199,15 @@ impl ProductTransaction {
         self.documents.values().map(Vec::len).sum()
     }
 
+    /// Returns an immutable document staged in this transaction, if present.
+    ///
+    /// Product reads that follow a write in the same transaction must use the
+    /// preview's staged bytes rather than reaching back to the durable head.
+    #[must_use]
+    pub fn staged_document(&self, path: &str) -> Option<&[u8]> {
+        self.documents.get(path).map(Vec::as_slice)
+    }
+
     #[must_use]
     pub fn base_snapshot(&self) -> &CatalogSnapshot {
         &self.base

@@ -2615,11 +2615,6 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
         }
         Statement::Delete(delete) => {
             let returning = parse_product_returning(delete.returning.as_ref())?;
-            if returning.iter().any(|column| column == "document_json") {
-                return Err(sql_error(
-                    "DELETE RETURNING document_json is not supported; the deleted document is not retained in the staged snapshot",
-                ));
-            }
             let tables = match &delete.from {
                 FromTable::WithFromKeyword(tables) => tables,
                 FromTable::WithoutKeyword(_) => {
@@ -2672,8 +2667,8 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
 }
 
 /// The product transaction contract can return stable identity, revision, and
-/// the staged document for creates/updates. Arbitrary row RETURNING remains
-/// rejected until typed-table DML has a durable row contract.
+/// the staged document. Arbitrary row RETURNING remains rejected until
+/// typed-table DML has a durable row contract.
 fn parse_product_returning(returning: Option<&Vec<SelectItem>>) -> Result<Vec<String>> {
     let Some(items) = returning else {
         return Ok(Vec::new());
@@ -2896,10 +2891,14 @@ mod tests {
             panic!("expected product DML");
         };
         assert_eq!(dml.returning, ["document_json"]);
-        assert!(parse_native_transactional(
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING document_json"
         )
-        .is_err());
+        .expect("product DELETE document projection should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(dml.returning, ["document_json"]);
     }
 
     #[test]
@@ -3472,14 +3471,18 @@ mod tests {
     fn accepts_identity_returning_for_product_update_and_delete() {
         for sql in [
             "UPDATE product.datasets SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
-            "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
+            "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision, document_json",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("product DML should parse")
             else {
                 panic!("expected product DML")
             };
-            assert_eq!(dml.returning, ["id", "revision"]);
+            if sql.starts_with("DELETE") {
+                assert_eq!(dml.returning, ["id", "revision", "document_json"]);
+            } else {
+                assert_eq!(dml.returning, ["id", "revision"]);
+            }
             assert!(adapt_product_dml(&dml).is_ok());
         }
     }

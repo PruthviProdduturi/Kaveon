@@ -522,6 +522,68 @@ impl TransactionRegistry {
         Ok(session.transaction.snapshot().clone())
     }
 
+    /// Capture deleted documents for `RETURNING document_json` from the same
+    /// transaction snapshot that will validate the staged CAS write. This
+    /// preserves read-your-writes when an earlier update staged a replacement
+    /// document, while falling back to the immutable durable object for rows
+    /// that have not been changed in this transaction.
+    async fn product_returning_documents(
+        &self,
+        owner: &str,
+        id: &str,
+        commands: &[kaveon_sql::parser::ProductDmlCommand],
+    ) -> Result<Vec<Option<String>>, RegistryError> {
+        let catalog = self.catalog.clone().ok_or(RegistryError::Disabled)?;
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        let snapshot = session.transaction.snapshot().clone();
+        let mut documents = vec![None; commands.len()];
+        for (index, command) in commands.iter().enumerate() {
+            let kaveon_sql::parser::ProductDmlCommand::Delete {
+                kind,
+                id,
+                expected_revision,
+            } = command
+            else {
+                continue;
+            };
+            if kind == "typed_row" {
+                return Err(RegistryError::Invalid(
+                    "document_json RETURNING is only available for product records".into(),
+                ));
+            }
+            let product_kind = record_kind(kind)?;
+            let record = snapshot
+                .product_record(product_kind, id)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                .ok_or(RegistryError::ProductMissing)?;
+            require_product_owner(record, owner)?;
+            if record.revision != *expected_revision {
+                return Err(RegistryError::Invalid("stale product revision".into()));
+            }
+            let path = record.document.path.clone();
+            let staged = session
+                .transaction
+                .staged_document(&path)
+                .map(ToOwned::to_owned);
+            let bytes = match staged {
+                Some(bytes) => bytes,
+                None => catalog
+                    .fetch_product_document_at(&snapshot, product_kind, id)
+                    .await
+                    .map_err(|error| match error {
+                        kaveon_storage::CommitErrorKind::Missing
+                        | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                        _ => RegistryError::Unavailable,
+                    })?
+                    .ok_or(RegistryError::Corrupt)?,
+            };
+            documents[index] = Some(String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?);
+        }
+        Ok(documents)
+    }
+
     async fn read_product(
         &self,
         identity: &Identity,
@@ -2470,13 +2532,32 @@ async fn execute_sql_request(
                 Ok(command) => command,
                 Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
             };
+            let deleted_documents = if returning
+                .iter()
+                .any(|column| column.eq_ignore_ascii_case("document_json"))
+            {
+                match registry
+                    .product_returning_documents(owner, &id, &commands)
+                    .await
+                {
+                    Ok(documents) => documents,
+                    Err(error) => return error_response(error),
+                }
+            } else {
+                Vec::new()
+            };
             match registry
                 .stage_product_commands(owner, &id, commands.clone())
                 .await
             {
                 Ok(snapshot) if returning.is_empty() => Json(snapshot).into_response(),
                 Ok(snapshot) => {
-                    match product_returning_response(&snapshot, &returning, &commands) {
+                    match product_returning_response(
+                        &snapshot,
+                        &returning,
+                        &commands,
+                        &deleted_documents,
+                    ) {
                         Ok(body) => Json(body).into_response(),
                         Err(error) => error_response(RegistryError::Invalid(error)),
                     }
@@ -2491,10 +2572,12 @@ fn product_returning_response(
     snapshot: &CatalogSnapshot,
     columns: &[String],
     commands: &[kaveon_sql::parser::ProductDmlCommand],
+    deleted_documents: &[Option<String>],
 ) -> Result<serde_json::Value, String> {
     let rows = commands
         .iter()
-        .map(|command| {
+        .enumerate()
+        .map(|(command_index, command)| {
             let (id, revision) = match command {
                 kaveon_sql::parser::ProductDmlCommand::Create { id, .. }
                 | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { id, .. } => (id.clone(), 1),
@@ -2550,8 +2633,17 @@ fn product_returning_response(
                             | kaveon_sql::parser::ProductDmlCommand::Upsert {
                                 document_json, ..
                             } => document_json.clone(),
-                            kaveon_sql::parser::ProductDmlCommand::Delete { .. }
-                            | kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. } => {
+                            kaveon_sql::parser::ProductDmlCommand::Delete { .. } => {
+                                deleted_documents
+                                    .get(command_index)
+                                    .and_then(Option::as_ref)
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        "document_json RETURNING is unavailable for this command"
+                                            .to_owned()
+                                    })?
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. } => {
                                 return Err(
                                     "document_json RETURNING is unavailable for this command"
                                         .to_owned(),
@@ -3847,7 +3939,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "DELETE FROM product.datasets WHERE id = 'orders' AND revision = 2 RETURNING id, revision".into(),
+                sql: "DELETE FROM product.datasets WHERE id = 'orders' AND revision = 2 RETURNING id, revision, document_json".into(),
                 transaction_id: Some(delete.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -3861,6 +3953,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "orders");
         assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            value["returning"][0]["document_json"],
+            r#"{"name":"Orders"}"#
+        );
         assert_eq!(
             execute_sql_request(
                 &registry,
