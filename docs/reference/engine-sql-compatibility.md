@@ -126,7 +126,7 @@ unchanged; nothing is approximated unless the statement writes an
 The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, bounded `TOP n PERCENT`, and `TOP n WITH TIES`
 with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
-`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `LEFT`, `RIGHT`, unstyled `CONVERT`, and
+`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `LEFT`, `RIGHT`, `REVERSE`, unstyled `CONVERT`, and
 unstyled `TRY_CONVERT`. Literal DATE
 conversion styles `0`, `1`, `101`, and `112` are normalized to ISO dates;
 runtime column style evaluation remains bounded. Datepart abbreviations such
@@ -157,6 +157,7 @@ text accepted by the safe numeric cast; locale-specific currency parsing is
 not claimed.
 `LEFT` and `RIGHT` are qualified for bounded Unicode scalar text lengths and
 preserve NULLs across local and three-worker execution.
+`REVERSE` is qualified for the same Unicode scalar and NULL-preserving path.
 
 `PIVOT`, `UNPIVOT`, and `CROSS/OUTER APPLY` are recognized and rejected with
 rewrite guidance rather than being treated as generic syntax failures. This
