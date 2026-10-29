@@ -8431,11 +8431,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, |value| value.trim_end().to_owned())
         }
-        "LENGTH" | "LEN" | "CHAR_LENGTH" | "CHARACTER_LENGTH" => {
+        "LENGTH" | "CHAR_LENGTH" | "CHARACTER_LENGTH" => {
             check_arity(name, args, 1)?;
             let result: Int64Array = (0..num_rows)
                 .map(|row| {
-                    text_value(&args[0], row).map(|value| value.map(|value| value.len() as i64))
+                    text_value(&args[0], row)
+                        .map(|value| value.map(|value| value.chars().count() as i64))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
+        // SQL Server LEN counts characters but excludes trailing U+0020
+        // spaces. Keep it separate from the ANSI length functions so the
+        // T-SQL boundary is exact without changing existing LENGTH behavior.
+        "LEN" => {
+            check_arity(name, args, 1)?;
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    text_value(&args[0], row).map(|value| {
+                        value.map(|value| value.trim_end_matches(' ').chars().count() as i64)
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -27922,6 +27938,17 @@ mod tests {
         .unwrap();
         let values = length.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), None]);
+
+        let tsql_length = evaluate(
+            &Expr::Function {
+                name: "LEN".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = tsql_length.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(8), None]);
 
         let single = RecordBatch::try_from_iter([(
             "value",
