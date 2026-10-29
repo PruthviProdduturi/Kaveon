@@ -15039,12 +15039,12 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
             }
             let field_str = field_arr.value(i).to_uppercase();
             let field = match field_str.as_str() {
-                "YEAR" => DateField::Year,
-                "MONTH" => DateField::Month,
-                "DAY" => DateField::Day,
-                "HOUR" => DateField::Hour,
-                "MINUTE" => DateField::Minute,
-                "SECOND" => DateField::Second,
+                "YEAR" | "YY" | "YYYY" => DateField::Year,
+                "MONTH" | "MM" | "M" => DateField::Month,
+                "DAY" | "DD" | "D" => DateField::Day,
+                "HOUR" | "HH" => DateField::Hour,
+                "MINUTE" | "MI" | "N" => DateField::Minute,
+                "SECOND" | "SS" | "S" => DateField::Second,
                 "DOW" | "DAYOFWEEK" => DateField::DayOfWeek,
                 "DOY" | "DAYOFYEAR" => DateField::DayOfYear,
                 "QUARTER" => DateField::Quarter,
@@ -15287,16 +15287,19 @@ fn eval_date_diff(
             }
             let unit = unit_arr.value(row).to_ascii_uppercase();
             let divisor = match unit.as_str() {
-                "NANOSECOND" => 1i128,
-                "MICROSECOND" => 1_000i128,
-                "MILLISECOND" => 1_000_000i128,
-                "SECOND" => 1_000_000_000i128,
-                "MINUTE" => 60_000_000_000i128,
-                "HOUR" => 3_600_000_000_000i128,
-                "DAY" => 86_400_000_000_000i128,
-                "WEEK" => 604_800_000_000_000i128,
+                "NANOSECOND" | "NS" => 1i128,
+                "MICROSECOND" | "MCS" => 1_000i128,
+                "MILLISECOND" | "MS" => 1_000_000i128,
+                "SECOND" | "SS" | "S" => 1_000_000_000i128,
+                "MINUTE" | "MI" | "N" => 60_000_000_000i128,
+                "HOUR" | "HH" => 3_600_000_000_000i128,
+                "DAY" | "DD" | "D" => 86_400_000_000_000i128,
+                "WEEK" | "WK" | "WW" => 604_800_000_000_000i128,
                 unit => {
-                    if matches!(unit, "MONTH" | "QUARTER" | "YEAR") {
+                    if matches!(
+                        unit,
+                        "MONTH" | "MM" | "M" | "QUARTER" | "QQ" | "Q" | "YEAR" | "YY" | "YYYY"
+                    ) {
                         let Some(start) = temporal_calendar_position(start, row)? else {
                             return Ok(None);
                         };
@@ -15305,9 +15308,9 @@ fn eval_date_diff(
                         };
                         let months = calendar_month_difference(start, end);
                         let result = match unit {
-                            "MONTH" => months,
-                            "QUARTER" => months / 3,
-                            "YEAR" => months / 12,
+                            "MONTH" | "MM" | "M" => months,
+                            "QUARTER" | "QQ" | "Q" => months / 3,
+                            "YEAR" | "YY" | "YYYY" => months / 12,
                             _ => unreachable!(),
                         };
                         return Ok(Some(result));

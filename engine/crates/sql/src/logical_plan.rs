@@ -4661,12 +4661,18 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 "{function_name} requires a unit, amount, and date or timestamp"
             )));
         };
-        let Expr::Literal(ScalarValue::Utf8(unit)) = unit else {
-            return Err(sql_err(format!(
-                "{function_name} unit must be a string literal"
-            )));
+        let unit = match unit {
+            Expr::Literal(ScalarValue::Utf8(unit)) => unit.clone(),
+            // T-SQL uses an unquoted datepart token (`DATEADD(dd, ...)`),
+            // which sqlparser represents as an identifier expression.
+            Expr::Column(unit) if !unit.contains('.') => unit.clone(),
+            _ => {
+                return Err(sql_err(format!(
+                    "{function_name} unit must be a string literal or datepart identifier"
+                )));
+            }
         };
-        let unit = unit.to_ascii_lowercase();
+        let unit = normalize_tsql_date_unit(&unit);
         let (operator, multiplier) = match unit.as_str() {
             "day" => ("DATE_ADD_DAYS", 1_i64),
             "week" => ("DATE_ADD_DAYS", 7),
@@ -4914,6 +4920,25 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         args
     };
     Ok(Expr::Function { name, args })
+}
+
+/// Normalize SQL Server/Fabric datepart spellings to the canonical Trino
+/// units used by the vectorized date operators.  The parser accepts the
+/// spelling, but execution must not silently treat an abbreviated unit as an
+/// unknown function argument.
+fn normalize_tsql_date_unit(unit: &str) -> String {
+    match unit.trim().to_ascii_lowercase().as_str() {
+        "yy" | "yyyy" => "year".into(),
+        "qq" | "q" => "quarter".into(),
+        "mm" | "m" => "month".into(),
+        "wk" | "ww" => "week".into(),
+        "dd" | "d" => "day".into(),
+        "hh" => "hour".into(),
+        "mi" | "n" => "minute".into(),
+        "ss" | "s" => "second".into(),
+        "ms" => "millisecond".into(),
+        other => other.into(),
+    }
 }
 
 /// Lower a supported aggregate `FILTER (WHERE predicate)` into the existing
@@ -5213,10 +5238,16 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
 /// `APPROX_COUNT_DISTINCT`.
 fn canonical_function_name(func: &ast::Function) -> String {
     let name = func.name.to_string().to_uppercase();
-    if name == "APPROX_DISTINCT" {
-        "APPROX_COUNT_DISTINCT".to_owned()
-    } else {
-        name
+    match name.as_str() {
+        "APPROX_DISTINCT" => "APPROX_COUNT_DISTINCT".to_owned(),
+        // SQL Server/Fabric spellings that have identical scalar semantics
+        // in the Engine. Keep the aliases here so every caller (aggregates,
+        // windows, and ordinary expressions) sees one canonical contract.
+        "ISNULL" => "COALESCE".to_owned(),
+        "DATEADD" => "DATE_ADD".to_owned(),
+        "DATEDIFF" => "DATE_DIFF".to_owned(),
+        "DATEPART" => "DATE_PART".to_owned(),
+        _ => name,
     }
 }
 
@@ -8132,6 +8163,19 @@ mod tests {
             }
             _ => panic!("expected Project"),
         }
+    }
+
+    #[test]
+    fn lowers_common_tsql_scalar_aliases() {
+        let plan = sql_to_logical_plan(
+            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date) FROM t",
+        )
+        .expect("common T-SQL scalar aliases should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("COALESCE"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
+        assert!(rendered.contains("DATE_DIFF"), "{rendered}");
+        assert!(rendered.contains("DATE_PART"), "{rendered}");
     }
 
     #[test]
