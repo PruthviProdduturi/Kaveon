@@ -26,7 +26,7 @@ following `DATETIMEOFFSETFROMPARTS` in `8f80bfbe`, `TIMEFROMPARTS` in
 three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-and the versioned 60-case corpus. The bounded date-construction qualifications
+and the versioned 63-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
