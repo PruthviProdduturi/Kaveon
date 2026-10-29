@@ -1857,6 +1857,14 @@ pub enum ProductDmlCommand {
         id: String,
         document_json: String,
     },
+    /// Bounded MERGE semantics: delete the matched product row, or create the
+    /// source document when no row matches. The transaction layer resolves
+    /// the current revision immediately before staging the CAS change.
+    MergeDeleteOrInsert {
+        kind: String,
+        id: String,
+        document_json: String,
+    },
     /// Copy product records from another product table in the pinned
     /// transactional snapshot.  The server expands this bounded form into
     /// ordinary create/update commands; it is deliberately not a lake-table
@@ -2200,20 +2208,23 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         || !matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched)
     {
         return Err(sql_error(
-            "MERGE requires WHEN MATCHED UPDATE followed by WHEN NOT MATCHED INSERT",
+            "MERGE requires WHEN MATCHED UPDATE or DELETE followed by WHEN NOT MATCHED INSERT",
         ));
     }
-    let MergeAction::Update { assignments } = &clauses[0].action else {
-        return Err(sql_error("MERGE WHEN MATCHED must update document_json"));
-    };
-    if assignments.len() != 1
-        || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
-            if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
-        || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
-    {
-        return Err(sql_error(
-            "MERGE WHEN MATCHED must set document_json from source",
-        ));
+    let matched_delete = matches!(clauses[0].action, MergeAction::Delete);
+    if !matched_delete {
+        let MergeAction::Update { assignments } = &clauses[0].action else {
+            return Err(sql_error("MERGE WHEN MATCHED must update or delete"));
+        };
+        if assignments.len() != 1
+            || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
+                if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+            || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+        {
+            return Err(sql_error(
+                "MERGE WHEN MATCHED must set document_json from source",
+            ));
+        }
     }
     let MergeAction::Insert(insert) = &clauses[1].action else {
         return Err(sql_error(
@@ -2240,10 +2251,18 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     source_values
         .iter()
         .map(|row| {
-            Ok(ProductDmlCommand::Upsert {
-                kind: kind.clone(),
-                id: string_literal(&row[0], "MERGE source id")?,
-                document_json: string_literal(&row[1], "MERGE source document_json")?,
+            Ok(if matched_delete {
+                ProductDmlCommand::MergeDeleteOrInsert {
+                    kind: kind.clone(),
+                    id: string_literal(&row[0], "MERGE source id")?,
+                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                }
+            } else {
+                ProductDmlCommand::Upsert {
+                    kind: kind.clone(),
+                    id: string_literal(&row[0], "MERGE source id")?,
+                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                }
             })
         })
         .collect()
@@ -3690,11 +3709,29 @@ mod tests {
     }
 
     #[test]
+    fn product_merge_supports_bounded_delete_or_insert() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("bounded delete-or-insert MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::MergeDeleteOrInsert {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
     fn product_merge_rejects_unbounded_or_ambiguous_shapes() {
         for sql in [
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.owner_principal = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
-            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
