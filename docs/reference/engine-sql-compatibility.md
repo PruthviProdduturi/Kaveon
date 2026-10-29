@@ -119,6 +119,15 @@ unchanged; nothing is approximated unless the statement writes an
   would have answered. File skipping by the statistics' bounds still
   applies.
 
+### Transactional source `INSERT … SELECT`
+
+KaveonDB supports a bounded product-record source copy: one same-kind
+`kaveon.product` table, direct `id` and `document_json` projection, pinned
+snapshot, owner isolation, and a 1,000-row cap. It reuses product conflict
+and revision-CAS semantics. Joins, filters, CTEs, arbitrary expressions,
+cross-kind copies, lake/external sources, and `RETURNING` remain rejected;
+this is not general lake-table DML.
+
 ## Not currently executable
 
 ### SQL Server/Fabric compatibility aliases

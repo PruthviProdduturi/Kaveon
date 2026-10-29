@@ -1300,6 +1300,16 @@ pub enum ProductDmlCommand {
         id: String,
         document_json: String,
     },
+    /// Copy product records from another product table in the pinned
+    /// transactional snapshot.  The server expands this bounded form into
+    /// ordinary create/update commands; it is deliberately not a lake-table
+    /// INSERT ... SELECT implementation.
+    InsertSelect {
+        kind: String,
+        source_kind: String,
+        on_conflict_do_nothing: bool,
+        on_conflict_do_update: bool,
+    },
     Update {
         kind: String,
         id: String,
@@ -1428,7 +1438,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         || select.distinct.is_some()
                         || select.top.is_some()
                         || select.into.is_some()
-                        || !select.from.is_empty()
+                        || (!select.from.is_empty() && !is_bounded_product_source(select, &kind))
                         || !select.lateral_views.is_empty()
                         || select.prewhere.is_some()
                         || select.selection.is_some()
@@ -1447,8 +1457,22 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         || select.connect_by.is_some()
                     {
                         return Err(sql_error(
-                            "product INSERT SELECT supports one constant SELECT without FROM or query modifiers",
+                            "product INSERT SELECT supports one constant SELECT or a bounded product-table copy",
                         ));
+                    }
+                    if !select.from.is_empty() {
+                        let source_kind = bounded_product_source_kind(select, &kind)?;
+                        if !dml.returning.is_empty() {
+                            return Err(sql_error(
+                                "product INSERT SELECT does not support RETURNING",
+                            ));
+                        }
+                        return Ok(vec![ProductDmlCommand::InsertSelect {
+                            kind,
+                            source_kind,
+                            on_conflict_do_nothing: dml.on_conflict_do_nothing,
+                            on_conflict_do_update: dml.on_conflict_do_update,
+                        }]);
                     }
                     let mut values = [None, None];
                     if select.projection.len() != 2 {
@@ -1532,6 +1556,50 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
         }
         _ => Err(sql_error("statement is not product DML")),
     }
+}
+
+fn bounded_product_source_kind(
+    select: &sqlparser::ast::Select,
+    target_kind: &str,
+) -> Result<String> {
+    let Some(table) = select.from.first() else {
+        return Err(sql_error("product INSERT SELECT requires one source table"));
+    };
+    if !table.joins.is_empty() {
+        return Err(sql_error("product INSERT SELECT does not support joins"));
+    }
+    let TableFactor::Table { name, alias, .. } = &table.relation else {
+        return Err(sql_error(
+            "product INSERT SELECT source must be a product table",
+        ));
+    };
+    if alias.is_some() {
+        return Err(sql_error(
+            "product INSERT SELECT does not support source aliases",
+        ));
+    }
+    let source_kind = product_kind(&name.to_string())?;
+    if source_kind != target_kind {
+        return Err(sql_error(
+            "product INSERT SELECT source and target kinds must match",
+        ));
+    }
+    if select.projection.len() != 2
+        || !select.projection.iter().all(|item| {
+            matches!(item, SelectItem::UnnamedExpr(Expr::Identifier(identifier))
+                if identifier.value.eq_ignore_ascii_case("id")
+                    || identifier.value.eq_ignore_ascii_case("document_json"))
+        })
+    {
+        return Err(sql_error(
+            "product INSERT SELECT must project only id and document_json",
+        ));
+    }
+    Ok(source_kind)
+}
+
+fn is_bounded_product_source(select: &sqlparser::ast::Select, target_kind: &str) -> bool {
+    bounded_product_source_kind(select, target_kind).is_ok()
 }
 
 fn product_kind(table: &str) -> Result<String> {
@@ -2732,6 +2800,39 @@ mod tests {
                     || error.to_string().contains("product INSERT SELECT"),
                 "{sql}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn product_insert_select_accepts_bounded_product_copy() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets ON CONFLICT DO NOTHING",
+        )
+        .expect("product source copy should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::InsertSelect {
+                kind: "dataset".into(),
+                source_kind: "dataset".into(),
+                on_conflict_do_nothing: true,
+                on_conflict_do_update: false,
+            }
+        );
+    }
+
+    #[test]
+    fn product_insert_select_rejects_joins_and_returning() {
+        for sql in [
+            "INSERT INTO product.datasets (id, document_json) SELECT a.id, a.document_json FROM product.datasets a JOIN product.datasets b ON a.id = b.id",
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets RETURNING id",
+        ] {
+            let parsed = parse_native_transactional(sql);
+            if let Ok(NativeTransactionalStatement::Dml(dml)) = parsed {
+                assert!(adapt_product_dml(&dml).is_err(), "{sql}");
+            }
         }
     }
 }

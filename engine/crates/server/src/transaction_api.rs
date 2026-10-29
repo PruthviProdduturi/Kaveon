@@ -33,6 +33,7 @@ use crate::{AppState, security::Identity};
 const MAX_SESSIONS: usize = 64;
 const MAX_SESSIONS_PER_PRINCIPAL: usize = 8;
 const MAX_SESSION_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PRODUCT_INSERT_SELECT_ROWS: usize = 1_000;
 const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
 type StagedDocument = (String, Vec<u8>);
 type ProductStage = (CatalogChange, Option<StagedDocument>);
@@ -320,7 +321,79 @@ impl TransactionRegistry {
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
+        let mut expanded = Vec::new();
+        let catalog = self.catalog.clone();
+        let snapshot = session.transaction.snapshot().clone();
         for command in commands {
+            if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
+                kind,
+                source_kind,
+                on_conflict_do_nothing,
+                on_conflict_do_update,
+            } = command
+            {
+                let catalog = catalog.as_ref().ok_or(RegistryError::Disabled)?;
+                let source = record_kind(&source_kind)?;
+                let mut cursor = None;
+                loop {
+                    let page = snapshot
+                        .product_records_page(source, 100, cursor.as_deref())
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                    for record in page.records {
+                        if record
+                            .unique_values
+                            .get("owner_principal")
+                            .map(String::as_str)
+                            != Some(owner)
+                        {
+                            return Err(RegistryError::OwnershipForbidden);
+                        }
+                        if expanded.len() >= MAX_PRODUCT_INSERT_SELECT_ROWS {
+                            return Err(RegistryError::Capacity);
+                        }
+                        let bytes = catalog
+                            .fetch_product_document_at(&snapshot, source, &record.id)
+                            .await
+                            .map_err(|error| match error {
+                                kaveon_storage::CommitErrorKind::Missing
+                                | kaveon_storage::CommitErrorKind::Invalid => {
+                                    RegistryError::Corrupt
+                                }
+                                _ => RegistryError::Unavailable,
+                            })?
+                            .ok_or(RegistryError::Corrupt)?;
+                        let document_json =
+                            String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?;
+                        expanded.push(if on_conflict_do_update {
+                            kaveon_sql::parser::ProductDmlCommand::Upsert {
+                                kind: kind.clone(),
+                                id: record.id,
+                                document_json,
+                            }
+                        } else if on_conflict_do_nothing {
+                            kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
+                                kind: kind.clone(),
+                                id: record.id,
+                                document_json,
+                            }
+                        } else {
+                            kaveon_sql::parser::ProductDmlCommand::Create {
+                                kind: kind.clone(),
+                                id: record.id,
+                                document_json,
+                            }
+                        });
+                    }
+                    cursor = page.next_cursor;
+                    if cursor.is_none() {
+                        break;
+                    }
+                }
+            } else {
+                expanded.push(command);
+            }
+        }
+        for command in expanded {
             let command = match command {
                 kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
                     kind,
@@ -936,6 +1009,9 @@ fn product_change(
                 None,
             ))
         }
+        ProductDmlCommand::InsertSelect { .. } => Err(RegistryError::Invalid(
+            "product INSERT SELECT must be expanded before staging".into(),
+        )),
     }
 }
 
@@ -2412,6 +2488,9 @@ fn product_returning_response(
                     expected_revision,
                     ..
                 } => (id.clone(), *expected_revision),
+                kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. } => {
+                    return Err("product INSERT SELECT cannot use RETURNING".to_owned());
+                }
                 kaveon_sql::parser::ProductDmlCommand::Upsert { kind, id, .. } => {
                     let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
                     let revision = snapshot
@@ -3912,6 +3991,73 @@ mod tests {
             .read_product(&identity, ProductRecordKind::Dataset, "orders")
             .await
             .expect("constant INSERT SELECT should commit");
+        assert_eq!(record.document["name"], "Orders");
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_commits_bounded_product_table_insert_select() {
+        let (registry, _catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}')"#.into(),
+                transaction_id: Some(seed.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(seed.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let copy = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json".into(),
+                transaction_id: Some(copy.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(copy.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let identity = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let record = registry
+            .read_product(&identity, ProductRecordKind::Dataset, "orders")
+            .await
+            .expect("source-backed INSERT SELECT should commit");
+        assert_eq!(record.revision, 2);
         assert_eq!(record.document["name"], "Orders");
     }
 
