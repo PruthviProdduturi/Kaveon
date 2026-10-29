@@ -40,7 +40,7 @@ The authoritative capability details remain in:
   `APPLY` forms rejected until their semantics are implemented and qualified.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
-Progress: the Engine now lowers `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`,
+Progress: the Engine now lowers bounded `TOP n PERCENT`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Literal DATE styles `0`, `1`, `101`, and `112` now
 normalize to ISO values. The focused planner regression passes; execution and
