@@ -15906,7 +15906,9 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "WEEKDAY" | "DW" | "W" | "DOW" | "DAYOFWEEK" => {
                     WEEKDAY_NAMES[((days % 7 + 4 + 7) % 7) as usize].to_owned()
                 }
-                "DAYOFYEAR" | "DOY" => (days - ymd_to_days(year, 1, 1) + 1).to_string(),
+                "DAYOFYEAR" | "DOY" | "DY" | "Y" => {
+                    (days - ymd_to_days(year, 1, 1) + 1).to_string()
+                }
                 "QUARTER" | "QQ" | "Q" => (((month - 1) / 3) + 1).to_string(),
                 "WEEK" | "WK" | "WW" => ((days - ymd_to_days(year, 1, 1)) / 7 + 1).to_string(),
                 "ISO_WEEK" | "ISOWK" | "ISOWW" => iso_week_number(days).to_string(),
@@ -16616,6 +16618,29 @@ mod tests {
         let result = values.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(result.value(0), "February");
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn date_name_accepts_tsql_day_of_year_aliases() {
+        let source = Arc::new(Date32Array::from(vec![Some(18_628)])) as ArrayRef;
+        let canonical = eval_date_name(&StringArray::from(vec![Some("DAYOFYEAR")]), &source, 1)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0)
+            .to_owned();
+        assert_eq!(canonical, "1");
+        for alias in ["DOY", "DY", "Y"] {
+            let values = eval_date_name(&StringArray::from(vec![Some(alias)]), &source, 1)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0)
+                .to_owned();
+            assert_eq!(values, canonical, "DATENAME day-of-year alias {alias}");
+        }
     }
 
     #[test]
