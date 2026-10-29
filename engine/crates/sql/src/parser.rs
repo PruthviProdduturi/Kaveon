@@ -476,9 +476,6 @@ fn normalize_bounded_apply(sql: &str) -> Result<Option<String>> {
     let Some((position, keyword)) = found else {
         return Ok(None);
     };
-    if keyword == "OUTER APPLY" {
-        return Ok(None);
-    }
     let after = sql[position + keyword.len()..].trim_start();
     if !after.starts_with('(') {
         return Ok(None);
@@ -517,8 +514,38 @@ fn normalize_bounded_apply(sql: &str) -> Result<Option<String>> {
     let mut rewritten = String::with_capacity(sql.len() + 8);
     rewritten.push_str(&sql[..position]);
     rewritten.push_str(replacement);
-    rewritten.push_str(&sql[position + keyword.len()..]);
+    rewritten.push_str(&sql[position + keyword.len()..close + 1]);
+    if keyword == "OUTER APPLY" {
+        // APPLY has implicit TRUE join semantics; the regular SQL grammar
+        // requires an explicit predicate for LEFT JOIN LATERAL. Keep the
+        // predicate before any query-level ORDER/LIMIT clauses that follow
+        // the APPLY relation.
+        let (alias, tail) = split_apply_tail(suffix);
+        rewritten.push(' ');
+        rewritten.push_str(alias);
+        rewritten.push_str(" ON TRUE");
+        if !tail.is_empty() {
+            rewritten.push(' ');
+            rewritten.push_str(tail);
+        }
+    } else {
+        rewritten.push_str(&sql[close + 1..]);
+    }
     Ok(Some(rewritten))
+}
+
+fn split_apply_tail(suffix: &str) -> (&str, &str) {
+    const CLAUSES: [&str; 9] = [
+        "WHERE", "GROUP BY", "HAVING", "ORDER BY", "LIMIT", "OFFSET", "FETCH", "UNION", "EXCEPT",
+    ];
+    let upper = suffix.to_ascii_uppercase();
+    let split = CLAUSES
+        .iter()
+        .filter_map(|clause| find_top_level_keyword(&upper, clause))
+        .min();
+    split
+        .map(|index| (suffix[..index].trim_end(), suffix[index..].trim()))
+        .unwrap_or((suffix.trim_end(), ""))
 }
 
 fn find_top_level_keyword(sql_upper: &str, keyword: &str) -> Option<usize> {
@@ -3371,6 +3398,18 @@ mod tests {
         let statements = parse_sql(sql).expect("bounded CROSS APPLY should lower");
         let rendered = statements[0].to_string();
         assert!(rendered.contains("CROSS JOIN LATERAL"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_outer_apply_lowers_to_left_lateral_join() {
+        let sql = "SELECT t.id, a.next_id FROM t OUTER APPLY (VALUES (1)) AS a(next_id)";
+        let statements = parse_sql(sql).expect("bounded OUTER APPLY should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("LEFT JOIN LATERAL"), "{rendered}");
+        assert!(
+            rendered.to_ascii_uppercase().contains("ON TRUE"),
+            "{rendered}"
+        );
     }
 
     #[test]

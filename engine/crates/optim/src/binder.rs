@@ -642,6 +642,10 @@ impl Binder<'_> {
                     .correlations
                     .into_iter()
                     .partition(|correlation| correlation.depth() == outer.len());
+                // An uncorrelated OUTER APPLY is normalized to a LEFT JOIN
+                // LATERAL ... ON TRUE. Preserve that outer-join contract so
+                // an empty derived relation null-extends the left row.
+                let uncorrelated_outer_apply = lateral_left && lateral.is_empty();
                 let mut correlations = left.correlations;
                 correlations.extend(deeper);
                 if !lateral.is_empty() {
@@ -772,8 +776,8 @@ impl Binder<'_> {
                         "residual correlated predicates are supported only for inner or left lateral joins".into(),
                     ));
                 }
-                let allow_lateral_outer_residual =
-                    join_type == JoinType::Left && !residuals.is_empty();
+                let allow_lateral_outer_residual = join_type == JoinType::Left
+                    && (!residuals.is_empty() || uncorrelated_outer_apply);
                 let condition =
                     conjoin(condition.into_iter().chain(keys).chain(residuals).collect());
                 let Some(condition) = condition else {
