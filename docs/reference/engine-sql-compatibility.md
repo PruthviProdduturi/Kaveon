@@ -125,8 +125,9 @@ unchanged; nothing is approximated unless the statement writes an
 
 The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, bounded `TOP n PERCENT`, and `TOP n WITH TIES`
-with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`,
-`DATEPART`, unstyled `CONVERT`, and unstyled `TRY_CONVERT`. Literal DATE
+with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
+`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, unstyled `CONVERT`, and
+unstyled `TRY_CONVERT`. Literal DATE
 conversion styles `0`, `1`, `101`, and `112` are normalized to ISO dates;
 runtime column style evaluation remains bounded. Datepart abbreviations such
 as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical

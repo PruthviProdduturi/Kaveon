@@ -5453,6 +5453,9 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEADD" => "DATE_ADD".to_owned(),
         "DATEDIFF" => "DATE_DIFF".to_owned(),
         "DATEPART" => "DATE_PART".to_owned(),
+        "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
+            "CURRENT_TIMESTAMP".to_owned()
+        }
         _ => name,
     }
 }
@@ -8374,7 +8377,7 @@ mod tests {
     #[test]
     fn lowers_common_tsql_scalar_aliases() {
         let plan = sql_to_logical_plan(
-            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date) FROM t",
+            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date), GETDATE(), SYSDATETIME() FROM t",
         )
         .expect("common T-SQL scalar aliases should lower");
         let rendered = format!("{plan:?}");
@@ -8382,6 +8385,7 @@ mod tests {
         assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("DATE_PART"), "{rendered}");
+        assert!(rendered.contains("CURRENT_TIMESTAMP"), "{rendered}");
     }
 
     #[test]
