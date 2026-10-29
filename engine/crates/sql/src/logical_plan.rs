@@ -8555,7 +8555,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 38);
+        assert_eq!(cases.len(), 39);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
@@ -9849,5 +9849,17 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(!debug.contains("name: \"ARRAY\""), "{debug}");
         assert!(debug.contains("year"), "{debug}");
+    }
+
+    #[test]
+    fn bounded_pivot_lowers_to_a_grouped_projection() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p",
+        )
+        .expect("bounded PIVOT should produce a normal logical plan");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Aggregate"), "{debug}");
+        assert!(debug.contains("Case"), "{debug}");
+        assert!(debug.contains("Jan"), "{debug}");
     }
 }
