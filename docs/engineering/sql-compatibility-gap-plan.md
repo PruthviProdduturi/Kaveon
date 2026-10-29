@@ -80,9 +80,11 @@ parseable-text inputs without claiming locale-specific currency parsing.
 - [ ] Extend typed product DML to general typed KaveonDB tables.
 - [ ] Add source-backed `INSERT … SELECT` with bounded plans.
 - [ ] Add `MERGE` and broader conflict handling only with explicit revision/CAS
-  semantics. Product `ON CONFLICT DO NOTHING` is now bounded to the product id
-  and covered by parser and API tests; `DO UPDATE`, named constraints, and
-  arbitrary conflict targets remain rejected. Product `RETURNING id, revision`
+  semantics. Product `ON CONFLICT DO NOTHING` and the bounded
+  `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`
+  upsert are now covered by parser and API tests; named constraints, conflict
+  predicates, arbitrary assignments, and arbitrary conflict targets remain
+  rejected. Product `RETURNING id, revision`
   is implemented from the staged revision/CAS write set. Savepoints are
   implemented for the product transaction session and covered by parser,
   catalog, and API tests.
