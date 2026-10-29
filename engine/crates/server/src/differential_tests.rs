@@ -270,6 +270,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_translate",
+        "SELECT TOP 5 TRANSLATE(country, 'ae', 'AE') AS translated FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_eomonth",
         "SELECT TOP 5 EOMONTH(event_date) AS month_end FROM {T} ORDER BY event_date",
         true,
