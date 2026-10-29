@@ -42,6 +42,8 @@
     {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datepart_weekday_alias", "sql": "SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_weekday_aliases"},
     {"id": "datepart_dayofyear_alias", "sql": "SELECT DATEPART(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},
+    {"id": "datepart_iso_week_alias", "sql": "SELECT DATEPART(iso_week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
+    {"id": "datename_iso_week_alias", "sql": "SELECT DATENAME(isowk, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
     {"id": "date_bucket_width_one", "sql": "SELECT DATE_BUCKET(month, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "date_bucket_wider_width", "sql": "SELECT DATE_BUCKET(month, 3, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "date_bucket_custom_origin", "sql": "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_typed_literals"},

@@ -320,6 +320,7 @@ pub enum DateField {
     DayOfYear,
     Quarter,
     Week,
+    IsoWeek,
     Epoch,
 }
 
