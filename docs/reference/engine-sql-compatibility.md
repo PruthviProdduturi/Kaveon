@@ -140,6 +140,11 @@ SQL permits different tied rows and the qualification is withheld. Unsupported
 `CONVERT` style codes, procedural T-SQL,
 and unsupported SQL Server functions remain rejected explicitly.
 
+`PIVOT`, `UNPIVOT`, and `CROSS/OUTER APPLY` are recognized and rejected with
+rewrite guidance rather than being treated as generic syntax failures. This
+is an intentional fail-closed boundary until their distributed semantics are
+implemented and qualified.
+
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
