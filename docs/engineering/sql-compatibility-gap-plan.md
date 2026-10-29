@@ -55,7 +55,8 @@ qualification is intentionally withheld. Numeric `CONVERT` and
 runtime-column conversion remains explicitly rejected. SQL Server `COUNT_BIG`
 now canonicalizes to the Engine's mergeable 64-bit `COUNT` state; it shares
 the existing distributed count semantics and does not claim a separate
-SQL Server numeric type.
+SQL Server numeric type. `LEN` is qualified with SQL Server's trailing-space
+rule, and `IIF` uses the existing vectorized conditional path.
 
 ### Phase 2 — Transactional SQL surface
 
