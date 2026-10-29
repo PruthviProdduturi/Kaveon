@@ -406,16 +406,35 @@ impl TransactionRegistry {
                     id: row_id,
                     document_json,
                 } => {
-                    let product_kind = record_kind(&kind)?;
-                    if session
-                        .transaction
-                        .snapshot()
-                        .product_record(product_kind, &row_id)
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?
-                        .is_some()
-                    {
-                        session.transaction.mark_noop();
-                        continue;
+                    if kind == "typed_row" {
+                        let (table, row) = typed_row_document(&row_id, &document_json, owner, 1)?;
+                        if let Some(existing) = session
+                            .transaction
+                            .snapshot()
+                            .typed_rows
+                            .get(&table)
+                            .and_then(|rows| rows.get(&row_id))
+                        {
+                            if existing == &row {
+                                session.transaction.mark_noop();
+                                continue;
+                            }
+                            return Err(RegistryError::Invalid(
+                                "typed row already exists with different content".into(),
+                            ));
+                        }
+                    } else {
+                        let product_kind = record_kind(&kind)?;
+                        if session
+                            .transaction
+                            .snapshot()
+                            .product_record(product_kind, &row_id)
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                            .is_some()
+                        {
+                            session.transaction.mark_noop();
+                            continue;
+                        }
                     }
                     kaveon_sql::parser::ProductDmlCommand::Create {
                         kind,
@@ -4436,6 +4455,30 @@ mod tests {
             .unwrap();
         let mut transaction = registry.take("alice", &begun.transaction_id).await.unwrap();
         transaction.bind_request_digest(b"typed-create").unwrap();
+        transaction.commit().await.unwrap();
+        assert_eq!(
+            catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
+            1
+        );
+
+        let replay = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_commands(
+                "alice",
+                &replay.transaction_id,
+                vec![ProductDmlCommand::CreateIgnore {
+                    kind: "typed_row".into(),
+                    id: "u-1".into(),
+                    document_json: create.into(),
+                }],
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry
+            .take("alice", &replay.transaction_id)
+            .await
+            .unwrap();
+        transaction.bind_request_digest(b"typed-replay").unwrap();
         transaction.commit().await.unwrap();
         assert_eq!(
             catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
