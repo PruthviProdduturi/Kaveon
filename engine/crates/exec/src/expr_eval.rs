@@ -8487,6 +8487,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(valid))
         }
+        // Bounded SQL Server ISNUMERIC: accept native numeric values and
+        // values that safely cast to DOUBLE; do not claim locale-specific
+        // currency/exponent parsing or coerce complex values.
+        "IS_NUMERIC" | "ISNUMERIC" => {
+            check_arity(name, args, 1)?;
+            let input = &args[0];
+            let numeric = match input.data_type() {
+                DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => (0..num_rows)
+                    .map(|row| Some(!input.is_null(row)))
+                    .collect::<BooleanArray>(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Dictionary(_, _) => {
+                    let cast = compute::cast_with_options(
+                        input,
+                        &DataType::Float64,
+                        &compute::CastOptions {
+                            safe: true,
+                            ..Default::default()
+                        },
+                    )?;
+                    (0..num_rows)
+                        .map(|row| Some(!input.is_null(row) && !cast.is_null(row)))
+                        .collect::<BooleanArray>()
+                }
+                _ => (0..num_rows).map(|_| Some(false)).collect::<BooleanArray>(),
+            };
+            Ok(Arc::new(numeric))
+        }
         "SUBSTR" | "SUBSTRING" => {
             if args.len() < 2 || args.len() > 3 {
                 return Err(KaveonError::Execution(format!(
@@ -28299,6 +28339,28 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some(false), Some(false)]
+        );
+    }
+
+    #[test]
+    fn evaluates_bounded_tsql_isnumeric() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![Some("12.5"), Some("nope"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "IS_NUMERIC".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(false)]
         );
     }
 

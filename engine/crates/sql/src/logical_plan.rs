@@ -5516,6 +5516,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
+        "ISNUMERIC" => "IS_NUMERIC".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
         }
@@ -8490,6 +8491,13 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT ISDATE(value) FROM t")
             .expect("ISDATE should lower through the bounded date predicate");
         assert!(format!("{plan:?}").contains("IS_DATE"));
+    }
+
+    #[test]
+    fn lowers_tsql_isnumeric_to_normalized_is_numeric() {
+        let plan = sql_to_logical_plan("SELECT ISNUMERIC(value) FROM t")
+            .expect("ISNUMERIC should lower through the bounded numeric predicate");
+        assert!(format!("{plan:?}").contains("IS_NUMERIC"));
     }
 
     #[test]
