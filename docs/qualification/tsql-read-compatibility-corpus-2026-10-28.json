@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "62cff92b",
+  "engine_commit": "b0311ba2",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -19,6 +19,7 @@
     {"id": "eomonth", "sql": "SELECT EOMONTH(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_input_is_date_or_timestamp"},
     {"id": "datefromparts", "sql": "SELECT DATEFROMPARTS(2024, 2, 29)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "datetimefromparts", "sql": "SELECT DATETIMEFROMPARTS(2024, 2, 29, 12, 34, 56, 789)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
+    {"id": "datetime2fromparts", "sql": "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_3"},
     {"id": "smalldatetimefromparts", "sql": "SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29, 12, 34)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
