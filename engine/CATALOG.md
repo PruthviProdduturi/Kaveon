@@ -68,7 +68,9 @@ Until that bridge is implemented and tested, registering a source in the platfor
 
 SQLite/WAL is appropriate for the shipped single-coordinator deployment and local validation. It is not the final design for active-active coordinators: a process-local `CatalogManager` snapshot cannot by itself provide cross-coordinator ordering, invalidation, or conflict detection.
 
-The multi-coordinator target is an external transactional catalog service, initially backed by PostgreSQL. That service must provide:
+The multi-coordinator target is a KaveonDB-owned durable catalog service backed by
+the same revisioned object-storage transaction protocol as product metadata. It
+must provide:
 
 - atomic compare-and-swap updates by object revision;
 - globally consistent ID allocation and uniqueness constraints;
@@ -76,9 +78,13 @@ The multi-coordinator target is an external transactional catalog service, initi
 - transactional lifecycle and audit writes;
 - coordinator-independent credential references;
 - bounded metadata caching with revision-aware invalidation; and
-- migration tooling that preserves IDs, revisions, and audit history from SQLite.
+- migration tooling that preserves IDs, revisions, and audit history from the
+  single-coordinator catalog.
 
-The runtime-facing catalog contract should remain stable across that transition. Replacing the persistence and invalidation mechanism must not require storage readers or execution workers to understand PostgreSQL, Hive, or platform API internals.
+The runtime-facing catalog contract should remain stable across that
+transition. Replacing the persistence and invalidation mechanism must not
+require storage readers or execution workers to understand a database engine,
+Hive, or platform API internals.
 
 ## Deliberate non-claims
 
