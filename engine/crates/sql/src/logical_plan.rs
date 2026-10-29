@@ -5633,6 +5633,59 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
             let year = parts.next()?.parse::<i32>().ok()?;
             (year, month, day)
         }
+        102 => {
+            if value.len() != 10
+                || value.as_bytes().get(4) != Some(&b'.')
+                || value.as_bytes().get(7) != Some(&b'.')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
+        }
+        104 | 105 => {
+            let separator = if style == 104 { b'.' } else { b'-' };
+            if value.len() != 10
+                || value.as_bytes().get(2) != Some(&separator)
+                || value.as_bytes().get(5) != Some(&separator)
+            {
+                return None;
+            }
+            (
+                value[6..10].parse::<i32>().ok()?,
+                value[3..5].parse::<u32>().ok()?,
+                value[0..2].parse::<u32>().ok()?,
+            )
+        }
+        110 => {
+            if value.len() != 10
+                || value.as_bytes().get(2) != Some(&b'-')
+                || value.as_bytes().get(5) != Some(&b'-')
+            {
+                return None;
+            }
+            (
+                value[6..10].parse::<i32>().ok()?,
+                value[0..2].parse::<u32>().ok()?,
+                value[3..5].parse::<u32>().ok()?,
+            )
+        }
+        111 => {
+            if value.len() != 10
+                || value.as_bytes().get(4) != Some(&b'/')
+                || value.as_bytes().get(7) != Some(&b'/')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
+        }
         0 => {
             let normalized = value.replace(',', " ");
             let mut parts = normalized.split_whitespace();
@@ -9158,6 +9211,26 @@ mod tests {
                 "SELECT TRY_CONVERT(DATE, '2024-12-31 23:59:59.123', 21) FROM t",
                 "2024-12-31",
             ),
+            (
+                "SELECT CONVERT(DATE, '2024.12.31', 102) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT CONVERT(DATE, '31.12.2024', 104) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT CONVERT(DATE, '31-12-2024', 105) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT CONVERT(DATE, '12-31-2024', 110) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT CONVERT(DATE, '2024/12/31', 111) FROM t",
+                "2024-12-31",
+            ),
         ] {
             let plan = sql_to_logical_plan(sql).expect("styled CONVERT should lower");
             assert!(format!("{plan:?}").contains(expected), "{plan:?}");
@@ -9174,7 +9247,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 66);
+        assert_eq!(cases.len(), 67);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
