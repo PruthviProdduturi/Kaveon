@@ -504,7 +504,12 @@ impl JoinSpec {
             if !self.left_keys.is_empty() || !self.right_keys.is_empty() {
                 return invalid("cross join cannot define equality keys");
             }
-        } else if self.left_keys.is_empty() || self.left_keys.len() != self.right_keys.len() {
+        } else if (self.left_keys.is_empty() || self.left_keys.len() != self.right_keys.len())
+            && !(self.left_keys.is_empty()
+                && self.right_keys.is_empty()
+                && self.broadcast
+                && self.residual.is_some())
+        {
             return invalid("hash join requires equal, non-empty left and right key lists");
         }
         if self.broadcast && matches!(self.join_type, JoinType::Right | JoinType::Full) {
