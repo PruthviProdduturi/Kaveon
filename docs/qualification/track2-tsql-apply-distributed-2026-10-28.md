@@ -27,15 +27,17 @@ function-evaluation semantics.
   equality.
 - The compatibility corpus records this case as `planner_qualified` and
   `distributed_status: qualified`.
-- The correlated `VALUES` form is covered by
-  `tsql_correlated_cross_apply` and the `correlated_cross_apply_values` corpus
-  case; it uses the same lateral path with outer-column binding.
+- Correlated `VALUES` forms are covered by
+  `tsql_correlated_cross_apply` and `tsql_correlated_outer_apply`, with
+  matching `correlated_cross_apply_values` and
+  `correlated_outer_apply_values` corpus cases; both use the existing lateral
+  path with outer-column binding.
 
 ## Contract
 
 The qualification is intentionally narrow: the derived relation must be
 parenthesized, its body must begin with `SELECT` or `VALUES`, and it must have
 an alias. Correlated qualification is limited to scalar `VALUES` expressions
-that bind outer columns; table-valued functions and arbitrary correlated
-derived `SELECT` forms remain fail-closed.
+that bind outer columns, for both cross and outer apply; table-valued functions
+and arbitrary correlated derived `SELECT` forms remain fail-closed.
 
