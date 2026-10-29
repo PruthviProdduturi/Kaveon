@@ -636,7 +636,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "date_bucket_custom_origin",
-        "SELECT DATE_BUCKET(month, 1, TIMESTAMP '2026-02-17 12:34:56.789', TIMESTAMP '2020-02-15 00:00:00') AS month_bucket FROM {T} LIMIT 1",
+        "SELECT DATE_BUCKET(month, 1, TIMESTAMP '2026-02-17 12:34:56.789', TIMESTAMP '2020-02-15 00:00:00') AS timestamp_bucket, DATE_BUCKET(month, 3, DATE '2026-02-17', DATE '2020-01-01') AS date_bucket FROM {T} LIMIT 1",
         false,
     ),
     (
