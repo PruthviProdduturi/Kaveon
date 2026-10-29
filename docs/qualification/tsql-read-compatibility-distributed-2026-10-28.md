@@ -9,9 +9,9 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 40 cases, including planner-qualified bounded derived-source
-  `PIVOT` and `UNPIVOT` lowerings and explicit fail-closed cases for unbounded
-  `PIVOT`,
+- Corpus: 40 cases, including exact local/three-worker qualification for
+  bounded derived-source `PIVOT` and `UNPIVOT` lowerings and explicit
+  fail-closed cases for unbounded `PIVOT`,
   `UNPIVOT`, correlated `APPLY`, `TOP WITH TIES` without an order, and
   runtime-column styled date conversion.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
@@ -27,6 +27,9 @@ parity or external-client parity.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CHARINDEX`, bounded `PATINDEX`, `TRANSLATE`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `LEFT`, `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
+
+The bounded `PIVOT`/`UNPIVOT` evidence is retained in
+[`track2-tsql-pivot-unpivot-distributed-2026-10-28.md`](track2-tsql-pivot-unpivot-distributed-2026-10-28.md).
 
 `ISDATE` returns a non-null boolean 0/1 result. Text is parsed through a safe
 typed date cast; numeric values are rejected as date inputs instead of being

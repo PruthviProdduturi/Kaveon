@@ -320,6 +320,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_bounded_pivot",
+        "SELECT * FROM (SELECT region, surface, actions FROM {T}) src PIVOT (SUM(actions) FOR surface IN ([Chat], [Export])) p",
+        false,
+    ),
+    (
+        "tsql_bounded_unpivot",
+        "SELECT * FROM (SELECT region, actions, errors FROM {T}) src UNPIVOT (measure FOR metric IN ([actions], [errors])) p",
+        false,
+    ),
+    (
         "in_list",
         "SELECT country, SUM(actions) AS a FROM {T} WHERE country IN ('Japan', 'Brazil', 'Kenya') GROUP BY country ORDER BY country",
         true,
