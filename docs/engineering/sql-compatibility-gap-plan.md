@@ -86,7 +86,11 @@ same distributed differential regression.
 ### Phase 2 — Transactional SQL surface
 
 - [ ] Extend typed product DML to general typed KaveonDB tables.
-- [ ] Add source-backed `INSERT … SELECT` with bounded plans.
+- [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
+  copies `id` and `document_json` from one same-kind `kaveon.product` table
+  under the pinned transaction snapshot, is capped at 1,000 source records,
+  enforces owner isolation, and reuses the existing conflict/CAS path. General
+  lake-table source DML remains open.
 - [ ] Add `MERGE` and broader conflict handling only with explicit revision/CAS
   semantics. Product `ON CONFLICT DO NOTHING` and the bounded
   `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`
