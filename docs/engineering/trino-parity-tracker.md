@@ -40,12 +40,15 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 71 bounded T-SQL read cases, including the
+The corpus currently contains 72 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
 `TRY_CONVERT(DATE, ..., 23|101|102|103|104|105|106|107|110|111|112|20|21|120|121|126)` is also qualified across the distributed
 Parquet differential (`docs/qualification/track2-tsql-convert-runtime-styles-2026-10-29.md`).
+Runtime text-column timestamp conversion now has local vectorized evaluator
+coverage for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only
+style `101`; distributed qualification remains open (`docs/qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md`).
 
 The bounded product DML contract now also returns staged `document_json` on
 create/update/upsert and revision-checked DELETE statements, including the

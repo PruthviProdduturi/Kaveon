@@ -1767,6 +1767,91 @@ fn eval_tsql_runtime_date_style(
     Ok(Arc::new(result.finish()))
 }
 
+/// Parse the ISO timestamp styles that SQL Server exposes for runtime text
+/// values.  The output is deliberately canonical UTF-8 so Arrow's timestamp
+/// cast remains the single representation/overflow implementation.
+fn normalize_tsql_runtime_timestamp_style(value: &str, style: u32) -> Option<String> {
+    if !matches!(style, 20 | 21 | 120 | 121 | 126) {
+        return None;
+    }
+    let value = value.trim();
+    if value.len() < 19 {
+        return None;
+    }
+    let separator = value.as_bytes().get(10).copied()?;
+    if !matches!(style, 126) && separator != b' ' {
+        return None;
+    }
+    if style == 126 && !matches!(separator, b'T' | b' ') {
+        return None;
+    }
+    let date = &value[..10];
+    normalize_tsql_runtime_date_style(date, 23)?;
+    let time = &value[11..];
+    let bytes = time.as_bytes();
+    if bytes.len() < 8 || bytes.get(2) != Some(&b':') || bytes.get(5) != Some(&b':') {
+        return None;
+    }
+    let hour = time[0..2].parse::<u32>().ok()?;
+    let minute = time[3..5].parse::<u32>().ok()?;
+    let second = time[6..8].parse::<u32>().ok()?;
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let fraction = if time.len() == 8 {
+        String::new()
+    } else {
+        let fraction = time.strip_prefix(&time[..8])?.strip_prefix('.')?;
+        if fraction.is_empty()
+            || fraction.len() > 6
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        format!(".{fraction}")
+    };
+    Some(format!(
+        "{date} {hour:02}:{minute:02}:{second:02}{fraction}"
+    ))
+}
+
+fn eval_tsql_runtime_timestamp_style(
+    name: &str,
+    source: &ArrayRef,
+    style: u32,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    if !matches!(style, 20 | 21 | 120 | 121 | 126) {
+        let dates = eval_tsql_runtime_date_style(name, source, style, num_rows)?;
+        return Ok(compute::cast(
+            &dates,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )?);
+    }
+    let try_mode = name.starts_with("TRY_");
+    let mut result = StringBuilder::with_capacity(num_rows, num_rows * 24);
+    for row in 0..num_rows {
+        let Some(value) = text_value(source, row)? else {
+            result.append_null();
+            continue;
+        };
+        match normalize_tsql_runtime_timestamp_style(value, style) {
+            Some(value) => result.append_value(value),
+            None if try_mode => result.append_null(),
+            None => {
+                return Err(KaveonError::Execution(format!(
+                    "{name} could not parse row {row} with style {style}"
+                )));
+            }
+        }
+    }
+    let values: ArrayRef = Arc::new(result.finish());
+    Ok(compute::cast(
+        &values,
+        &DataType::Timestamp(TimeUnit::Microsecond, None),
+    )?)
+}
+
 fn optional_string_value(arr: &StringArray, row: usize) -> Option<String> {
     (!arr.is_null(row)).then(|| arr.value(row).to_owned())
 }
@@ -8244,6 +8329,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         })?;
         check_arity(name, args, 1)?;
         return eval_tsql_runtime_date_style(name, &args[0], style, num_rows);
+    }
+    if let Some(style) = upper.strip_prefix("TRY_CONVERT_TIMESTAMP_STYLE_") {
+        let style = style.parse::<u32>().map_err(|_| {
+            KaveonError::Execution(format!("unsupported TRY_CONVERT TIMESTAMP style: {style}"))
+        })?;
+        check_arity(name, args, 1)?;
+        return eval_tsql_runtime_timestamp_style(name, &args[0], style, num_rows);
+    }
+    if let Some(style) = upper.strip_prefix("CONVERT_TIMESTAMP_STYLE_") {
+        let style = style.parse::<u32>().map_err(|_| {
+            KaveonError::Execution(format!("unsupported CONVERT TIMESTAMP style: {style}"))
+        })?;
+        check_arity(name, args, 1)?;
+        return eval_tsql_runtime_timestamp_style(name, &args[0], style, num_rows);
     }
     match upper.as_str() {
         "UPPER" => {
@@ -25819,6 +25918,57 @@ mod tests {
             assert!(result.is_null(1));
             assert!(result.is_null(2));
         }
+    }
+
+    #[test]
+    fn evaluates_tsql_runtime_timestamp_styles_with_try_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("2024-12-31T23:59:59.123"),
+                Some("2024-12-31 00:00:00"),
+                Some("bad"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let expression = |name: &str| Expr::Function {
+            name: name.into(),
+            args: vec![Expr::Column("value".into())],
+        };
+        let result = evaluate(&expression("TRY_CONVERT_TIMESTAMP_STYLE_126"), &batch).unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result.value(0), 1_735_689_599_123_000);
+        assert_eq!(result.value(1), 1_735_603_200_000_000);
+        assert!(result.is_null(2));
+        assert!(result.is_null(3));
+
+        let result = evaluate(
+            &expression("TRY_CONVERT_TIMESTAMP_STYLE_101"),
+            &RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![Some("12/31/2024"), Some("bad")])) as ArrayRef,
+            )])
+            .unwrap(),
+        )
+        .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result.value(0), 1_735_603_200_000_000);
+        assert!(result.is_null(1));
+
+        let result = evaluate(
+            &expression("TRY_CONVERT_TIMESTAMP_STYLE_121"),
+            &RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![Some("2024-12-30 12:00:00.123")])) as ArrayRef,
+            )])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_primitive::<TimestampMicrosecondType>().value(0),
+            1_735_560_000_123_000
+        );
     }
 
     #[test]
