@@ -125,10 +125,12 @@ unchanged; nothing is approximated unless the statement writes an
 
 The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, `ISNULL`, `DATEADD`, `DATEDIFF`,
-`DATEPART`, unstyled `CONVERT`, and unstyled `TRY_CONVERT`. Datepart
-abbreviations such as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized
-to the canonical vectorized date operators. This is a read-compatibility
-layer, not a claim of general T-SQL parity. `CONVERT` style codes,
+`DATEPART`, unstyled `CONVERT`, and unstyled `TRY_CONVERT`. Literal DATE
+conversion styles `0`, `1`, `101`, and `112` are normalized to ISO dates;
+runtime column style evaluation remains bounded. Datepart abbreviations such
+as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical
+vectorized date operators. This is a read-compatibility layer, not a claim of
+general T-SQL parity. Unsupported `CONVERT` style codes,
 `TOP PERCENT`, `TOP WITH TIES`, procedural T-SQL, and unsupported SQL Server
 functions remain rejected explicitly.
 
