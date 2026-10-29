@@ -2,8 +2,8 @@
 
 The showcase uses the `OpenSource` catalog in Kaveon Engine, backed by the ADLS
 snapshot described in [OpenSource data](opensource-data.md). Saved datasets,
-charts, and dashboard definitions currently remain in PostgreSQL. This showcase
-does not complete the native transactional metadata migration.
+charts, dashboards, DLM artifacts, and query history are product records in
+KaveonDB's transactional store; PostgreSQL is not required for this showcase.
 
 ## Open the portal
 
