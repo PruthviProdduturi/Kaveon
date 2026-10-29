@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 62 cases, including exact local/three-worker qualification for
+- Corpus: 63 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -31,7 +31,7 @@ parity or external-client parity.
   `TIMEFROMPARTS` (precision 0–6), bounded UTC-normalized
   `DATETIMEOFFSETFROMPARTS` (precision 0–6), `DATEPART`/`DATENAME` weekday,
   day-of-year, and ISO-week aliases, `DATENAME` day-of-year aliases,
-  `DATEPART` week/quarter aliases, day-equivalent `DATEADD`
+  `DATEPART` week/quarter/subsecond aliases, day-equivalent `DATEADD`
   weekday/day-of-year aliases, `LEFT`,
   `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
 

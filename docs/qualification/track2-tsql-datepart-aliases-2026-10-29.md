@@ -14,6 +14,9 @@ numbering; the existing `WEEK` spelling remains a separate non-ISO contract.
 `Y`.
 `DATEPART` accepts the `WEEK`/`WK`/`WW` and `QUARTER`/`QQ`/`Q` aliases as
 well.
+It also accepts `MILLISECOND`/`MILLI`/`MS`,
+`MICROSECOND`/`MICRO`/`MCS`/`US`, and
+`NANOSECOND`/`NANO`/`NS` for timestamp subsecond fields.
 
 Evidence:
 
@@ -23,8 +26,10 @@ Evidence:
   `tsql_datepart_dayofyear_alias`, `tsql_dateadd_weekday_alias`, and
   `tsql_dateadd_dayofyear_alias`, `tsql_datepart_iso_week_alias`, and
   `tsql_datename_iso_week_alias`, and `tsql_datename_dayofyear_alias`.
-  The week/quarter alias case is `tsql_datepart_week_quarter_alias`.
+  The week/quarter alias case is `tsql_datepart_week_quarter_alias`; the
+  subsecond case is `tsql_datepart_subsecond_aliases`.
 - Corpus cases: `datepart_weekday_alias`, `datepart_dayofyear_alias`,
   `dateadd_weekday_alias`, `dateadd_dayofyear_alias`,
   `datepart_iso_week_alias`, `datename_iso_week_alias`, and
   `datename_dayofyear_alias`, and `datepart_week_quarter_alias`.
+  The corpus also includes `datepart_subsecond_aliases`.
