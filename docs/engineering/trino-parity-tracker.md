@@ -18,7 +18,7 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
-The latest SQL compatibility increment is `9a5eab7f` (typed DATE/TIMESTAMP
+The latest SQL compatibility increment is `a51b595b` (typed DATE/TIMESTAMP
 literal origins for `DATE_BUCKET`, following runtime T-SQL DATE conversion
 styles in `5b8c5031`). Planner, executor, and focused three-worker differential
 evidence are recorded in
