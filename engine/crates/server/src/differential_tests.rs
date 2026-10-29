@@ -635,6 +635,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "date_bucket_custom_origin",
+        "SELECT DATE_BUCKET(month, 1, TIMESTAMP '2026-02-17 12:34:56.789', TIMESTAMP '2020-02-15 00:00:00') AS month_bucket FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "tsql_runtime_date_style",
         "SELECT TRY_CONVERT(DATE, value, 101) AS us_date, TRY_CONVERT(DATE, value, 112) AS iso_date FROM (VALUES ('12/31/2024'), ('20241230'), ('bad'), (NULL)) AS values_table(value)",
         false,
