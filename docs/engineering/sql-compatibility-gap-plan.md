@@ -62,6 +62,9 @@ uses a bounded Unicode scalar search with SQL Server's argument order.
 qualified for date/timestamp inputs with an optional row-local month offset.
 `DATEFROMPARTS` now builds validated `DATE` values from integer parts with
 NULL propagation and distributed differential coverage.
+`DATENAME` now returns deterministic English calendar names or textual numeric
+parts and is covered by the distributed differential sweep; locale-specific
+formatting remains outside the contract.
 
 ### Phase 2 — Transactional SQL surface
 

@@ -147,6 +147,9 @@ qualification is limited to those input types; it does not imply support for
 the broader SQL Server date-construction family. `DATEFROMPARTS` is qualified
 for valid year/month/day parts, with SQL Server-style NULL propagation and
 explicit rejection of invalid calendar dates.
+`DATENAME` is qualified for calendar parts and returns deterministic English
+month/weekday names or textual numeric parts; locale/session-language
+formatting is intentionally not claimed.
 
 `PIVOT`, `UNPIVOT`, and `CROSS/OUTER APPLY` are recognized and rejected with
 rewrite guidance rather than being treated as generic syntax failures. This
