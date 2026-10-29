@@ -5196,8 +5196,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
 
     // DATETIME2FROMPARTS is qualified for precisions representable by the
     // Engine's microsecond timestamp path without rounding. Precision 0..=3
-    // maps the fraction argument to milliseconds; higher precision is
-    // rejected rather than silently losing 100-nanosecond information.
+    // maps the fraction argument to milliseconds; precision 4..=6 maps it to
+    // microseconds. Precision 7 is rejected because 100-nanosecond storage is
+    // not representable by the Engine's timestamp type.
     if name == "DATETIME2_FROM_PARTS" {
         if args.len() != 8 {
             return Err(sql_err(
@@ -5205,15 +5206,15 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             ));
         }
         let precision = match &args[7] {
-            Expr::Literal(ScalarValue::Int64(value)) if (0..=3).contains(value) => *value,
+            Expr::Literal(ScalarValue::Int64(value)) if (0..=6).contains(value) => *value,
             Expr::Literal(ScalarValue::Int64(_)) => {
                 return Err(sql_err(
-                    "DATETIME2FROMPARTS precision must be between 0 and 3",
+                    "DATETIME2FROMPARTS precision must be between 0 and 6",
                 ));
             }
             _ => {
                 return Err(sql_err(
-                    "DATETIME2FROMPARTS precision must be a literal between 0 and 3",
+                    "DATETIME2FROMPARTS precision must be a literal between 0 and 6",
                 ));
             }
         };
@@ -5249,7 +5250,11 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             name: "DATE_ADD_SECONDS".into(),
             args: vec![timestamp, seconds],
         };
-        let fraction_scale = 10_i64.pow((3 - precision) as u32);
+        let fraction_scale = if precision <= 3 {
+            10_i64.pow((3 - precision) as u32)
+        } else {
+            10_i64.pow((6 - precision) as u32)
+        };
         let fraction = if fraction_scale == 1 {
             args[6].clone()
         } else {
@@ -5260,7 +5265,11 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             }
         };
         return Ok(Expr::Function {
-            name: "DATE_ADD_MILLISECONDS".into(),
+            name: if precision <= 3 {
+                "DATE_ADD_MILLISECONDS".into()
+            } else {
+                "DATE_ADD_MICROSECONDS".into()
+            },
             args: vec![shifted, fraction],
         });
     }
@@ -9166,9 +9175,19 @@ mod tests {
         assert!(rendered.contains("DATE_ADD_SECONDS"), "{rendered}");
         assert!(rendered.contains("DATE_ADD_MILLISECONDS"), "{rendered}");
         assert!(rendered.contains("TimestampMicros"), "{rendered}");
+        let precision_four = sql_to_logical_plan(
+            "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 7890, 4) FROM t",
+        )
+        .expect("precision 4 should use microsecond timestamp arithmetic");
+        assert!(format!("{precision_four:?}").contains("DATE_ADD_MICROSECONDS"));
+        let precision_six = sql_to_logical_plan(
+            "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789123, 6) FROM t",
+        )
+        .expect("precision 6 should use microsecond timestamp arithmetic");
+        assert!(format!("{precision_six:?}").contains("DATE_ADD_MICROSECONDS"));
         assert!(
             sql_to_logical_plan(
-                "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 7890, 4) FROM t"
+                "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 7890123, 7) FROM t"
             )
             .is_err()
         );

@@ -19,7 +19,7 @@
     {"id": "eomonth", "sql": "SELECT EOMONTH(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_input_is_date_or_timestamp"},
     {"id": "datefromparts", "sql": "SELECT DATEFROMPARTS(2024, 2, 29)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "datetimefromparts", "sql": "SELECT DATETIMEFROMPARTS(2024, 2, 29, 12, 34, 56, 789)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
-    {"id": "datetime2fromparts", "sql": "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_3"},
+    {"id": "datetime2fromparts", "sql": "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789123, 6)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_6"},
     {"id": "smalldatetimefromparts", "sql": "SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29, 12, 34)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "timefromparts", "sql": "SELECT TIMEFROMPARTS(12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_6"},
     {"id": "datetimeoffsetfromparts", "sql": "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 5, 30)", "status": "planner_qualified", "distributed_status": "qualified_for_utc_normalized_offsets_and_precision_0_to_6"},
