@@ -4909,7 +4909,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         let month_offset = args
             .get(1)
             .cloned()
-            .unwrap_or_else(|| Expr::Literal(ScalarValue::Int64(0)));
+            .unwrap_or(Expr::Literal(ScalarValue::Int64(0)));
         let shifted_offset = Expr::BinaryOp {
             left: Box::new(month_offset),
             op: BinaryOp::Plus,
