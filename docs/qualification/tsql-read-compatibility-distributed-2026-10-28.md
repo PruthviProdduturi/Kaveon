@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 72 cases, including exact local/three-worker qualification for
+- Corpus: 75 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -27,7 +27,8 @@ parity or external-client parity.
 - Focused distributed regression `distributed_tsql_left_and_right_match_local_unicode_semantics`
   passed with three workers and zero retained memory reservations.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
-  `CONCAT_WS` with NULL-skipping arguments, `CHOOSE`, `CHARINDEX`, bounded `PATINDEX`,
+  `CONCAT` with NULL-as-empty arguments, `CONCAT_WS` with NULL-skipping arguments,
+  `CHOOSE`, `CHARINDEX`, bounded `PATINDEX`,
   `TRANSLATE`, bounded width-one
   `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `DATETIME2FROMPARTS` (precision 0–6), `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `TIMEFROMPARTS` (precision 0–6), bounded UTC-normalized
