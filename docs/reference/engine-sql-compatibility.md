@@ -231,6 +231,7 @@ guidance rather than being treated as generic syntax failures.
   `UPDATE`, `DELETE`, `ALTER TABLE ADD/DROP COLUMN`. Catalog DDL registers
   tables that already exist in storage. The separate product transaction API
   accepts a bounded, revisioned metadata-record DML subset, including
+  `RETURNING id, revision, document_json` on product creates/updates and
   identity-only `RETURNING id, revision` on revision-checked product
   `UPDATE`/`DELETE`; its typed-row facade validates declared primary/unique
   keys and product references, but it is not arbitrary OLTP SQL or general
@@ -276,7 +277,7 @@ supports revisioned typed-row create/update/delete with owner isolation and
 replay-safe `ON CONFLICT DO NOTHING`; arbitrary typed schemas and conflict
 updates remain outside this contract. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. Source-backed `INSERT ... SELECT`, document
-projections in `RETURNING`, general `ON CONFLICT` actions, transaction
+ projections on `DELETE`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 The qualified `MERGE` form is intentionally narrow: one target product table
 alias, one source `VALUES` batch of at most 1,000 rows aliased as
@@ -284,8 +285,9 @@ alias, one source `VALUES` batch of at most 1,000 rows aliased as
 join on `target.id = source.id`, and the fixed matched-update/not-matched-insert
 clause pair. Source scans, multiple rows, predicates, deletes, arbitrary
 assignments, and other `MERGE` clause orderings remain rejected.
-Product `RETURNING id, revision` is evaluated from the staged revision/CAS
-write set. Product inserts also support the bounded `ON CONFLICT DO NOTHING`
+Product `RETURNING id, revision` and staged `document_json` projections on
+creates/updates are evaluated from the revision/CAS write set. Product inserts
+also support the bounded `ON CONFLICT DO NOTHING`
 form, with an optional conflict target of `id`; a duplicate is a transaction-
 local no-op that can still be committed. They also support the bounded
 `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` form;
