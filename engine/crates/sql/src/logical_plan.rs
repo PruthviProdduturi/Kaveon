@@ -4966,12 +4966,19 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             }
             _ => return Err(sql_err("DATE_BUCKET width must be a positive literal")),
         };
+        let bucket_value = match &args[2] {
+            // Typed DATE literals are represented as epoch-day integers by
+            // the general expression lowering; restore the temporal type at
+            // this date-only operator boundary.
+            Expr::Literal(ScalarValue::Int64(_)) => Expr::Cast {
+                expr: Box::new(args[2].clone()),
+                data_type: CastTarget::Date32,
+            },
+            other => other.clone(),
+        };
         let truncated = Expr::Function {
             name: "DATE_TRUNC".into(),
-            args: vec![
-                Expr::Literal(ScalarValue::Utf8(unit.clone())),
-                args[2].clone(),
-            ],
+            args: vec![Expr::Literal(ScalarValue::Utf8(unit.clone())), bucket_value],
         };
         if width == 1 && args.len() == 3 {
             return Ok(truncated);
