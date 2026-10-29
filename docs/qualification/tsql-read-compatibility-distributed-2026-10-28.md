@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 41 cases, including exact local/three-worker qualification for
+- Corpus: 43 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, and `CROSS APPLY` lowerings and
   explicit fail-closed cases for unbounded `PIVOT`, `UNPIVOT`, `OUTER APPLY`,
   table-valued/correlated `APPLY`, `TOP WITH TIES` without an order, and
@@ -25,7 +25,8 @@ parity or external-client parity.
 - Focused distributed regression `distributed_tsql_left_and_right_match_local_unicode_semantics`
   passed with three workers and zero retained memory reservations.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
-  `CHARINDEX`, bounded `PATINDEX`, `TRANSLATE`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
+  `CHARINDEX`, bounded `PATINDEX`, `TRANSLATE`, bounded width-one
+  `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `LEFT`, `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
 
 The bounded `PIVOT`/`UNPIVOT` evidence is retained in
@@ -57,6 +58,9 @@ are ignored, with NULL propagation.
 `PATINDEX` reports one-based Unicode scalar positions for `%` and `_`
 wildcards, returns zero for no match, preserves NULLs, and rejects bracket
 classes explicitly.
+`DATE_BUCKET` is qualified for literal width-one year/quarter/month/day/hour/
+minute/second buckets and lowers to typed `DATE_TRUNC`; wider widths and
+custom origins are rejected rather than approximated.
 
 ## Contract
 
