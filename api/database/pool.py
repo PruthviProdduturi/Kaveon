@@ -754,6 +754,13 @@ _pools: Dict[str, ConnectionPool] = {}
 _pool_lock = Lock()
 
 
+# The prefix `services.credentials` uses to recognise a Key Vault reference.
+# Named here rather than imported at module scope because `credentials` is
+# imported lazily inside the resolvers to keep this module importable without
+# a keyring.
+KEY_VAULT_ENVELOPE = "kaveon:keyvault:v1:"
+
+
 def _live_meta_db() -> str:
     """Return the current metadata database name from os.environ (kept live by
     main.py lifespan and config update endpoints) with fallback to the frozen
@@ -782,11 +789,17 @@ def _aad_dbs() -> set:
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 
-def get_connection_pool(database: str) -> ConnectionPool:
+def get_connection_pool(database: str, actor: Optional[str] = None,
+                        role: str = "Viewer") -> ConnectionPool:
     """Get or create the pool for *database* (keyed by database name).
 
     Uses os.environ for metadata DB identity so live config updates take effect
     without requiring a full process restart.
+
+    `actor` is the caller's identity, needed to read the source registry out of
+    KaveonDB. It is optional only so the metadata-era paths above keep working;
+    resolving a registered data source without it falls back to the legacy
+    table, which no longer exists.
     """
     with _pool_lock:
         if database in _pools:
@@ -816,7 +829,7 @@ def get_connection_pool(database: str) -> ConnectionPool:
                 )
         else:
             # Data source — resolve its type + connection info from data_sources.
-            ds = _resolve_data_source(database)
+            ds = _resolve_data_source(database, actor, role)
             ds_type = _map_ds_type(ds.get("type") if ds else None)
             pool_size = settings.MAX_POOL_SIZE_DATAWAREHOUSE
             # Use the resolved database_name for the pool key (not the passed ID)
@@ -855,13 +868,85 @@ def get_connection_pool(database: str) -> ConnectionPool:
         return pool
 
 
-def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
+def _kaveondb_source_row(database: str, actor: str, role: str) -> Optional[Dict[str, Any]]:
+    """The registered data source named *database*, as a legacy-shaped row.
+
+    Sources live in KaveonDB now; this reads them from there and returns the
+    same keys the connection code below expects, with `connection_string`
+    carrying the Key Vault envelope rather than a secret. Resolution of that
+    envelope stays in `services.credentials.source_for_use`, which already
+    knows how to read a Key Vault reference without a database connection.
+    """
+    from services import product_read_authority, source_secret_store
+
+    documents = product_read_authority.list_documents("sources", actor, role)
+    wanted = str(database)
+    match = None
+    for document in documents:
+        if document.get("source_kind") != "data" or not document.get("is_active"):
+            continue
+        source_id = str(document.get("source_id") or "")
+        if not source_id.startswith("data-"):
+            continue
+        # Callers pass either the routing label a dataset references or the
+        # bare id, the same two ways the legacy lookup accepted.
+        if str(document.get("database_name") or "") == wanted or source_id[5:] == wanted:
+            match = document
+            break
+    if match is None:
+        return None
+
+    source_id = str(match.get("source_id"))[5:]
+    reference = str(match.get("secret_ref") or "")
+    if reference.startswith("https://"):
+        envelope = reference
+    elif reference.startswith("key-managed:"):
+        # Written by the backfill, which recorded that a secret is managed
+        # without naming it. The name is derived the way it was written.
+        try:
+            name = source_secret_store.secret_name("data", source_id)
+            envelope = f"{source_secret_store.vault_url()}/secrets/{name}"
+        except Exception:
+            return None
+    else:
+        # No usable reference: fail closed rather than fall back to an
+        # endpoint from the environment, which would connect somewhere the
+        # source does not name.
+        return None
+
+    return {
+        "id": source_id,
+        "type": match.get("source_type"),
+        "database_name": match.get("database_name"),
+        "connection_string": KEY_VAULT_ENVELOPE + envelope,
+    }
+
+
+def _resolve_data_source(database: str, actor: Optional[str] = None,
+                         role: str = "Viewer") -> Optional[Dict[str, Any]]:
     """Return {type, connection_string} for a registered data source, or None.
 
-    Dialect-aware: uses %s / TRUE against a Postgres/MySQL metadata DB and ? / 1
-    against Fabric/Azure SQL.
+    KaveonDB first, because that is where sources are registered. The legacy
+    path below reads the `data_sources` table out of the metadata database and
+    cannot answer once that database is gone.
     """
     from services.credentials import source_for_use, CredentialError
+
+    if actor:
+        try:
+            from services import product_read_authority
+            if product_read_authority.enabled("sources"):
+                row = _kaveondb_source_row(database, actor, role)
+                # `source_for_use` takes its Key Vault branch for this
+                # envelope and never touches the connection arguments, which
+                # is why there is no connection to give it.
+                return source_for_use(row, None, None) if row else None
+        except CredentialError:
+            raise
+        except Exception as error:
+            print(f"[Pool] Could not resolve data source {database} from KaveonDB: {type(error).__name__}")
+            return None
+
     meta_db = _live_meta_db()
     if meta_db not in _pools:
         return None
