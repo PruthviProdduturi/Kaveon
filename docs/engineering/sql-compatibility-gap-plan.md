@@ -82,6 +82,10 @@ same distributed differential path.
 `TRIM`, `LTRIM`, and `RTRIM` preserve NULLs and remove only the documented
 ASCII-space boundaries on the width-aware text path; they are covered by the
 same distributed differential regression.
+`TRANSLATE` now has a bounded SQL Server-compatible Unicode scalar mapping
+path, including NULL propagation and first-match/extra-character semantics,
+and is covered by the versioned planner corpus and three-worker differential
+gate.
 
 ### Phase 2 — Transactional SQL surface
 
