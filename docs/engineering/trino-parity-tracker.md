@@ -40,7 +40,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 74 bounded T-SQL read cases, including the
+The corpus currently contains 75 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -58,10 +58,12 @@ explicitly rejected. Evidence: `track2-native-dml-returning-document-2026-10-29.
 This supersedes the older Native DML row wording that listed all document
 projections as open; arbitrary expressions and lake-table DML remain open.
 
-The current T-SQL corpus is 74 cases (the implementation pin is updated after
+The current T-SQL corpus is 75 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
-SQL Server NULL-skipping separator semantics and `CHOOSE` lowered to a
-null-preserving one-based CASE, each with a focused three-worker differential.
+SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
+arguments, and `CHOOSE` lowered to a null-preserving one-based CASE, each with
+a focused three-worker differential. The `CONCAT` evidence is retained in
+`docs/qualification/track2-tsql-concat-2026-10-29.md`.
 The `CHOOSE` evidence is retained in
 `docs/qualification/track2-tsql-choose-2026-10-29.md`.
 
