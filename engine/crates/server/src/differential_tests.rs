@@ -250,6 +250,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_len",
+        "SELECT TOP 5 LEN(country) AS country_length FROM {T} ORDER BY country",
+        true,
+    ),
+    (
+        "tsql_iif",
+        "SELECT TOP 5 IIF(actions > 10, 'high', 'low') AS bucket FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_dateadd",
         "SELECT TOP 5 DATEADD(dd, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,
