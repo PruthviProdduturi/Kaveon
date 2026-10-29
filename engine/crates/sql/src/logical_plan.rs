@@ -838,6 +838,12 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
     // three of the ordered result, so applying it before the sort would take
     // an arbitrary three and then order those.
     let top = select_top(&query.body)?;
+    let top_percent = select_top_percent(&query.body)?;
+    if top_percent.is_some() && (query.limit.is_some() || query.fetch.is_some()) {
+        return Err(sql_err(
+            "TOP PERCENT and LIMIT cannot both bound one query; use one of them",
+        ));
+    }
     let limit = match (top, &query.limit) {
         (Some(_), Some(_)) => {
             return Err(sql_err(
@@ -848,8 +854,20 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         (None, _) => None,
     };
     let plan = match limit {
-        Some(count) => build_limit_offset(plan, &Some(count), &query.offset, query.fetch.as_ref())?,
-        None => build_limit_offset(plan, &query.limit, &query.offset, query.fetch.as_ref())?,
+        Some(count) => build_limit_offset(
+            plan,
+            &Some(count),
+            &query.offset,
+            query.fetch.as_ref(),
+            None,
+        )?,
+        None => build_limit_offset(
+            plan,
+            &query.limit,
+            &query.offset,
+            query.fetch.as_ref(),
+            top_percent.as_ref(),
+        )?,
     };
     // ORDER BY on a column the query does not select: the column rode
     // along through the sort and limit and is dropped here.
@@ -3470,7 +3488,7 @@ fn select_top(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
         return Ok(None);
     };
     if top.percent {
-        return Err(sql_err("TOP PERCENT is unsupported; use TOP n"));
+        return Ok(None);
     }
     if top.with_ties {
         return Err(sql_err("TOP WITH TIES is unsupported; use TOP n"));
@@ -3486,25 +3504,52 @@ fn select_top(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
     }
 }
 
+fn select_top_percent(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
+    let ast::SetExpr::Select(select) = body else {
+        return Ok(None);
+    };
+    let Some(top) = &select.top else {
+        return Ok(None);
+    };
+    if !top.percent {
+        return Ok(None);
+    }
+    if top.with_ties {
+        return Err(sql_err("TOP PERCENT WITH TIES is unsupported"));
+    }
+    match &top.quantity {
+        Some(ast::TopQuantity::Expr(expr)) => Ok(Some(expr.clone())),
+        Some(ast::TopQuantity::Constant(count)) => Ok(Some(ast::Expr::Value(ast::Value::Number(
+            count.to_string(),
+            false,
+        )))),
+        None => Err(sql_err("TOP PERCENT requires a percentage")),
+    }
+}
+
 fn build_limit_offset(
     plan: LogicalPlan,
     limit: &Option<ast::Expr>,
     offset: &Option<ast::Offset>,
     fetch: Option<&ast::Fetch>,
+    top_percent: Option<&ast::Expr>,
 ) -> Result<LogicalPlan> {
     let offset_count = match offset {
         Some(ast::Offset { value, .. }) => ast_expr_to_usize(value)?,
         None => 0,
     };
-    let fetch_percent = match fetch {
-        Some(fetch) if fetch.percent => {
-            let quantity = fetch
-                .quantity
-                .as_ref()
-                .ok_or_else(|| sql_err("FETCH PERCENT requires a percentage"))?;
-            Some(ast_expr_to_fetch_percent(quantity)?)
-        }
-        _ => None,
+    let fetch_percent = match top_percent {
+        Some(percent) => Some(ast_expr_to_fetch_percent(percent)?),
+        None => match fetch {
+            Some(fetch) if fetch.percent => {
+                let quantity = fetch
+                    .quantity
+                    .as_ref()
+                    .ok_or_else(|| sql_err("FETCH PERCENT requires a percentage"))?;
+                Some(ast_expr_to_fetch_percent(quantity)?)
+            }
+            _ => None,
+        },
     };
     let fetch_limit = match fetch {
         None => None,
@@ -9020,16 +9065,12 @@ mod tests {
     }
 
     #[test]
-    fn top_variants_that_change_which_rows_return_are_refused() {
-        // Refused rather than approximated: both change the result set, and
-        // silently returning the wrong rows is the fault being removed here.
-        for statement in [
-            "SELECT TOP 10 PERCENT * FROM events",
-            "SELECT TOP 3 WITH TIES * FROM events ORDER BY user_id",
-        ] {
-            let error = sql_to_logical_plan(statement).unwrap_err();
-            assert!(error.to_string().contains("TOP"), "{statement}: {error}");
-        }
+    fn top_percent_is_lowered_but_top_with_ties_remains_explicitly_unsupported() {
+        let percent = sql_to_logical_plan("SELECT TOP 10 PERCENT * FROM events").unwrap();
+        assert!(format!("{percent:?}").contains("CEIL"), "{percent:?}");
+        let error = sql_to_logical_plan("SELECT TOP 3 WITH TIES * FROM events ORDER BY user_id")
+            .unwrap_err();
+        assert!(error.to_string().contains("TOP"), "{error}");
     }
 
     #[test]
