@@ -4,10 +4,12 @@
 August 2026
 
 > **Implementation and evidence boundary.** The scoring and routing modules are
-> implemented for PostgreSQL statistics semantics. Claims about cost, latency, or
-> selective work describe the method and reference implementation, not a universal
-> guarantee across connectors. Current product integration and connector support
-> are authoritative in [`STATUS.md`](../STATUS.md).
+> implemented for KaveonDB source-version watermarks and catalog statistics on
+> the native path. Historical PostgreSQL statistics semantics are retained as an
+> adapter example only. Claims about cost, latency, or selective work describe
+> the method and reference implementation, not a universal guarantee across
+> connectors. Current product integration and connector support are authoritative
+> in [`STATUS.md`](../STATUS.md).
 
 ---
 
@@ -61,12 +63,11 @@ standard mitigation is a result cache with a TTL. TTLs are a blunt instrument:
 The insight behind this work is that a modern analytical database already knows
 how much its tables have changed, and already maintains a statistical summary of
 its columns — and both are readable in constant time without scanning a single
-row. PostgreSQL's `pg_stat_user_tables` exposes, per table, the number of row
-modifications since the last statistics refresh (`n_mod_since_analyze`), the live
-row count (`n_live_tup`), and when statistics were last computed (`last_analyze`).
-PostgreSQL's `pg_stats` exposes, per column, the distinct-value estimate, null
-fraction, most-common values, and a distribution histogram. These are byproducts
-of the query planner that the database keeps current for its own purposes.
+row. KaveonDB exposes, per native table, a committed source version, manifest
+watermark, exact row count, null counts, bounds, and bounded sketches. These
+catalog and ADLS records are the native change and profile signals. PostgreSQL's
+`pg_stat_user_tables` and `pg_stats` are retained only as historical examples of
+an external adapter that can provide analogous signals.
 
 If we treat those catalogs as a **context representation** of the data, and treat
 their change counters as a **freshness signal**, we can do something a TTL cache
@@ -84,10 +85,10 @@ maintain the context. Steps 3–6 run per question.
 ```
    ┌─────────────────────────────  build / maintain  ──────────────────────────┐
    │  1. Profile the dataset (no LLM):                                          │
-   │       column distributions  <- pg_stats                                    │
-   │       table relationships   <- pg_constraint + name/type heuristics        │
+   │       column distributions  <- KaveonDB catalog statistics                  │
+   │       table relationships   <- catalog metadata + name/type heuristics       │
    │       query pattern freq.    <- query_history                              │
-   │  2. Capture change counters (n_live_tup, n_mod_since_analyze, last_analyze)│
+   │  2. Capture source-version and manifest watermarks                          │
    │       per element and store the snapshot.                                  │
    └────────────────────────────────────────────────────────────────────────────┘
                                         │
@@ -358,16 +359,16 @@ live result (query executed, elements refreshed).
 
 ## 9. Limitations and Future Work
 
-**Change-counter fidelity.** `n_mod_since_analyze` counts modifications, not net
-change, and resets on `ANALYZE`; the method compensates by treating an `ANALYZE`
-as a change event, but a table under constant autovacuum needs a watermark
-(`max(updated_at)` or a CDC LSN) for a tighter signal. The factor-(b) interface is
-deliberately source-agnostic to allow this.
+**Watermark fidelity.** A source version or manifest watermark identifies a
+committed snapshot, while a connector-provided CDC or update-time watermark can
+provide finer-grained freshness. The factor-(b) interface remains deliberately
+source-agnostic so each connector can qualify its own watermark semantics.
 
-**Cross-engine support.** The current profiler is PostgreSQL-specific. SQL Server
-(`sys.dm_db_stats_properties`, `rowmodctr`), MySQL (`information_schema.STATISTICS`,
-`innodb_metrics`), and DuckDB expose analogous catalogs; the method transfers, the
-catalog names do not.
+**Cross-engine support.** The native profiler is KaveonDB-first and
+source-version based. SQL Server (`sys.dm_db_stats_properties`, `rowmodctr`),
+MySQL (`information_schema.STATISTICS`, `innodb_metrics`), and DuckDB can provide
+optional connector-specific adapters; the method transfers, but each adapter's
+watermark and statistics semantics must be qualified independently.
 
 **Profile-synthesised answer coverage.** *(Largely shipped — see the Addendum.)*
 The profile directly answers row counts, approximate distinct counts, and null
