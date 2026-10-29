@@ -4917,10 +4917,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         };
         let month_start = Expr::Function {
             name: "DATE_TRUNC".into(),
-            args: vec![
-                Expr::Literal(ScalarValue::Utf8("month".into())),
-                value,
-            ],
+            args: vec![Expr::Literal(ScalarValue::Utf8("month".into())), value],
         };
         let next_month = Expr::Function {
             name: "DATE_ADD_MONTHS".into(),
@@ -4937,7 +4934,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     // unquoted datepart identifier before it reaches the vectorized executor.
     if name == "DATE_NAME" {
         if args.len() != 2 {
-            return Err(sql_err("DATENAME requires a datepart and date or timestamp"));
+            return Err(sql_err(
+                "DATENAME requires a datepart and date or timestamp",
+            ));
         }
         let unit = match &args[0] {
             Expr::Literal(ScalarValue::Utf8(unit)) => unit.clone(),
@@ -5516,6 +5515,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEPART" => "DATE_PART".to_owned(),
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
+        "ISDATE" => "IS_DATE".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
         }
@@ -8458,10 +8458,9 @@ mod tests {
 
     #[test]
     fn lowers_tsql_eomonth_to_typed_date_operators() {
-        let plan = sql_to_logical_plan(
-            "SELECT EOMONTH(event_date), EOMONTH(event_timestamp, 2) FROM t",
-        )
-        .expect("EOMONTH should lower through typed date operators");
+        let plan =
+            sql_to_logical_plan("SELECT EOMONTH(event_date), EOMONTH(event_timestamp, 2) FROM t")
+                .expect("EOMONTH should lower through typed date operators");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
         assert!(rendered.contains("DATE_ADD_MONTHS"), "{rendered}");
@@ -8484,6 +8483,13 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("DATE_NAME"), "{rendered}");
         assert!(rendered.contains("month"), "{rendered}");
+    }
+
+    #[test]
+    fn lowers_tsql_isdate_to_normalized_is_date() {
+        let plan = sql_to_logical_plan("SELECT ISDATE(value) FROM t")
+            .expect("ISDATE should lower through the bounded date predicate");
+        assert!(format!("{plan:?}").contains("IS_DATE"));
     }
 
     #[test]

@@ -8458,6 +8458,35 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .into();
             Ok(Arc::new(result))
         }
+        // SQL Server ISDATE returns 1 for a valid date/time value and 0 for
+        // invalid text or NULL.  Keep the accepted input types explicit: a
+        // numeric value must not be silently interpreted as an epoch day.
+        "IS_DATE" | "ISDATE" => {
+            check_arity(name, args, 1)?;
+            let input = &args[0];
+            let valid = match input.data_type() {
+                DataType::Date32
+                | DataType::Date64
+                | DataType::Timestamp(_, _)
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Dictionary(_, _) => {
+                    let cast = compute::cast_with_options(
+                        input,
+                        &DataType::Date32,
+                        &compute::CastOptions {
+                            safe: true,
+                            ..Default::default()
+                        },
+                    )?;
+                    (0..num_rows)
+                        .map(|row| Some(!input.is_null(row) && !cast.is_null(row)))
+                        .collect::<BooleanArray>()
+                }
+                _ => (0..num_rows).map(|_| Some(false)).collect::<BooleanArray>(),
+            };
+            Ok(Arc::new(valid))
+        }
         "SUBSTR" | "SUBSTRING" => {
             if args.len() < 2 || args.len() > 3 {
                 return Err(KaveonError::Execution(format!(
@@ -14656,9 +14685,9 @@ fn eval_date_from_parts(
                 )));
             }
             let days = ymd_to_days(year_value as i32, month_value, day_value as u32);
-            i32::try_from(days)
-                .map(Some)
-                .map_err(|_| KaveonError::Execution("DATEFROMPARTS result is outside DATE range".into()))
+            i32::try_from(days).map(Some).map_err(|_| {
+                KaveonError::Execution("DATEFROMPARTS result is outside DATE range".into())
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Arc::new(Date32Array::from(result)))
@@ -15481,11 +15510,27 @@ fn eval_date_diff(
 /// start's time.
 fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
     const MONTH_NAMES: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June", "July", "August",
-        "September", "October", "November", "December",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
     const WEEKDAY_NAMES: [&str; 7] = [
-        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
     ];
     let result = (0..num_rows)
         .map(|row| {
@@ -15493,7 +15538,8 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 return Ok(None);
             }
             let field = field_arr.value(row).to_ascii_uppercase();
-            let Some((year, month, day, remainder)) = temporal_calendar_position(source, row)? else {
+            let Some((year, month, day, remainder)) = temporal_calendar_position(source, row)?
+            else {
                 return Ok(None);
             };
             let days = ymd_to_days(year, month, day);
@@ -15506,9 +15552,7 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 }
                 "DAYOFYEAR" | "DOY" => (days - ymd_to_days(year, 1, 1) + 1).to_string(),
                 "QUARTER" | "QQ" | "Q" => (((month - 1) / 3) + 1).to_string(),
-                "WEEK" | "WK" | "WW" => {
-                    ((days - ymd_to_days(year, 1, 1)) / 7 + 1).to_string()
-                }
+                "WEEK" | "WK" | "WW" => ((days - ymd_to_days(year, 1, 1)) / 7 + 1).to_string(),
                 "HOUR" | "HH" => (remainder / 3_600_000_000_000).to_string(),
                 "MINUTE" | "MI" | "N" => ((remainder / 60_000_000_000) % 60).to_string(),
                 "SECOND" | "SS" | "S" => ((remainder / 1_000_000_000) % 60).to_string(),
@@ -28211,6 +28255,51 @@ mod tests {
         .unwrap();
         let values = codepoint.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(955), None]);
+    }
+
+    #[test]
+    fn evaluates_tsql_isdate_without_numeric_epoch_coercion() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("2024-02-29"),
+                Some("not-a-date"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "IS_DATE".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(false)]
+        );
+
+        let numeric = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int64Array::from(vec![Some(1), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "IS_DATE".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &numeric,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(false)]
+        );
     }
 
     #[test]
