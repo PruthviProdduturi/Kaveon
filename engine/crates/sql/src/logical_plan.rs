@@ -839,6 +839,7 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
     // an arbitrary three and then order those.
     let top = select_top(&query.body)?;
     let top_percent = select_top_percent(&query.body)?;
+    let top_percent_with_ties = select_top_percent_with_ties(&query.body);
     let top_ties = select_top_with_ties(&query.body)?;
     if (top_percent.is_some() || top_ties.is_some())
         && (query.limit.is_some() || query.fetch.is_some())
@@ -849,6 +850,9 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
     }
     if top_ties.is_some() && query.order_by.is_none() {
         return Err(sql_err("TOP WITH TIES requires an ORDER BY clause"));
+    }
+    if top_percent_with_ties && query.order_by.is_none() {
+        return Err(sql_err("TOP PERCENT WITH TIES requires an ORDER BY clause"));
     }
     let top_fetch = top_ties.map(|count| ast::Fetch {
         with_ties: true,
@@ -866,13 +870,14 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         (None, _) => None,
     };
     let plan = match limit {
-        Some(count) => build_limit_offset(plan, &Some(count), &query.offset, fetch, None)?,
+        Some(count) => build_limit_offset(plan, &Some(count), &query.offset, fetch, None, false)?,
         None => build_limit_offset(
             plan,
             &query.limit,
             &query.offset,
             fetch,
             top_percent.as_ref(),
+            top_percent_with_ties,
         )?,
     };
     // ORDER BY on a column the query does not select: the column rode
@@ -3540,9 +3545,6 @@ fn select_top_percent(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
     if !top.percent {
         return Ok(None);
     }
-    if top.with_ties {
-        return Err(sql_err("TOP PERCENT WITH TIES is unsupported"));
-    }
     match &top.quantity {
         Some(ast::TopQuantity::Expr(expr)) => Ok(Some(expr.clone())),
         Some(ast::TopQuantity::Constant(count)) => Ok(Some(ast::Expr::Value(ast::Value::Number(
@@ -3553,12 +3555,23 @@ fn select_top_percent(body: &ast::SetExpr) -> Result<Option<ast::Expr>> {
     }
 }
 
+fn select_top_percent_with_ties(body: &ast::SetExpr) -> bool {
+    let ast::SetExpr::Select(select) = body else {
+        return false;
+    };
+    select
+        .top
+        .as_ref()
+        .is_some_and(|top| top.percent && top.with_ties)
+}
+
 fn build_limit_offset(
     plan: LogicalPlan,
     limit: &Option<ast::Expr>,
     offset: &Option<ast::Offset>,
     fetch: Option<&ast::Fetch>,
     top_percent: Option<&ast::Expr>,
+    top_percent_with_ties: bool,
 ) -> Result<LogicalPlan> {
     let offset_count = match offset {
         Some(ast::Offset { value, .. }) => ast_expr_to_usize(value)?,
@@ -3587,7 +3600,7 @@ fn build_limit_offset(
                 .ok_or_else(|| sql_err("FETCH requires a row count"))?,
         ),
     };
-    let with_ties = fetch.is_some_and(|fetch| fetch.with_ties);
+    let with_ties = top_percent_with_ties || fetch.is_some_and(|fetch| fetch.with_ties);
     if let Some(percent) = fetch_percent {
         if limit.is_some() {
             return Err(sql_err("LIMIT and FETCH cannot both be specified"));
@@ -8619,7 +8632,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 43);
+        assert_eq!(cases.len(), 44);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
@@ -9323,6 +9336,17 @@ mod tests {
         assert!(format!("{ties:?}").contains("RANK"), "{ties:?}");
         let error = sql_to_logical_plan("SELECT TOP 3 WITH TIES * FROM events").unwrap_err();
         assert!(error.to_string().contains("ORDER BY"), "{error}");
+        let percent_ties =
+            sql_to_logical_plan("SELECT TOP 10 PERCENT WITH TIES * FROM events ORDER BY user_id")
+                .expect("TOP PERCENT WITH TIES should lower through rank");
+        let percent_ties = format!("{percent_ties:?}");
+        assert!(percent_ties.contains("name: \"RANK\""), "{percent_ties}");
+        let percent_error =
+            sql_to_logical_plan("SELECT TOP 10 PERCENT WITH TIES * FROM events").unwrap_err();
+        assert!(
+            percent_error.to_string().contains("ORDER BY"),
+            "{percent_error}"
+        );
     }
 
     #[test]
