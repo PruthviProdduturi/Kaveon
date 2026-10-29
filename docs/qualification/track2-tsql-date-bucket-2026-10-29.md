@@ -9,6 +9,7 @@ implemented by Kaveon Engine:
 - dateparts `year`, `quarter`, `month`, `day`, `hour`, `minute`, and `second`;
 - literal or unquoted datepart identifiers;
 - SQL Server's default origin (`1900-01-01`) when no origin is supplied;
+- typed `DATE`/`TIMESTAMP` literal origins;
 - nullable date/timestamp values through the existing typed `DATE_TRUNC`,
   `DATE_DIFF`, normalized remainder, and typed date-add evaluators on the
   distributed fragment path.
@@ -16,7 +17,7 @@ implemented by Kaveon Engine:
 The following remain explicitly unsupported and are rejected before execution:
 
 - non-positive, dynamic, or otherwise non-literal widths;
-- custom origin arguments;
+- dynamic or untyped origin expressions;
 - unsupported dateparts and dynamic width/datepart expressions.
 
 This is intentionally not a claim of full SQL Server `DATE_BUCKET` parity.
@@ -26,7 +27,8 @@ This is intentionally not a claim of full SQL Server `DATE_BUCKET` parity.
 - SQL planner regression:
   `logical_plan::tests::bounded_date_bucket_lowers_literal_widths_and_rejects_unqualified_forms`.
 - Exact local/distributed differential cases:
-  `date_bucket_width_one` and `date_bucket_wider_width` in
+  `date_bucket_width_one`, `date_bucket_wider_width`, and
+  `date_bucket_custom_origin` in
   `engine/crates/server/src/differential_tests.rs`, covering month and day
   buckets (including three-month and seven-day widths) across dictionary,
   plain, partitioned, clustered, and fragmented layouts.
@@ -38,4 +40,4 @@ This is intentionally not a claim of full SQL Server `DATE_BUCKET` parity.
 Width one lowers directly to `DATE_TRUNC`. Wider positive literal widths lower
 to `DATE_TRUNC` plus `DATE_DIFF`, a normalized modulo remainder, and the
 typed calendar or fixed-duration date-add operator. No unqualified form
-reaches a worker, and no custom-origin semantics are silently approximated.
+reaches a worker, and no dynamic-origin semantics are silently approximated.

@@ -4930,17 +4930,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     // Fabric/Azure SQL DATE_BUCKET uses the SQL Server default origin
     // (1900-01-01) when no origin is supplied. Width one is exactly the
     // existing DATE_TRUNC boundary. Wider literal widths use DATE_DIFF plus
-    // a normalized remainder and the typed date-add operators; custom origins
-    // and dynamic widths remain fail-closed until separately qualified.
+    // a normalized remainder and the typed date-add operators. Custom origins
+    // are accepted only when they are typed date/timestamp literals; dynamic
+    // origins and widths remain fail-closed until separately qualified.
     if name == "DATE_BUCKET" {
         if !(args.len() == 3 || args.len() == 4) {
             return Err(sql_err(
                 "DATE_BUCKET requires datepart, width, date, and optional origin",
-            ));
-        }
-        if args.len() == 4 {
-            return Err(sql_err(
-                "DATE_BUCKET custom origins are not supported in the bounded Engine contract",
             ));
         }
         let unit = match &args[0] {
@@ -4977,7 +4973,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 args[2].clone(),
             ],
         };
-        if width == 1 {
+        if width == 1 && args.len() == 3 {
             return Ok(truncated);
         }
         let origin_type = if matches!(unit.as_str(), "hour" | "minute" | "second") {
@@ -4987,9 +4983,31 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         } else {
             CastTarget::Date32
         };
-        let origin = Expr::Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Utf8("1900-01-01".into()))),
-            data_type: origin_type,
+        let origin = if let Some(custom_origin) = args.get(3) {
+            match custom_origin {
+                Expr::Literal(ScalarValue::Int64(_))
+                    if matches!(origin_type, CastTarget::Date32) =>
+                {
+                    Expr::Cast {
+                        expr: Box::new(custom_origin.clone()),
+                        data_type: CastTarget::Date32,
+                    }
+                }
+                Expr::Cast {
+                    data_type: CastTarget::TimestampMicros { .. },
+                    ..
+                } => custom_origin.clone(),
+                _ => {
+                    return Err(sql_err(
+                        "DATE_BUCKET origin must be a typed DATE or TIMESTAMP literal",
+                    ));
+                }
+            }
+        } else {
+            Expr::Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8("1900-01-01".into()))),
+                data_type: origin_type,
+            }
         };
         let difference = Expr::Function {
             name: "DATE_DIFF".into(),
@@ -8655,11 +8673,11 @@ mod tests {
         let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date) FROM t")
             .expect_err("dynamic widths must remain unqualified");
         assert!(error.to_string().contains("positive literal"));
-        let error = sql_to_logical_plan(
+        let plan = sql_to_logical_plan(
             "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t",
         )
-        .expect_err("custom origins must remain unqualified");
-        assert!(error.to_string().contains("custom origins"));
+        .expect("typed custom origins should lower");
+        assert!(format!("{plan:?}").contains("DATE_DIFF"));
     }
 
     #[test]
@@ -8717,7 +8735,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 44);
+        assert_eq!(cases.len(), 45);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
