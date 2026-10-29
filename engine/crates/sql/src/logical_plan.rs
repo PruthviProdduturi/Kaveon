@@ -4137,15 +4137,48 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             if charset.is_some() {
                 return Err(sql_err("CONVERT character-set syntax is unsupported"));
             }
-            if !styles.is_empty() {
-                return Err(sql_err(
-                    "CONVERT style codes are unsupported; use an unstyled CONVERT or CAST",
-                ));
-            }
             let data_type = data_type
                 .as_ref()
                 .ok_or_else(|| sql_err("CONVERT requires a target data type"))?;
-            let inner = ast_expr_to_expr(expr)?;
+            let style = if styles.is_empty() {
+                None
+            } else if styles.len() == 1 {
+                match &styles[0] {
+                    ast::Expr::Value(ast::Value::Number(value, _)) => Some(
+                        value
+                            .parse::<u32>()
+                            .map_err(|_| sql_err("CONVERT style must be an integer literal"))?,
+                    ),
+                    _ => {
+                        return Err(sql_err("CONVERT style must be an integer literal"));
+                    }
+                }
+            } else {
+                return Err(sql_err("CONVERT accepts at most one style code"));
+            };
+            let inner = if let Some(style) = style {
+                if matches!(data_type, ast::DataType::Date) {
+                    if let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = expr.as_ref() {
+                        let normalized =
+                            normalize_tsql_date_literal(value, style).ok_or_else(|| {
+                                sql_err(format!(
+                                    "CONVERT DATE literal is invalid for style {style}"
+                                ))
+                            })?;
+                        Expr::Literal(ScalarValue::Utf8(normalized))
+                    } else {
+                        return Err(sql_err(
+                            "styled CONVERT DATE currently requires a string literal",
+                        ));
+                    }
+                } else {
+                    return Err(sql_err(
+                        "CONVERT styles are currently supported only for DATE literals",
+                    ));
+                }
+            } else {
+                ast_expr_to_expr(expr)?
+            };
             let target = ast_data_type_to_cast_target(data_type)?;
             if matches!(data_type, ast::DataType::JSON | ast::DataType::JSONB) {
                 return Ok(Expr::Function {
@@ -4989,6 +5022,58 @@ fn normalize_tsql_date_unit(unit: &str) -> String {
         "ms" => "millisecond".into(),
         other => other.into(),
     }
+}
+
+/// Normalize the bounded literal DATE styles shared by SQL Server and
+/// Fabric. Runtime expressions intentionally remain fail-closed until their
+/// style semantics are vectorized as well.
+fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
+    let value = value.trim();
+    let (year, month, day) = match style {
+        1 | 101 => {
+            let mut parts = value.split('/');
+            let month = parts.next()?.parse::<u32>().ok()?;
+            let day = parts.next()?.parse::<u32>().ok()?;
+            let year = parts.next()?.parse::<i32>().ok()?;
+            (year, month, day)
+        }
+        0 => {
+            let normalized = value.replace(',', " ");
+            let mut parts = normalized.split_whitespace();
+            let month_name = parts.next()?.to_ascii_lowercase();
+            let day = parts.next()?.parse::<u32>().ok()?;
+            let year = parts.next()?.parse::<i32>().ok()?;
+            let month = match month_name.as_str() {
+                "jan" | "january" => 1,
+                "feb" | "february" => 2,
+                "mar" | "march" => 3,
+                "apr" | "april" => 4,
+                "may" => 5,
+                "jun" | "june" => 6,
+                "jul" | "july" => 7,
+                "aug" | "august" => 8,
+                "sep" | "september" => 9,
+                "oct" | "october" => 10,
+                "nov" | "november" => 11,
+                "dec" | "december" => 12,
+                _ => return None,
+            };
+            (year, month, day)
+        }
+        112 => {
+            if value.len() != 8 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[4..6].parse::<u32>().ok()?,
+                value[6..8].parse::<u32>().ok()?,
+            )
+        }
+        _ => return None,
+    };
+    let text = format!("{year:04}-{month:02}-{day:02}");
+    parse_date_days(&text).map(|_| text)
 }
 
 /// Lower a supported aggregate `FILTER (WHERE predicate)` into the existing
@@ -8236,6 +8321,27 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("Cast"), "{rendered}");
         assert!(rendered.contains("TRY_CAST_DATE32"), "{rendered}");
+    }
+
+    #[test]
+    fn lowers_tsql_date_convert_styles() {
+        for (sql, expected) in [
+            (
+                "SELECT CONVERT(DATE, '12/31/2024', 101) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT CONVERT(DATE, 'Dec 31 2024', 0) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT TRY_CONVERT(DATE, '20241231', 112) FROM t",
+                "2024-12-31",
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql).expect("styled CONVERT should lower");
+            assert!(format!("{plan:?}").contains(expected), "{plan:?}");
+        }
     }
 
     #[test]

@@ -42,7 +42,8 @@ The authoritative capability details remain in:
 
 Progress: the Engine now lowers `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
-datepart abbreviations. The focused planner regression passes; execution and
+datepart abbreviations. Literal DATE styles `0`, `1`, `101`, and `112` now
+normalize to ISO values. The focused planner regression passes; execution and
 distributed corpus evidence are still required before this becomes a fully
 qualified compatibility claim.
 
