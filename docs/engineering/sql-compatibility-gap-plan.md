@@ -133,7 +133,13 @@ gate.
 - [ ] Use statistics for join ordering, broadcast choice, selectivity, and
   partition pruning.
 - [ ] Add plan-vs-runtime diagnostics and regression thresholds.
-- [ ] Qualify result-cache behavior separately from data-cache behavior.
+- [x] Qualify result-cache behavior separately from data-cache behavior. The
+  result cache is keyed by normalized SQL, parameters, catalog snapshot,
+  pinned source versions, and time zone; it reports cache execution mode,
+  excludes paged results, honors per-statement bypass, applies bounded
+  TTL/byte/LRU eviction, and is cleared on catalog publication and product
+  transaction commit/replay. Evidence:
+  `docs/qualification/track3-result-cache-boundary-2026-10-28.md`.
 
 ### Phase 4 — Distributed completeness
 
