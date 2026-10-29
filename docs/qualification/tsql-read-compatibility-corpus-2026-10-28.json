@@ -40,6 +40,7 @@
     {"id": "convert_style_runtime_column", "sql": "SELECT CONVERT(DATE, value, 101) FROM t", "status": "explicit_rejection"},
     {"id": "pivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified"},
     {"id": "pivot", "sql": "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p", "status": "explicit_rejection"},
+    {"id": "unpivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified"},
     {"id": "unpivot", "sql": "SELECT * FROM t UNPIVOT (v FOR k IN (a)) u", "status": "explicit_rejection"},
     {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"}
   ]
