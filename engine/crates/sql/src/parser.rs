@@ -1269,6 +1269,7 @@ pub struct NativeDmlStatement {
     pub ast: Statement,
     pub returning: Vec<String>,
     pub on_conflict_do_nothing: bool,
+    pub on_conflict_do_update: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1290,6 +1291,11 @@ pub enum ProductDmlCommand {
         document_json: String,
     },
     CreateIgnore {
+        kind: String,
+        id: String,
+        document_json: String,
+    },
+    Upsert {
         kind: String,
         id: String,
         document_json: String,
@@ -1358,9 +1364,9 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
             }
             let id_index = id_index.expect("validated product INSERT id column");
             let document_index = document_index.expect("validated product INSERT document column");
-            if dml.on_conflict_do_nothing && kind == "typed_row" {
+            if (dml.on_conflict_do_nothing || dml.on_conflict_do_update) && kind == "typed_row" {
                 return Err(sql_error(
-                    "ON CONFLICT DO NOTHING is supported only for product records, not typed rows",
+                    "ON CONFLICT is supported only for product records, not typed rows",
                 ));
             }
             let Some(query) = insert.source.as_deref() else {
@@ -1377,7 +1383,16 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         .rows
                         .iter()
                         .map(|row| {
-                            Ok(if dml.on_conflict_do_nothing {
+                            Ok(if dml.on_conflict_do_update {
+                                ProductDmlCommand::Upsert {
+                                    kind: kind.clone(),
+                                    id: string_literal(&row[id_index], "product ID")?,
+                                    document_json: string_literal(
+                                        &row[document_index],
+                                        "product document_json",
+                                    )?,
+                                }
+                            } else if dml.on_conflict_do_nothing {
                                 ProductDmlCommand::CreateIgnore {
                                     kind: kind.clone(),
                                     id: string_literal(&row[id_index], "product ID")?,
@@ -1450,7 +1465,16 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         values[index] = Some(expression);
                     }
                     let values = values.map(|value| value.expect("projection length checked"));
-                    Ok(vec![if dml.on_conflict_do_nothing {
+                    Ok(vec![if dml.on_conflict_do_update {
+                        ProductDmlCommand::Upsert {
+                            kind,
+                            id: string_literal(values[id_index], "product ID")?,
+                            document_json: string_literal(
+                                values[document_index],
+                                "product document_json",
+                            )?,
+                        }
+                    } else if dml.on_conflict_do_nothing {
                         ProductDmlCommand::CreateIgnore {
                             kind,
                             id: string_literal(values[id_index], "product ID")?,
@@ -1653,8 +1677,8 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 return Err(sql_error("INSERT supports VALUES or SELECT only"));
             }
             let table = validated_table_name(&insert.table_name)?;
-            let on_conflict_do_nothing = match insert.on.as_ref() {
-                None => false,
+            let (on_conflict_do_nothing, on_conflict_do_update) = match insert.on.as_ref() {
+                None => (false, false),
                 Some(OnInsert::OnConflict(conflict))
                     if (conflict.conflict_target.is_none()
                         || matches!(
@@ -1665,11 +1689,38 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                         ))
                         && matches!(conflict.action, OnConflictAction::DoNothing) =>
                 {
-                    true
+                    (true, false)
+                }
+                Some(OnInsert::OnConflict(conflict))
+                    if (conflict.conflict_target.is_none()
+                        || matches!(
+                            &conflict.conflict_target,
+                            Some(sqlparser::ast::ConflictTarget::Columns(columns))
+                                if columns.len() == 1
+                                    && columns[0].value.eq_ignore_ascii_case("id")
+                        ))
+                        && matches!(
+                            &conflict.action,
+                            OnConflictAction::DoUpdate(update)
+                                if update.selection.is_none()
+                                    && update.assignments.len() == 1
+                                    && matches!(
+                                        &update.assignments[0].target,
+                                        AssignmentTarget::ColumnName(column)
+                                            if column.0.len() == 1
+                                                && column.0[0].value.eq_ignore_ascii_case("document_json")
+                                    )
+                                    && update.assignments[0]
+                                        .value
+                                        .to_string()
+                                        .eq_ignore_ascii_case("excluded.document_json")
+                        ) =>
+                {
+                    (false, true)
                 }
                 Some(_) => {
                     return Err(sql_error(
-                        "INSERT supports only ON CONFLICT DO NOTHING on the product id",
+                        "INSERT supports only bounded ON CONFLICT DO NOTHING or DO UPDATE of document_json on the product id",
                     ));
                 }
             };
@@ -1694,7 +1745,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 || insert.partitioned.is_some()
                 || !insert.after_columns.is_empty()
                 || insert.table
-                || (!on_conflict_do_nothing && insert.on.is_some())
+                || (!on_conflict_do_nothing && !on_conflict_do_update && insert.on.is_some())
                 || insert.replace_into
                 || insert.priority.is_some()
                 || insert.insert_alias.is_some()
@@ -1710,6 +1761,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     ast: statement,
                     returning,
                     on_conflict_do_nothing,
+                    on_conflict_do_update,
                 },
             )))
         }
@@ -1745,6 +1797,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     ast: statement,
                     returning,
                     on_conflict_do_nothing: false,
+                    on_conflict_do_update: false,
                 },
             )))
         }
@@ -1777,6 +1830,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     ast: statement,
                     returning,
                     on_conflict_do_nothing: false,
+                    on_conflict_do_update: false,
                 },
             )))
         }
@@ -2579,6 +2633,37 @@ mod tests {
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO NOTHING"
         )
         .is_err());
+    }
+
+    #[test]
+    fn product_insert_supports_bounded_on_conflict_do_update() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"new\"}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json",
+        )
+        .expect("bounded conflict upsert should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert!(dml.on_conflict_do_update);
+        assert!(!dml.on_conflict_do_nothing);
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"new\"}".into(),
+            }
+        );
+        for sql in [
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO UPDATE SET document_json = excluded.document_json",
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE id = 'ds-1'",
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = '{}'",
+        ] {
+            assert!(
+                parse_native_transactional(sql).is_err(),
+                "unexpectedly accepted unsafe upsert: {sql}"
+            );
+        }
     }
 
     #[test]
