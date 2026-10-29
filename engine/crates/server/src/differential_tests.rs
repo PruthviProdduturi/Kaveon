@@ -306,7 +306,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_datetime2fromparts",
-        "SELECT TOP 5 DATETIME2FROMPARTS(DATEPART(yyyy, event_date), DATEPART(mm, event_date), DATEPART(dd, event_date), 12, 34, 56, 789, 3) AS rebuilt FROM {T} ORDER BY event_date",
+        "SELECT TOP 5 DATETIME2FROMPARTS(DATEPART(yyyy, event_date), DATEPART(mm, event_date), DATEPART(dd, event_date), 12, 34, 56, 789123, 6) AS rebuilt FROM {T} ORDER BY event_date",
         true,
     ),
     (
@@ -7789,6 +7789,28 @@ fn distributed_tsql_runtime_timestamp_styles_match_local() {
     let statement = "SELECT user_id, TRY_CONVERT(DATETIME2, value, 20) AS ts_20, TRY_CONVERT(DATETIME2, value, 21) AS ts_21, TRY_CONVERT(DATETIME2, value, 120) AS ts_120, TRY_CONVERT(DATETIME2, value, 121) AS ts_121, TRY_CONVERT(DATETIME2, value, 126) AS ts_126, TRY_CONVERT(DATETIME2, value, 101) AS us_date FROM timestamp_events ORDER BY user_id";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-timestamp-style-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_datetime2fromparts_precision_six_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-datetime2-p6-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789123, 6) AS rebuilt FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-datetime2-p6-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), true);
