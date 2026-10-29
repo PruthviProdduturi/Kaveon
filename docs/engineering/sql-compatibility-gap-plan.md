@@ -160,7 +160,9 @@ unsupported dateparts remain explicitly rejected.
   choice, selectivity, and reader pruning. Cloud pruning and universal
   cost-based planning remain separate gates; see
   `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
-- [ ] Add plan-vs-runtime diagnostics and regression thresholds.
+- [ ] Add plan-vs-runtime diagnostics. Runtime-only comparison now exposes a
+  conservative doubled-P95 regression threshold after five comparable runs;
+  estimate-vs-actual operator diagnostics remain open.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
   pinned source versions, and time zone; it reports cache execution mode,

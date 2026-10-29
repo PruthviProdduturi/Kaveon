@@ -428,6 +428,12 @@ struct QueryComparison {
     queue_wait_runs: usize,
     max_admission_wait_ms: u64,
     pressure_events: Vec<QueryPressureEvent>,
+    /// A deliberately conservative runtime regression signal. It is only
+    /// present after enough comparable non-cache runs exist; it never turns a
+    /// small sample into a performance claim.
+    regression_threshold_ms: Option<u64>,
+    regression_ratio: Option<f64>,
+    regression_detected: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -11416,6 +11422,25 @@ fn with_live_elapsed(mut record: QueryRecord) -> QueryRecord {
     record
 }
 
+/// Runtime-only regression threshold for comparable query runs. The p95 is
+/// doubled to avoid flagging normal variance as a regression, and the signal
+/// is withheld until five complete runs are available.
+fn runtime_regression(
+    samples: &[u64],
+    current_ms: u64,
+) -> (Option<u64>, Option<f64>, Option<bool>) {
+    if samples.len() < 5 {
+        return (None, None, None);
+    }
+    let index = (samples.len() * 95).div_ceil(100).saturating_sub(1);
+    let Some(p95) = samples.get(index).copied() else {
+        return (None, None, None);
+    };
+    let threshold = p95.saturating_mul(2).max(1);
+    let ratio = current_ms as f64 / p95.max(1) as f64;
+    (Some(threshold), Some(ratio), Some(current_ms > threshold))
+}
+
 async fn get_query(
     Path(query_id): Path<String>,
     Extension(identity): Extension<Identity>,
@@ -11493,6 +11518,8 @@ async fn compare_query(
             .copied()
     };
     let median = samples.get(samples.len().saturating_sub(1) / 2).copied();
+    let (regression_threshold_ms, regression_ratio, regression_detected) =
+        runtime_regression(&samples, current.elapsed_ms);
     Json(QueryComparison {
         query_id,
         comparable_runs: samples.len(),
@@ -11505,6 +11532,9 @@ async fn compare_query(
         queue_wait_runs,
         max_admission_wait_ms,
         pressure_events,
+        regression_threshold_ms,
+        regression_ratio,
+        regression_detected,
     })
     .into_response()
 }
@@ -15417,6 +15447,21 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_regression_requires_five_runs_and_uses_a_doubled_p95() {
+        assert_eq!(
+            super::runtime_regression(&[10, 11, 12, 13], 100),
+            (None, None, None)
+        );
+        let samples = vec![10, 11, 12, 13, 14, 20, 21, 22, 23, 24];
+        let (threshold, ratio, detected) = super::runtime_regression(&samples, 50);
+        assert_eq!(threshold, Some(48));
+        assert_eq!(detected, Some(true));
+        assert!(ratio.expect("ratio") > 2.0);
+        let (_, _, detected) = super::runtime_regression(&samples, 48);
+        assert_eq!(detected, Some(false));
+    }
+
     #[test]
     fn a_spooled_exchange_input_reserves_the_batch_it_holds_not_the_spool() {
         use arrow::array::Int64Array;
