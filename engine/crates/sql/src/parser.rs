@@ -1619,7 +1619,16 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             ) {
                 return Err(sql_error("INSERT supports VALUES or SELECT only"));
             }
+            let table = validated_table_name(&insert.table_name)?;
             let returning = parse_product_returning(insert.returning.as_ref())?;
+            if !returning.is_empty()
+                && !table.to_ascii_lowercase().starts_with("product.")
+                && !table.to_ascii_lowercase().starts_with("kaveon.product.")
+            {
+                return Err(sql_error(
+                    "RETURNING is supported only for kaveon.product records",
+                ));
+            }
             if insert.table_alias.is_some()
                 || insert.or.is_some()
                 || insert.ignore
@@ -1636,7 +1645,6 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     "INSERT aliases, conflict clauses, modifiers, partitions, and RETURNING are not supported",
                 ));
             }
-            let table = validated_table_name(&insert.table_name)?;
             Ok(NativeTransactionalStatement::Dml(Box::new(
                 NativeDmlStatement {
                     kind: NativeDmlKind::Insert,
