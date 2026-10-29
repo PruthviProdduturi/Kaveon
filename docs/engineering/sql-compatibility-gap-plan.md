@@ -52,11 +52,11 @@ The authoritative capability details remain in:
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
-Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
+Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Runtime DATE and timestamp styles have qualified local
 and three-worker coverage for the declared style set. Literal DATE styles `0`, `1`, `101`, and `112` now
-normalize to ISO values. `ISNULL`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
+normalize to ISO values. `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
 pass exact local-vs-three-worker differential checks across dictionary, plain,
 partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
