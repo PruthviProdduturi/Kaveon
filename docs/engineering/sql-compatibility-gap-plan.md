@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 29-case corpus has planner coverage and a completed exact
+  The current 31-case corpus has planner coverage and a completed exact
   three-worker differential sweep; evidence is retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 - [ ] Keep `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected until
@@ -74,6 +74,9 @@ distributed evidence are recorded in
 inputs, explicitly refusing numeric epoch coercion.
 `ISNUMERIC` now returns a safe boolean result for native numeric and
 parseable-text inputs without claiming locale-specific currency parsing.
+`LEFT` and `RIGHT` preserve SQL Server's Unicode scalar character semantics
+for bounded text lengths and are covered by the distributed differential
+regression.
 
 ### Phase 2 — Transactional SQL surface
 
