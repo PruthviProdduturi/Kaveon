@@ -3740,6 +3740,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_update_and_delete_return_identity_and_revision() {
+        let (registry, catalog) = registry().await;
+        let create = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('orders', '{}')"
+                        .into(),
+                    transaction_id: Some(create.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(create.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let update = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "UPDATE product.datasets SET document_json = '{\"name\":\"Orders\"}' WHERE id = 'orders' AND revision = 1 RETURNING id, revision".into(),
+                transaction_id: Some(update.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "orders");
+        assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(update.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let delete = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "DELETE FROM product.datasets WHERE id = 'orders' AND revision = 2 RETURNING id, revision".into(),
+                transaction_id: Some(delete.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "orders");
+        assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(delete.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert!(
+            catalog
+                .read_current()
+                .await
+                .unwrap()
+                .product_record(ProductRecordKind::Dataset, "orders")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_on_conflict_do_update_revises_owned_product() {
         let (registry, catalog) = registry().await;
         let first = registry.begin("alice").await.unwrap();

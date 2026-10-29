@@ -212,12 +212,14 @@ failures.
   approximate aggregates beyond `APPROX_COUNT_DISTINCT` and
   `APPROX_PERCENTILE` — `APPROX_MOST_FREQUENT` has no heavy-hitter sketch in
   the statistics object yet.
-- Table-creating DDL and row DML: `CREATE TABLE AS`, `INSERT`, `UPDATE`,
-  `DELETE`, `ALTER TABLE ADD/DROP COLUMN`. Catalog DDL registers tables that
-  already exist in storage. The separate product transaction API accepts a
-  bounded, revisioned metadata-record DML subset; its typed-row facade
-  validates declared primary/unique keys and product references, but it is not
-  arbitrary OLTP SQL or general constraint DDL.
+- Table-creating DDL and general lake-row DML: `CREATE TABLE AS`, `INSERT`,
+  `UPDATE`, `DELETE`, `ALTER TABLE ADD/DROP COLUMN`. Catalog DDL registers
+  tables that already exist in storage. The separate product transaction API
+  accepts a bounded, revisioned metadata-record DML subset, including
+  identity-only `RETURNING id, revision` on revision-checked product
+  `UPDATE`/`DELETE`; its typed-row facade validates declared primary/unique
+  keys and product references, but it is not arbitrary OLTP SQL or general
+  constraint DDL.
 - Universal cost-based optimization. Native `ANALYZE` persists an immutable
   source-version-bound statistics document with exact metadata, sketches,
   quantiles, and bounded numeric histograms; the planner still falls back
