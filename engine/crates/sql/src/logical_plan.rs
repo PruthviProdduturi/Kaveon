@@ -5153,6 +5153,77 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // DATETIME2FROMPARTS is qualified for precisions representable by the
+    // Engine's microsecond timestamp path without rounding. Precision 0..=3
+    // maps the fraction argument to milliseconds; higher precision is
+    // rejected rather than silently losing 100-nanosecond information.
+    if name == "DATETIME2_FROM_PARTS" {
+        if args.len() != 8 {
+            return Err(sql_err(
+                "DATETIME2FROMPARTS requires year, month, day, hour, minute, second, fractions, and precision",
+            ));
+        }
+        let precision = match &args[7] {
+            Expr::Literal(ScalarValue::Int64(value)) if (0..=3).contains(value) => *value,
+            Expr::Literal(ScalarValue::Int64(_)) => {
+                return Err(sql_err(
+                    "DATETIME2FROMPARTS precision must be between 0 and 3",
+                ));
+            }
+            _ => {
+                return Err(sql_err(
+                    "DATETIME2FROMPARTS precision must be a literal between 0 and 3",
+                ));
+            }
+        };
+        let date = Expr::Function {
+            name: "DATE_FROM_PARTS".into(),
+            args: args[..3].to_vec(),
+        };
+        let timestamp = Expr::Cast {
+            expr: Box::new(date),
+            data_type: CastTarget::TimestampMicros {
+                with_timezone: false,
+            },
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(args[3].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(3_600))),
+            }),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::BinaryOp {
+                left: Box::new(args[4].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(60))),
+            }),
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(seconds),
+            op: BinaryOp::Plus,
+            right: Box::new(args[5].clone()),
+        };
+        let shifted = Expr::Function {
+            name: "DATE_ADD_SECONDS".into(),
+            args: vec![timestamp, seconds],
+        };
+        let fraction_scale = 10_i64.pow((3 - precision) as u32);
+        let fraction = if fraction_scale == 1 {
+            args[6].clone()
+        } else {
+            Expr::BinaryOp {
+                left: Box::new(args[6].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(fraction_scale))),
+            }
+        };
+        return Ok(Expr::Function {
+            name: "DATE_ADD_MILLISECONDS".into(),
+            args: vec![shifted, fraction],
+        });
+    }
+
     // SMALLDATETIMEFROMPARTS has minute precision: construct a timestamp
     // from the calendar date and add only the hour/minute offset, leaving
     // seconds at zero as SQL Server does.
@@ -5778,6 +5849,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         "DATETIMEFROMPARTS" => "DATETIME_FROM_PARTS".to_owned(),
+        "DATETIME2FROMPARTS" => "DATETIME2_FROM_PARTS".to_owned(),
         "SMALLDATETIMEFROMPARTS" => "SMALLDATETIME_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
         "ISNUMERIC" => "IS_NUMERIC".to_owned(),
@@ -8766,6 +8838,26 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datetime2fromparts_with_bounded_precision() {
+        let plan = sql_to_logical_plan(
+            "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3) FROM t",
+        )
+        .expect("DATETIME2FROMPARTS should lower to timestamp operators");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_FROM_PARTS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_SECONDS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_MILLISECONDS"), "{rendered}");
+        assert!(rendered.contains("TimestampMicros"), "{rendered}");
+        assert!(
+            sql_to_logical_plan(
+                "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 7890, 4) FROM t"
+            )
+            .is_err()
+        );
+        assert!(sql_to_logical_plan("SELECT DATETIME2FROMPARTS(2024, 2, 29) FROM t").is_err());
+    }
+
+    #[test]
     fn lowers_tsql_datename_to_normalized_date_name() {
         let plan = sql_to_logical_plan("SELECT DATENAME(mm, event_date) FROM t")
             .expect("DATENAME should normalize its unquoted datepart");
@@ -8854,7 +8946,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 48);
+        assert_eq!(cases.len(), 49);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

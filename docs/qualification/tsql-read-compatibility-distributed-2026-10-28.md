@@ -27,7 +27,7 @@ parity or external-client parity.
   passed with three workers and zero retained memory reservations.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CHARINDEX`, bounded `PATINDEX`, `TRANSLATE`, bounded width-one
-  `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
+  `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `DATETIME2FROMPARTS` (precision 0–3), `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `LEFT`, `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
 
 The bounded `PIVOT`/`UNPIVOT` evidence is retained in
