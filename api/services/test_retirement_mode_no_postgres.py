@@ -84,30 +84,55 @@ def test_catalog_usage_projection_is_postgresql_free(monkeypatch,retired):
     retired.assert_not_called()
 
 
-@pytest.mark.parametrize("operation",[
-    lambda: lab.list_tables(Response(),"warehouse","alice"),
-    lambda: lab.get_table_columns("dbo.orders","warehouse","alice"),
-    lambda: lab.get_schema("dbo","orders","warehouse","alice"),
-    lambda: lab.get_distinct_values("dbo","orders","status","warehouse",100,"alice"),
+@pytest.mark.parametrize("operation,expected_pool_call",[
+    (lambda: lab.list_tables(Response(),"warehouse","alice"),"get_tables"),
+    (lambda: lab.get_table_columns("dbo.orders","warehouse","alice"),"get_table_columns"),
+    (lambda: lab.get_schema("dbo","orders","warehouse","alice"),"get_table_columns"),
 ])
-def test_legacy_lab_pool_fails_closed_before_database_access(monkeypatch,retired,operation):
-    pool_operation=Mock(side_effect=AssertionError("legacy data plane reached"))
-    monkeypatch.setattr(lab.pool,"get_tables",pool_operation)
-    monkeypatch.setattr(lab.pool,"get_table_columns",pool_operation)
-    monkeypatch.setattr(lab.pool,"execute_query",pool_operation)
-    with pytest.raises(Exception) as error:
-        operation()
-    assert getattr(error.value,"status_code",None)==503
-    pool_operation.assert_not_called()
+def test_lab_reaches_the_pool_for_a_registered_source_without_postgresql(
+        monkeypatch,retired,operation,expected_pool_call):
+    """These answered 503. The refusal was not the point -- `retired` is, and it
+    fails if anything reaches `database.metadata`. The source resolver can read
+    the registry from KaveonDB now, so the endpoint gets as far as the pool, and
+    still touches no relational metadata doing it."""
+    reached={}
+    def record(name):
+        def call(*args,**kwargs):
+            reached["name"]=name
+            reached["actor"]=kwargs.get("actor") or (args[1] if name=="get_tables" else args[2])
+            return [] if name!="execute_query" else {"columns":[],"rows":[],"row_count":0}
+        return call
+    for name in ("get_tables","get_table_columns","execute_query"):
+        monkeypatch.setattr(lab.pool,name,record(name))
+    operation()
+    assert reached["name"]==expected_pool_call
+    assert reached["actor"]=="alice", "the pool needs the caller to read the registry as"
     retired.assert_not_called()
 
 
-def test_engine_catalog_resolution_and_legacy_studio_routes_fail_closed(monkeypatch,retired):
+def test_execute_routes_an_engine_catalog_and_pools_everything_else(monkeypatch,retired):
+    """`/sql/execute` refused any database that was not an Engine catalog. A
+    registered source is not one and does not need to be: it goes to the pool,
+    which resolves it from KaveonDB. Neither path touches PostgreSQL."""
     monkeypatch.setattr(product_read_authority,"list_documents",documents)
     assert sql._engine_source_for_catalog("lake")["engine_catalog"]=="lake"
+
+    pooled={}
+    def execute_query(sql_text,database,*args,**kwargs):
+        pooled["database"]=database
+        pooled["actor"]=kwargs.get("actor")
+        return {"columns":[],"rows":[],"row_count":0}
+    monkeypatch.setattr(sql.pool,"execute_query",execute_query)
+    monkeypatch.setattr(sql.history_svc,"create_history",Mock())
+    monkeypatch.setattr(sql.sql_execute_limiter,"check",Mock())
+    monkeypatch.setattr(sql,"assert_no_platform_tables",Mock())
+
     context=SimpleNamespace(email="alice",role="Analyst")
-    execute_body=SimpleNamespace(sql_text="SELECT 1",database="warehouse",source="lab")
-    with pytest.raises(Exception) as execute_error:
-        sql.execute_sql(execute_body,Response(),context)
-    assert getattr(execute_error.value,"status_code",None)==503
+    body=SimpleNamespace(sql_text="SELECT 1",database="warehouse",source="lab",
+                         tables_used=None,chart_id=None,dashboard_id=None,
+                         chart_type=None,dataset_id=None,row_limit=None,
+                         use_cache=False,cache_ttl=None)
+    sql.execute_sql(body,Response(),context)
+    assert pooled["database"]=="warehouse"
+    assert pooled["actor"]=="alice"
     retired.assert_not_called()

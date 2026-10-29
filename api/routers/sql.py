@@ -629,14 +629,12 @@ def distinct_filter_values(
 @router.post("/sql/execute")
 @statement_route("sql_text")
 def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
-    if postgresql_retirement_runtime.requested():
-        # A statement over an Engine catalog is not legacy execution: the
-        # warehouse is gone, the catalog is not. Route it to the Engine
-        # rather than refusing a caller that named a live catalog (the
-        # chat's own fallback statement did exactly that).
-        if _engine_source_for_catalog(data.database):
-            return execute_engine_sql(data, response, ctx)
-        raise HTTPException(status_code=503, detail="Legacy SQL execution is unavailable after PostgreSQL retirement; use /sql/engine.")
+    # A statement over an Engine catalog is not external execution: the
+    # warehouse is gone, the catalog is not. Everything else is a registered
+    # data source, resolved from KaveonDB by the pool below -- which is why
+    # this no longer refuses what it cannot route to the Engine.
+    if _engine_source_for_catalog(data.database):
+        return execute_engine_sql(data, response, ctx)
     # Viewers may only execute from dashboard/filter context — not from builder or lab
     _dashboard_sources = {"dashboard-chart", "dashboard-filter", "dataset-filter", "dataset-preview"}
     from middleware.permissions import ROLE_LEVELS
@@ -713,7 +711,8 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     if (chart_type or "").lower() in GEOGRAPHIC_CHART_TYPES:
         hard_limit = min(hard_limit, MAX_GEOGRAPHIC_ROWS)
     try:
-        result = pool.execute_query(sql_text, database, max_rows=hard_limit)
+        result = pool.execute_query(sql_text, database, max_rows=hard_limit,
+                                    actor=ctx.email, role=ctx.role)
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
         logger.warning("sql_execute_failed database=%s type=%s", database, type(e).__name__)
@@ -772,8 +771,6 @@ def execute_sql_async(
     ctx=Depends(require_min_role("Analyst")),
 ):
     """Start an async query job. Returns job_id immediately for polling."""
-    if postgresql_retirement_runtime.requested():
-        raise HTTPException(status_code=503, detail="Legacy asynchronous SQL execution is unavailable after PostgreSQL retirement.")
     user = ctx.email
     assert_no_platform_tables(data.sql_text, data.database)
     sql_execute_limiter.check(user)

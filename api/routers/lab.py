@@ -105,15 +105,6 @@ def _engine_source_grants(actor: str, role: str) -> set[str]:
     return set(granted)
 
 
-def _require_legacy_data_plane():
-    """Reject legacy pool access before it can resolve metadata in PostgreSQL."""
-    if postgresql_retirement_runtime.requested():
-        raise HTTPException(
-            status_code=503,
-            detail="Legacy database passthrough is unavailable after PostgreSQL retirement; use an Engine catalog.",
-        )
-
-
 @router.get("/lab/databases")
 def list_databases(response: Response, user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
@@ -412,37 +403,33 @@ def get_engine_table_columns(source_id: str, schema: str, table: str, response: 
 
 @router.get("/lab/tables")
 def list_tables(response: Response, database: str = Query(default=None), user: str = Depends(require_auth)):
-    _require_legacy_data_plane()
     response.headers.update(NO_CACHE)
     resolved = _resolve_db(database)
-    tables = _hide_platform_tables(pool.get_tables(resolved), resolved)
+    tables = _hide_platform_tables(pool.get_tables(resolved, user), resolved)
     return {"success": True, "tables": tables}
 
 
 @router.get("/lab/tables/{table_id}/columns")
 def get_table_columns(table_id: str, database: str = Query(default=None), user: str = Depends(require_auth)):
-    _require_legacy_data_plane()
-    columns = pool.get_table_columns(table_id, _resolve_db(database))
+    columns = pool.get_table_columns(table_id, _resolve_db(database), user)
     return columns
 
 
 @router.get("/lab/schema/{schema}/{table_name}")
 def get_schema(schema: str, table_name: str, database: str = Query(default=None), user: str = Depends(require_auth)):
-    _require_legacy_data_plane()
     table_id = f"{schema}.{table_name}"
-    columns = pool.get_table_columns(table_id, _resolve_db(database))
+    columns = pool.get_table_columns(table_id, _resolve_db(database), user)
     return {"success": True, "schema": {"columns": columns}}
 
 
 @router.post("/lab/execute")
 @statement_route("sql")
 def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_min_role("Analyst"))):
-    _require_legacy_data_plane()
     user = ctx.email
     sql_execute_limiter.check(user)
     resolved = _resolve_db(data.database)
     assert_no_platform_tables(data.sql, resolved)
-    result = pool.execute_query(data.sql, resolved)
+    result = pool.execute_query(data.sql, resolved, actor=user, role=ctx.role)
     return {"columns": result.get("columns", []), "rows": result.get("rows", []),
             "rowCount": result.get("row_count", 0)}
 
@@ -763,7 +750,6 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
             "execution": execution,
             "engineQueryId": result.get("id"),
         }
-    _require_legacy_data_plane()
     assert_no_platform_tables(sql, database)
     dataset_id = data.datasetId
     run_context = data.runContext
@@ -784,6 +770,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
             database,
             cancel_event=cancel_event,
             max_rows=LAB_DEFAULT_ROW_CAP if row_cap_applied else None,
+            actor=ctx.email, role=ctx.role,
         ),
     )
 
@@ -852,7 +839,6 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
 
 @router.post("/lab/ctas", status_code=200)
 def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst"))):
-    _require_legacy_data_plane()
     user = ctx.email  # noqa: F841
     """Materialise a query as a new table using SELECT … INTO [schema].[table]."""
     sql_execute_limiter.check(user)
@@ -866,7 +852,7 @@ def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst
     target = f"{quote_identifier(data.schema)}.{quote_identifier(data.table_name)}"
     ctas_sql = f"SELECT * INTO {target} FROM (\n{source_sql}\n) AS __ctas_source"
     try:
-        pool.execute_query(ctas_sql, data.database)
+        pool.execute_query(ctas_sql, data.database, actor=ctx.email, role=ctx.role)
         return {"success": True, "table": f"{data.schema}.{data.table_name}"}
     except Exception as error:
         # The driver's message was returned verbatim as a 400, so a connection
@@ -921,7 +907,6 @@ def get_distinct_values(
     limit: int = Query(default=100),
     user: str = Depends(require_auth),
 ):
-    _require_legacy_data_plane()
     user_id = user
     start_time = int(time.time() * 1000)
 
@@ -939,7 +924,7 @@ def get_distinct_values(
     )
 
     try:
-        result = pool.execute_query(sql, database)
+        result = pool.execute_query(sql, database, actor=user)
         duration_ms = int(time.time() * 1000) - start_time
 
         values = []

@@ -76,8 +76,7 @@ class ErrorBodiesCarryNoInternalsTests(unittest.TestCase):
         from models.lab import CtasBody
         body = CtasBody(sql="SELECT 1", database="warehouse", schema="dbo", table_name="t")
         failure = RuntimeError('Login timeout expired [host=sql-prod, user=kaveon]')
-        with patch.object(lab, "_require_legacy_data_plane"), \
-             patch.object(lab.sql_execute_limiter, "check"), \
+        with patch.object(lab.sql_execute_limiter, "check"), \
              patch.object(lab, "assert_no_platform_tables"), \
              patch.object(lab.pool, "execute_query", side_effect=failure):
             with self.assertRaises(HTTPException) as caught:

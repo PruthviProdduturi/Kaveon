@@ -37,7 +37,9 @@ class GeographicExecutionBoundTests(unittest.TestCase):
 
     def _run(self, body, result):
         """Call the route with everything outside it held still."""
-        with patch.object(sql.postgresql_retirement_runtime, "requested", return_value=False), \
+        # Not an Engine catalog, so the statement goes through the pool --
+        # the path these ceilings apply to. There is no retirement flag now.
+        with patch.object(sql, "_engine_source_for_catalog", return_value=None), \
              patch.object(sql, "assert_no_platform_tables"), \
              patch.object(sql.sql_execute_limiter, "check"), \
              patch.object(sql.history_svc, "create_history"), \
