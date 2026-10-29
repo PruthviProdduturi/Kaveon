@@ -2562,7 +2562,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             let returning = parse_product_returning(returning.as_ref())?;
             if from.is_some() || or.is_some() {
                 return Err(sql_error(
-                    "UPDATE FROM, conflict clauses, and RETURNING are not supported",
+                    "UPDATE FROM and conflict clauses are not supported",
                 ));
             }
             if selection.is_none() {
@@ -2601,7 +2601,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 || delete.limit.is_some()
             {
                 return Err(sql_error(
-                    "DELETE supports one table and no USING, RETURNING, ORDER BY, or LIMIT",
+                    "DELETE supports one table and no USING, ORDER BY, or LIMIT",
                 ));
             }
             if delete.selection.is_none() {
@@ -3411,6 +3411,22 @@ mod tests {
                 parse_native_transactional(sql).is_ok(),
                 "expected supported single statement: {sql}"
             );
+        }
+    }
+
+    #[test]
+    fn accepts_identity_returning_for_product_update_and_delete() {
+        for sql in [
+            "UPDATE product.datasets SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
+            "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("product DML should parse")
+            else {
+                panic!("expected product DML")
+            };
+            assert_eq!(dml.returning, ["id", "revision"]);
+            assert!(adapt_product_dml(&dml).is_ok());
         }
     }
 
