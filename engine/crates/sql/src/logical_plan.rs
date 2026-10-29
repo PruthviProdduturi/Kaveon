@@ -5456,6 +5456,11 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
         }
+        // SQL Server's COUNT_BIG has the same row semantics as COUNT for
+        // Kaveon's 64-bit result representation. Canonicalize it before
+        // aggregate discovery so local and distributed plans share the same
+        // mergeable count state.
+        "COUNT_BIG" => "COUNT".to_owned(),
         _ => name,
     }
 }

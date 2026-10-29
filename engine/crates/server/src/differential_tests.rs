@@ -245,6 +245,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_count_big",
+        "SELECT COUNT_BIG(*) AS row_count FROM {T}",
+        true,
+    ),
+    (
         "tsql_dateadd",
         "SELECT TOP 5 DATEADD(dd, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,
