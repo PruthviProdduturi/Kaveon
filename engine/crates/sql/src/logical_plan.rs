@@ -4293,6 +4293,23 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         )),
         ast::Expr::Subquery(_) => Err(sql_err("scalar subqueries are not yet supported")),
 
+        ast::Expr::Trim {
+            expr,
+            trim_where,
+            trim_what,
+            trim_characters,
+        } => {
+            if trim_where.is_some() || trim_what.is_some() || trim_characters.is_some() {
+                return Err(sql_err(
+                    "TRIM currently supports the one-argument form only",
+                ));
+            }
+            Ok(Expr::Function {
+                name: "TRIM".into(),
+                args: vec![ast_expr_to_expr(expr)?],
+            })
+        }
+
         ast::Expr::Interval(_) => Err(sql_err(
             "an INTERVAL is only supported added to or subtracted from a date",
         )),
@@ -8538,7 +8555,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 32);
+        assert_eq!(cases.len(), 35);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
