@@ -60,6 +60,8 @@ rule, `IIF` uses the existing vectorized conditional path, and `CHARINDEX`
 uses a bounded Unicode scalar search with SQL Server's argument order.
 `EOMONTH` now lowers to typed month truncation and calendar arithmetic and is
 qualified for date/timestamp inputs with an optional row-local month offset.
+`DATEFROMPARTS` now builds validated `DATE` values from integer parts with
+NULL propagation and distributed differential coverage.
 
 ### Phase 2 — Transactional SQL surface
 
