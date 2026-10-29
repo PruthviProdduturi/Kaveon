@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "3dca9f3a",
+  "engine_commit": "0c3fdee0",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -42,6 +42,7 @@
     {"id": "pivot", "sql": "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p", "status": "explicit_rejection"},
     {"id": "unpivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "unpivot", "sql": "SELECT * FROM t UNPIVOT (v FOR k IN (a)) u", "status": "explicit_rejection"},
+    {"id": "cross_apply_bounded_values", "sql": "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (1)) AS a(next_id)", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"}
   ]
 }

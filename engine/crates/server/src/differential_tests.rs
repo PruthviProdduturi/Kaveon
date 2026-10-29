@@ -330,6 +330,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "tsql_bounded_cross_apply",
+        "SELECT t.user_id, a.next_actions FROM {T} t CROSS APPLY (SELECT 1 AS next_actions) AS a ORDER BY t.user_id LIMIT 10",
+        true,
+    ),
+    (
         "in_list",
         "SELECT country, SUM(actions) AS a FROM {T} WHERE country IN ('Japan', 'Brazil', 'Kenya') GROUP BY country ORDER BY country",
         true,

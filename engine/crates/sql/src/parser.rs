@@ -42,6 +42,10 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         Some(unpivot) => unpivot,
         None => normalized,
     };
+    let normalized = match normalize_bounded_apply(&normalized)? {
+        Some(apply) => apply,
+        None => normalized,
+    };
     reject_unsupported_tsql_relational_forms(&normalized)?;
     // BigQuery's grammar retains a table-shaped UNNEST node when the function
     // is correlated. DuckDB parses the same spelling as a generic function,
@@ -454,6 +458,67 @@ fn normalize_bounded_unpivot(sql: &str) -> Result<Option<String>> {
         ));
     }
     Ok(Some(branches.join(" UNION ALL ")))
+}
+
+/// Map the bounded derived-relation forms of SQL Server APPLY onto the
+/// Engine's existing lateral-join grammar. Table-valued functions and other
+/// arbitrary APPLY expressions are intentionally left for the explicit
+/// fail-closed diagnostic below.
+fn normalize_bounded_apply(sql: &str) -> Result<Option<String>> {
+    let upper = sql.to_ascii_uppercase();
+    let mut found = None;
+    for keyword in ["CROSS APPLY", "OUTER APPLY"] {
+        if let Some(position) = find_top_level_keyword(&upper, keyword) {
+            found = Some((position, keyword));
+            break;
+        }
+    }
+    let Some((position, keyword)) = found else {
+        return Ok(None);
+    };
+    if keyword == "OUTER APPLY" {
+        return Ok(None);
+    }
+    let after = sql[position + keyword.len()..].trim_start();
+    if !after.starts_with('(') {
+        return Ok(None);
+    }
+    let open = sql.len() - after.len();
+    let close = matching_delimiter(sql, open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded APPLY has an unbalanced derived relation"))?;
+    let body = sql[open + 1..close].trim();
+    let body_upper = body.to_ascii_uppercase();
+    if !(body_upper.starts_with("SELECT ")
+        || body_upper == "VALUES"
+        || body_upper.starts_with("VALUES "))
+    {
+        return Ok(None);
+    }
+    // The current lateral execution path is qualified for an uncorrelated
+    // derived relation only. Reject qualified outer references here so a
+    // correlated APPLY cannot parse successfully and fail later at execution.
+    let body_bytes = body.as_bytes();
+    if body_bytes.windows(3).any(|window| {
+        window[1] == b'.'
+            && window[0].is_ascii_alphabetic()
+            && (window[2].is_ascii_alphabetic() || window[2] == b'_')
+    }) {
+        return Ok(None);
+    }
+    let suffix = sql[close + 1..].trim_start();
+    if suffix.is_empty() {
+        return Ok(None);
+    }
+    let replacement = if keyword == "CROSS APPLY" {
+        "CROSS JOIN LATERAL"
+    } else {
+        "LEFT JOIN LATERAL"
+    };
+    let mut rewritten = String::with_capacity(sql.len() + 8);
+    rewritten.push_str(&sql[..position]);
+    rewritten.push_str(replacement);
+    rewritten.push_str(&sql[position + keyword.len()..]);
+    Ok(Some(rewritten))
 }
 
 fn find_top_level_keyword(sql_upper: &str, keyword: &str) -> Option<usize> {
@@ -3298,6 +3363,38 @@ mod tests {
         let error = parse_sql("SELECT * FROM t UNPIVOT (v FOR k IN (a)) u")
             .expect_err("a non-derived UNPIVOT must remain unsupported");
         assert!(error.to_string().contains("UNPIVOT is not implemented"));
+    }
+
+    #[test]
+    fn bounded_cross_apply_lowers_to_lateral_join() {
+        let sql = "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (1)) AS a(next_id)";
+        let statements = parse_sql(sql).expect("bounded CROSS APPLY should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("CROSS JOIN LATERAL"), "{rendered}");
+    }
+
+    #[test]
+    fn correlated_cross_apply_keeps_fail_closed_boundary() {
+        let error = parse_sql(
+            "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (t.id + 1)) AS a(next_id)",
+        )
+        .expect_err("correlated derived APPLY should remain unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("CROSS/OUTER APPLY is not implemented")
+        );
+    }
+
+    #[test]
+    fn apply_function_keeps_fail_closed_boundary() {
+        let error = parse_sql("SELECT * FROM t CROSS APPLY f(t.id)")
+            .expect_err("table-valued APPLY functions remain unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("CROSS/OUTER APPLY is not implemented")
+        );
     }
 
     #[test]
