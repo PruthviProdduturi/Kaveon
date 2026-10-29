@@ -124,12 +124,13 @@ unchanged; nothing is approximated unless the statement writes an
 ### SQL Server/Fabric compatibility aliases
 
 The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
-`[bracketed_identifiers]`, `TOP n`, `ISNULL`, `DATEADD`, `DATEDIFF`, and
-`DATEPART`. Datepart abbreviations such as `dd`, `mm`, `yyyy`, `wk`, `mi`,
-and `ss` are normalized to the canonical vectorized date operators. This is a
-read-compatibility layer, not a claim of general T-SQL parity. `TOP PERCENT`,
-`TOP WITH TIES`, procedural T-SQL, and unsupported SQL Server functions remain
-rejected explicitly.
+`[bracketed_identifiers]`, `TOP n`, `ISNULL`, `DATEADD`, `DATEDIFF`,
+`DATEPART`, unstyled `CONVERT`, and unstyled `TRY_CONVERT`. Datepart
+abbreviations such as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized
+to the canonical vectorized date operators. This is a read-compatibility
+layer, not a claim of general T-SQL parity. `CONVERT` style codes,
+`TOP PERCENT`, `TOP WITH TIES`, procedural T-SQL, and unsupported SQL Server
+functions remain rejected explicitly.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
