@@ -3817,6 +3817,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically() {
+        let (registry, catalog) = registry().await;
+        let first = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('one', '{}'), ('two', '{}')"#.into(),
+                transaction_id: Some(first.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(first.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('one', '{"n":1}'), ('two', '{"n":2}'), ('three', '{"n":3}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)"#.into(),
+                transaction_id: Some(merge.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(merge.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        for (id, revision) in [("one", 2), ("two", 2), ("three", 1)] {
+            assert_eq!(
+                snapshot
+                    .product_record(ProductRecordKind::Dataset, id)
+                    .unwrap()
+                    .unwrap()
+                    .revision,
+                revision
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_savepoint_rolls_back_staged_product_changes() {
         let (registry, catalog) = registry().await;
         let begun = registry.begin("alice").await.unwrap();
