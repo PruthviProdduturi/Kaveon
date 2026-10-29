@@ -2535,6 +2535,34 @@ fn product_returning_response(
                     "revision" => {
                         row.insert("revision".to_owned(), serde_json::json!(revision));
                     }
+                    "document_json" => {
+                        let document = match command {
+                            kaveon_sql::parser::ProductDmlCommand::Create {
+                                document_json, ..
+                            }
+                            | kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
+                                document_json,
+                                ..
+                            }
+                            | kaveon_sql::parser::ProductDmlCommand::Update {
+                                document_json, ..
+                            }
+                            | kaveon_sql::parser::ProductDmlCommand::Upsert {
+                                document_json, ..
+                            } => document_json.clone(),
+                            kaveon_sql::parser::ProductDmlCommand::Delete { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. } => {
+                                return Err(
+                                    "document_json RETURNING is unavailable for this command"
+                                        .to_owned(),
+                                );
+                            }
+                        };
+                        row.insert(
+                            "document_json".to_owned(),
+                            serde_json::Value::String(document),
+                        );
+                    }
                     _ => unreachable!("parser validates product RETURNING columns"),
                 }
             }
@@ -3655,7 +3683,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{}') RETURNING id, revision"#.into(),
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}') RETURNING id, revision, document_json"#.into(),
                 transaction_id: Some(begun.transaction_id),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -3669,6 +3697,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "orders");
         assert_eq!(value["returning"][0]["revision"], 1);
+        assert_eq!(
+            value["returning"][0]["document_json"],
+            r#"{"name":"Orders"}"#
+        );
     }
 
     #[tokio::test]

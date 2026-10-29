@@ -2615,6 +2615,11 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
         }
         Statement::Delete(delete) => {
             let returning = parse_product_returning(delete.returning.as_ref())?;
+            if returning.iter().any(|column| column == "document_json") {
+                return Err(sql_error(
+                    "DELETE RETURNING document_json is not supported; the deleted document is not retained in the staged snapshot",
+                ));
+            }
             let tables = match &delete.from {
                 FromTable::WithFromKeyword(tables) => tables,
                 FromTable::WithoutKeyword(_) => {
@@ -2666,10 +2671,9 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
     }
 }
 
-/// The product transaction contract can return stable record identity and
-/// revision metadata from its staged snapshot. Document projections and
-/// arbitrary row RETURNING are intentionally rejected until typed-table DML
-/// has a durable row contract.
+/// The product transaction contract can return stable identity, revision, and
+/// the staged document for creates/updates. Arbitrary row RETURNING remains
+/// rejected until typed-table DML has a durable row contract.
 fn parse_product_returning(returning: Option<&Vec<SelectItem>>) -> Result<Vec<String>> {
     let Some(items) = returning else {
         return Ok(Vec::new());
@@ -2687,8 +2691,11 @@ fn parse_product_returning(returning: Option<&Vec<SelectItem>>) -> Result<Vec<St
             };
             if !identifier.value.eq_ignore_ascii_case("id")
                 && !identifier.value.eq_ignore_ascii_case("revision")
+                && !identifier.value.eq_ignore_ascii_case("document_json")
             {
-                return Err(sql_error("product RETURNING supports only id and revision"));
+                return Err(sql_error(
+                    "product RETURNING supports only id, revision, or document_json",
+                ));
             }
             Ok(identifier.value.to_ascii_lowercase())
         })
@@ -2872,7 +2879,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_identity_returning_for_product_dml() {
+    fn accepts_identity_and_document_returning_for_product_dml() {
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') RETURNING id, revision",
         )
@@ -2881,8 +2888,16 @@ mod tests {
             panic!("expected product DML");
         };
         assert_eq!(dml.returning, ["id", "revision"]);
-        assert!(parse_native_transactional(
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') RETURNING document_json"
+        )
+        .unwrap()
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(dml.returning, ["document_json"]);
+        assert!(parse_native_transactional(
+            "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING document_json"
         )
         .is_err());
     }
