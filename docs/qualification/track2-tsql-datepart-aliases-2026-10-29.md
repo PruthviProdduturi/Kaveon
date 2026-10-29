@@ -10,6 +10,8 @@ The same aliases are accepted by `DATEADD` as day-equivalent offsets. This
 does not claim business-day or calendar-holiday behavior. `DATEPART` and
 `DATENAME` also accept `iso_week`, `isowk`, and `isoww` using ISO-8601 week
 numbering; the existing `WEEK` spelling remains a separate non-ISO contract.
+`DATENAME` also accepts the SQL Server day-of-year aliases `DOY`, `DY`, and
+`Y`.
 
 Evidence:
 
@@ -18,7 +20,8 @@ Evidence:
 - Differential cases: `tsql_datepart_weekday_alias`,
   `tsql_datepart_dayofyear_alias`, `tsql_dateadd_weekday_alias`, and
   `tsql_dateadd_dayofyear_alias`, `tsql_datepart_iso_week_alias`, and
-  `tsql_datename_iso_week_alias`.
+  `tsql_datename_iso_week_alias`, and `tsql_datename_dayofyear_alias`.
 - Corpus cases: `datepart_weekday_alias`, `datepart_dayofyear_alias`,
   `dateadd_weekday_alias`, `dateadd_dayofyear_alias`,
-  `datepart_iso_week_alias`, and `datename_iso_week_alias`.
+  `datepart_iso_week_alias`, `datename_iso_week_alias`, and
+  `datename_dayofyear_alias`.
