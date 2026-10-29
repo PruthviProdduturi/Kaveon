@@ -178,7 +178,7 @@ inputs; numeric values are not interpreted as epoch dates.
 `ISNUMERIC` returns a non-null boolean result for native numeric values and
 text accepted by the safe numeric cast; locale-specific currency parsing is
 not claimed.
-Runtime `TRY_CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `103`, and `112`
+Runtime `TRY_CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `103`, `112`, `120`, `121`, and `126`
 is qualified across local and three-worker Parquet execution; malformed and
 NULL inputs remain NULL. See
 [`track2-tsql-convert-runtime-styles-2026-10-29.md`](../qualification/track2-tsql-convert-runtime-styles-2026-10-29.md).
