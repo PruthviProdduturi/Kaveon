@@ -32,6 +32,8 @@
     {"id": "ltrim", "sql": "SELECT LTRIM(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "rtrim", "sql": "SELECT RTRIM(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "dateadd_weekday_alias", "sql": "SELECT DATEADD(dw, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_day_equivalent_aliases"},
+    {"id": "dateadd_dayofyear_alias", "sql": "SELECT DATEADD(dy, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_day_equivalent_aliases"},
     {"id": "dateadd_microsecond", "sql": "SELECT DATEADD(microsecond, 250, event_ts) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_timestamps"},
     {"id": "dateadd_nanosecond", "sql": "SELECT DATEADD(nanosecond, 250, event_ts) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_nanosecond_timestamps"},
     {"id": "datediff_big", "sql": "SELECT DATEDIFF_BIG(dd, DATE '2026-01-01', event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
