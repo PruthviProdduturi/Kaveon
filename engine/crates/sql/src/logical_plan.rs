@@ -4922,10 +4922,11 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
-    // Fabric/Azure SQL DATE_BUCKET is accepted only for the conservative
-    // width-one/no-origin form. Those buckets are exactly the existing
-    // DATE_TRUNC calendar boundaries; wider buckets and custom origins stay
-    // fail-closed until their calendar arithmetic is qualified.
+    // Fabric/Azure SQL DATE_BUCKET uses the SQL Server default origin
+    // (1900-01-01) when no origin is supplied. Width one is exactly the
+    // existing DATE_TRUNC boundary. Wider literal widths use DATE_DIFF plus
+    // a normalized remainder and the typed date-add operators; custom origins
+    // and dynamic widths remain fail-closed until separately qualified.
     if name == "DATE_BUCKET" {
         if !(args.len() == 3 || args.len() == 4) {
             return Err(sql_err(
@@ -4955,18 +4956,85 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 "DATE_BUCKET does not support datepart '{unit}' in the bounded Engine contract"
             )));
         }
-        match &args[1] {
-            Expr::Literal(ScalarValue::Int64(1)) => {}
+        let width = match &args[1] {
+            Expr::Literal(ScalarValue::Int64(width)) if *width > 0 => *width,
             Expr::Literal(ScalarValue::Int64(width)) => {
                 return Err(sql_err(format!(
-                    "DATE_BUCKET width {width} is not qualified; only width 1 is supported"
+                    "DATE_BUCKET width {width} must be a positive literal"
                 )));
             }
-            _ => return Err(sql_err("DATE_BUCKET width must be the literal 1")),
-        }
-        return Ok(Expr::Function {
+            _ => return Err(sql_err("DATE_BUCKET width must be a positive literal")),
+        };
+        let truncated = Expr::Function {
             name: "DATE_TRUNC".into(),
-            args: vec![Expr::Literal(ScalarValue::Utf8(unit)), args[2].clone()],
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8(unit.clone())),
+                args[2].clone(),
+            ],
+        };
+        if width == 1 {
+            return Ok(truncated);
+        }
+        let origin_type = if matches!(unit.as_str(), "hour" | "minute" | "second") {
+            CastTarget::TimestampMicros {
+                with_timezone: false,
+            }
+        } else {
+            CastTarget::Date32
+        };
+        let origin = Expr::Cast {
+            expr: Box::new(Expr::Literal(ScalarValue::Utf8("1900-01-01".into()))),
+            data_type: origin_type,
+        };
+        let difference = Expr::Function {
+            name: "DATE_DIFF".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8(unit.clone())),
+                origin,
+                truncated.clone(),
+            ],
+        };
+        let remainder = Expr::Function {
+            name: "MOD".into(),
+            args: vec![difference, Expr::Literal(ScalarValue::Int64(width))],
+        };
+        let normalized_remainder = Expr::Function {
+            name: "IF".into(),
+            args: vec![
+                Expr::BinaryOp {
+                    left: Box::new(remainder.clone()),
+                    op: BinaryOp::Lt,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(0))),
+                },
+                Expr::BinaryOp {
+                    left: Box::new(remainder.clone()),
+                    op: BinaryOp::Plus,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(width))),
+                },
+                remainder,
+            ],
+        };
+        let multiplier = match unit.as_str() {
+            "year" => 12,
+            "quarter" => 3,
+            "month" | "day" | "hour" | "minute" | "second" => 1,
+            _ => unreachable!("DATE_BUCKET unit was validated above"),
+        };
+        let amount = Expr::BinaryOp {
+            left: Box::new(normalized_remainder),
+            op: BinaryOp::Multiply,
+            right: Box::new(Expr::Literal(ScalarValue::Int64(-multiplier))),
+        };
+        let operator = if matches!(unit.as_str(), "year" | "quarter" | "month") {
+            "DATE_ADD_MONTHS"
+        } else if unit == "day" {
+            "DATE_ADD_DAYS"
+        } else {
+            "DATE_ADD_SECONDS"
+        };
+        return Ok(Expr::Function {
+            name: operator.into(),
+            args: vec![truncated, amount],
         });
     }
 
@@ -8565,14 +8633,23 @@ mod tests {
     }
 
     #[test]
-    fn bounded_date_bucket_lowers_to_date_trunc_and_rejects_unqualified_forms() {
+    fn bounded_date_bucket_lowers_literal_widths_and_rejects_unqualified_forms() {
         let plan = sql_to_logical_plan("SELECT DATE_BUCKET(month, 1, event_date) FROM t")
             .expect("width-one DATE_BUCKET should lower");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("DATE_TRUNC"), "{rendered}");
-        let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, 3, event_date) FROM t")
-            .expect_err("wider buckets must remain unqualified");
-        assert!(error.to_string().contains("only width 1 is supported"));
+        let plan = sql_to_logical_plan("SELECT DATE_BUCKET(month, 3, event_date) FROM t")
+            .expect("positive literal wider DATE_BUCKET should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_DIFF"), "{rendered}");
+        assert!(rendered.contains("MOD"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_MONTHS"), "{rendered}");
+        let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, 0, event_date) FROM t")
+            .expect_err("non-positive buckets must remain unqualified");
+        assert!(error.to_string().contains("positive literal"));
+        let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date) FROM t")
+            .expect_err("dynamic widths must remain unqualified");
+        assert!(error.to_string().contains("positive literal"));
         let error = sql_to_logical_plan(
             "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t",
         )
