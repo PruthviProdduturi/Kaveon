@@ -151,10 +151,9 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 
 ## Qualification commands
 
-The T-SQL row above predates the latest corpus increment; its referenced
-qualification set is now 61 cases, with `DATENAME` day-of-year aliases added
-and pinned at `1c161366` (the distributed evidence is recorded in the linked
-qualification document).
+The T-SQL row above is backed by the versioned 66-case corpus pinned at
+`f8d8f620`; the distributed evidence is recorded in the linked qualification
+documents.
 
 Run from `engine/`:
 
