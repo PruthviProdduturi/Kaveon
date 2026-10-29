@@ -236,7 +236,7 @@ guidance rather than being treated as generic syntax failures.
   tables that already exist in storage. The separate product transaction API
   accepts a bounded, revisioned metadata-record DML subset, including
   `RETURNING id, revision, document_json` on product creates, updates, upserts,
-  and revision-checked deletes; typed-row DELETE and source-copy
+  and revision-checked deletes; source-copy
   `INSERT ... SELECT` document projections remain rejected. Its typed-row facade validates declared primary/unique
   keys and product references, but it is not arbitrary OLTP SQL or general
   constraint DDL.
@@ -281,7 +281,7 @@ supports revisioned typed-row create/update/delete with owner isolation and
 replay-safe `ON CONFLICT DO NOTHING`; arbitrary typed schemas and conflict
 updates remain outside this contract. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. Source-backed `INSERT ... SELECT`,
-typed-row document projections on `DELETE`, general `ON CONFLICT` actions, transaction
+source-copy document projections on `INSERT ... SELECT`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 The qualified `MERGE` form is intentionally narrow: one target product table
 alias, one source `VALUES` batch of at most 1,000 rows aliased as
