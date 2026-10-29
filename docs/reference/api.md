@@ -51,9 +51,11 @@ All paths below are relative to the FastAPI origin.
   unset family remains on the configured metadata backend and is not silently
   treated as migrated. KaveonDB-backed DLM generation binds definitions to the
   dataset revision and serves compiled context or Engine-backed results. A
-  registered PostgreSQL or Fabric SQL database is an optional external-source
-  connector. It is never an implicit KaveonDB transaction authority; migrated
-  product families remain owned by KaveonDB.
+  registered Fabric SQL database is an optional external-source connector.
+  PostgreSQL references are legacy migration/reconciliation support only and
+  are fail-closed when retirement mode is enabled. Neither external source is
+  an implicit KaveonDB transaction authority; migrated product families remain
+  owned by KaveonDB.
 - **Streaming pages (Engine).** A statement submitted with
   `result_delivery: "paged"` registers its pages the moment its record becomes
   `RUNNING`, and its record (`GET /v1/query/{id}`, the `GET /v1/query` list)

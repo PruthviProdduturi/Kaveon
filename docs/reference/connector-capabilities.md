@@ -168,7 +168,7 @@ are left unchanged.
 | Fabric SQL analytics endpoint | Current | `pyodbc` | `DefaultAzureCredential` token | PostgreSQL-specific statistics and HLL profiling are unavailable |
 | Fabric SQL warehouse | Current | `pyodbc` | `DefaultAzureCredential` token | Same limitation |
 | Azure SQL | Current | `pyodbc` | `DefaultAzureCredential` token | Same limitation |
-| PostgreSQL | Current | `psycopg2` | Password or configured Azure token path | Full profiler path |
+| PostgreSQL | Legacy / retirement-disabled by default | `psycopg2` (legacy only) | Password or configured Azure token path | Retained only for controlled migration/reconciliation; not an available KaveonDB execution authority when retirement mode is enabled |
 | StarRocks | Current | `pymysql` (MySQL protocol) | Username and password | Manifest and precomputation may work; the PostgreSQL statistics and HLL path is unavailable |
 | MySQL and MariaDB | API only | `pymysql` | Username and password | Not in Studio's source picker |
 | Trino | Registration only | **Target** | None implemented | No executable driver |
@@ -177,6 +177,10 @@ are left unchanged.
 
 - A platform query executes against one selected source or one KaveonDB
   catalog. Cross-source federation is not implemented.
+- PostgreSQL is a legacy migration connector, not the product metadata or
+  transactional authority. In retirement mode its query path is fail-closed;
+  deployers should use KaveonDB catalogs and retain PostgreSQL only for an
+  explicitly controlled migration or reconciliation window.
 - `POST /api/v1/data-sources/{id}/test` is a stub; first-run setup and the
   metadata-admin probe endpoints perform real connection checks. Table
   registration on KaveonDB is verified by a real read.

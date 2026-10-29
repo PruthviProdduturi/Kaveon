@@ -214,7 +214,7 @@ Engine metadata and bounded distinct scans to build deterministic context,
 value indexes, and precomputed answers. Registered external SQL sources may
 expose fewer profiling capabilities because their statistics APIs differ.
 
-| Capability | KaveonDB / Engine catalog | PostgreSQL | Fabric SQL / Azure SQL / StarRocks / Trino |
+| Capability | KaveonDB / Engine catalog | PostgreSQL (legacy) | Fabric SQL / Azure SQL / StarRocks / Trino |
 |-----------|---------------------------|------------|-------------------------------------------|
 | DLM manifest (columns, joins, metrics, synonyms) | Full | Full | Full |
 | Context profiling | Engine statistics and bounded scans | `pg_stats` fast path | Source-specific or bounded-scan path |
@@ -223,8 +223,10 @@ expose fewer profiling capabilities because their statistics APIs differ.
 | `serve-chart` from compiled context | Supported | Supported | Supported when answers were compiled |
 | DLM artifact status | `ready` after compilation | `ready` after compilation | `ready` when compilation succeeds |
 
-PostgreSQL-specific `pg_stats` profiling remains an optimization for legacy
-external sources, not a product requirement or a KaveonDB dependency. A source
+PostgreSQL-specific `pg_stats` profiling remains an optimization for a
+controlled legacy migration source, not a product requirement or a KaveonDB
+dependency. When retirement mode is enabled, PostgreSQL query execution is
+disabled and the KaveonDB catalog is authoritative. A source
 whose statistics cannot be read is handled explicitly: the DLM uses bounded
 profiling where available or reports that a context artifact needs generation.
 
