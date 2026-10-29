@@ -124,8 +124,9 @@ gate.
   catalog, and API tests.
 - [ ] Add durable journal/recovery, snapshot isolation, and restart tests.
 - [ ] Add constraints, indexes, and catalog-backed schema enforcement.
-- [ ] Publish a supported transaction/isolation matrix rather than claiming
-  PostgreSQL equivalence.
+- [x] Publish a supported transaction/isolation matrix rather than claiming
+  PostgreSQL equivalence. The bounded product-record contract is recorded in
+  `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
 
 ### Phase 3 — Optimizer and statistics
 
