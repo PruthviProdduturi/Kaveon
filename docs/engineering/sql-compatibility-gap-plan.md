@@ -139,9 +139,15 @@ gate.
 
 ### Phase 3 — Optimizer and statistics
 
-- [ ] Persist column distinct counts, histograms, null fractions, and bounds.
-- [ ] Use statistics for join ordering, broadcast choice, selectivity, and
-  partition pruning.
+- [x] Persist source-version-bound row counts, bytes, distinct sketches, null
+  fractions, quantiles, and bounds for supported Parquet/Delta/Iceberg paths.
+  Evidence: `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
+- [ ] Add a persisted histogram model; sketches and quantiles are qualified,
+  but this is not yet a histogram claim.
+- [x] Use qualified statistics for bounded local join ordering, broadcast
+  choice, selectivity, and reader pruning. Cloud pruning and universal
+  cost-based planning remain separate gates; see
+  `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
 - [ ] Add plan-vs-runtime diagnostics and regression thresholds.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
