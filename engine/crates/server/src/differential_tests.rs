@@ -260,6 +260,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_convert",
+        "SELECT TOP 5 event_date, user_id, CONVERT(BIGINT, actions) AS actions_bigint FROM {T} ORDER BY event_date, user_id, actions",
+        true,
+    ),
+    (
+        "tsql_try_convert",
+        "SELECT TOP 5 event_date, user_id, TRY_CONVERT(BIGINT, actions) AS actions_bigint FROM {T} ORDER BY event_date, user_id, actions",
+        true,
+    ),
+    (
         "in_list",
         "SELECT country, SUM(actions) AS a FROM {T} WHERE country IN ('Japan', 'Brazil', 'Kenya') GROUP BY country ORDER BY country",
         true,
