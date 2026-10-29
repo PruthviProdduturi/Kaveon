@@ -8420,6 +8420,33 @@ mod tests {
     }
 
     #[test]
+    fn versioned_tsql_corpus_matches_declared_boundaries() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json"
+        ))
+        .expect("T-SQL compatibility corpus must be valid JSON");
+        let cases = corpus["cases"].as_array().expect("corpus cases");
+        assert_eq!(cases.len(), 20);
+        for case in cases {
+            let sql = case["sql"].as_str().expect("corpus SQL");
+            let status = case["status"].as_str().expect("corpus status");
+            let result = sql_to_logical_plan(sql);
+            match status {
+                "planner_qualified" => {
+                    assert!(
+                        result.is_ok(),
+                        "expected planner acceptance for {sql}: {result:?}"
+                    );
+                }
+                "explicit_rejection" => {
+                    assert!(result.is_err(), "expected explicit rejection for {sql}");
+                }
+                other => panic!("unknown T-SQL corpus status: {other}"),
+            }
+        }
+    }
+
+    #[test]
     fn parses_window_frame_rows_between() {
         let plan = sql_to_logical_plan(
             "SELECT SUM(amount) OVER (ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM t",
