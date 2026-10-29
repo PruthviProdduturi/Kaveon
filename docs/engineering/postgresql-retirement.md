@@ -1,5 +1,11 @@
 # PostgreSQL retirement gate
 
+> **Migration protocol / historical record.** This document defines the
+> fail-closed retirement rehearsal and rollback evidence, not the current
+> KaveonDB runtime topology. It must not be read as proof that PostgreSQL is
+> an active authority. Use the current deployment and qualification records
+> for present state; retain this protocol for repeatable cutover validation.
+
 ## Family-scoped read authority
 
 `KAVEONDB_READ_AUTHORITY_FAMILIES` is empty by default, so PostgreSQL remains
