@@ -5232,6 +5232,106 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // DATETIMEOFFSETFROMPARTS is qualified as a normalized UTC instant. The
+    // offset components are required to be literals so the planner can
+    // validate SQL Server's bounded +/-14-hour contract before execution.
+    // Precision 7 would require 100-nanosecond storage, which is not
+    // representable by the Engine's microsecond timestamp path.
+    if name == "DATETIMEOFFSET_FROM_PARTS" {
+        if args.len() != 10 {
+            return Err(sql_err(
+                "DATETIMEOFFSETFROMPARTS requires year, month, day, hour, minute, second, fractions, precision, timezone hour, and timezone minute",
+            ));
+        }
+        let literal_i64 = |arg: &Expr, label: &str| match arg {
+            Expr::Literal(ScalarValue::Int64(value)) => Ok(*value),
+            _ => Err(sql_err(format!(
+                "DATETIMEOFFSETFROMPARTS {label} must be an integer literal"
+            ))),
+        };
+        let precision = literal_i64(&args[7], "precision")?;
+        if !(0..=6).contains(&precision) {
+            return Err(sql_err(
+                "DATETIMEOFFSETFROMPARTS precision must be between 0 and 6",
+            ));
+        }
+        let offset_hour = literal_i64(&args[8], "timezone hour")?;
+        let offset_minute = literal_i64(&args[9], "timezone minute")?;
+        if !(-14..=14).contains(&offset_hour) || !(0..=59).contains(&offset_minute) {
+            return Err(sql_err(
+                "DATETIMEOFFSETFROMPARTS timezone offset is outside the supported range",
+            ));
+        }
+        if offset_hour == 14 && offset_minute != 0 {
+            return Err(sql_err(
+                "DATETIMEOFFSETFROMPARTS timezone offset exceeds 14 hours",
+            ));
+        }
+        if offset_hour < 0 && offset_minute != 0 {
+            return Err(sql_err(
+                "DATETIMEOFFSETFROMPARTS timezone hour and minute must have a consistent sign",
+            ));
+        }
+        let offset_seconds = offset_hour
+            .checked_mul(3_600)
+            .and_then(|value| value.checked_add(offset_minute.checked_mul(60)?))
+            .ok_or_else(|| sql_err("DATETIMEOFFSETFROMPARTS timezone offset overflows"))?;
+        let date = Expr::Function {
+            name: "DATE_FROM_PARTS".into(),
+            args: args[..3].to_vec(),
+        };
+        let timestamp = Expr::Cast {
+            expr: Box::new(date),
+            data_type: CastTarget::TimestampMicros {
+                with_timezone: false,
+            },
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(args[3].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(3_600))),
+            }),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::BinaryOp {
+                left: Box::new(args[4].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(60))),
+            }),
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(seconds),
+                op: BinaryOp::Plus,
+                right: Box::new(args[5].clone()),
+            }),
+            op: BinaryOp::Minus,
+            right: Box::new(Expr::Literal(ScalarValue::Int64(offset_seconds))),
+        };
+        let shifted = Expr::Function {
+            name: "DATE_ADD_SECONDS".into(),
+            args: vec![timestamp, seconds],
+        };
+        let shifted = Expr::Function {
+            name: "NORMALIZE_UTC_TIMESTAMP".into(),
+            args: vec![shifted],
+        };
+        let fraction_scale = 10_i64.pow((6 - precision) as u32);
+        let fraction = if fraction_scale == 1 {
+            args[6].clone()
+        } else {
+            Expr::BinaryOp {
+                left: Box::new(args[6].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(fraction_scale))),
+            }
+        };
+        return Ok(Expr::Function {
+            name: "DATE_ADD_MICROSECONDS".into(),
+            args: vec![shifted, fraction],
+        });
+    }
+
     // TIMEFROMPARTS is evaluated by the vectorized TIME constructor. Keep the
     // five-argument form (hour, minute, seconds, fractions, precision) and
     // validate precision in the executor so row-wise NULLs remain possible.
@@ -5875,6 +5975,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         "DATETIMEFROMPARTS" => "DATETIME_FROM_PARTS".to_owned(),
         "DATETIME2FROMPARTS" => "DATETIME2_FROM_PARTS".to_owned(),
+        "DATETIMEOFFSETFROMPARTS" => "DATETIMEOFFSET_FROM_PARTS".to_owned(),
         "TIMEFROMPARTS" => "TIME_FROM_PARTS".to_owned(),
         "SMALLDATETIMEFROMPARTS" => "SMALLDATETIME_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
@@ -8898,6 +8999,30 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datetimeoffsetfromparts_to_utc_timestamp() {
+        let plan = sql_to_logical_plan(
+            "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 5, 30) FROM t",
+        )
+        .expect("DATETIMEOFFSETFROMPARTS should lower to a UTC timestamp");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_ADD_SECONDS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_MICROSECONDS"), "{rendered}");
+        assert!(rendered.contains("NORMALIZE_UTC_TIMESTAMP"), "{rendered}");
+        assert!(
+            sql_to_logical_plan(
+                "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 7890, 7, 5, 30) FROM t"
+            )
+            .is_err()
+        );
+        assert!(
+            sql_to_logical_plan(
+                "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 14, 1) FROM t"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn lowers_tsql_datename_to_normalized_date_name() {
         let plan = sql_to_logical_plan("SELECT DATENAME(mm, event_date) FROM t")
             .expect("DATENAME should normalize its unquoted datepart");
@@ -8986,7 +9111,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 57);
+        assert_eq!(cases.len(), 58);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

@@ -12260,6 +12260,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 3)?;
             eval_date_from_parts(&args[0], &args[1], &args[2], num_rows)
         }
+        "NORMALIZE_UTC_TIMESTAMP" => {
+            check_arity(name, args, 1)?;
+            let source = args[0]
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(
+                        "NORMALIZE_UTC_TIMESTAMP requires a microsecond timestamp".into(),
+                    )
+                })?;
+            Ok(Arc::new(
+                TimestampMicrosecondArray::from(
+                    (0..num_rows)
+                        .map(|row| (!source.is_null(row)).then(|| source.value(row)))
+                        .collect::<Vec<_>>(),
+                )
+                .with_timezone("+00:00"),
+            ))
+        }
         "DATE_PART" => {
             if args.len() != 2 {
                 return Err(KaveonError::Execution(

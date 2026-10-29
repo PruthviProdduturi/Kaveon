@@ -22,6 +22,7 @@
     {"id": "datetime2fromparts", "sql": "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_3"},
     {"id": "smalldatetimefromparts", "sql": "SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29, 12, 34)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "timefromparts", "sql": "SELECT TIMEFROMPARTS(12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_6"},
+    {"id": "datetimeoffsetfromparts", "sql": "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 5, 30)", "status": "planner_qualified", "distributed_status": "qualified_for_utc_normalized_offsets_and_precision_0_to_6"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
     {"id": "isnumeric", "sql": "SELECT ISNUMERIC(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_and_parseable_text_inputs"},

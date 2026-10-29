@@ -161,8 +161,10 @@ qualification is limited to those input types; it does not imply support for
 the broader SQL Server date-construction family. `DATEFROMPARTS` is qualified
 for valid year/month/day parts, `DATETIMEFROMPARTS` is qualified for valid
 calendar and time parts, `DATETIME2FROMPARTS` is qualified for valid calendar
-and time parts at precisions 0 through 3, `TIMEFROMPARTS` is qualified for
-valid time parts at precisions 0 through 6, and `SMALLDATETIMEFROMPARTS` is
+and time parts at precisions 0 through 3, bounded UTC-normalized
+`DATETIMEOFFSETFROMPARTS` is qualified at precisions 0 through 6,
+`TIMEFROMPARTS` is qualified for valid time parts at precisions 0 through 6,
+and `SMALLDATETIMEFROMPARTS` is
 qualified for valid calendar parts with minute precision, with SQL Server-style
 NULL propagation and explicit
 rejection of invalid calendar dates or unsupported arities.
