@@ -1562,6 +1562,11 @@ fn bounded_product_source_kind(
     select: &sqlparser::ast::Select,
     target_kind: &str,
 ) -> Result<String> {
+    if select.from.len() != 1 {
+        return Err(sql_error(
+            "product INSERT SELECT requires exactly one source table",
+        ));
+    }
     let Some(table) = select.from.first() else {
         return Err(sql_error("product INSERT SELECT requires one source table"));
     };
@@ -2788,6 +2793,7 @@ mod tests {
             "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM source.datasets",
             "INSERT INTO product.datasets (id, document_json) SELECT DISTINCT 'ds-1', '{}'",
             "INSERT INTO product.datasets (id, document_json) SELECT 'ds-1', '{}' LIMIT 1",
+            "INSERT INTO product.datasets (id, document_json) SELECT a.id, a.document_json FROM product.datasets a, product.datasets b",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("SELECT shape should parse")
