@@ -207,7 +207,9 @@ implemented and qualified.
 - Table-creating DDL and row DML: `CREATE TABLE AS`, `INSERT`, `UPDATE`,
   `DELETE`, `ALTER TABLE ADD/DROP COLUMN`. Catalog DDL registers tables that
   already exist in storage. The separate product transaction API accepts a
-  bounded, revisioned metadata-record DML subset; it is not arbitrary OLTP SQL.
+  bounded, revisioned metadata-record DML subset; its typed-row facade
+  validates declared primary/unique keys and product references, but it is not
+  arbitrary OLTP SQL or general constraint DDL.
 - Scalar optimizer statistics beyond row count. Native `ANALYZE` persists the
   exact row count and an immutable statistics document, but histogram/selectivity
   planning is not yet implemented.

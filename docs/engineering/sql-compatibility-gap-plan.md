@@ -128,7 +128,11 @@ gate.
 - [ ] Add a durable journal/recovery qualification for cloud/object-store
   failures and multi-coordinator restart. This remains distinct from the
   bounded snapshot contract above.
-- [ ] Add constraints, indexes, and catalog-backed schema enforcement.
+- [x] Qualify primary/unique indexes, typed-schema validation, and bounded
+  product-reference enforcement for KaveonDB-owned typed rows. Evidence:
+  `docs/qualification/track2-typed-schema-integrity-2026-10-28.md`.
+- [ ] Add general SQL constraint/index DDL and catalog-backed enforcement for
+  arbitrary user tables and lake-table mutation.
 - [x] Publish a supported transaction/isolation matrix rather than claiming
   PostgreSQL equivalence. The bounded product-record contract is recorded in
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
