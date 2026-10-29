@@ -35,7 +35,10 @@ The authoritative capability details remain in:
   pagination.
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
-- [ ] Add exact local and distributed result tests for accepted translations.
+- [x] Add exact local and distributed result tests for accepted translations.
+  The current 27-case corpus has planner coverage and a completed exact
+  three-worker differential sweep; evidence is retained in
+  `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 - [ ] Keep `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected until
   their semantics are implemented and qualified. `TOP PERCENT` and `TOP WITH
   TIES` are qualified only when their `ORDER BY` keys define a deterministic
@@ -64,7 +67,9 @@ qualified for date/timestamp inputs with an optional row-local month offset.
 NULL propagation and distributed differential coverage.
 `DATENAME` now returns deterministic English calendar names or textual numeric
 parts and is covered by the distributed differential sweep; locale-specific
-formatting remains outside the contract.
+formatting remains outside the contract. The complete bounded corpus and its
+distributed evidence are recorded in
+`docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 
 ### Phase 2 — Transactional SQL surface
 
