@@ -183,6 +183,11 @@ Runtime `TRY_CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `102`
 is qualified across local and three-worker Parquet execution; malformed and
 NULL inputs remain NULL. See
 [`track2-tsql-convert-runtime-styles-2026-10-29.md`](../qualification/track2-tsql-convert-runtime-styles-2026-10-29.md).
+Styled literal `CONVERT`/`TRY_CONVERT` to the T-SQL timestamp family is also
+planner-qualified: ISO date-time styles preserve the supplied time, while
+date-only styles produce midnight. Runtime text-column timestamp styles remain
+outside the contract; see
+[`track2-tsql-convert-timestamp-literals-2026-10-29.md`](../qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md).
 `LEFT` and `RIGHT` are qualified for bounded Unicode scalar text lengths and
 preserve NULLs across local and three-worker execution.
 `REVERSE` is qualified for the same Unicode scalar and NULL-preserving path.

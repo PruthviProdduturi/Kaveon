@@ -4247,14 +4247,18 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 return Err(sql_err("CONVERT accepts at most one style code"));
             };
             let inner = if let Some(style) = style {
-                if matches!(data_type, ast::DataType::Date) {
+                if matches!(data_type, ast::DataType::Date) || is_tsql_timestamp_type(data_type) {
                     if let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = expr.as_ref() {
-                        let normalized =
-                            normalize_tsql_date_literal(value, style).ok_or_else(|| {
-                                sql_err(format!(
-                                    "CONVERT DATE literal is invalid for style {style}"
-                                ))
-                            })?;
+                        let normalized = if is_tsql_timestamp_type(data_type) {
+                            normalize_tsql_timestamp_literal(value, style)
+                        } else {
+                            normalize_tsql_date_literal(value, style)
+                        }
+                        .ok_or_else(|| {
+                            sql_err(format!(
+                                "CONVERT temporal literal is invalid for style {style}"
+                            ))
+                        })?;
                         Expr::Literal(ScalarValue::Utf8(normalized))
                     } else {
                         return Ok(Expr::Function {
@@ -4267,7 +4271,7 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                     }
                 } else {
                     return Err(sql_err(
-                        "CONVERT styles are currently supported only for DATE literals",
+                        "CONVERT styles are currently supported only for DATE or timestamp literals",
                     ));
                 }
             } else {
@@ -4647,8 +4651,27 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
                 value: Box::new(custom_cast_target(&args[1])?),
             })
         }
+        ast::DataType::Custom(name, args)
+            if args.is_empty() && is_tsql_timestamp_name(&name.to_string()) =>
+        {
+            Ok(CastTarget::TimestampMicros {
+                with_timezone: false,
+            })
+        }
         other => Err(sql_err(format!("unsupported CAST target type: {other}"))),
     }
+}
+
+fn is_tsql_timestamp_type(dt: &ast::DataType) -> bool {
+    matches!(dt, ast::DataType::Timestamp(..))
+        || matches!(dt, ast::DataType::Custom(name, args) if args.is_empty() && is_tsql_timestamp_name(&name.to_string()))
+}
+
+fn is_tsql_timestamp_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_uppercase().as_str(),
+        "DATETIME" | "DATETIME2" | "SMALLDATETIME" | "DATETIMEOFFSET"
+    )
 }
 
 fn custom_cast_target(name: &str) -> Result<CastTarget> {
@@ -5803,6 +5826,24 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
     };
     let text = format!("{year:04}-{month:02}-{day:02}");
     parse_date_days(&text).map(|_| text)
+}
+
+fn normalize_tsql_timestamp_literal(value: &str, style: u32) -> Option<String> {
+    let value = value.trim();
+    let date = normalize_tsql_date_literal(value, style)?;
+    let time = match style {
+        20 | 21 | 120 | 121 => value.get(10..)?.strip_prefix(' ')?.trim(),
+        126 => value
+            .get(10..)?
+            .strip_prefix('T')
+            .or_else(|| value.get(10..)?.strip_prefix(' '))?
+            .trim(),
+        _ => "00:00:00",
+    };
+    if time.is_empty() {
+        return None;
+    }
+    Some(format!("{date} {time}"))
 }
 
 /// Lower a supported aggregate `FILTER (WHERE predicate)` into the existing
@@ -9289,13 +9330,25 @@ mod tests {
     }
 
     #[test]
+    fn lowers_styled_tsql_timestamp_literals() {
+        let plan = sql_to_logical_plan(
+            "SELECT CONVERT(DATETIME2, '2024-12-31T23:59:59.123', 126), TRY_CONVERT(DATETIME2, '12/31/2024', 101) FROM t",
+        )
+        .expect("styled timestamp literals should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("2024-12-31 23:59:59.123"), "{rendered}");
+        assert!(rendered.contains("2024-12-31 00:00:00"), "{rendered}");
+        assert!(rendered.contains("TimestampMicros"), "{rendered}");
+    }
+
+    #[test]
     fn versioned_tsql_corpus_matches_declared_boundaries() {
         let corpus: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json"
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 70);
+        assert_eq!(cases.len(), 71);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
