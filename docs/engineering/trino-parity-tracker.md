@@ -18,12 +18,14 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
-The latest SQL compatibility increment is `c589d6cf` (`DATE_BUCKET` positive
-literal widths with the SQL Server default origin). Its planner and focused
-three-worker differential evidence is recorded in
+The latest SQL compatibility increment is `5b8c5031` (runtime T-SQL DATE
+conversion styles, following the qualified `DATE_BUCKET` literal-width slice
+in `c589d6cf`). Planner, executor, and focused three-worker differential
+evidence are recorded in
+`docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md` and
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`. The versioned
-T-SQL corpus pins that implementation commit; later changes must update the
-pin only after the declared tests and qualification evidence pass.
+T-SQL corpus pins the latest implementation commit; later changes must update
+the pin only after the declared tests and qualification evidence pass.
 
 ## Owner execution target — 2026-10-21
 
