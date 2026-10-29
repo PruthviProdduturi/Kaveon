@@ -5153,6 +5153,44 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // SMALLDATETIMEFROMPARTS has minute precision: construct a timestamp
+    // from the calendar date and add only the hour/minute offset, leaving
+    // seconds at zero as SQL Server does.
+    if name == "SMALLDATETIME_FROM_PARTS" {
+        if args.len() != 5 {
+            return Err(sql_err(
+                "SMALLDATETIMEFROMPARTS requires year, month, day, hour, and minute",
+            ));
+        }
+        let date = Expr::Function {
+            name: "DATE_FROM_PARTS".into(),
+            args: args[..3].to_vec(),
+        };
+        let timestamp = Expr::Cast {
+            expr: Box::new(date),
+            data_type: CastTarget::TimestampMicros {
+                with_timezone: false,
+            },
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(args[3].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(3_600))),
+            }),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::BinaryOp {
+                left: Box::new(args[4].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(60))),
+            }),
+        };
+        return Ok(Expr::Function {
+            name: "DATE_ADD_SECONDS".into(),
+            args: vec![timestamp, seconds],
+        });
+    }
+
     // DATENAME uses the same datepart vocabulary as DATEPART but returns the
     // locale-independent English name/number as text. Normalize SQL Server's
     // unquoted datepart identifier before it reaches the vectorized executor.
@@ -5740,6 +5778,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         "DATETIMEFROMPARTS" => "DATETIME_FROM_PARTS".to_owned(),
+        "SMALLDATETIMEFROMPARTS" => "SMALLDATETIME_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
         "ISNUMERIC" => "IS_NUMERIC".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
@@ -8716,6 +8755,17 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_smalldatetimefromparts_to_minute_timestamp() {
+        let plan = sql_to_logical_plan("SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29, 12, 34) FROM t")
+            .expect("SMALLDATETIMEFROMPARTS should lower to timestamp operators");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_FROM_PARTS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_SECONDS"), "{rendered}");
+        assert!(rendered.contains("TimestampMicros"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29) FROM t").is_err());
+    }
+
+    #[test]
     fn lowers_tsql_datename_to_normalized_date_name() {
         let plan = sql_to_logical_plan("SELECT DATENAME(mm, event_date) FROM t")
             .expect("DATENAME should normalize its unquoted datepart");
@@ -8804,7 +8854,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 47);
+        assert_eq!(cases.len(), 48);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
