@@ -63,11 +63,13 @@ Restarts clear them. Multi-replica durable job coordination is not implemented.
 
 ## Backups and recovery
 
-Back up the metadata database using the database provider's supported tools. It
-contains datasets, charts, dashboards, user state, history, and DLM artifacts.
-Customer analytical databases require their own backup policy. The repository does
-not provide a restore orchestrator; rehearse database restore and configuration
-secret recovery for each deployment.
+Back up the KaveonDB catalog/system store and its object-storage snapshots using
+the deployment's configured storage backup policy. It contains datasets, charts,
+dashboards, user state, history, and DLM artifacts. Customer analytical sources
+require their own backup policy; Kaveon does not copy or own those source backups.
+The repository does not provide a universal restore orchestrator, so rehearse
+KaveonDB snapshot restore, storage credentials, and configuration-secret recovery
+for each deployment.
 
 ## Safe escalation data
 
