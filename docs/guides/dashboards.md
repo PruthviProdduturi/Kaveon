@@ -176,7 +176,7 @@ On dashboard load, `preloadAllCharts` fetches all chart configurations in parall
 
 ### Query Semaphore
 
-A global semaphore (`querySemaphore.ts`) limits concurrent dashboard chart queries to 6 (tuned for Azure Postgres's connection pool). Charts beyond the limit queue and execute as slots free up.
+A global semaphore (`querySemaphore.ts`) limits concurrent dashboard chart queries to 6 (the default Studio admission budget). Charts beyond the limit queue and execute as slots free up; the Engine's own memory admission remains authoritative for distributed execution.
 
 ---
 
