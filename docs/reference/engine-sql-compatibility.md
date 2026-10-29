@@ -140,6 +140,12 @@ SQL permits different tied rows and the qualification is withheld. Unsupported
 `CONVERT` style codes, procedural T-SQL,
 and unsupported SQL Server functions remain rejected explicitly.
 
+`LEN`, `IIF`, and `CHARINDEX` are also qualified on the distributed path.
+`EOMONTH` is translated to the typed calendar operators and returns a `DATE`
+for date or timestamp inputs, including a row-local month offset. Its
+qualification is limited to those input types; it does not imply support for
+the broader SQL Server date-construction family.
+
 `PIVOT`, `UNPIVOT`, and `CROSS/OUTER APPLY` are recognized and rejected with
 rewrite guidance rather than being treated as generic syntax failures. This
 is an intentional fail-closed boundary until their distributed semantics are

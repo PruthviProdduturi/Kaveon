@@ -58,6 +58,8 @@ the existing distributed count semantics and does not claim a separate
 SQL Server numeric type. `LEN` is qualified with SQL Server's trailing-space
 rule, `IIF` uses the existing vectorized conditional path, and `CHARINDEX`
 uses a bounded Unicode scalar search with SQL Server's argument order.
+`EOMONTH` now lowers to typed month truncation and calendar arithmetic and is
+qualified for date/timestamp inputs with an optional row-local month offset.
 
 ### Phase 2 — Transactional SQL surface
 
