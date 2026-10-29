@@ -8,9 +8,10 @@ bytes when an earlier write in the same transaction changed the record. The
 response is therefore tied to the same revision-checked snapshot as the CAS
 write.
 
-Typed-row DELETE and `INSERT ... SELECT RETURNING document_json` remain
-rejected explicitly. Typed rows have a separate row contract, and bounded
-source-copy expansion does not preserve a per-command returning projection.
+Typed-row DELETE now returns a canonical typed-row document with its table,
+owner, revision, columns, and unique-key metadata. Bounded source-copy
+`INSERT ... SELECT RETURNING document_json` remains rejected because expansion
+does not preserve a per-command returning projection.
 
 Evidence:
 

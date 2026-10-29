@@ -549,9 +549,25 @@ impl TransactionRegistry {
                 continue;
             };
             if kind == "typed_row" {
-                return Err(RegistryError::Invalid(
-                    "document_json RETURNING is only available for product records".into(),
-                ));
+                let (table, row) = find_typed_row(&snapshot, id, owner)?;
+                if row.revision != *expected_revision {
+                    return Err(RegistryError::Invalid("stale typed row revision".into()));
+                }
+                let owner_principal = match row.columns.get("owner_principal") {
+                    Some(TypedValue::String(value)) => value.clone(),
+                    _ => return Err(RegistryError::Corrupt),
+                };
+                let document = TypedRowDocument {
+                    table,
+                    primary_key: row.primary_key.clone(),
+                    revision: row.revision,
+                    columns: row.columns.clone(),
+                    unique_keys: row.unique_keys.clone(),
+                    owner_principal,
+                };
+                documents[index] =
+                    Some(serde_json::to_string(&document).map_err(|_| RegistryError::Corrupt)?);
+                continue;
             }
             let product_kind = record_kind(kind)?;
             let record = snapshot
@@ -1102,7 +1118,7 @@ fn product_change(
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct TypedRowDocument {
     table: String,
     primary_key: String,
@@ -4847,6 +4863,31 @@ mod tests {
             .unwrap();
         transaction.bind_request_digest(b"typed-update").unwrap();
         transaction.commit().await.unwrap();
+
+        let delete_returning = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 2 RETURNING id, revision, document_json".into(),
+                transaction_id: Some(delete_returning.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "u-1");
+        assert_eq!(value["returning"][0]["revision"], 2);
+        assert!(
+            value["returning"][0]["document_json"]
+                .as_str()
+                .is_some_and(|document| document.contains("owner_principal"))
+        );
 
         let rollback = registry.begin("alice").await.unwrap();
         registry
