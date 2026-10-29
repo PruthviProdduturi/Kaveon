@@ -9,11 +9,11 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 63 cases, including exact local/three-worker qualification for
+- Corpus: 69 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
-  table-valued/correlated `APPLY`, `TOP WITH TIES` without an order, and
+  table-valued/unsupported correlated `APPLY`, `TOP WITH TIES` without an order, and
   runtime-column styled date conversion.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
@@ -42,6 +42,9 @@ Bounded `CROSS APPLY` over a parenthesized `SELECT` or `VALUES` relation is
 lowered to the Engine's existing lateral-join path. Exact local and
 three-worker evidence is recorded in
 [`track2-tsql-apply-distributed-2026-10-28.md`](track2-tsql-apply-distributed-2026-10-28.md).
+The qualified correlated shape is limited to scalar `VALUES` expressions that
+bind outer columns; table-valued functions and arbitrary correlated derived
+`SELECT` forms remain fail-closed.
 
 `ISDATE` returns a non-null boolean 0/1 result. Text is parsed through a safe
 typed date cast; numeric values are rejected as date inputs instead of being

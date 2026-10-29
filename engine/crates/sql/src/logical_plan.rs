@@ -1627,6 +1627,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             }
             if let Some(alias) = alias
                 && !alias.columns.is_empty()
+                && !matches!(plan, LogicalPlan::Unnest { .. })
                 && let Some(columns) = plan_output_columns(&plan)
             {
                 if alias.columns.len() != columns.len() {
@@ -9290,7 +9291,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 68);
+        assert_eq!(cases.len(), 69);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
