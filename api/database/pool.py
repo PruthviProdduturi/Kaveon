@@ -754,6 +754,16 @@ _pools: Dict[str, ConnectionPool] = {}
 _pool_lock = Lock()
 
 
+class UnknownDataSource(Exception):
+    """No registered source answers to this name.
+
+    Distinct from a connection failure: nothing was attempted, because the
+    registry has no active source with this database name or id. Routers turn
+    it into a 400 naming the database, since the caller asked for something
+    that does not exist rather than something that is broken.
+    """
+
+
 # The prefix `services.credentials` uses to recognise a Key Vault reference.
 # Named here rather than imported at module scope because `credentials` is
 # imported lazily inside the resolvers to keep this module importable without
@@ -844,6 +854,8 @@ def get_connection_pool(database: str, actor: Optional[str] = None,
                 password = info["password"] or (ds.get("password", "") if ds else "")
                 sslmode = info["sslmode"] or (ds.get("sslmode", "require") if ds else "require")
                 if not host:
+                    if ds is None:
+                        raise UnknownDataSource(database)
                     raise ValueError(f"No host configured for {ds_type} data source: {database}")
                 # The physical DB to connect to comes from the connection string (or an
                 # explicit db field) — NOT from `database_name`, which is just the routing
@@ -858,6 +870,8 @@ def get_connection_pool(database: str, actor: Optional[str] = None,
                 # Fabric SQL / Azure SQL — connection_string is the ODBC endpoint.
                 endpoint = (ds.get("connection_string", "") if ds else "") or settings.DATAWAREHOUSE_ENDPOINT or ""
                 if not endpoint:
+                    if ds is None:
+                        raise UnknownDataSource(database)
                     raise ValueError(f"No endpoint configured for database: {database}")
                 pool = ConnectionPool(endpoint, actual_db, pool_size=pool_size)
 

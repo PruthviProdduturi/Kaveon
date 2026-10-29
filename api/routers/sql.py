@@ -713,6 +713,15 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     try:
         result = pool.execute_query(sql_text, database, max_rows=hard_limit,
                                     actor=ctx.email, role=ctx.role)
+    except pool.UnknownDataSource:
+        # Nothing was attempted: no registered source answers to this name.
+        # Saying so beats "Query execution failed", which described a query
+        # that never ran.
+        raise HTTPException(
+            status_code=400,
+            detail=f"No active data source named '{database}'. Register it under "
+                   "Sources, or name an Engine catalog.",
+        ) from None
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
         logger.warning("sql_execute_failed database=%s type=%s", database, type(e).__name__)

@@ -13,7 +13,8 @@ import time
 
 from config import settings
 from middleware.demo import demo_read_only
-from middleware.errors import AppError, app_error_handler, generic_error_handler
+import database.pool as pool
+from middleware.errors import AppError, app_error_handler, generic_error_handler, unknown_data_source_handler
 from database.pool import LargeIntResponse, TokenAuthError
 from database.warmup import start_warmup_and_heartbeat
 
@@ -214,6 +215,7 @@ async def _token_auth_handler(request: Request, exc: TokenAuthError) -> JSONResp
 # Exception handlers
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(TokenAuthError, _token_auth_handler)
+app.add_exception_handler(pool.UnknownDataSource, unknown_data_source_handler)
 app.add_exception_handler(Exception, generic_error_handler)
 
 
