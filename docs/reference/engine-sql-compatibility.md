@@ -137,8 +137,9 @@ The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, bounded `TOP n PERCENT`, `TOP n PERCENT WITH TIES`, and `TOP n WITH TIES`
 with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
 `GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `TRANSLATE`, `LEFT`, `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, `RTRIM`, unstyled `CONVERT`, and
-unstyled `TRY_CONVERT`. Literal DATE
-conversion styles `0`, `1`, `23`, `101`, `103`, and `112` are normalized to ISO dates;
+unstyled `TRY_CONVERT`. Literal DATE conversion styles `0`, `1`, `23`, `101`,
+`102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`,
+`120`, `121`, and `126` are normalized to ISO dates;
 runtime column style evaluation remains bounded. Datepart abbreviations such
 as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical
 vectorized date operators. `DATEADD` also accepts `weekday`/`dw`/`w` and
@@ -201,11 +202,12 @@ relation lowers to the existing lateral-join path, including scalar correlated
 `VALUES` expressions, with exact local and
 three-worker evidence in
 `docs/qualification/track2-tsql-apply-distributed-2026-10-28.md`.
-Bounded uncorrelated `OUTER APPLY` over the same derived forms lowers to a
-left-lateral join and preserves NULL extension for an empty derived result
-through local and three-worker execution. Unbounded forms, arbitrary correlated
-derived `SELECT` forms, and table-valued APPLY are recognized and rejected with
-rewrite guidance rather than being treated as generic syntax failures.
+Bounded `OUTER APPLY` over the same derived forms lowers to a left-lateral join
+and preserves NULL extension for an empty derived result through local and
+three-worker execution; scalar correlated `VALUES` expressions are qualified
+on the same path. Unbounded forms, arbitrary correlated derived `SELECT`
+forms, and table-valued APPLY are recognized and rejected with rewrite
+guidance rather than being treated as generic syntax failures.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
