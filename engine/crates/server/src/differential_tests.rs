@@ -635,6 +635,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "tsql_runtime_date_style",
+        "SELECT TRY_CONVERT(DATE, value, 101) AS us_date, TRY_CONVERT(DATE, value, 112) AS iso_date FROM (VALUES ('12/31/2024'), ('20241230'), ('bad'), (NULL)) AS values_table(value)",
+        false,
+    ),
+    (
         "width_bucket_and_finiteness",
         "SELECT WIDTH_BUCKET(CAST(2.5 AS DOUBLE), 0, 10, 10) AS bucket, IS_FINITE(CAST(2.5 AS DOUBLE)) AS finite, IS_INFINITE(CAST('Infinity' AS DOUBLE)) AS infinite, IS_NAN(CAST('NaN' AS DOUBLE)) AS nan FROM {T} LIMIT 1",
         false,
