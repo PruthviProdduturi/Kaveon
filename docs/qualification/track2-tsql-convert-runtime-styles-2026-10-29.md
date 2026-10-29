@@ -39,18 +39,21 @@ SELECT
   , TRY_CONVERT(DATE, value, 105) AS eu_dash_date
   , TRY_CONVERT(DATE, value, 110) AS us_dash_date
   , TRY_CONVERT(DATE, value, 111) AS iso_slash_date
+  , TRY_CONVERT(DATE, value, 106) AS eu_text_date
+  , TRY_CONVERT(DATE, value, 107) AS us_text_date
 FROM (VALUES
   ('Dec 31 2024'), ('12/31/2024'), ('31/12/2024'), ('2024-12-30'),
   ('20241230'), ('2024-12-30 12:00:00'),
   ('2024-12-30 12:00:00.123'), ('2024-12-31T12:00:00.123'),
-  ('bad'), (NULL)
+  ('2024.12.30'), ('30.12.2024'), ('30-12-2024'), ('12-30-2024'),
+  ('2024/12/30'), ('30 Dec 2024'), ('Dec 30, 2024'), ('bad'), (NULL)
 ) AS values_table(value)
 ```
 
 Invalid and NULL inputs remain NULL under `TRY_CONVERT`; valid values use the
 style-specific parser. The current bounded runtime styles are `0`, `1`, `23`,
-`101`, `102`, `103`, `104`, `105`, `110`, `111`, `112`, `20`, `21`, `120`,
-`121`, and `126`; styles `20`/`120`
+`101`, `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`,
+`21`, `120`, `121`, and `126`; styles `20`/`120`
 and `21`/`121` require
 an ODBC timestamp with a space separator, while `126` accepts an ISO timestamp
 with `T` (or a space) and discards the validated time suffix. Unsupported style

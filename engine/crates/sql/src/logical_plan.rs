@@ -5633,6 +5633,41 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
             let year = parts.next()?.parse::<i32>().ok()?;
             (year, month, day)
         }
+        106 | 107 => {
+            let normalized = value.replace(',', " ");
+            let mut parts = normalized.split_whitespace();
+            let first = parts.next()?.to_ascii_lowercase();
+            let second = parts.next()?;
+            let third = parts.next()?;
+            let month = |name: &str| match name {
+                "jan" | "january" => Some(1),
+                "feb" | "february" => Some(2),
+                "mar" | "march" => Some(3),
+                "apr" | "april" => Some(4),
+                "may" => Some(5),
+                "jun" | "june" => Some(6),
+                "jul" | "july" => Some(7),
+                "aug" | "august" => Some(8),
+                "sep" | "september" => Some(9),
+                "oct" | "october" => Some(10),
+                "nov" | "november" => Some(11),
+                "dec" | "december" => Some(12),
+                _ => None,
+            };
+            if style == 106 {
+                (
+                    third.parse::<i32>().ok()?,
+                    month(&second.to_ascii_lowercase())?,
+                    first.parse::<u32>().ok()?,
+                )
+            } else {
+                (
+                    third.parse::<i32>().ok()?,
+                    month(&first)?,
+                    second.parse::<u32>().ok()?,
+                )
+            }
+        }
         102 => {
             if value.len() != 10
                 || value.as_bytes().get(4) != Some(&b'.')
@@ -9231,6 +9266,14 @@ mod tests {
                 "SELECT CONVERT(DATE, '2024/12/31', 111) FROM t",
                 "2024-12-31",
             ),
+            (
+                "SELECT CONVERT(DATE, '31 Dec 2024', 106) FROM t",
+                "2024-12-31",
+            ),
+            (
+                "SELECT TRY_CONVERT(DATE, 'Dec 31, 2024', 107) FROM t",
+                "2024-12-31",
+            ),
         ] {
             let plan = sql_to_logical_plan(sql).expect("styled CONVERT should lower");
             assert!(format!("{plan:?}").contains(expected), "{plan:?}");
@@ -9247,7 +9290,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 67);
+        assert_eq!(cases.len(), 68);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

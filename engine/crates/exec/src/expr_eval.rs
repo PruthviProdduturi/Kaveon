@@ -1573,6 +1573,41 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
             let year = parts.next()?.parse::<i32>().ok()?;
             (year, month, day)
         }
+        106 | 107 => {
+            let normalized = value.replace(',', " ");
+            let mut parts = normalized.split_whitespace();
+            let first = parts.next()?.to_ascii_lowercase();
+            let second = parts.next()?;
+            let third = parts.next()?;
+            let month = |name: &str| match name {
+                "jan" | "january" => Some(1),
+                "feb" | "february" => Some(2),
+                "mar" | "march" => Some(3),
+                "apr" | "april" => Some(4),
+                "may" => Some(5),
+                "jun" | "june" => Some(6),
+                "jul" | "july" => Some(7),
+                "aug" | "august" => Some(8),
+                "sep" | "september" => Some(9),
+                "oct" | "october" => Some(10),
+                "nov" | "november" => Some(11),
+                "dec" | "december" => Some(12),
+                _ => None,
+            };
+            if style == 106 {
+                (
+                    third.parse::<i32>().ok()?,
+                    month(&second.to_ascii_lowercase())?,
+                    first.parse::<u32>().ok()?,
+                )
+            } else {
+                (
+                    third.parse::<i32>().ok()?,
+                    month(&first)?,
+                    second.parse::<u32>().ok()?,
+                )
+            }
+        }
         102 => {
             if value.len() != 10
                 || value.as_bytes().get(4) != Some(&b'.')
@@ -25766,6 +25801,8 @@ mod tests {
             (105, "30-12-2024", 20_087),
             (110, "12-30-2024", 20_087),
             (111, "2024/12/30", 20_087),
+            (106, "30 Dec 2024", 20_087),
+            (107, "Dec 30, 2024", 20_087),
             (126, "2024-12-31T12:00:00.123", 20_088),
         ] {
             let result = evaluate(
