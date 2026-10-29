@@ -5,6 +5,12 @@
 **Branch:** `dev`  
 **Repository:** `PruthviProdduturi/Kaveon`
 
+> **Historical handoff.** This brief records an earlier cloud migration
+> snapshot and is not a current deployment authority. Do not use its
+> PostgreSQL resource status or cutover instructions as present state; verify
+> the active KaveonDB profile and current deployment evidence before operating
+> any environment.
+
 ## Current handoff - 2026-10-05
 
 ### Performance lane update — 2026-10-12
