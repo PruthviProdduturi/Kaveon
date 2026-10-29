@@ -183,9 +183,11 @@ Bounded `CROSS APPLY` over a parenthesized `SELECT` or `VALUES` derived
 relation lowers to the existing lateral-join path, with exact local and
 three-worker evidence in
 `docs/qualification/track2-tsql-apply-distributed-2026-10-28.md`.
-Unbounded forms, `OUTER APPLY`, and table-valued APPLY are recognized and
-rejected with rewrite guidance rather than being treated as generic syntax
-failures.
+Bounded uncorrelated `OUTER APPLY` over the same derived forms lowers to a
+local left-lateral join and preserves NULL extension for an empty derived
+result; distributed qualification remains open. Unbounded forms, correlated
+derived forms, and table-valued APPLY are recognized and rejected with rewrite
+guidance rather than being treated as generic syntax failures.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),

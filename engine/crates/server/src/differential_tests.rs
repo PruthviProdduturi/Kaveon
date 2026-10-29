@@ -3407,6 +3407,28 @@ fn distributed_constant_lateral_unnest_matches_trino_shape() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// SQL Server OUTER APPLY over an uncorrelated derived relation is equivalent
+/// to a LEFT JOIN LATERAL. An empty derived result must preserve each outer
+/// row with NULL-extended columns on both local and distributed paths.
+#[test]
+fn bounded_outer_apply_preserves_empty_outer_rows_locally() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-outer-apply-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT e.user_id, a.next_id FROM events AS e OUTER APPLY (SELECT 99 AS next_id WHERE false) AS a ORDER BY e.user_id LIMIT 5";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-outer-apply", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local planning: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(expected.len(), 5);
+    assert!(expected.iter().all(|row| row.ends_with("\u{1f}NULL")));
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// `NOT IN` is null-aware: a NULL anywhere in the subquery makes every
 /// non-matching comparison UNKNOWN. The right side is broadcast so this
 /// remains true when the subquery is split across three workers.
