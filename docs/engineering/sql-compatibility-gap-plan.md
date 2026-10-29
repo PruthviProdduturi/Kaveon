@@ -36,8 +36,9 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 43-case corpus has planner coverage and a completed exact
-  three-worker differential sweep; evidence is retained in
+  The current 74-case corpus has planner coverage and focused exact
+  three-worker differential evidence; the versioned corpus and distributed
+  evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 - [ ] Keep unbounded `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected
   until their semantics are implemented and qualified. Bounded derived-source
@@ -51,17 +52,17 @@ The authoritative capability details remain in:
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
-Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
+Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
-datepart abbreviations. Literal DATE styles `0`, `1`, `101`, and `112` now
-normalize to ISO values. `ISNULL`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
+datepart abbreviations. Runtime DATE and timestamp styles have qualified local
+and three-worker coverage for the declared style set. Literal DATE styles `0`, `1`, `101`, and `112` now
+normalize to ISO values. `ISNULL`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
 pass exact local-vs-three-worker differential checks across dictionary, plain,
 partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
 without a complete tie-breaker, SQL permits different tied rows and the
 qualification is intentionally withheld. Numeric `CONVERT` and
-`TRY_CONVERT` casts are also qualified across those layouts; date-style
-runtime-column conversion remains explicitly rejected. SQL Server `COUNT_BIG`
+`TRY_CONVERT` casts are also qualified across those layouts. SQL Server `COUNT_BIG`
 now canonicalizes to the Engine's mergeable 64-bit `COUNT` state; it shares
 the existing distributed count semantics and does not claim a separate
 SQL Server numeric type. `LEN` is qualified with SQL Server's trailing-space
