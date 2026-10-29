@@ -7,8 +7,9 @@ APPLY` is followed by a parenthesized derived `SELECT` or `VALUES` relation
 with an explicit alias. The parser lowers this form to Kaveon’s existing
 lateral-join path; it does not introduce a second execution implementation.
 
-Correlated derived APPLY, table-valued functions, and arbitrary APPLY
-expressions remain explicitly rejected. Bounded uncorrelated `OUTER APPLY` is
+Table-valued functions and arbitrary correlated derived SELECT APPLY
+expressions remain explicitly rejected. Bounded correlated `VALUES` APPLY is
+qualified below; bounded uncorrelated `OUTER APPLY` is
 qualified separately in
 [`track2-tsql-outer-apply-distributed-2026-10-29.md`](track2-tsql-outer-apply-distributed-2026-10-29.md).
 That boundary prevents a
@@ -26,12 +27,15 @@ function-evaluation semantics.
   equality.
 - The compatibility corpus records this case as `planner_qualified` and
   `distributed_status: qualified`.
+- The correlated `VALUES` form is covered by
+  `tsql_correlated_cross_apply` and the `correlated_cross_apply_values` corpus
+  case; it uses the same lateral path with outer-column binding.
 
 ## Contract
 
 The qualification is intentionally narrow: the derived relation must be
-parenthesized, uncorrelated, its body must begin with `SELECT` or `VALUES`, and
-it must have an alias. Correlated forms remain fail-closed until their
-null-extension and row-by-row evaluation semantics have a dedicated runtime
-qualification.
+parenthesized, its body must begin with `SELECT` or `VALUES`, and it must have
+an alias. Correlated qualification is limited to scalar `VALUES` expressions
+that bind outer columns; table-valued functions and arbitrary correlated
+derived `SELECT` forms remain fail-closed.
 

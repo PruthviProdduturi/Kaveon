@@ -491,17 +491,6 @@ fn normalize_bounded_apply(sql: &str) -> Result<Option<String>> {
     {
         return Ok(None);
     }
-    // The current lateral execution path is qualified for an uncorrelated
-    // derived relation only. Reject qualified outer references here so a
-    // correlated APPLY cannot parse successfully and fail later at execution.
-    let body_bytes = body.as_bytes();
-    if body_bytes.windows(3).any(|window| {
-        window[1] == b'.'
-            && window[0].is_ascii_alphabetic()
-            && (window[2].is_ascii_alphabetic() || window[2] == b'_')
-    }) {
-        return Ok(None);
-    }
     let suffix = sql[close + 1..].trim_start();
     if suffix.is_empty() {
         return Ok(None);
@@ -3446,16 +3435,13 @@ mod tests {
     }
 
     #[test]
-    fn correlated_cross_apply_keeps_fail_closed_boundary() {
-        let error = parse_sql(
+    fn correlated_cross_apply_lowers_to_lateral_join() {
+        let statements = parse_sql(
             "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (t.id + 1)) AS a(next_id)",
         )
-        .expect_err("correlated derived APPLY should remain unsupported");
-        assert!(
-            error
-                .to_string()
-                .contains("CROSS/OUTER APPLY is not implemented")
-        );
+        .expect("correlated derived APPLY should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("CROSS JOIN LATERAL"), "{rendered}");
     }
 
     #[test]

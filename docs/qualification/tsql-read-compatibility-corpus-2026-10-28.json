@@ -69,6 +69,7 @@
     {"id": "unpivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "unpivot", "sql": "SELECT * FROM t UNPIVOT (v FOR k IN (a)) u", "status": "explicit_rejection"},
     {"id": "cross_apply_bounded_values", "sql": "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (1)) AS a(next_id)", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "correlated_cross_apply_values", "sql": "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (t.id + 1)) AS a(next_id)", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "outer_apply_bounded_derived", "sql": "SELECT t.id, a.next_id FROM t OUTER APPLY (SELECT 1 AS next_id WHERE false) AS a", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"}
   ]
