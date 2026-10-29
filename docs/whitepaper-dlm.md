@@ -499,11 +499,12 @@ can be backed by a view that pre-joins multiple tables.
 BY date with ordering — a shape the precomputed store does not cover because the
 time-slice matrix is unbounded. These fall to the live path.
 
-**PostgreSQL-specific change counters.** The freshness algorithm reads
-`n_mod_since_analyze` from `pg_stat_user_tables`. SQL Server
-(`sys.dm_db_stats_properties.modification_counter`), MySQL
-(`information_schema.STATISTICS`), and DuckDB expose analogous catalogs; the
-method transfers, the catalog names do not.
+**Source-specific watermarks.** The native freshness algorithm reads KaveonDB
+source-version and manifest watermarks plus catalog statistics. Registered
+external connectors may expose analogous change counters (for example SQL
+Server's `sys.dm_db_stats_properties.modification_counter` or a source CDC
+watermark), but those are optional adapters. The DLM does not require a
+PostgreSQL statistics catalog.
 
 ---
 
