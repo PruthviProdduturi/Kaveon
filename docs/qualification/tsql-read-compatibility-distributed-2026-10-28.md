@@ -9,12 +9,13 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 71 cases, including exact local/three-worker qualification for
+- Corpus: 72 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
-  table-valued/unsupported correlated `APPLY`, `TOP WITH TIES` without an order, and
-  runtime-column styled date conversion.
+  table-valued/unsupported correlated `APPLY`, `TOP WITH TIES` without an order,
+  and the runtime-column styled timestamp boundary (now locally qualified;
+  distributed qualification remains open).
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
@@ -67,6 +68,10 @@ are ignored, with NULL propagation.
 `PATINDEX` reports one-based Unicode scalar positions for `%` and `_`
 wildcards, returns zero for no match, preserves NULLs, and rejects bracket
 classes explicitly.
+Runtime text-column timestamp conversion has local vectorized evaluator coverage
+for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only style `101`.
+It is not included in the three-worker differential yet; the corpus records this
+as a local-only qualification until that distributed gate is run.
 `DATE_BUCKET` is qualified for literal width-one year/quarter/month/day/hour/
 minute/second buckets and lowers to typed `DATE_TRUNC`; wider widths and
 custom origins are rejected rather than approximated.
