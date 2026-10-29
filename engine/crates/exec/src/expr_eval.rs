@@ -1573,6 +1573,59 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
             let year = parts.next()?.parse::<i32>().ok()?;
             (year, month, day)
         }
+        102 => {
+            if value.len() != 10
+                || value.as_bytes().get(4) != Some(&b'.')
+                || value.as_bytes().get(7) != Some(&b'.')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
+        }
+        104 | 105 => {
+            let separator = if style == 104 { b'.' } else { b'-' };
+            if value.len() != 10
+                || value.as_bytes().get(2) != Some(&separator)
+                || value.as_bytes().get(5) != Some(&separator)
+            {
+                return None;
+            }
+            (
+                value[6..10].parse::<i32>().ok()?,
+                value[3..5].parse::<u32>().ok()?,
+                value[0..2].parse::<u32>().ok()?,
+            )
+        }
+        110 => {
+            if value.len() != 10
+                || value.as_bytes().get(2) != Some(&b'-')
+                || value.as_bytes().get(5) != Some(&b'-')
+            {
+                return None;
+            }
+            (
+                value[6..10].parse::<i32>().ok()?,
+                value[0..2].parse::<u32>().ok()?,
+                value[3..5].parse::<u32>().ok()?,
+            )
+        }
+        111 => {
+            if value.len() != 10
+                || value.as_bytes().get(4) != Some(&b'/')
+                || value.as_bytes().get(7) != Some(&b'/')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
+        }
         0 => {
             let normalized = value.replace(',', " ");
             let mut parts = normalized.split_whitespace();
@@ -25708,6 +25761,11 @@ mod tests {
             (121, "2024-12-30 12:00:00.123", 20_087),
             (20, "2024-12-30 12:00:00", 20_087),
             (21, "2024-12-30 12:00:00.123", 20_087),
+            (102, "2024.12.30", 20_087),
+            (104, "30.12.2024", 20_087),
+            (105, "30-12-2024", 20_087),
+            (110, "12-30-2024", 20_087),
+            (111, "2024/12/30", 20_087),
             (126, "2024-12-31T12:00:00.123", 20_088),
         ] {
             let result = evaluate(
