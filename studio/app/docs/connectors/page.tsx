@@ -7,7 +7,7 @@ export default function ConnectorDocs() {
     <PageHeader eyebrow="Platform" title="Connector matrix" lead="Registration, query execution, and deterministic context profiling are separate capabilities." />
     <table><thead><tr><th>Source</th><th>Studio</th><th>Execution</th><th>DLM boundary</th></tr></thead><tbody>
       <tr><td>Fabric SQL / Azure SQL</td><td>Current</td><td>Current · pyodbc + Azure identity</td><td>Per-dataset DLM compilation; no statistics/HLL profiling</td></tr>
-      <tr><td>PostgreSQL</td><td>Current</td><td>Current · psycopg2</td><td>Per-dataset DLM compilation; no database-wide statistics profiling</td></tr>
+      <tr><td>PostgreSQL</td><td>Legacy / retirement-disabled</td><td>Legacy · psycopg2</td><td>Migration and reconciliation only; KaveonDB is authoritative when retirement mode is enabled</td></tr>
       <tr><td>StarRocks</td><td>Current</td><td>Current · MySQL protocol</td><td>Per-dataset DLM compilation; no statistics/HLL profiling</td></tr>
       <tr><td>MySQL / MariaDB</td><td>API only</td><td>Current · pymysql</td><td>Not in Studio’s source picker</td></tr>
       <tr><td>Trino</td><td>Registration only</td><td>Target</td><td>No driver</td></tr>
