@@ -19,7 +19,8 @@ The parser and transaction layer intentionally keep this contract narrow:
 - exactly one `kaveon.product` source table;
 - source and target are the same product-record kind;
 - direct, unaliased `id` and `document_json` projection only;
-- no joins, predicates, CTEs, ordering, grouping, limits, or `RETURNING`;
+- no joins, CTEs, ordering, grouping, limits, or `RETURNING`; the only
+  predicate allowed is a literal `id IN (...)` list of at most 1,000 values;
 - source rows are read from the transaction's pinned catalog snapshot;
 - the source is owner-filtered, with a hard cap of 1,000 rows per statement;
 - conflict handling reuses the existing `DO NOTHING` or revision-CAS upsert path.

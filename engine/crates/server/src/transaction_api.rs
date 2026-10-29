@@ -328,6 +328,7 @@ impl TransactionRegistry {
             if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
                 kind,
                 source_kind,
+                source_ids,
                 on_conflict_do_nothing,
                 on_conflict_do_update,
             } = command
@@ -340,6 +341,11 @@ impl TransactionRegistry {
                         .product_records_page(source, 100, cursor.as_deref())
                         .map_err(|error| RegistryError::Invalid(error.to_string()))?;
                     for record in page.records {
+                        if let Some(ids) = &source_ids
+                            && !ids.iter().any(|id| id == &record.id)
+                        {
+                            continue;
+                        }
                         if record
                             .unique_values
                             .get("owner_principal")
@@ -3886,7 +3892,12 @@ mod tests {
             },
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
+        if response.status() != StatusCode::OK {
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            panic!("source copy failed: {}", String::from_utf8_lossy(&body));
+        }
         let response = execute_sql_request(
             &registry,
             "alice",
@@ -4002,7 +4013,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}')"#.into(),
+                sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}'), ('other', '{"name":"Other"}')"#.into(),
                 transaction_id: Some(seed.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4028,7 +4039,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json".into(),
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json".into(),
                 transaction_id: Some(copy.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4059,6 +4070,11 @@ mod tests {
             .expect("source-backed INSERT SELECT should commit");
         assert_eq!(record.revision, 2);
         assert_eq!(record.document["name"], "Orders");
+        let other = registry
+            .read_product(&identity, ProductRecordKind::Dataset, "other")
+            .await
+            .expect("unselected source row should remain readable");
+        assert_eq!(other.revision, 1);
     }
 
     #[test]

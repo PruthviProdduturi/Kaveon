@@ -92,7 +92,8 @@ gate.
 - [ ] Extend typed product DML to general typed KaveonDB tables.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
   copies `id` and `document_json` from one same-kind `kaveon.product` table
-  under the pinned transaction snapshot, is capped at 1,000 source records,
+  under the pinned transaction snapshot, optionally narrowed by a literal
+  `id IN (...)` list, and is capped at 1,000 source records,
   enforces owner isolation, and reuses the existing conflict/CAS path. General
   lake-table source DML remains open.
 - [ ] Add `MERGE` and broader conflict handling only with explicit revision/CAS
