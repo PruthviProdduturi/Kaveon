@@ -29,6 +29,8 @@ SELECT
   TRY_CONVERT(DATE, value, 103) AS eu_date,
   TRY_CONVERT(DATE, value, 23) AS iso_dashed_date,
   TRY_CONVERT(DATE, value, 112) AS iso_date,
+  TRY_CONVERT(DATE, value, 20) AS odbc_short_date,
+  TRY_CONVERT(DATE, value, 21) AS odbc_millis_short_date,
   TRY_CONVERT(DATE, value, 120) AS odbc_date,
   TRY_CONVERT(DATE, value, 121) AS odbc_millis_date,
   TRY_CONVERT(DATE, value, 126) AS iso_datetime_date
@@ -42,7 +44,8 @@ FROM (VALUES
 
 Invalid and NULL inputs remain NULL under `TRY_CONVERT`; valid values use the
 style-specific parser. The current bounded runtime styles are `0`, `1`, `23`,
-`101`, `103`, `112`, `120`, `121`, and `126`; styles `120` and `121` require
+`101`, `103`, `112`, `20`, `21`, `120`, `121`, and `126`; styles `20`/`120`
+and `21`/`121` require
 an ODBC timestamp with a space separator, while `126` accepts an ISO timestamp
 with `T` (or a space) and discards the validated time suffix. Unsupported style
 codes remain explicit errors. The differential completed with **1 passed, 0
