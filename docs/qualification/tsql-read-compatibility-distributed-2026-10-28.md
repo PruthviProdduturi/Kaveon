@@ -20,6 +20,8 @@ parity or external-client parity.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
   completed 1/1 with exact results in 729.75 seconds; the full differential
   workload completed without worker or spill failures.
+- Focused distributed regression `distributed_tsql_left_and_right_match_local_unicode_semantics`
+  passed with three workers and zero retained memory reservations.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CHARINDEX`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `LEFT`, and `RIGHT`.
