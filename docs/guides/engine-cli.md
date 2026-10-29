@@ -686,8 +686,8 @@ registered dataset and answers in one of four shapes:
   confidence. When the dataset is a native Kaveon catalog the shell switches
   the session to that catalog and schema and runs the SQL on the coordinator
   as any statement, with progress, the result table and the summary. When
-  the dataset is served by the platform (a PostgreSQL or Fabric source) the
-  SQL is shown to run in SQL Lab.
+  the dataset is served by the platform through a registered external source
+  (for example PostgreSQL or Fabric), the SQL is shown to run in SQL Lab.
 - **From context**: the rows answered from the DLM's precomputed context
   without a scan, marked `from context · no scan` (`≈ approximate` for a
   sketch-backed distinct count).

@@ -552,10 +552,10 @@ records:
   verified against it). This surface does not probe a location; a table
   registered through it is verified by the script's count.
 
-The platform PostgreSQL source registry and the Engine catalog are separate
-stores, connected by the native catalog synchronization API
+The KaveonDB product source registry and the Engine catalog are separate
+logical stores, connected by the native catalog synchronization API
 (`POST /api/v1/catalog-sources/{id}/engine-sync`, revision-aware). Saving a
-platform source does not import data or register its tables. See the
+registered source does not import data or register its tables. See the
 [registration guide](../guides/register-engine-catalog.md).
 
 The product transaction store (`KAVEON_PRODUCT_TRANSACTIONS_ENABLED`) commits

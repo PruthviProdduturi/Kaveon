@@ -24,12 +24,14 @@ Set `WEB_URL` to the exact Studio origin, including scheme and without an unrela
 path. FastAPI emits that single configured origin. CORS does not replace API ingress
 restrictions or authentication.
 
-### Metadata database is unavailable
+### KaveonDB metadata is unavailable
 
-Verify the `METADATA_*` settings, DNS/network access, TLS mode, and database role.
-For passwordless Azure PostgreSQL, verify the Container App identity was created as
-a database principal and has privileges. For Fabric/Azure SQL, verify ODBC Driver 18
-and Azure credential availability.
+Verify the Engine coordinator URL, catalog transaction configuration, storage
+identity, DNS/network access, and the coordinator's `/health` and `/ready`
+responses. KaveonDB-native metadata is not backed by a PostgreSQL service. If
+the failing operation targets a registered external source, troubleshoot that
+source's own credentials and driver separately; external PostgreSQL and
+Fabric/Azure SQL are connectors, not Kaveon's metadata authority.
 
 ### A registered source “tests” successfully but queries fail
 
