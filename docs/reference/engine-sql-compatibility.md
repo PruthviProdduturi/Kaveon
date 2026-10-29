@@ -144,7 +144,9 @@ and unsupported SQL Server functions remain rejected explicitly.
 `EOMONTH` is translated to the typed calendar operators and returns a `DATE`
 for date or timestamp inputs, including a row-local month offset. Its
 qualification is limited to those input types; it does not imply support for
-the broader SQL Server date-construction family.
+the broader SQL Server date-construction family. `DATEFROMPARTS` is qualified
+for valid year/month/day parts, with SQL Server-style NULL propagation and
+explicit rejection of invalid calendar dates.
 
 `PIVOT`, `UNPIVOT`, and `CROSS/OUTER APPLY` are recognized and rejected with
 rewrite guidance rather than being treated as generic syntax failures. This
