@@ -1,8 +1,15 @@
-# PostgreSQL authority inventory
+# PostgreSQL authority inventory (historical transition record)
 
-Current as of September 14, 2026. The repository contains PostgreSQL-free
-runtime paths for every declared product family. PostgreSQL remains the live
-deployment authority until the AKS retirement evidence gate passes.
+> Historical snapshot from September 14, 2026. This inventory describes the
+> transition-era authority map and is not a statement about the current native
+> KaveonDB runtime. Current authority is deployment-configured: native
+> deployments use KaveonDB, while any explicitly enabled legacy families are
+> reported by the live configuration and must not be inferred from this file.
+> Preserve this document for migration and rollback evidence only.
+
+The repository contains PostgreSQL-free runtime paths for every declared
+product family; the table below records the source-to-destination design that
+was used while the retirement gates were being qualified.
 
 | Authority family | PostgreSQL source | KaveonDB destination | Implemented cutover behavior |
 | --- | --- | --- | --- |
