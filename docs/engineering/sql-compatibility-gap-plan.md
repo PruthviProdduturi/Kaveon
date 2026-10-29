@@ -31,8 +31,8 @@ The authoritative capability details remain in:
 
 - [x] Create a versioned T-SQL corpus covering `TOP`, bracket identifiers,
   `DATEADD`, `DATEDIFF`, `DATEPART`, `CONVERT`, `TRY_CONVERT`, `ISNULL`,
-  `GETDATE`, `SYSDATETIME`, `PIVOT`, `UNPIVOT`, and SQL Server
-  pagination.
+  `GETDATE`, `SYSDATETIME`, bounded `PIVOT`, `UNPIVOT`, and `CROSS APPLY`,
+  explicit unsupported APPLY forms, and SQL Server pagination.
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
