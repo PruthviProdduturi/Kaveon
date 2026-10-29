@@ -209,9 +209,10 @@ server or a general row-store protocol.
 Each request carries one statement and a transaction ID after `BEGIN`. Product
 operations are authenticated, owner-isolated, revision-checked, and limited to
 the supported product families. Multi-row `VALUES` are expanded into bounded
-typed commands and committed atomically. `INSERT ... SELECT`,
-`RETURNING`, `ON CONFLICT`, transaction modifiers, arbitrary user
-tables, and lake-table DML are rejected explicitly. Statement execution and the
+typed commands and committed atomically. `INSERT ... SELECT`, document
+projections in `RETURNING`, `ON CONFLICT`, transaction modifiers, arbitrary
+user tables, and lake-table DML are rejected explicitly. Product `RETURNING
+id, revision` is evaluated from the staged revision/CAS write set. Statement execution and the
 authenticated product transaction endpoint accept typed positional (`$1`, `?`)
 and named (`:name`) scalar or JSON-array parameters through the HTTP API; values
 are bound before parsing/planning and are never interpolated into SQL. Missing

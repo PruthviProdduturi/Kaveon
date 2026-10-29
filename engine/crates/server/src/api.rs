@@ -10157,7 +10157,7 @@ async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabili
             single_statement_per_request: true,
             parameter_binding: true,
             multi_row_insert: true,
-            returning: false,
+            returning: true,
             savepoints: true,
             explicit_isolation_modes: false,
             arbitrary_table_dml: false,

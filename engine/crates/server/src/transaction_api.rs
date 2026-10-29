@@ -2266,16 +2266,74 @@ async fn execute_sql_request(
             let Some(id) = request.transaction_id else {
                 return error_response(RegistryError::Invalid("transaction_id is required".into()));
             };
+            let returning = dml.returning.clone();
             let commands = match adapt_product_dml_batch(&dml) {
                 Ok(command) => command,
                 Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
             };
-            match registry.stage_product_commands(owner, &id, commands).await {
-                Ok(snapshot) => Json(snapshot).into_response(),
+            match registry
+                .stage_product_commands(owner, &id, commands.clone())
+                .await
+            {
+                Ok(snapshot) if returning.is_empty() => Json(snapshot).into_response(),
+                Ok(snapshot) => {
+                    match product_returning_response(&snapshot, &returning, &commands) {
+                        Ok(body) => Json(body).into_response(),
+                        Err(error) => error_response(RegistryError::Invalid(error)),
+                    }
+                }
                 Err(error) => error_response(error),
             }
         }
     }
+}
+
+fn product_returning_response(
+    snapshot: &CatalogSnapshot,
+    columns: &[String],
+    commands: &[kaveon_sql::parser::ProductDmlCommand],
+) -> Result<serde_json::Value, String> {
+    let rows = commands
+        .iter()
+        .map(|command| {
+            let (id, revision) = match command {
+                kaveon_sql::parser::ProductDmlCommand::Create { id, .. } => (id.clone(), 1),
+                kaveon_sql::parser::ProductDmlCommand::Update {
+                    id,
+                    expected_revision,
+                    ..
+                } => (
+                    id.clone(),
+                    expected_revision
+                        .checked_add(1)
+                        .ok_or_else(|| "product revision overflow".to_owned())?,
+                ),
+                kaveon_sql::parser::ProductDmlCommand::Delete {
+                    id,
+                    expected_revision,
+                    ..
+                } => (id.clone(), *expected_revision),
+            };
+            let mut row = serde_json::Map::new();
+            for column in columns {
+                match column.as_str() {
+                    "id" => {
+                        row.insert("id".to_owned(), serde_json::Value::String(id.clone()));
+                    }
+                    "revision" => {
+                        row.insert("revision".to_owned(), serde_json::json!(revision));
+                    }
+                    _ => unreachable!("parser validates product RETURNING columns"),
+                }
+            }
+            Ok(serde_json::Value::Object(row))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut body = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+    body.as_object_mut()
+        .ok_or_else(|| "transaction snapshot is not a JSON object".to_owned())?
+        .insert("returning".to_owned(), serde_json::Value::Array(rows));
+    Ok(body)
 }
 
 async fn commit_transaction(registry: &TransactionRegistry, owner: &str, id: &str) -> Response {
@@ -3375,6 +3433,30 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_returns_product_identity_metadata_from_staged_dml() {
+        let (registry, _catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{}') RETURNING id, revision"#.into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "orders");
+        assert_eq!(value["returning"][0]["revision"], 1);
     }
 
     #[tokio::test]
