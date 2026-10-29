@@ -5105,6 +5105,54 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // SQL Server's DATETIMEFROMPARTS constructs a timestamp from calendar
+    // parts. Lower it through the existing typed DATE and timestamp arithmetic
+    // operators so null propagation, calendar validation, and distributed
+    // execution remain shared with the rest of the date surface.
+    if name == "DATETIME_FROM_PARTS" {
+        if args.len() != 7 {
+            return Err(sql_err(
+                "DATETIMEFROMPARTS requires year, month, day, hour, minute, second, and milliseconds",
+            ));
+        }
+        let date = Expr::Function {
+            name: "DATE_FROM_PARTS".into(),
+            args: args[..3].to_vec(),
+        };
+        let timestamp = Expr::Cast {
+            expr: Box::new(date),
+            data_type: CastTarget::TimestampMicros {
+                with_timezone: false,
+            },
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(Expr::BinaryOp {
+                left: Box::new(args[3].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(3_600))),
+            }),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::BinaryOp {
+                left: Box::new(args[4].clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(60))),
+            }),
+        };
+        let seconds = Expr::BinaryOp {
+            left: Box::new(seconds),
+            op: BinaryOp::Plus,
+            right: Box::new(args[5].clone()),
+        };
+        let shifted = Expr::Function {
+            name: "DATE_ADD_SECONDS".into(),
+            args: vec![timestamp, seconds],
+        };
+        return Ok(Expr::Function {
+            name: "DATE_ADD_MILLISECONDS".into(),
+            args: vec![shifted, args[6].clone()],
+        });
+    }
+
     // DATENAME uses the same datepart vocabulary as DATEPART but returns the
     // locale-independent English name/number as text. Normalize SQL Server's
     // unquoted datepart identifier before it reaches the vectorized executor.
@@ -5691,6 +5739,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEPART" => "DATE_PART".to_owned(),
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
+        "DATETIMEFROMPARTS" => "DATETIME_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
         "ISNUMERIC" => "IS_NUMERIC".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
@@ -8654,6 +8703,19 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datetimefromparts_to_typed_timestamp_operators() {
+        let plan =
+            sql_to_logical_plan("SELECT DATETIMEFROMPARTS(2024, 2, 29, 12, 34, 56, 789) FROM t")
+                .expect("DATETIMEFROMPARTS should lower to typed timestamp operators");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_FROM_PARTS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_SECONDS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_MILLISECONDS"), "{rendered}");
+        assert!(rendered.contains("TimestampMicros"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT DATETIMEFROMPARTS(2024, 2, 29) FROM t").is_err());
+    }
+
+    #[test]
     fn lowers_tsql_datename_to_normalized_date_name() {
         let plan = sql_to_logical_plan("SELECT DATENAME(mm, event_date) FROM t")
             .expect("DATENAME should normalize its unquoted datepart");
@@ -8742,7 +8804,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 46);
+        assert_eq!(cases.len(), 47);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
