@@ -42,7 +42,10 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_supports_bounded_update_or_insert`
 - `parser::tests::product_merge_expands_a_bounded_values_batch`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
+- `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
 - `cargo test -p kaveon-sql` — 285 passed, 0 failed on 2026-10-28
 
-The transaction API already stages the adapted command through the same
-`ProductDmlCommand::Upsert` path used by the qualified conflict-upsert tests.
+The transaction API test commits two revisions and one insert atomically, then
+reads the committed snapshot and verifies revisions `2, 2, 1`. It stages the
+adapted commands through the same `ProductDmlCommand::Upsert` path used by the
+qualified conflict-upsert tests.
