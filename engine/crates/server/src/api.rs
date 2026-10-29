@@ -19780,8 +19780,8 @@ mod tests {
         assert!(enabled.transactions.single_statement_per_request);
         assert!(enabled.transactions.parameter_binding);
         assert!(enabled.transactions.multi_row_insert);
-        assert!(!enabled.transactions.returning);
-        assert!(!enabled.transactions.savepoints);
+        assert!(enabled.transactions.returning);
+        assert!(enabled.transactions.savepoints);
         assert!(!enabled.transactions.explicit_isolation_modes);
         assert!(!enabled.transactions.arbitrary_table_dml);
         std::fs::remove_dir_all(directory).unwrap();
