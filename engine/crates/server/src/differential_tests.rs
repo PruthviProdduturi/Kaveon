@@ -230,6 +230,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_top_with_ties",
+        "SELECT TOP 1 WITH TIES country, actions FROM {T} ORDER BY actions DESC, country ASC",
+        true,
+    ),
+    (
         "tsql_isnull",
         "SELECT TOP 5 ISNULL(country, 'unknown') AS country FROM {T} ORDER BY country",
         true,
