@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "4df9c49b",
+  "engine_commit": "fb9fa474",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -13,6 +13,7 @@
     {"id": "len", "sql": "SELECT LEN(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "iif", "sql": "SELECT IIF(actions > 10, 'yes', 'no') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "charindex", "sql": "SELECT CHARINDEX('a', name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "eomonth", "sql": "SELECT EOMONTH(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_input_is_date_or_timestamp"},
     {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
