@@ -62,7 +62,7 @@ Generation (`generate_dlm()`) runs these steps:
 
 1. **Fingerprint** the dataset definition for cheap change-detection
 2. **ANALYZE** the tables, then build context snapshots via `context_profiler`
-3. **Value inventory** — bounded `GROUP BY` scan per low-cardinality dimension (cap: 1,000 distinct values). Falls back to `pg_stats.most_common_vals` when unavailable
+3. **Value inventory** — bounded `GROUP BY` scan per low-cardinality dimension (cap: 1,000 distinct values). KaveonDB-native datasets use Engine statistics and scans; legacy PostgreSQL sources may use `pg_stats.most_common_vals` as an optimization when available.
 4. **Usage rollup** — how often each table has been queried (from `query_history`)
 5. **Stats rollup** — cardinalities, row counts, date range (metric-coverage-bounded)
 6. **Manifest** — the deterministic assembler's map: columns, joins, metrics, synonyms, context spec

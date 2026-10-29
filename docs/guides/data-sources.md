@@ -207,20 +207,26 @@ Roles are assigned in `AUTH_ADMIN_EMAILS` at deploy time. Emails not in that lis
 
 ---
 
-## DLM Limitations by Database Type
+## DLM behavior by source
 
-The DLM (Data Language Model) — which compiles per-dataset context for zero-LLM question answering, precomputed dashboard serving, and value-index resolution — **requires PostgreSQL** for full functionality.
+The Data Language Model is not PostgreSQL-bound. KaveonDB-native datasets use
+Engine metadata and bounded distinct scans to build deterministic context,
+value indexes, and precomputed answers. Registered external SQL sources may
+expose fewer profiling capabilities because their statistics APIs differ.
 
-| Capability | PostgreSQL | Fabric SQL / Azure SQL / StarRocks / Trino |
-|-----------|-----------|-------------------------------------------|
-| DLM manifest (columns, joins, metrics, synonyms) | Full | Full |
-| Context profiling (pg_stats value inventory) | Full | No-op (profiler `is_supported()` returns `False`) |
-| Value index (entity resolution for NL queries) | Full | Skipped — no catalog stats to index |
-| HLL sketch cuboids (approximate COUNT DISTINCT) | Full | Skipped — register SQL is PostgreSQL-specific |
-| `serve-chart` from precomputed context | Full | Only serves if answers were precomputed at generate time; falls back to live query |
-| DLM artifact status | `ready` | `unsupported` |
+| Capability | KaveonDB / Engine catalog | PostgreSQL | Fabric SQL / Azure SQL / StarRocks / Trino |
+|-----------|---------------------------|------------|-------------------------------------------|
+| DLM manifest (columns, joins, metrics, synonyms) | Full | Full | Full |
+| Context profiling | Engine statistics and bounded scans | `pg_stats` fast path | Source-specific or bounded-scan path |
+| Value index (entity resolution) | Supported when dimensions are measurable | Supported through `pg_stats` | Available when bounded profiling succeeds |
+| HLL sketch cuboids | Engine statistics/sketch path | PostgreSQL statistics path | Source-dependent; not assumed |
+| `serve-chart` from compiled context | Supported | Supported | Supported when answers were compiled |
+| DLM artifact status | `ready` after compilation | `ready` after compilation | `ready` when compilation succeeds |
 
-In practice: datasets on non-PostgreSQL data sources can still build a manifest and precompute metric totals/breakdowns, but lack the pg_stats-driven value inventory and HLL sketches. NL chat questions for those datasets route through the LLM path rather than the deterministic DLM resolver.
+PostgreSQL-specific `pg_stats` profiling remains an optimization for legacy
+external sources, not a product requirement or a KaveonDB dependency. A source
+whose statistics cannot be read is handled explicitly: the DLM uses bounded
+profiling where available or reports that a context artifact needs generation.
 
 ---
 
