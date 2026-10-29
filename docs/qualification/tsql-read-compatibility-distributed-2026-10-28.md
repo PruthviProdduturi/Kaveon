@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 28 cases, including explicit fail-closed cases for `PIVOT`,
+- Corpus: 29 cases, including explicit fail-closed cases for `PIVOT`,
   `UNPIVOT`, correlated `APPLY`, `TOP WITH TIES` without an order, and
   runtime-column styled date conversion.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
@@ -18,11 +18,16 @@ parity or external-client parity.
   with exact local-vs-distributed results after the `DATENAME` implementation;
   the run completed without worker failures or retained exchange/spill files.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
-  `CHARINDEX`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, and `ISDATE`.
+  `CHARINDEX`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, and
+  `ISNUMERIC`.
 
 `ISDATE` returns a non-null boolean 0/1 result. Text is parsed through a safe
 typed date cast; numeric values are rejected as date inputs instead of being
 interpreted as epoch offsets.
+
+`ISNUMERIC` returns a non-null boolean 0/1 result. Native numeric values and
+text accepted by the safe numeric cast are qualified; locale-specific currency
+and SQL Server type-coercion extensions remain outside the contract.
 
 ## Contract
 

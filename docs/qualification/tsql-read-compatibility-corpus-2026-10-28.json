@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "6b4dceaa",
+  "engine_commit": "5a3e040b",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -17,6 +17,7 @@
     {"id": "datefromparts", "sql": "SELECT DATEFROMPARTS(2024, 2, 29)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
+    {"id": "isnumeric", "sql": "SELECT ISNUMERIC(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_and_parseable_text_inputs"},
     {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
