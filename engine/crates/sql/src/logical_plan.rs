@@ -4263,8 +4263,13 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                     } else {
                         return Ok(Expr::Function {
                             name: format!(
-                                "{}DATE_STYLE_{style}",
-                                if *is_try { "TRY_CONVERT_" } else { "CONVERT_" }
+                                "{}{}_STYLE_{style}",
+                                if *is_try { "TRY_CONVERT_" } else { "CONVERT_" },
+                                if is_tsql_timestamp_type(data_type) {
+                                    "TIMESTAMP"
+                                } else {
+                                    "DATE"
+                                }
                             ),
                             args: vec![ast_expr_to_expr(expr)?],
                         });
@@ -9327,6 +9332,9 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_CONVERT(DATE, value, 101) FROM t")
             .expect("runtime DATE style should lower through the typed function");
         assert!(format!("{plan:?}").contains("TRY_CONVERT_DATE_STYLE_101"));
+        let plan = sql_to_logical_plan("SELECT TRY_CONVERT(DATETIME2, value, 126) FROM t")
+            .expect("runtime timestamp style should lower through the typed function");
+        assert!(format!("{plan:?}").contains("TRY_CONVERT_TIMESTAMP_STYLE_126"));
     }
 
     #[test]
@@ -9348,7 +9356,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 71);
+        assert_eq!(cases.len(), 72);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
