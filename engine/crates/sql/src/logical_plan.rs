@@ -4873,6 +4873,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "second" => ("DATE_ADD_SECONDS", 1),
             "millisecond" => ("DATE_ADD_MILLISECONDS", 1),
             "microsecond" => ("DATE_ADD_MICROSECONDS", 1),
+            "nanosecond" => ("DATE_ADD_NANOSECONDS", 1),
             other => {
                 return Err(sql_err(format!(
                     "{function_name} does not support unit '{other}'"
@@ -5486,6 +5487,7 @@ fn normalize_tsql_date_unit(unit: &str) -> String {
         "ss" | "s" => "second".into(),
         "ms" => "millisecond".into(),
         "mcs" | "us" => "microsecond".into(),
+        "ns" => "nanosecond".into(),
         other => other.into(),
     }
 }
@@ -8953,7 +8955,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 50);
+        assert_eq!(cases.len(), 51);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
