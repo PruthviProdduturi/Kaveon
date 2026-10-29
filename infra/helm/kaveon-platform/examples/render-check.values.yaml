@@ -1,0 +1,40 @@
+# Placeholder values complete enough to render the chart. Used by the Helm job
+# in .github/workflows/ci.yml and by anyone who wants to see the rendered
+# manifests without a cluster:
+#
+#   helm template kaveon infra/helm/kaveon-platform \
+#     -f infra/helm/kaveon-platform/examples/render-check.values.yaml
+#
+# Nothing here is real. The registry does not resolve, the digests are not
+# images, the client id is zeros and the vault does not exist. The point is to
+# satisfy every `required` so the templates are exercised, not to deploy.
+images:
+  api:
+    repository: registry.invalid/kaveon-api
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  studio:
+    repository: registry.invalid/kaveon-studio
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+  engine:
+    repository: registry.invalid/kaveon-engine
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+
+secrets:
+  portalAuth: kaveon-portal-auth
+
+seed:
+  catalog: OpenSource
+
+api:
+  keyVaultUrl: https://kaveon-kv.vault.azure.net
+  workloadIdentity:
+    clientId: 00000000-0000-0000-0000-000000000000
+  cutover:
+    artifactAccount: kaveonartifacts
+    artifactContainer: product
+    evidencePvc: kaveon-retirement-evidence
+    authorityFamilies: datasets,charts,dashboards
+    readAuthorityFamilies: datasets,charts,dashboards
+  evidenceStorage:
+    create: true
+    name: kaveon-retirement-evidence
