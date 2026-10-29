@@ -58,9 +58,10 @@ explicitly rejected. Evidence: `track2-native-dml-returning-document-2026-10-29.
 This supersedes the older Native DML row wording that listed all document
 projections as open; arbitrary expressions and lake-table DML remain open.
 
-The current T-SQL corpus is 73 cases (pinned to `0e8441d0`): the latest
-addition is `CONCAT_WS` with SQL Server NULL-skipping separator semantics,
-qualified by `distributed_tsql_concat_ws_matches_local_with_null_fields`.
+The current T-SQL corpus is 74 cases (the implementation pin is updated after
+the qualification commit): the latest additions are `CONCAT_WS` with
+SQL Server NULL-skipping separator semantics and `CHOOSE` lowered to a
+null-preserving one-based CASE, each with a focused three-worker differential.
 
 ## Owner execution target — 2026-10-21
 
