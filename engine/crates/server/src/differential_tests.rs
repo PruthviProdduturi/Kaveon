@@ -7622,7 +7622,7 @@ fn distributed_tsql_left_and_right_match_local_unicode_semantics() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-tsql-left-right-{}", uuid::Uuid::new_v4()));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, LEFT(country, 2) AS country_prefix, RIGHT(country, 2) AS country_suffix FROM events ORDER BY user_id, country LIMIT 5";
+    let statement = "SELECT user_id, LEFT(country, 2) AS country_prefix, RIGHT(country, 2) AS country_suffix, REVERSE(country) AS country_reversed FROM events ORDER BY user_id, country LIMIT 5";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-left-right-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
