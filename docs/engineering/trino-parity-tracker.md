@@ -40,7 +40,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 72 bounded T-SQL read cases, including the
+The corpus currently contains 73 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -57,6 +57,10 @@ typed-row facade. Source-copy `INSERT ... SELECT` document projections remain
 explicitly rejected. Evidence: `track2-native-dml-returning-document-2026-10-29.md`.
 This supersedes the older Native DML row wording that listed all document
 projections as open; arbitrary expressions and lake-table DML remain open.
+
+The current T-SQL corpus is 73 cases (pinned to `0e8441d0`): the latest
+addition is `CONCAT_WS` with SQL Server NULL-skipping separator semantics,
+qualified by `distributed_tsql_concat_ws_matches_local_with_null_fields`.
 
 ## Owner execution target — 2026-10-21
 
