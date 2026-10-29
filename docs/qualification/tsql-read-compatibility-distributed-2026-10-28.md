@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 36 cases, including explicit fail-closed cases for `PIVOT`,
+- Corpus: 37 cases, including explicit fail-closed cases for `PIVOT`,
   `UNPIVOT`, correlated `APPLY`, `TOP WITH TIES` without an order, and
   runtime-column styled date conversion.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
@@ -23,7 +23,7 @@ parity or external-client parity.
 - Focused distributed regression `distributed_tsql_left_and_right_match_local_unicode_semantics`
   passed with three workers and zero retained memory reservations.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
-  `CHARINDEX`, `TRANSLATE`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
+  `CHARINDEX`, bounded `PATINDEX`, `TRANSLATE`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `LEFT`, `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
 
 `ISDATE` returns a non-null boolean 0/1 result. Text is parsed through a safe
@@ -44,6 +44,9 @@ documented boundaries; broader culture-specific trimming is not claimed.
 `TRANSLATE` maps Unicode scalar characters using SQL Server's first-match
 mapping rule; extra source characters are removed and extra target characters
 are ignored, with NULL propagation.
+`PATINDEX` reports one-based Unicode scalar positions for `%` and `_`
+wildcards, returns zero for no match, preserves NULLs, and rejects bracket
+classes explicitly.
 
 ## Contract
 
