@@ -230,6 +230,26 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_isnull",
+        "SELECT TOP 5 ISNULL(country, 'unknown') AS country FROM {T} ORDER BY country",
+        true,
+    ),
+    (
+        "tsql_dateadd",
+        "SELECT TOP 5 DATEADD(dd, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
+        "tsql_datediff",
+        "SELECT TOP 5 DATEDIFF(dd, DATE '2026-01-01', event_date) AS days FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
+        "tsql_datepart",
+        "SELECT TOP 5 DATEPART(yyyy, event_date) AS event_year FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "in_list",
         "SELECT country, SUM(actions) AS a FROM {T} WHERE country IN ('Japan', 'Brazil', 'Kenya') GROUP BY country ORDER BY country",
         true,
