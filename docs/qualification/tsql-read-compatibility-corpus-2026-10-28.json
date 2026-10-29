@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "1c161366",
+  "engine_commit": "1278c59c",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -43,6 +43,7 @@
     {"id": "datepart_weekday_alias", "sql": "SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_weekday_aliases"},
     {"id": "datepart_dayofyear_alias", "sql": "SELECT DATEPART(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},
     {"id": "datepart_iso_week_alias", "sql": "SELECT DATEPART(iso_week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
+    {"id": "datepart_week_quarter_alias", "sql": "SELECT DATEPART(wk, event_date), DATEPART(qq, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_week_and_quarter_aliases"},
     {"id": "datename_iso_week_alias", "sql": "SELECT DATENAME(isowk, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
     {"id": "datename_dayofyear_alias", "sql": "SELECT DATENAME(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},
     {"id": "date_bucket_width_one", "sql": "SELECT DATE_BUCKET(month, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
