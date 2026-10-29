@@ -321,6 +321,31 @@ impl TransactionRegistry {
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
         for command in commands {
+            let command = match command {
+                kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
+                    kind,
+                    id: row_id,
+                    document_json,
+                } => {
+                    let product_kind = record_kind(&kind)?;
+                    if session
+                        .transaction
+                        .snapshot()
+                        .product_record(product_kind, &row_id)
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                        .is_some()
+                    {
+                        session.transaction.mark_noop();
+                        continue;
+                    }
+                    kaveon_sql::parser::ProductDmlCommand::Create {
+                        kind,
+                        id: row_id,
+                        document_json,
+                    }
+                }
+                other => other,
+            };
             // Migration batches are replayable.  A typed-row create that is
             // already present with the same immutable payload is an idempotent
             // no-op; this avoids turning a resumed batch into 1,000 point-read
@@ -712,6 +737,19 @@ fn product_change(
 ) -> Result<ProductStage, RegistryError> {
     use kaveon_sql::parser::ProductDmlCommand;
     match command {
+        ProductDmlCommand::CreateIgnore {
+            kind,
+            id,
+            document_json,
+        } => product_change(
+            snapshot,
+            owner,
+            ProductDmlCommand::Create {
+                kind,
+                id,
+                document_json,
+            },
+        ),
         ProductDmlCommand::Create {
             kind,
             id,
@@ -2297,7 +2335,8 @@ fn product_returning_response(
         .iter()
         .map(|command| {
             let (id, revision) = match command {
-                kaveon_sql::parser::ProductDmlCommand::Create { id, .. } => (id.clone(), 1),
+                kaveon_sql::parser::ProductDmlCommand::Create { id, .. }
+                | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { id, .. } => (id.clone(), 1),
                 kaveon_sql::parser::ProductDmlCommand::Update {
                     id,
                     expected_revision,
@@ -3457,6 +3496,74 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "orders");
         assert_eq!(value["returning"][0]["revision"], 1);
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_on_conflict_do_nothing_preserves_existing_product() {
+        let (registry, catalog) = registry().await;
+        let first = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}')"#.into(),
+                transaction_id: Some(first.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(first.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let retry = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Changed"}') ON CONFLICT DO NOTHING"#.into(),
+                transaction_id: Some(retry.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(retry.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        let record = snapshot
+            .product_record(ProductRecordKind::Dataset, "orders")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.revision, 1);
     }
 
     #[tokio::test]
