@@ -4120,6 +4120,56 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             }
         }
 
+        // SQL Server/Fabric's CONVERT/TRY_CONVERT uses the target type
+        // before the value (`CONVERT(date, value)`).  Lower the unstyled
+        // form into the same typed cast path as CAST so null/error behavior
+        // stays identical across dialect spellings.  Style codes and
+        // character-set conversions remain explicit boundaries until their
+        // date/text semantics are qualified.
+        ast::Expr::Convert {
+            is_try,
+            expr,
+            data_type,
+            charset,
+            styles,
+            ..
+        } => {
+            if charset.is_some() {
+                return Err(sql_err("CONVERT character-set syntax is unsupported"));
+            }
+            if !styles.is_empty() {
+                return Err(sql_err(
+                    "CONVERT style codes are unsupported; use an unstyled CONVERT or CAST",
+                ));
+            }
+            let data_type = data_type
+                .as_ref()
+                .ok_or_else(|| sql_err("CONVERT requires a target data type"))?;
+            let inner = ast_expr_to_expr(expr)?;
+            let target = ast_data_type_to_cast_target(data_type)?;
+            if matches!(data_type, ast::DataType::JSON | ast::DataType::JSONB) {
+                return Ok(Expr::Function {
+                    name: if *is_try {
+                        "TRY_JSON_PARSE".into()
+                    } else {
+                        "JSON_PARSE".into()
+                    },
+                    args: vec![inner],
+                });
+            }
+            if *is_try {
+                Ok(Expr::Function {
+                    name: format!("TRY_CAST_{}", cast_target_name(target)),
+                    args: vec![inner],
+                })
+            } else {
+                Ok(Expr::Cast {
+                    expr: Box::new(inner),
+                    data_type: target,
+                })
+            }
+        }
+
         // ── EXTRACT ──────────────────────────────────────────────────────
         ast::Expr::Extract { field, expr, .. } => {
             let date_field = ast_date_field_to_date_field(field)?;
@@ -8176,6 +8226,16 @@ mod tests {
         assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("DATE_PART"), "{rendered}");
+    }
+
+    #[test]
+    fn lowers_unstyled_tsql_convert_aliases() {
+        let plan =
+            sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
+                .expect("unstyled CONVERT should lower through CAST");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("Cast"), "{rendered}");
+        assert!(rendered.contains("TRY_CAST_DATE32"), "{rendered}");
     }
 
     #[test]

@@ -50,6 +50,16 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     {
         return Ok(statements);
     }
+    // DuckDB accepts SQL Server's CONVERT syntax but binds the two arguments
+    // in the wrong AST positions (the value becomes the target type). Prefer
+    // sqlparser's MSSQL grammar for this narrow surface so CONVERT/TRY_CONVERT
+    // can share the Engine's normal CAST semantics.
+    let upper = normalized.to_ascii_uppercase();
+    if (upper.contains("CONVERT(") || upper.contains("TRY_CONVERT("))
+        && let Ok(statements) = Parser::parse_sql(&MsSqlDialect {}, &normalized)
+    {
+        return Ok(statements);
+    }
     match Parser::parse_sql(&dialect, &normalized) {
         Ok(statements) => Ok(statements),
         Err(primary) if normalized.to_ascii_uppercase().contains("WITH OFFSET") => {

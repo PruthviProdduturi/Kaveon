@@ -40,10 +40,11 @@ The authoritative capability details remain in:
   `APPLY` forms rejected until their semantics are implemented and qualified.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
-Progress: the Engine now lowers `ISNULL`, `DATEADD`, `DATEDIFF`, and
-`DATEPART`, including common SQL Server datepart abbreviations. The focused
-planner regression passes; execution and distributed corpus evidence are still
-required before this becomes a qualified compatibility claim.
+Progress: the Engine now lowers `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`,
+unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
+datepart abbreviations. The focused planner regression passes; execution and
+distributed corpus evidence are still required before this becomes a fully
+qualified compatibility claim.
 
 ### Phase 2 — Transactional SQL surface
 
