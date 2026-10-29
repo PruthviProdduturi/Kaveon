@@ -295,6 +295,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datetimefromparts",
+        "SELECT TOP 5 DATETIMEFROMPARTS(DATEPART(yyyy, event_date), DATEPART(mm, event_date), DATEPART(dd, event_date), 12, 34, 56, 789) AS rebuilt FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datename",
         "SELECT TOP 5 DATENAME(month, event_date) AS event_month FROM {T} ORDER BY event_date",
         true,

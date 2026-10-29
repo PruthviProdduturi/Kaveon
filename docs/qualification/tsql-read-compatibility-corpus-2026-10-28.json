@@ -18,6 +18,7 @@
     {"id": "translate", "sql": "SELECT TRANSLATE(name, 'ae', 'AE') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "eomonth", "sql": "SELECT EOMONTH(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_input_is_date_or_timestamp"},
     {"id": "datefromparts", "sql": "SELECT DATEFROMPARTS(2024, 2, 29)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
+    {"id": "datetimefromparts", "sql": "SELECT DATETIMEFROMPARTS(2024, 2, 29, 12, 34, 56, 789)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
     {"id": "isnumeric", "sql": "SELECT ISNUMERIC(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_and_parseable_text_inputs"},
