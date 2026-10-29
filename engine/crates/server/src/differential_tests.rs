@@ -270,6 +270,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_patindex",
+        "SELECT TOP 5 PATINDEX('%a%', country) AS position FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_translate",
         "SELECT TOP 5 TRANSLATE(country, 'ae', 'AE') AS translated FROM {T} ORDER BY user_id, event_date, actions, country",
         true,

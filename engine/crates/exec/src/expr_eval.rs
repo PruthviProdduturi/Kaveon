@@ -105,6 +105,34 @@ fn compiled_regex_for(function: &str, pattern: &str) -> Result<regex::Regex> {
     Ok(regex)
 }
 
+/// Translate the bounded SQL Server PATINDEX wildcard surface to a regular
+/// expression. Leading `%` wildcards are removed so the reported match
+/// position identifies the first matched character, as PATINDEX does. `%`
+/// and `_` are supported; bracket classes remain explicitly unsupported.
+fn patindex_regex(pattern: &str) -> Result<regex::Regex> {
+    let mut pattern = pattern;
+    while let Some(rest) = pattern.strip_prefix('%') {
+        pattern = rest;
+    }
+    if pattern.contains('[') || pattern.contains(']') {
+        return Err(KaveonError::Execution(
+            "PATINDEX bracket classes are not supported; use % and _ wildcards".into(),
+        ));
+    }
+    let mut source = String::new();
+    for character in pattern.chars() {
+        match character {
+            '%' => source.push_str(".*"),
+            '_' => source.push('.'),
+            other => source.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    if source.is_empty() {
+        source.push_str(".*");
+    }
+    compiled_regex_for("PATINDEX", &source)
+}
+
 fn reserve_string_expansion(bytes: u64, rows: usize) -> Result<()> {
     const MAX_EXPANSION_BYTES: u64 = 64 * 1024 * 1024;
     if bytes > MAX_EXPANSION_BYTES {
@@ -594,6 +622,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "STRPOS",
     "POSITION",
     "CHARINDEX",
+    "PATINDEX",
     "SPLIT_PART",
     "REVERSE",
     "REPEAT",
@@ -11365,6 +11394,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .find(needle)
                     .map(|byte| start as i64 + suffix[..byte].chars().count() as i64);
                 result.push(Some(position.unwrap_or(0)));
+            }
+            Ok(Arc::new(Int64Array::from(result)))
+        }
+        "PATINDEX" => {
+            check_arity(name, args, 2)?;
+            let mut result = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let (Some(pattern), Some(value)) =
+                    (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                else {
+                    result.push(None);
+                    continue;
+                };
+                let regex = patindex_regex(pattern)?;
+                let position = regex
+                    .find(value)
+                    .map(|matched| value[..matched.start()].chars().count() as i64 + 1)
+                    .unwrap_or(0);
+                result.push(Some(position));
             }
             Ok(Arc::new(Int64Array::from(result)))
         }
@@ -24744,6 +24792,45 @@ mod tests {
         .unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
         assert!(result.as_primitive::<Int64Type>().is_null(1));
+    }
+
+    #[test]
+    fn patindex_uses_unicode_positions_and_bounded_wildcards() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![Some("éx-é"), Some("xyz"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "PATINDEX".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("%é%".into())),
+                    Expr::Column("value".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(0), None]
+        );
+        let result = evaluate(
+            &Expr::Function {
+                name: "PATINDEX".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("x_".into())),
+                    Expr::Column("value".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]
