@@ -7,8 +7,11 @@ APPLY` is followed by a parenthesized derived `SELECT` or `VALUES` relation
 with an explicit alias. The parser lowers this form to Kaveon’s existing
 lateral-join path; it does not introduce a second execution implementation.
 
-Correlated derived APPLY, `OUTER APPLY`, table-valued functions, and arbitrary
-APPLY expressions remain explicitly rejected. That boundary prevents a
+Correlated derived APPLY, table-valued functions, and arbitrary APPLY
+expressions remain explicitly rejected. Bounded uncorrelated `OUTER APPLY` is
+qualified separately in
+[`track2-tsql-outer-apply-distributed-2026-10-29.md`](track2-tsql-outer-apply-distributed-2026-10-29.md).
+That boundary prevents a
 syntactically accepted query from silently changing null-extension or
 function-evaluation semantics.
 

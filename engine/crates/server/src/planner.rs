@@ -1640,13 +1640,14 @@ impl StageGraphBuilder {
                     self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
                     return Ok(left_stage);
                 }
-                let target = self.add_exchange_stage(
-                    "PartitionedHashJoin",
-                    join.attributes.clone(),
-                    self.worker_count,
-                    2,
-                );
+                let target;
                 if *join_type == JoinType::Cross {
+                    target = self.add_exchange_stage(
+                        "PartitionedHashJoin",
+                        join.attributes.clone(),
+                        self.worker_count,
+                        2,
+                    );
                     self.add_exchange(
                         left_stage,
                         target,
@@ -1668,6 +1669,12 @@ impl StageGraphBuilder {
                         ));
                     }
                     let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
+                    target = self.add_exchange_stage(
+                        "PartitionedHashJoin",
+                        join.attributes.clone(),
+                        self.worker_count,
+                        2,
+                    );
                     self.add_exchange(
                         left_stage,
                         target,

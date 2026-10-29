@@ -3411,7 +3411,7 @@ fn distributed_constant_lateral_unnest_matches_trino_shape() {
 /// to a LEFT JOIN LATERAL. An empty derived result must preserve each outer
 /// row with NULL-extended columns on both local and distributed paths.
 #[test]
-fn bounded_outer_apply_preserves_empty_outer_rows_locally() {
+fn distributed_bounded_outer_apply_preserves_empty_outer_rows() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-outer-apply-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -3425,6 +3425,12 @@ fn bounded_outer_apply_preserves_empty_outer_rows_locally() {
     drop(local);
     assert_eq!(expected.len(), 5);
     assert!(expected.iter().all(|row| row.ends_with("\u{1f}NULL")));
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
