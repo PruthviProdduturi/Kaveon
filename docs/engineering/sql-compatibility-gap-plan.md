@@ -36,9 +36,9 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [ ] Add exact local and distributed result tests for accepted translations.
-- [ ] Keep `TOP PERCENT`, `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms
-  rejected until their semantics are implemented and qualified. `TOP WITH
-  TIES` is qualified only when its `ORDER BY` keys define a deterministic
+- [ ] Keep `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected until
+  their semantics are implemented and qualified. `TOP PERCENT` and `TOP WITH
+  TIES` are qualified only when their `ORDER BY` keys define a deterministic
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
@@ -47,11 +47,10 @@ unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Literal DATE styles `0`, `1`, `101`, and `112` now
 normalize to ISO values. `ISNULL`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
 pass exact local-vs-three-worker differential checks across dictionary, plain,
-partitioned, clustered, and fragmented Parquet layouts. `TOP WITH TIES` also
-passes that sweep when its order keys are deterministic. `TOP PERCENT` remains
-planner-qualified only: the sweep still finds layout-dependent result
-differences, so it stays out of the distributed compatibility claim until
-global percent-limit semantics are corrected.
+partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
+`TOP WITH TIES` also pass that sweep when their order keys are deterministic;
+without a complete tie-breaker, SQL permits different tied rows and the
+qualification is intentionally withheld.
 
 ### Phase 2 — Transactional SQL surface
 
