@@ -1627,7 +1627,11 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             }
             if let Some(alias) = alias
                 && !alias.columns.is_empty()
-                && !matches!(plan, LogicalPlan::Unnest { .. })
+                && !matches!(
+                    plan,
+                    LogicalPlan::Unnest { ref expressions, .. }
+                        if expressions.iter().any(expression_contains_column)
+                )
                 && let Some(columns) = plan_output_columns(&plan)
             {
                 if alias.columns.len() != columns.len() {
