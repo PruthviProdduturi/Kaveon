@@ -162,6 +162,7 @@ unsupported dateparts remain explicitly rejected.
   `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
 - [ ] Add plan-vs-runtime diagnostics. Runtime-only comparison now exposes a
   conservative doubled-P95 regression threshold after five comparable runs;
+  evidence: `docs/qualification/track3-runtime-regression-threshold-2026-10-29.md`;
   estimate-vs-actual operator diagnostics remain open.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
