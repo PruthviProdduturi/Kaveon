@@ -14,8 +14,8 @@ parity or external-client parity.
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
   table-valued/unsupported correlated `APPLY`, `TOP WITH TIES` without an order,
-  and the runtime-column styled timestamp boundary (now locally qualified;
-  distributed qualification remains open).
+  and runtime-column styled timestamp conversion across local and three-worker
+  execution.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
