@@ -19,7 +19,7 @@ These settings are declared in `api/config.py`.
 | `KAVEON_DEV_USER_EMAIL` | empty | Local API authentication bypass; never set in production |
 | `KAVEON_DEV_USER_NAME` | `Dev User` | Name for the local bypass identity |
 | `KAVEON_DEV_USER_ROLE` | `Admin` | Role for the local bypass identity |
-| `METADATA_DB_TYPE` | empty | `fabric_sql`, `azure_sql`, `postgresql`, or `mysql` |
+| `METADATA_DB_TYPE` | empty | Legacy migration/compatibility backend (`fabric_sql`, `azure_sql`, `postgresql`, or `mysql`); native deployments use KaveonDB |
 | `METADATA_ENDPOINT` | empty | Fabric/Azure SQL endpoint |
 | `METADATA_DATABASE` | empty | Metadata database name |
 | `METADATA_HOST` | empty | PostgreSQL/MySQL host |
