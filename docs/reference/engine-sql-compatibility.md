@@ -141,8 +141,10 @@ unstyled `TRY_CONVERT`. Literal DATE
 conversion styles `0`, `1`, `101`, and `112` are normalized to ISO dates;
 runtime column style evaluation remains bounded. Datepart abbreviations such
 as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical
-vectorized date operators. This is a read-compatibility layer, not a claim of
-general T-SQL parity. `ISNULL`, `DATEADD` (including microsecond offsets on
+vectorized date operators. `DATEADD` also accepts `weekday`/`dw`/`w` and
+`dayofyear`/`dy`/`y` as day-equivalent offsets, while `DATEPART` accepts those
+aliases under Kaveon's deterministic calendar convention. This is a
+read-compatibility layer, not a claim of general T-SQL parity. `ISNULL`, `DATEADD` (including microsecond offsets on
 microsecond-or-finer timestamps and nanosecond offsets on nanosecond
 timestamps), `DATEDIFF`, `DATEDIFF_BIG`, and `DATEPART` are
 qualified across the local and three-worker Parquet differential paths. The

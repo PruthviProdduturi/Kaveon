@@ -4861,7 +4861,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 )));
             }
         };
-        let unit = normalize_tsql_date_unit(&unit);
+        let unit = match unit.trim().to_ascii_lowercase().as_str() {
+            // SQL Server DATEADD treats these calendar aliases as day
+            // offsets. Keep this normalization local to DATEADD; DATEPART
+            // weekday numbering remains a separate deterministic contract.
+            "weekday" | "dw" | "w" | "dayofyear" | "dy" | "y" => "day".into(),
+            _ => normalize_tsql_date_unit(&unit),
+        };
         let (operator, multiplier) = match unit.as_str() {
             "day" => ("DATE_ADD_DAYS", 1_i64),
             "week" => ("DATE_ADD_DAYS", 7),
@@ -8807,7 +8813,7 @@ mod tests {
     #[test]
     fn lowers_common_tsql_scalar_aliases() {
         let plan = sql_to_logical_plan(
-            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date), DATEPART(dw, event_date), DATEPART(dy, event_date), GETDATE(), SYSDATETIME() FROM t",
+            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEADD(dw, 1, event_date), DATEADD(dy, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date), DATEPART(dw, event_date), DATEPART(dy, event_date), GETDATE(), SYSDATETIME() FROM t",
         )
         .expect("common T-SQL scalar aliases should lower");
         let rendered = format!("{plan:?}");
@@ -8980,7 +8986,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 55);
+        assert_eq!(cases.len(), 57);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

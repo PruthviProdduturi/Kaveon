@@ -330,6 +330,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_dateadd_weekday_alias",
+        "SELECT TOP 5 DATEADD(dw, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
+        "tsql_dateadd_dayofyear_alias",
+        "SELECT TOP 5 DATEADD(dy, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_dateadd",
         "SELECT TOP 5 DATEADD(dd, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,
