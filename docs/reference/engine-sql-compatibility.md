@@ -134,9 +134,10 @@ as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical
 vectorized date operators. This is a read-compatibility layer, not a claim of
 general T-SQL parity. `ISNULL`, `DATEADD`, `DATEDIFF`, and `DATEPART` are
 qualified across the local and three-worker Parquet differential paths. The
-`TOP PERCENT` and `TOP WITH TIES` forms are planner-qualified only: global
-limit/rank behavior still needs distributed qualification across partitioned
-and clustered layouts. Unsupported `CONVERT` style codes, procedural T-SQL,
+`TOP PERCENT` is planner-qualified only: global percent-limit behavior still
+needs distributed qualification across partitioned and clustered layouts.
+`TOP WITH TIES` is distributed-qualified when its `ORDER BY` keys define a
+deterministic order. Unsupported `CONVERT` style codes, procedural T-SQL,
 and unsupported SQL Server functions remain rejected explicitly.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality

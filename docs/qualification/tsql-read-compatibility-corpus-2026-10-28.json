@@ -6,7 +6,7 @@
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
     {"id": "top_rows", "sql": "SELECT TOP 10 * FROM t", "status": "planner_qualified"},
     {"id": "top_percent", "sql": "SELECT TOP 10 PERCENT * FROM t", "status": "planner_qualified"},
-    {"id": "top_with_ties", "sql": "SELECT TOP 3 WITH TIES * FROM t ORDER BY score", "status": "planner_qualified"},
+    {"id": "top_with_ties", "sql": "SELECT TOP 3 WITH TIES * FROM t ORDER BY score", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
     {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},

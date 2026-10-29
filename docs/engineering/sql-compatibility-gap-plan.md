@@ -36,8 +36,10 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [ ] Add exact local and distributed result tests for accepted translations.
-- [ ] Keep `TOP PERCENT`, `TOP WITH TIES`, `PIVOT`, `UNPIVOT`, and unsupported
-  `APPLY` forms rejected until their semantics are implemented and qualified.
+- [ ] Keep `TOP PERCENT`, `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms
+  rejected until their semantics are implemented and qualified. `TOP WITH
+  TIES` is qualified only when its `ORDER BY` keys define a deterministic
+  order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
 Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
@@ -45,10 +47,11 @@ unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Literal DATE styles `0`, `1`, `101`, and `112` now
 normalize to ISO values. `ISNULL`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
 pass exact local-vs-three-worker differential checks across dictionary, plain,
-partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
-`TOP WITH TIES` remain planner-qualified only: the differential sweep found
-layout-dependent result differences, so they stay out of the distributed
-compatibility claim until global-limit semantics are corrected.
+partitioned, clustered, and fragmented Parquet layouts. `TOP WITH TIES` also
+passes that sweep when its order keys are deterministic. `TOP PERCENT` remains
+planner-qualified only: the sweep still finds layout-dependent result
+differences, so it stays out of the distributed compatibility claim until
+global percent-limit semantics are corrected.
 
 ### Phase 2 — Transactional SQL surface
 
