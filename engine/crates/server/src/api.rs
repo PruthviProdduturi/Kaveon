@@ -6734,6 +6734,7 @@ async fn run_statement(
                         &optimized_plan,
                         analysis_us,
                         planning_us,
+                        Some(&stages),
                     );
                 }
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
@@ -6856,7 +6857,13 @@ async fn run_statement(
             Ok((result, stage)) => {
                 let mut result = result;
                 if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
-                    render_explain_analyze_result(&mut result, &optimized_plan, analysis_us, 0);
+                    render_explain_analyze_result(
+                        &mut result,
+                        &optimized_plan,
+                        analysis_us,
+                        0,
+                        Some(std::slice::from_ref(&stage)),
+                    );
                 }
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
@@ -7709,6 +7716,7 @@ fn render_explain_analyze_result(
     optimized_plan: &kaveon_core::PlanNode,
     analysis_us: u64,
     planning_us: u64,
+    stages: Option<&[StageTelemetry]>,
 ) {
     let mut lines = Vec::new();
     explain_plan_lines(optimized_plan, 0, &mut lines);
@@ -7719,6 +7727,30 @@ fn render_explain_analyze_result(
         planning_us,
         result.elapsed_us
     ));
+    if let Some(stages) = stages {
+        for stage in stages {
+            let rows = stage
+                .tasks
+                .iter()
+                .map(|task| task.output_rows as u64)
+                .sum::<u64>();
+            let bytes = stage
+                .tasks
+                .iter()
+                .map(|task| task.output_bytes as u64)
+                .sum::<u64>();
+            lines.push(format!(
+                "Stage {}: state={}, tasks={}/{}, rows={}, bytes={}, elapsed_us={}",
+                stage.stage_id,
+                stage.state,
+                stage.completed_tasks,
+                stage.task_count,
+                rows,
+                bytes,
+                stage.elapsed_us
+            ));
+        }
+    }
     result.columns = vec![ColumnInfo {
         name: "Query Plan".to_owned(),
         data_type: "VARCHAR".to_owned(),
@@ -16223,6 +16255,39 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported EXPLAIN option")
         );
+    }
+
+    #[test]
+    fn explain_analyze_includes_observed_stage_summary() {
+        let mut result = super::TaskResponse {
+            columns: vec![],
+            data: vec![vec![serde_json::json!(1)]],
+            elapsed_us: 42,
+        };
+        let stage = super::StageTelemetry {
+            stage_id: 2,
+            state: "FINISHED",
+            task_count: 2,
+            completed_tasks: 2,
+            elapsed_us: 99,
+            tasks: vec![super::TaskTelemetry {
+                task_id: "q:2:0:0".into(),
+                node_id: "worker-1".into(),
+                partition_index: 0,
+                elapsed_us: 40,
+                output_rows: 3,
+                output_batches: 1,
+                output_bytes: 24,
+                execution: None,
+                scan: None,
+            }],
+        };
+        let plan = kaveon_core::PlanNode::new(0, kaveon_core::PlanPhase::Physical, "Scan");
+        super::render_explain_analyze_result(&mut result, &plan, 7, 8, Some(&[stage]));
+        assert!(result.data.iter().any(|row| {
+            row[0].as_str()
+                == Some("Stage 2: state=FINISHED, tasks=2/2, rows=3, bytes=24, elapsed_us=99")
+        }));
     }
 
     /// One finished statement as the journal keeps it.
