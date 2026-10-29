@@ -1,17 +1,21 @@
-# Kaveon on Azure: qualification and production-shaped deployment
+# Kaveon on Azure: qualification deployment (historical)
 
 For the current production-shaped resource naming, autoscaling and GitHub
 Actions path, start with [Azure production deployment](../guides/azure-production-deployment.md).
 This document remains the detailed qualification and troubleshooting runbook
-for the test chart; it deliberately uses the `kaveon-test` names and should not
-be used as the production naming guide.
+for the historical test chart; it deliberately uses the `kaveon-test` names and
+should not be used as the production naming guide. Current deployments use the
+KaveonDB-native catalog and transaction store; PostgreSQL is not a required
+service. PostgreSQL references below describe the retired migration rehearsal,
+not a production dependency.
 
 Use **Part A** if Kaveon is already deployed. Use **Part B** once to create a new
 test environment. Commands below are for PowerShell. The Engine UI uses port
 8080; Studio uses 3000. The `kaveon-test` AKS template used here deploys the
 Engine and test fixtures, not Studio/API. A full-product deployment uses the
-separate `kaveon-portal-test` chart. PostgreSQL retirement is an evidence-gated
-rehearsal for that chart; it is not an install-time switch.
+separate `kaveon-portal-test` chart. The old PostgreSQL retirement rehearsal
+applies only to that superseded chart and is not part of the current
+KaveonDB-native install path.
 
 ## Part A — connect to an existing deployment
 
@@ -404,20 +408,17 @@ Now follow **Part A**, using your tenant/subscription/resource-group/cluster val
 Other users also need AKS access plus an explicit object-ID/role entry in the
 coordinator's Entra configuration. Being in the tenant alone does not grant access.
 
-### Product retirement and rollback boundary
+### Historical product retirement and rollback boundary
 
-The full-product chart starts with PostgreSQL present and all retirement flags
-off. Backfill and replay first, then collect one fresh immutable evidence run for
-all 16 authority families. The same run must prove shadow parity, a fixed final
-watermark with zero outbox lag, the write fence, a PostgreSQL-unavailable API
-restart, KaveonDB backup/restore, and bounded rollback. The runtime rejects a
-missing, stale, incomplete, or mismatched report.
+The superseded full-product chart started with PostgreSQL present and all
+retirement flags off. That migration protocol is retained as historical
+evidence only. The current chart starts with KaveonDB as the product metadata
+authority and does not provision PostgreSQL.
 
-Only after the final audit and qualification summary pass may an operator scale
-PostgreSQL to zero. Keep its PVC and snapshot for the approved rollback window;
-neither the chart nor the rehearsal runner deletes them. Local filesystem
-checkpoints and local-cluster tests are development aids and cannot satisfy the
-AKS evidence gate.
+The old audit, snapshot, and rollback steps must not be used to introduce a
+PostgreSQL dependency into a new deployment. For current rollback, retain the
+KaveonDB catalog snapshot and ADLS transaction manifests and use the native
+backup/restore runbook.
 
 ### 9. Stop compute when finished
 
