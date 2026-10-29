@@ -6395,8 +6395,11 @@ async fn run_statement(
     let plan = kaveon_optim::rules::push_projection_down(plan);
     let (plan, planning_source_pins, planning_statistics) =
         optimize_with_durable_statistics(&state, plan, &catalog_snapshot).await;
-    let optimized_plan = crate::planner::optimized_plan_tree(&plan);
-    let physical_plan = crate::planner::physical_plan_tree(&plan);
+    let mut optimized_plan = crate::planner::optimized_plan_tree(&plan);
+    let mut physical_plan = crate::planner::physical_plan_tree(&plan);
+    let estimate_map = planning_estimate_map(&planning_statistics);
+    annotate_plan_estimates(&mut optimized_plan, &estimate_map);
+    annotate_plan_estimates(&mut physical_plan, &estimate_map);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
         record.timings.analysis_us = Some(analysis_us);
         record.plan.logical = Some(logical_plan.clone());
@@ -10475,6 +10478,70 @@ impl PlannedRelation {
 #[derive(Clone, Default)]
 struct PlanningStatistics {
     relations: BTreeMap<String, PlannedRelation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlanEstimate {
+    rows: u64,
+    bytes: Option<u64>,
+    source: &'static str,
+    source_version: String,
+}
+
+/// Extract the immutable facts available to the planner for plan display.
+/// A current persisted statistics document is preferred as the source label;
+/// source metadata remains a valid exact row/byte fallback when no full
+/// document is current.
+fn planning_estimate_map(planning: &PlanningStatistics) -> BTreeMap<String, PlanEstimate> {
+    planning
+        .relations
+        .iter()
+        .filter_map(|(table, relation)| {
+            let current = relation.current.as_ref()?;
+            Some((
+                table.clone(),
+                PlanEstimate {
+                    rows: current.row_count,
+                    bytes: current.bytes,
+                    source: if relation.current_statistics().is_some() {
+                        "current_statistics"
+                    } else {
+                        "source_metadata"
+                    },
+                    source_version: current.identity_sha256.clone(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Attach bounded estimate metadata to displayable scan nodes. This is
+/// intentionally descriptive: it does not alter execution or pretend that
+/// source row counts are operator output estimates after filters and joins.
+fn annotate_plan_estimates(
+    node: &mut kaveon_core::PlanNode,
+    estimates: &BTreeMap<String, PlanEstimate>,
+) {
+    if node.operator.eq_ignore_ascii_case("Scan")
+        && let Some(table) = node.attributes.get("table").cloned()
+        && let Some(estimate) = estimates.get(&table)
+    {
+        node.attributes
+            .insert("estimated_rows".to_owned(), estimate.rows.to_string());
+        if let Some(bytes) = estimate.bytes {
+            node.attributes
+                .insert("estimated_bytes".to_owned(), bytes.to_string());
+        }
+        node.attributes
+            .insert("estimate_source".to_owned(), estimate.source.to_owned());
+        node.attributes.insert(
+            "estimate_source_version".to_owned(),
+            estimate.source_version.clone(),
+        );
+    }
+    for child in &mut node.children {
+        annotate_plan_estimates(child, estimates);
+    }
 }
 
 /// Tables whose statistics are being refreshed in the background, so one
@@ -15447,6 +15514,26 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plan_scan_displays_versioned_source_estimates_without_rewriting_execution() {
+        let mut plan = kaveon_core::PlanNode::new(1, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "OpenSource.public.events");
+        let estimates = std::collections::BTreeMap::from([(
+            "OpenSource.public.events".to_owned(),
+            super::PlanEstimate {
+                rows: 504_000_000,
+                bytes: Some(5_600_000_000),
+                source: "current_statistics",
+                source_version: "abc123".to_owned(),
+            },
+        )]);
+        super::annotate_plan_estimates(&mut plan, &estimates);
+        assert_eq!(plan.attributes["estimated_rows"], "504000000");
+        assert_eq!(plan.attributes["estimated_bytes"], "5600000000");
+        assert_eq!(plan.attributes["estimate_source"], "current_statistics");
+        assert_eq!(plan.attributes["estimate_source_version"], "abc123");
+    }
+
     #[test]
     fn runtime_regression_requires_five_runs_and_uses_a_doubled_p95() {
         assert_eq!(
