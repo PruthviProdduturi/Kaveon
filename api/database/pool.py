@@ -1076,7 +1076,8 @@ def _bound_statement(sql: str, db_type: str, timeout_seconds: float) -> str:
 
 
 def execute_query(sql: str, database: str, params: Optional[list] = None,
-                  timeout_seconds: Optional[float] = None, max_rows: Optional[int] = None) -> Dict[str, Any]:
+                  timeout_seconds: Optional[float] = None, max_rows: Optional[int] = None,
+                  actor: Optional[str] = None, role: str = "Viewer") -> Dict[str, Any]:
     """
     Execute *sql* against *database* using the connection pool.
     Retries up to 3 attempts on stale-connection errors (08S01 / 10054), with a
@@ -1084,7 +1085,7 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
     `timeout_seconds` bounds the statement on the server (or the driver, for
     SQL Server); a bounded statement that runs over raises like any other error.
     """
-    pool = get_connection_pool(database)
+    pool = get_connection_pool(database, actor, role)
     # Translate T-SQL idioms when the target is Postgres/MySQL (idempotent).
     sql = adapt_sql(sql, pool.db_type)
     if timeout_seconds:
@@ -1121,10 +1122,10 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
 
 def execute_query_cancellable(
     sql: str, database: str, params: Optional[list] = None, cancel_event=None,
-    max_rows: Optional[int] = None,
+    max_rows: Optional[int] = None, actor: Optional[str] = None, role: str = "Viewer",
 ) -> Dict[str, Any]:
     """execute_query variant that supports mid-flight cancellation via cancel_event."""
-    db_pool = get_connection_pool(database)
+    db_pool = get_connection_pool(database, actor, role)
     sql = adapt_sql(sql, db_pool.db_type)
     if max_rows:
         sql = _bound_rows(sql, db_pool.db_type, max_rows)
@@ -1141,8 +1142,9 @@ def execute_query_cancellable(
         raise
 
 
-def get_tables(database: str) -> List[Dict[str, Any]]:
-    pool = get_connection_pool(database)
+def get_tables(database: str, actor: Optional[str] = None,
+               role: str = "Viewer") -> List[Dict[str, Any]]:
+    pool = get_connection_pool(database, actor, role)
     conn = pool.get_connection()
     try:
         tables = conn.get_tables()
@@ -1159,12 +1161,13 @@ def get_tables(database: str) -> List[Dict[str, Any]]:
         pool.return_connection(conn)
 
 
-def get_table_columns(table_id: str, database: str) -> List[Dict[str, Any]]:
+def get_table_columns(table_id: str, database: str, actor: Optional[str] = None,
+                      role: str = "Viewer") -> List[Dict[str, Any]]:
     parts = table_id.split(".")
     if len(parts) != 2:
         raise ValueError(f"Invalid table ID format: {table_id}")
     schema, table_name = parts
-    pool = get_connection_pool(database)
+    pool = get_connection_pool(database, actor, role)
     conn = pool.get_connection()
     try:
         return conn.get_table_columns(schema, table_name)

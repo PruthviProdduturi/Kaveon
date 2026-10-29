@@ -91,7 +91,7 @@ class ReadOnlyDependencyTests(unittest.TestCase):
                     patch.object(sql.history_svc, "create_history"), \
                     patch.object(sql, "assert_no_platform_tables"), \
                     patch.object(sql.sql_execute_limiter, "check"), \
-                    patch.object(sql.postgresql_retirement_runtime, "requested", return_value=False):
+                    patch.object(sql, "_engine_source_for_catalog", return_value=None):
                 allowed = self.client.post("/api/v1/sql/execute", json={"sql_text": "SELECT 1", "database": "d"})
             self.assertEqual(allowed.status_code, 200, allowed.text)
 

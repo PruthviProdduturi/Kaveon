@@ -117,6 +117,9 @@ class EngineLabQueryTests(unittest.IsolatedAsyncioTestCase):
             "SELECT * FROM dbo.orders", "warehouse",
             cancel_event=execute.call_args.kwargs["cancel_event"],
             max_rows=lab.LAB_DEFAULT_ROW_CAP,
+            # The pool reads the source registry out of KaveonDB, which
+            # carries the caller to the Engine as a principal.
+            actor=ctx.email, role=ctx.role,
         )
 
 
@@ -190,13 +193,36 @@ class DatasetPreviewResolutionTests(unittest.IsolatedAsyncioTestCase):
         def read(dataset_id, actor, role):
             raise RuntimeError("the control plane refused a read this request never needed")
 
+        # This asserted a 503 by patching the data-plane fence to raise one.
+        # There is no fence: an unresolved catalog is a registered source, and
+        # keeping the routing it had means reaching the pool with the database
+        # the request named -- without the control-plane read it never needed.
+        pooled = {}
+
+        def execute_query_cancellable(sql_text, database, *args, **kwargs):
+            pooled["database"] = database
+            pooled["actor"] = kwargs.get("actor")
+            return {"columns": [], "rows": [], "row_count": 0}
+
         with patch("routers.sql._engine_source_for_catalog", lambda catalog: None), \
              patch.object(lab.datasets_svc, "get_dataset_by_id", read), \
              patch.object(lab.sql_execute_limiter, "check"), \
-             patch.object(lab, "_require_legacy_data_plane", side_effect=HTTPException(503, "retired")):
-            with self.assertRaises(HTTPException) as error:
-                await lab.run_query(None, self._body(), self.ctx)
-        self.assertEqual(error.exception.status_code, 503)
+             patch.object(lab, "assert_no_platform_tables"), \
+             patch.object(lab.history_svc, "create_history"), \
+             patch.object(lab.pool, "execute_query_cancellable", execute_query_cancellable):
+            # A request that stays connected; run_query only polls it for
+            # disconnect while the statement runs.
+            class Connected:
+                async def is_disconnected(self):
+                    return False
+
+            connected = Connected()
+            await lab.run_query(connected, self._body(), self.ctx)
+        # The database the request named, unchanged: that is what "keeps the
+        # routing it had" means now that nothing refuses it.
+        self.assertEqual(pooled["database"], "kavedb")
+        self.assertEqual(pooled["actor"], self.ctx.email,
+                         "the pool needs the caller to read the registry as")
 
 
 class FakeCoordinator:
