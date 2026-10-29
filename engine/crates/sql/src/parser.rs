@@ -1267,6 +1267,7 @@ pub struct NativeDmlStatement {
     pub kind: NativeDmlKind,
     pub table: String,
     pub ast: Statement,
+    pub returning: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1618,6 +1619,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             ) {
                 return Err(sql_error("INSERT supports VALUES or SELECT only"));
             }
+            let returning = parse_product_returning(insert.returning.as_ref())?;
             if insert.table_alias.is_some()
                 || insert.or.is_some()
                 || insert.ignore
@@ -1626,7 +1628,6 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 || !insert.after_columns.is_empty()
                 || insert.table
                 || insert.on.is_some()
-                || insert.returning.is_some()
                 || insert.replace_into
                 || insert.priority.is_some()
                 || insert.insert_alias.is_some()
@@ -1641,6 +1642,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     kind: NativeDmlKind::Insert,
                     table,
                     ast: statement,
+                    returning,
                 },
             )))
         }
@@ -1653,7 +1655,8 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             or,
         } => {
             let table_name = simple_table(table)?;
-            if from.is_some() || returning.is_some() || or.is_some() {
+            let returning = parse_product_returning(returning.as_ref())?;
+            if from.is_some() || or.is_some() {
                 return Err(sql_error(
                     "UPDATE FROM, conflict clauses, and RETURNING are not supported",
                 ));
@@ -1673,10 +1676,12 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     kind: NativeDmlKind::Update,
                     table: table_name,
                     ast: statement,
+                    returning,
                 },
             )))
         }
         Statement::Delete(delete) => {
+            let returning = parse_product_returning(delete.returning.as_ref())?;
             let tables = match &delete.from {
                 FromTable::WithFromKeyword(tables) => tables,
                 FromTable::WithoutKeyword(_) => {
@@ -1686,7 +1691,6 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             if tables.len() != 1
                 || !delete.tables.is_empty()
                 || delete.using.is_some()
-                || delete.returning.is_some()
                 || !delete.order_by.is_empty()
                 || delete.limit.is_some()
             {
@@ -1703,6 +1707,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     kind: NativeDmlKind::Delete,
                     table,
                     ast: statement,
+                    returning,
                 },
             )))
         }
@@ -1710,6 +1715,35 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             "native transaction parser accepts INSERT, UPDATE, DELETE, BEGIN, COMMIT, or ROLLBACK only",
         )),
     }
+}
+
+/// The product transaction contract can return stable record identity and
+/// revision metadata from its staged snapshot. Document projections and
+/// arbitrary row RETURNING are intentionally rejected until typed-table DML
+/// has a durable row contract.
+fn parse_product_returning(returning: Option<&Vec<SelectItem>>) -> Result<Vec<String>> {
+    let Some(items) = returning else {
+        return Ok(Vec::new());
+    };
+    if items.is_empty() {
+        return Err(sql_error("RETURNING requires id or revision"));
+    }
+    items
+        .iter()
+        .map(|item| {
+            let SelectItem::UnnamedExpr(Expr::Identifier(identifier)) = item else {
+                return Err(sql_error(
+                    "product RETURNING supports only unqualified id and revision",
+                ));
+            };
+            if !identifier.value.eq_ignore_ascii_case("id")
+                && !identifier.value.eq_ignore_ascii_case("revision")
+            {
+                return Err(sql_error("product RETURNING supports only id and revision"));
+            }
+            Ok(identifier.value.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 fn simple_table(table: &TableWithJoins) -> Result<String> {
@@ -1868,6 +1902,22 @@ mod tests {
                 assert_eq!(dml.table, table);
             }
         }
+    }
+
+    #[test]
+    fn accepts_identity_returning_for_product_dml() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') RETURNING id, revision",
+        )
+        .unwrap()
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(dml.returning, ["id", "revision"]);
+        assert!(parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') RETURNING document_json"
+        )
+        .is_err());
     }
 
     #[test]

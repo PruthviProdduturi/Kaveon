@@ -58,8 +58,9 @@ runtime-column conversion remains explicitly rejected.
 
 - [ ] Extend typed product DML to general typed KaveonDB tables.
 - [ ] Add source-backed `INSERT … SELECT` with bounded plans.
-- [ ] Add `MERGE`, conflict handling, and `RETURNING` only with explicit
-  revision/CAS semantics. Savepoints are now implemented for the product
+- [ ] Add `MERGE` and conflict handling only with explicit revision/CAS
+  semantics. Product `RETURNING id, revision` is now implemented from the
+  staged revision/CAS write set. Savepoints are implemented for the product
   transaction session and covered by parser, catalog, and API tests.
 - [ ] Add durable journal/recovery, snapshot isolation, and restart tests.
 - [ ] Add constraints, indexes, and catalog-backed schema enforcement.
