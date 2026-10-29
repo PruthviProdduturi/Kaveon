@@ -33,6 +33,7 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // planner rather than being accepted with unsafe or incomplete semantics.
     let normalized = normalize_bounded_linear_recursive_cte(&normalized)
         .unwrap_or_else(|| normalized.to_owned());
+    reject_unsupported_tsql_relational_forms(&normalized)?;
     // BigQuery's grammar retains a table-shaped UNNEST node when the function
     // is correlated. DuckDB parses the same spelling as a generic function,
     // which cannot carry ordinality metadata.
@@ -92,6 +93,40 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
             Err(KaveonError::Sql(primary.to_string()))
         }
     }
+}
+
+/// Keep SQL Server/Fabric relational extensions fail-closed with a useful
+/// diagnostic.  The generic parser may reject these forms with a low-level
+/// token error, which is not actionable for a client choosing a rewrite.
+/// Detection is word-boundary based so identifiers such as `pivot_value` do
+/// not trigger it.
+fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
+    let bytes = sql.as_bytes();
+    for (word, guidance) in [
+        (
+            b"PIVOT".as_slice(),
+            "PIVOT is not implemented; use conditional aggregation",
+        ),
+        (
+            b"UNPIVOT".as_slice(),
+            "UNPIVOT is not implemented; use UNION ALL projections",
+        ),
+        (
+            b"APPLY".as_slice(),
+            "CROSS/OUTER APPLY is not implemented; use a supported join or rewrite",
+        ),
+    ] {
+        if bytes
+            .windows(word.len())
+            .enumerate()
+            .any(|(offset, window)| {
+                window.eq_ignore_ascii_case(word) && is_sql_word_at(bytes, offset, word)
+            })
+        {
+            return Err(sql_error(guidance));
+        }
+    }
+    Ok(())
 }
 
 fn parse_bounded_map_casts(sql: &str) -> Option<Vec<Statement>> {
@@ -2258,6 +2293,28 @@ mod tests {
                 "unexpectedly accepted {sql}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_unsupported_tsql_relational_forms_with_actionable_errors() {
+        for (sql, message) in [
+            (
+                "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p",
+                "PIVOT is not implemented",
+            ),
+            (
+                "SELECT * FROM t UNPIVOT (v FOR k IN (a)) u",
+                "UNPIVOT is not implemented",
+            ),
+            (
+                "SELECT * FROM t CROSS APPLY f(t.id)",
+                "CROSS/OUTER APPLY is not implemented",
+            ),
+        ] {
+            let error = parse_sql(sql).expect_err("unsupported T-SQL form must fail closed");
+            assert!(error.to_string().contains(message), "{sql}: {error}");
+        }
+        assert!(parse_sql("SELECT pivot_value FROM t").is_ok());
     }
 
     #[test]
