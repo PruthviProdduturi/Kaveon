@@ -1375,10 +1375,8 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
             }
             let id_index = id_index.expect("validated product INSERT id column");
             let document_index = document_index.expect("validated product INSERT document column");
-            if (dml.on_conflict_do_nothing || dml.on_conflict_do_update) && kind == "typed_row" {
-                return Err(sql_error(
-                    "ON CONFLICT is supported only for product records, not typed rows",
-                ));
+            if dml.on_conflict_do_update && kind == "typed_row" {
+                return Err(sql_error("typed rows support ON CONFLICT DO NOTHING only"));
             }
             let Some(query) = insert.source.as_deref() else {
                 return Err(sql_error("product INSERT requires VALUES or SELECT"));
@@ -2711,6 +2709,25 @@ mod tests {
                 kind: "dataset".into(),
                 id: "ds-1".into(),
                 document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn typed_row_insert_supports_bounded_conflict_ignore() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES ('row-1', '{\"table\":\"app.users\",\"primary_key\":\"row-1\",\"revision\":1,\"owner_principal\":\"alice\",\"columns\":{}}') ON CONFLICT DO NOTHING",
+        )
+        .expect("typed-row conflict-ignore should parse")
+        else {
+            panic!("expected typed-row DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::CreateIgnore {
+                kind: "typed_row".into(),
+                id: "row-1".into(),
+                document_json: "{\"table\":\"app.users\",\"primary_key\":\"row-1\",\"revision\":1,\"owner_principal\":\"alice\",\"columns\":{}}".into(),
             }
         );
     }

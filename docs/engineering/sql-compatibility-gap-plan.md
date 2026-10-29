@@ -89,7 +89,11 @@ gate.
 
 ### Phase 2 — Transactional SQL surface
 
-- [ ] Extend typed product DML to general typed KaveonDB tables.
+- [x] Qualify bounded typed-row DML for KaveonDB-owned tables. The
+  `kaveon.product.typed_rows` facade supports revisioned create/update/delete
+  with owner isolation and replay-safe `ON CONFLICT DO NOTHING`; arbitrary
+  typed-table schemas and conflict updates remain outside this contract. Evidence:
+  `docs/qualification/track2-native-dml-typed-row-conflict-ignore-2026-10-28.md`.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
   copies `id` and `document_json` from one same-kind `kaveon.product` table
   under the pinned transaction snapshot, optionally narrowed by a literal
