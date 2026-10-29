@@ -50,7 +50,9 @@ pass exact local-vs-three-worker differential checks across dictionary, plain,
 partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
 without a complete tie-breaker, SQL permits different tied rows and the
-qualification is intentionally withheld.
+qualification is intentionally withheld. Numeric `CONVERT` and
+`TRY_CONVERT` casts are also qualified across those layouts; date-style
+runtime-column conversion remains explicitly rejected.
 
 ### Phase 2 — Transactional SQL surface
 
