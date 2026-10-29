@@ -179,8 +179,13 @@ columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
 conditional aggregation and `UNPIVOT` to `UNION ALL`; both have exact local
 and three-worker differential evidence in
 `docs/qualification/track2-tsql-pivot-unpivot-distributed-2026-10-28.md`.
-Unbounded forms and `CROSS/OUTER APPLY` are recognized and rejected with
-rewrite guidance rather than being treated as generic syntax failures.
+Bounded `CROSS APPLY` over a parenthesized `SELECT` or `VALUES` derived
+relation lowers to the existing lateral-join path, with exact local and
+three-worker evidence in
+`docs/qualification/track2-tsql-apply-distributed-2026-10-28.md`.
+Unbounded forms, `OUTER APPLY`, and table-valued APPLY are recognized and
+rejected with rewrite guidance rather than being treated as generic syntax
+failures.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),

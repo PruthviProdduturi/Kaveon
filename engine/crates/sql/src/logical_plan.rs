@@ -8555,7 +8555,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 40);
+        assert_eq!(cases.len(), 41);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
@@ -9873,5 +9873,17 @@ mod tests {
         assert!(debug.contains("Union"), "{debug}");
         assert!(debug.contains("Jan"), "{debug}");
         assert!(debug.contains("Feb"), "{debug}");
+    }
+
+    #[test]
+    fn bounded_cross_apply_lowers_to_a_lateral_plan() {
+        let plan = sql_to_logical_plan(
+            "SELECT t.id, a.next_id FROM t CROSS APPLY (VALUES (1)) AS a(next_id)",
+        )
+        .expect("bounded CROSS APPLY should produce a normal logical plan");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Join"), "{debug}");
+        assert!(debug.contains("Unnest"), "{debug}");
+        assert!(debug.contains("next_id"), "{debug}");
     }
 }
