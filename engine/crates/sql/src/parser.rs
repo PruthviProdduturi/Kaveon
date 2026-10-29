@@ -1,8 +1,8 @@
 use kaveon_core::{KaveonError, Result};
 use sqlparser::ast::Statement;
 use sqlparser::ast::{
-    AssignmentTarget, BinaryOperator, Expr, FromTable, GroupByExpr, SelectItem, SetExpr,
-    TableFactor, TableWithJoins, Value,
+    AssignmentTarget, BinaryOperator, Expr, FromTable, GroupByExpr, OnConflictAction, OnInsert,
+    SelectItem, SetExpr, TableFactor, TableWithJoins, Value,
 };
 use sqlparser::dialect::{
     BigQueryDialect, ClickHouseDialect, DatabricksDialect, DuckDbDialect, GenericDialect,
@@ -1268,6 +1268,7 @@ pub struct NativeDmlStatement {
     pub table: String,
     pub ast: Statement,
     pub returning: Vec<String>,
+    pub on_conflict_do_nothing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1284,6 +1285,11 @@ pub enum NativeTransactionalStatement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProductDmlCommand {
     Create {
+        kind: String,
+        id: String,
+        document_json: String,
+    },
+    CreateIgnore {
         kind: String,
         id: String,
         document_json: String,
@@ -1352,6 +1358,11 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
             }
             let id_index = id_index.expect("validated product INSERT id column");
             let document_index = document_index.expect("validated product INSERT document column");
+            if dml.on_conflict_do_nothing && kind == "typed_row" {
+                return Err(sql_error(
+                    "ON CONFLICT DO NOTHING is supported only for product records, not typed rows",
+                ));
+            }
             let Some(query) = insert.source.as_deref() else {
                 return Err(sql_error("product INSERT requires VALUES or SELECT"));
             };
@@ -1366,13 +1377,24 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         .rows
                         .iter()
                         .map(|row| {
-                            Ok(ProductDmlCommand::Create {
-                                kind: kind.clone(),
-                                id: string_literal(&row[id_index], "product ID")?,
-                                document_json: string_literal(
-                                    &row[document_index],
-                                    "product document_json",
-                                )?,
+                            Ok(if dml.on_conflict_do_nothing {
+                                ProductDmlCommand::CreateIgnore {
+                                    kind: kind.clone(),
+                                    id: string_literal(&row[id_index], "product ID")?,
+                                    document_json: string_literal(
+                                        &row[document_index],
+                                        "product document_json",
+                                    )?,
+                                }
+                            } else {
+                                ProductDmlCommand::Create {
+                                    kind: kind.clone(),
+                                    id: string_literal(&row[id_index], "product ID")?,
+                                    document_json: string_literal(
+                                        &row[document_index],
+                                        "product document_json",
+                                    )?,
+                                }
                             })
                         })
                         .collect()
@@ -1428,13 +1450,24 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         values[index] = Some(expression);
                     }
                     let values = values.map(|value| value.expect("projection length checked"));
-                    Ok(vec![ProductDmlCommand::Create {
-                        kind,
-                        id: string_literal(values[id_index], "product ID")?,
-                        document_json: string_literal(
-                            values[document_index],
-                            "product document_json",
-                        )?,
+                    Ok(vec![if dml.on_conflict_do_nothing {
+                        ProductDmlCommand::CreateIgnore {
+                            kind,
+                            id: string_literal(values[id_index], "product ID")?,
+                            document_json: string_literal(
+                                values[document_index],
+                                "product document_json",
+                            )?,
+                        }
+                    } else {
+                        ProductDmlCommand::Create {
+                            kind,
+                            id: string_literal(values[id_index], "product ID")?,
+                            document_json: string_literal(
+                                values[document_index],
+                                "product document_json",
+                            )?,
+                        }
                     }])
                 }
                 _ => Err(sql_error(
@@ -1620,7 +1653,32 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 return Err(sql_error("INSERT supports VALUES or SELECT only"));
             }
             let table = validated_table_name(&insert.table_name)?;
+            let on_conflict_do_nothing = match insert.on.as_ref() {
+                None => false,
+                Some(OnInsert::OnConflict(conflict))
+                    if (conflict.conflict_target.is_none()
+                        || matches!(
+                            &conflict.conflict_target,
+                            Some(sqlparser::ast::ConflictTarget::Columns(columns))
+                                if columns.len() == 1
+                                    && columns[0].value.eq_ignore_ascii_case("id")
+                        ))
+                        && matches!(conflict.action, OnConflictAction::DoNothing) =>
+                {
+                    true
+                }
+                Some(_) => {
+                    return Err(sql_error(
+                        "INSERT supports only ON CONFLICT DO NOTHING on the product id",
+                    ));
+                }
+            };
             let returning = parse_product_returning(insert.returning.as_ref())?;
+            if on_conflict_do_nothing && !returning.is_empty() {
+                return Err(sql_error(
+                    "ON CONFLICT DO NOTHING cannot be combined with product RETURNING",
+                ));
+            }
             if !returning.is_empty()
                 && !table.to_ascii_lowercase().starts_with("product.")
                 && !table.to_ascii_lowercase().starts_with("kaveon.product.")
@@ -1636,7 +1694,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 || insert.partitioned.is_some()
                 || !insert.after_columns.is_empty()
                 || insert.table
-                || insert.on.is_some()
+                || (!on_conflict_do_nothing && insert.on.is_some())
                 || insert.replace_into
                 || insert.priority.is_some()
                 || insert.insert_alias.is_some()
@@ -1651,6 +1709,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table,
                     ast: statement,
                     returning,
+                    on_conflict_do_nothing,
                 },
             )))
         }
@@ -1685,6 +1744,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table: table_name,
                     ast: statement,
                     returning,
+                    on_conflict_do_nothing: false,
                 },
             )))
         }
@@ -1716,6 +1776,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table,
                     ast: statement,
                     returning,
+                    on_conflict_do_nothing: false,
                 },
             )))
         }
@@ -2491,6 +2552,33 @@ mod tests {
                 document_json: "{\"name\":\"Orders\"}".into(),
             }
         );
+    }
+
+    #[test]
+    fn product_insert_supports_bounded_on_conflict_do_nothing() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT DO NOTHING",
+        )
+        .expect("bounded conflict-ignore insert should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::CreateIgnore {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{}".into(),
+            }
+        );
+        assert!(parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT DO NOTHING RETURNING id"
+        )
+        .is_err());
+        assert!(parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO NOTHING"
+        )
+        .is_err());
     }
 
     #[test]

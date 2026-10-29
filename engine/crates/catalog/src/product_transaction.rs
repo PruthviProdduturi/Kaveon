@@ -60,6 +60,7 @@ pub struct ProductTransaction {
     documents: ProductDocuments,
     preview: Option<CatalogSnapshot>,
     savepoints: BTreeMap<String, SavepointState>,
+    allow_empty_commit: bool,
 }
 
 #[derive(Clone)]
@@ -67,6 +68,7 @@ struct SavepointState {
     request: PrepareChange,
     documents: ProductDocuments,
     preview: Option<CatalogSnapshot>,
+    allow_empty_commit: bool,
 }
 
 impl ProductTransaction {
@@ -93,6 +95,7 @@ impl ProductTransaction {
             documents: ProductDocuments::new(),
             preview: None,
             savepoints: BTreeMap::new(),
+            allow_empty_commit: false,
         })
     }
 
@@ -132,6 +135,13 @@ impl ProductTransaction {
         Ok(())
     }
 
+    /// Marks a transaction as a successful no-op. This is used by bounded
+    /// `INSERT ... ON CONFLICT DO NOTHING`: SQL still permits the caller to
+    /// commit the transaction even though no durable change was required.
+    pub fn mark_noop(&mut self) {
+        self.allow_empty_commit = true;
+    }
+
     /// Adds immutable bytes needed by staged product-record writes. Exact path
     /// and digest coverage is checked by the durable commit boundary.
     pub fn stage_document(&mut self, path: impl Into<String>, bytes: Vec<u8>) {
@@ -153,6 +163,7 @@ impl ProductTransaction {
                 request: self.request.clone(),
                 documents: self.documents.clone(),
                 preview: self.preview.clone(),
+                allow_empty_commit: self.allow_empty_commit,
             },
         );
         Ok(())
@@ -169,6 +180,7 @@ impl ProductTransaction {
         self.request = state.request;
         self.documents = state.documents;
         self.preview = state.preview;
+        self.allow_empty_commit = state.allow_empty_commit;
         Ok(())
     }
 
@@ -261,10 +273,13 @@ impl ProductTransaction {
     }
 
     pub async fn commit(self) -> Result<CommitOutcome, TransactionError> {
-        if self.request.changes.is_empty() {
+        if self.request.changes.is_empty() && !self.allow_empty_commit {
             return Err(TransactionError::InvalidWriteSet(
                 "at least one change is required".to_owned(),
             ));
+        }
+        if self.request.changes.is_empty() {
+            return Ok(CommitOutcome::Committed(self.base));
         }
         Ok(self
             .catalog
