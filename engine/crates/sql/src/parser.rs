@@ -3445,6 +3445,16 @@ mod tests {
     }
 
     #[test]
+    fn correlated_outer_apply_lowers_to_left_lateral_join() {
+        let statements = parse_sql(
+            "SELECT t.id, a.next_id FROM t OUTER APPLY (VALUES (t.id + 1)) AS a(next_id)",
+        )
+        .expect("correlated derived OUTER APPLY should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("LEFT JOIN LATERAL"), "{rendered}");
+    }
+
+    #[test]
     fn apply_function_keeps_fail_closed_boundary() {
         let error = parse_sql("SELECT * FROM t CROSS APPLY f(t.id)")
             .expect_err("table-valued APPLY functions remain unsupported");
