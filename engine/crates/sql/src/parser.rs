@@ -38,6 +38,10 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
         Some(pivot) => pivot,
         None => normalized,
     };
+    let normalized = match normalize_bounded_unpivot(&normalized)? {
+        Some(unpivot) => unpivot,
+        None => normalized,
+    };
     reject_unsupported_tsql_relational_forms(&normalized)?;
     // BigQuery's grammar retains a table-shaped UNNEST node when the function
     // is correlated. DuckDB parses the same spelling as a generic function,
@@ -310,6 +314,146 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
         );
     }
     Ok(Some(rewritten))
+}
+
+/// Lower the bounded derived-source form of SQL Server UNPIVOT to a bounded
+/// UNION ALL.  The source and column list are intentionally static so the
+/// rewrite cannot invent columns or perform an unbounded schema scan.
+fn normalize_bounded_unpivot(sql: &str) -> Result<Option<String>> {
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let upper = trimmed.to_ascii_uppercase();
+    let Some(unpivot_marker) = find_top_level_keyword(&upper, "UNPIVOT") else {
+        return Ok(None);
+    };
+    if !upper.starts_with("SELECT * FROM (") {
+        return Ok(None);
+    }
+    let source_open = upper
+        .find('(')
+        .ok_or_else(|| sql_error("bounded UNPIVOT requires a derived source SELECT"))?;
+    let source_close = matching_delimiter(trimmed, source_open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded UNPIVOT has an unbalanced source SELECT"))?;
+    if unpivot_marker <= source_close {
+        return Ok(None);
+    }
+    let source_sql = trimmed[source_open + 1..source_close].trim();
+    let source_upper = source_sql.to_ascii_uppercase();
+    if !source_upper.starts_with("SELECT ") {
+        return Ok(None);
+    }
+    let Some(source_from) = find_top_level_keyword(&source_upper, "FROM") else {
+        return Ok(None);
+    };
+    let source_projection = source_sql["SELECT ".len()..source_from].trim();
+    let source_relation = source_sql[source_from + "FROM".len()..].trim();
+    if source_projection.is_empty() || source_relation.is_empty() {
+        return Ok(None);
+    }
+    let source_columns = split_top_level_commas(source_projection)?;
+    if source_columns.is_empty() || source_columns.len() > 128 {
+        return Err(sql_error(
+            "bounded UNPIVOT source projection exceeds the 128-column limit",
+        ));
+    }
+    let mut columns = Vec::with_capacity(source_columns.len());
+    for expression in source_columns {
+        let (expression, alias) = split_simple_alias(expression.trim()).ok_or_else(|| {
+            sql_error("bounded UNPIVOT source columns must be simple identifiers")
+        })?;
+        let name = alias.unwrap_or(expression);
+        if !is_simple_identifier(name) {
+            return Ok(None);
+        }
+        columns.push(name.to_owned());
+    }
+
+    let body_start = trimmed[unpivot_marker + "UNPIVOT".len()..]
+        .find('(')
+        .map(|offset| unpivot_marker + "UNPIVOT".len() + offset)
+        .ok_or_else(|| sql_error("bounded UNPIVOT requires a value and name specification"))?;
+    let body_close = matching_delimiter(trimmed, body_start, b'(', b')')
+        .ok_or_else(|| sql_error("bounded UNPIVOT has an unbalanced specification"))?;
+    let body = trimmed[body_start + 1..body_close].trim();
+    let body_upper = body.to_ascii_uppercase();
+    let Some(for_pos) = find_top_level_keyword(&body_upper, "FOR") else {
+        return Err(sql_error("bounded UNPIVOT requires FOR name_column"));
+    };
+    let Some(in_pos_rel) = find_top_level_keyword(&body_upper[for_pos + "FOR".len()..], "IN")
+    else {
+        return Err(sql_error("bounded UNPIVOT requires an explicit IN list"));
+    };
+    let in_pos = for_pos + "FOR".len() + in_pos_rel;
+    let value_column = body[..for_pos].trim();
+    let name_column = body[for_pos + "FOR".len()..in_pos].trim();
+    if !is_simple_identifier(value_column) || !is_simple_identifier(name_column) {
+        return Ok(None);
+    }
+    let list_open = body[in_pos + "IN".len()..]
+        .find('(')
+        .map(|offset| in_pos + "IN".len() + offset)
+        .ok_or_else(|| sql_error("bounded UNPIVOT requires an IN list"))?;
+    let list_close = matching_delimiter(body, list_open, b'(', b')')
+        .ok_or_else(|| sql_error("bounded UNPIVOT IN list is unbalanced"))?;
+    if !body[list_close + 1..].trim().is_empty() {
+        return Ok(None);
+    }
+    let items = split_top_level_commas(body[list_open + 1..list_close].trim())?;
+    if items.is_empty() || items.len() > 128 {
+        return Err(sql_error(
+            "bounded UNPIVOT requires between 1 and 128 IN values",
+        ));
+    }
+    let mut columns_to_unpivot = Vec::with_capacity(items.len());
+    for item in items {
+        let item = item.trim();
+        let column = item
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .or_else(|| {
+                item.strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+            })
+            .unwrap_or(item);
+        if !is_simple_identifier(column)
+            || !columns
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(column))
+        {
+            return Err(sql_error(
+                "bounded UNPIVOT IN values must name source columns",
+            ));
+        }
+        columns_to_unpivot.push(column.to_owned());
+    }
+    let group_columns = columns
+        .iter()
+        .filter(|column| {
+            !columns_to_unpivot
+                .iter()
+                .any(|selected| selected.eq_ignore_ascii_case(column))
+        })
+        .collect::<Vec<_>>();
+    let mut branches = Vec::with_capacity(columns_to_unpivot.len());
+    for column in columns_to_unpivot {
+        let mut projection = group_columns
+            .iter()
+            .map(|group| (*group).to_owned())
+            .collect::<Vec<_>>();
+        projection.push(format!(
+            "'{}' AS \"{}\"",
+            column.replace('\'', "''"),
+            name_column.replace('"', "\"\"")
+        ));
+        projection.push(format!(
+            "{column} AS \"{}\"",
+            value_column.replace('"', "\"\"")
+        ));
+        branches.push(format!(
+            "SELECT {} FROM ({source_sql}) AS __kaveon_unpivot_source",
+            projection.join(", ")
+        ));
+    }
+    Ok(Some(branches.join(" UNION ALL ")))
 }
 
 fn find_top_level_keyword(sql_upper: &str, keyword: &str) -> Option<usize> {
@@ -3137,6 +3281,23 @@ mod tests {
         let error = parse_sql("SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p")
             .expect_err("a non-derived PIVOT must remain unsupported");
         assert!(error.to_string().contains("PIVOT is not implemented"));
+    }
+
+    #[test]
+    fn bounded_unpivot_lowers_to_union_all() {
+        let sql = "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p";
+        let statements = parse_sql(sql).expect("bounded UNPIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("'Jan' AS \"month\""), "{rendered}");
+        assert!(rendered.contains("'Feb' AS \"month\""), "{rendered}");
+        assert!(rendered.contains("UNION ALL"), "{rendered}");
+    }
+
+    #[test]
+    fn unpivot_keeps_unbounded_shapes_fail_closed() {
+        let error = parse_sql("SELECT * FROM t UNPIVOT (v FOR k IN (a)) u")
+            .expect_err("a non-derived UNPIVOT must remain unsupported");
+        assert!(error.to_string().contains("UNPIVOT is not implemented"));
     }
 
     #[test]

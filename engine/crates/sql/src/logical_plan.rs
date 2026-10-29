@@ -8555,7 +8555,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 39);
+        assert_eq!(cases.len(), 40);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
@@ -9861,5 +9861,17 @@ mod tests {
         assert!(debug.contains("Aggregate"), "{debug}");
         assert!(debug.contains("Case"), "{debug}");
         assert!(debug.contains("Jan"), "{debug}");
+    }
+
+    #[test]
+    fn bounded_unpivot_lowers_to_a_union_plan() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p",
+        )
+        .expect("bounded UNPIVOT should produce a normal logical plan");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Union"), "{debug}");
+        assert!(debug.contains("Jan"), "{debug}");
+        assert!(debug.contains("Feb"), "{debug}");
     }
 }
