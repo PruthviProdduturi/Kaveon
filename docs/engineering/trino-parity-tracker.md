@@ -18,6 +18,12 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
+The local optimizer contract was re-run on 2026-10-29: 86/86 planner tests
+passed, including bounded four-to-eight-way join reordering, broadcast
+admission, filter propagation, decorrelation, and fail-closed unsupported
+shapes. This is local evidence only; cloud/deployed endurance remains open
+(`docs/qualification/track1-optimizer-local-suite-2026-10-29.md`).
+
 The latest SQL compatibility increment is the qualified ISO-week alias slice
 (`DATEPART`/`DATENAME` with `iso_week`, `isowk`, and `isoww`) in `73eeb842`,
 following `DATETIMEOFFSETFROMPARTS` in `8f80bfbe`, `TIMEFROMPARTS` in
