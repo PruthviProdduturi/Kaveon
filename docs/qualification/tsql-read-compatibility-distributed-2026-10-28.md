@@ -17,6 +17,9 @@ parity or external-client parity.
 - Distributed gate: the in-process three-worker differential sweep completed
   with exact local-vs-distributed results after the `DATENAME` implementation;
   the run completed without worker failures or retained exchange/spill files.
+- The corpus-level rerun after adding the `ISNUMERIC` distributed shape
+  completed 1/1 with exact results in 729.75 seconds; the full differential
+  workload completed without worker or spill failures.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CHARINDEX`, `EOMONTH`, `DATEFROMPARTS`, `DATENAME`, `ISDATE`, and
   `ISNUMERIC`.
