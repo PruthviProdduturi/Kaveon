@@ -1,4 +1,12 @@
-# Deploy Kaveon — Vercel + Azure Container Apps + Azure PostgreSQL
+# Superseded: Vercel + Azure PostgreSQL deployment
+
+> This guide describes the retired PostgreSQL architecture and must not be used
+> for a new deployment. KaveonDB is now the product metadata and transaction
+> authority. Use [the AKS deployment guide](azure-production-deployment.md) for
+> the Engine/API plane and [the Vercel guide](vercel-deployment.md) for Studio.
+
+The historical instructions below are retained only to explain older
+installations and migration evidence.
 
 The production cloud stack:
 

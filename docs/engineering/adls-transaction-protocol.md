@@ -1,11 +1,14 @@
 # ADLS transaction protocol
 
-This is the durable state path for Kaveon product metadata and, eventually,
-Engine catalog/schema/table definitions. It uses ADLS Gen2 objects only.
+This is the durable object protocol underlying KaveonDB product metadata and,
+eventually, Engine catalog/schema/table definitions. It uses ADLS Gen2 objects
+only.
 SQLite, PVCs, and coordinator-local files are not durable state. Temporary
 memory or upload buffers may be lost before a successful head compare-and-swap.
-It is a **target protocol**: Kaveon does not yet implement or qualify this
-writer, reader, recovery path, or transaction guarantee against an ADLS account.
+The protocol is implemented behind the KaveonDB transaction authority for the
+qualified local/object-store paths; cloud account recovery and operational
+qualification remain deployment gates. It is not a PostgreSQL compatibility
+layer.
 
 The protocol relies on Azure Blob ETags: a write with `If-Match` succeeds only
 when the supplied ETag is current; a mismatch returns HTTP 412. Microsoft

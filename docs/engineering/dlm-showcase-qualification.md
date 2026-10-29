@@ -39,10 +39,11 @@ sketches for deleted dataset IDs.
 
 The OpenSource catalog is served by Kaveon Engine. DLM aggregate builds now route
 through the authenticated Engine bridge, including the required session schema.
-PostgreSQL-specific statistics and change counters remain unavailable for this
-catalog. The dashboard client therefore continues to skip DLM for Engine sources
-until an immutable-source freshness policy and the remaining chart shapes are
-qualified.
+Native Engine statistics and immutable source versions are available for this
+catalog. Freshness is evaluated from the registered source identity and
+statistics version; PostgreSQL change counters are not part of the KaveonDB
+authority path. Registered external SQL sources retain source-specific freshness
+behavior.
 
 ## Correctness checks
 
