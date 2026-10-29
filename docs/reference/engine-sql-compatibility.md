@@ -267,7 +267,7 @@ server or a general row-store protocol.
 | `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit |
 | `UPDATE` | Revision-checked replacement of one product document; `id` and `revision` are required in `WHERE` |
 | `DELETE` | Revision-checked deletion of one product document; `id` and `revision` are required in `WHERE` |
-| `MERGE` | One bounded aliased `VALUES` batch (up to 1,000 rows) can update-or-insert `id, document_json` through the existing revision/CAS upsert path |
+| `MERGE` | One bounded aliased `VALUES` batch (up to 1,000 rows) can update-or-insert, or delete-or-insert, `id, document_json` through owner-checked revision/CAS paths |
 | `COMMIT` | Publishes a prepared immutable catalog snapshot through the configured product store |
 | `ROLLBACK` | Discards the session without publishing its staged changes |
 | `SAVEPOINT name` | Captures the staged product write set inside the transaction |
@@ -286,9 +286,9 @@ modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 The qualified `MERGE` form is intentionally narrow: one target product table
 alias, one source `VALUES` batch of at most 1,000 rows aliased as
 `(id, document_json)`, an equality
-join on `target.id = source.id`, and the fixed matched-update/not-matched-insert
-clause pair. Source scans, multiple rows, predicates, deletes, arbitrary
-assignments, and other `MERGE` clause orderings remain rejected.
+join on `target.id = source.id`, and either the fixed matched-update/not-matched-insert
+or matched-delete/not-matched-insert clause pair. Source scans, predicates,
+arbitrary assignments, and other `MERGE` clause orderings remain rejected.
 Product `RETURNING id, revision` and staged `document_json` projections on
 creates, updates, upserts, and deletes are evaluated from the revision/CAS
 write set. Product inserts

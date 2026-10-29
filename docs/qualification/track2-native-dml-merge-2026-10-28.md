@@ -1,4 +1,4 @@
-# Bounded native `MERGE` qualification — 2026-10-28
+# Bounded native `MERGE` qualification — 2026-10-29
 
 ## Status
 
@@ -27,23 +27,30 @@ WHEN NOT MATCHED THEN
 ```
 
 The parser lowers each source row to the existing owner-isolated `Upsert`
-command. Commit, revision-CAS, replay, and transaction visibility therefore
-use the same tested path as the bounded `ON CONFLICT (id) DO UPDATE` operation.
+command. A second qualified form uses `WHEN MATCHED THEN DELETE` followed by
+the same not-matched insert; the transaction layer resolves each source key
+against the pinned snapshot and stages either a revision-checked delete or a
+new create. Commit, revision-CAS, replay, ownership, and transaction
+visibility therefore use the same tested paths as the bounded conflict-upsert
+operation.
 
 ## Rejections
 
 The parser fails closed for source-query inputs, joins, batches over 1,000 rows,
-predicates on `WHEN` clauses, non-`id` match keys, deletes, arbitrary
-assignments, other clause orderings, and non-product targets. General typed lake-table DML,
+predicates on `WHEN` clauses, non-`id` match keys, arbitrary assignments,
+other clause orderings, and non-product targets. General typed lake-table DML,
 constraints, named conflict targets, and full `MERGE` semantics remain open.
 
 ## Evidence
 
 - `parser::tests::product_merge_supports_bounded_update_or_insert`
 - `parser::tests::product_merge_expands_a_bounded_values_batch`
+- `parser::tests::product_merge_supports_bounded_delete_or_insert`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
-- `cargo test -p kaveon-sql` — 285 passed, 0 failed on 2026-10-28
+- `transaction_api::tests::sql_endpoint_bounded_merge_delete_or_insert_is_owner_checked_and_atomic`
+- `cargo test -p kaveon-sql --lib product_merge_` — 4 passed, 0 failed on 2026-10-29
+- `cargo test -p kaveon-server --bin kaveon-server transaction_api::tests::sql_endpoint_bounded_merge` — 2 passed, 0 failed on 2026-10-29
 
 The transaction API test commits two revisions and one insert atomically, then
 reads the committed snapshot and verifies revisions `2, 2, 1`. It stages the
