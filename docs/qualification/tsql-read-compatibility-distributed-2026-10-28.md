@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 60 cases, including exact local/three-worker qualification for
+- Corpus: 61 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -30,7 +30,8 @@ parity or external-client parity.
   `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `DATETIME2FROMPARTS` (precision 0–3), `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `TIMEFROMPARTS` (precision 0–6), bounded UTC-normalized
   `DATETIMEOFFSETFROMPARTS` (precision 0–6), `DATEPART`/`DATENAME` weekday,
-  day-of-year, and ISO-week aliases, day-equivalent `DATEADD` weekday/day-of-year aliases, `LEFT`,
+  day-of-year, and ISO-week aliases, `DATENAME` day-of-year aliases,
+  day-equivalent `DATEADD` weekday/day-of-year aliases, `LEFT`,
   `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
 
 The bounded `PIVOT`/`UNPIVOT` evidence is retained in
