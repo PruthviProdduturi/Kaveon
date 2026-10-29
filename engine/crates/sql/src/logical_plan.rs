@@ -4932,6 +4932,27 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // DATENAME uses the same datepart vocabulary as DATEPART but returns the
+    // locale-independent English name/number as text. Normalize SQL Server's
+    // unquoted datepart identifier before it reaches the vectorized executor.
+    if name == "DATE_NAME" {
+        if args.len() != 2 {
+            return Err(sql_err("DATENAME requires a datepart and date or timestamp"));
+        }
+        let unit = match &args[0] {
+            Expr::Literal(ScalarValue::Utf8(unit)) => unit.clone(),
+            Expr::Column(unit) if !unit.contains('.') => unit.clone(),
+            _ => return Err(sql_err("DATENAME datepart must be a literal or identifier")),
+        };
+        return Ok(Expr::Function {
+            name: "DATE_NAME".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8(normalize_tsql_date_unit(&unit))),
+                args[1].clone(),
+            ],
+        });
+    }
+
     // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A
     // safe cast is the most common and most useful form in lake queries, and
     // JSON_PARSE has the same row-local failure contract.  Lower both forms
@@ -5493,6 +5514,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEADD" => "DATE_ADD".to_owned(),
         "DATEDIFF" => "DATE_DIFF".to_owned(),
         "DATEPART" => "DATE_PART".to_owned(),
+        "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
@@ -8456,6 +8478,15 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datename_to_normalized_date_name() {
+        let plan = sql_to_logical_plan("SELECT DATENAME(mm, event_date) FROM t")
+            .expect("DATENAME should normalize its unquoted datepart");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_NAME"), "{rendered}");
+        assert!(rendered.contains("month"), "{rendered}");
+    }
+
+    #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
         let plan =
             sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
@@ -8493,7 +8524,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 26);
+        assert_eq!(cases.len(), 27);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

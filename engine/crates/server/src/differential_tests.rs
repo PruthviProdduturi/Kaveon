@@ -275,6 +275,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datename",
+        "SELECT TOP 5 DATENAME(month, event_date) AS event_month FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_dateadd",
         "SELECT TOP 5 DATEADD(dd, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,

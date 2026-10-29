@@ -12047,6 +12047,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let source = &args[1];
             eval_date_part(field_arr, source, num_rows)
         }
+        "DATE_NAME" => {
+            if args.len() != 2 {
+                return Err(KaveonError::Execution(
+                    "DATENAME requires 2 arguments (field, source)".into(),
+                ));
+            }
+            let field_arr = as_string_array(&args[0])?;
+            eval_date_name(field_arr, &args[1], num_rows)
+        }
         "DATE_DIFF" => {
             if args.len() != 3 {
                 return Err(KaveonError::Execution(
@@ -15470,6 +15479,51 @@ fn eval_date_diff(
 /// makes timestamps on the same day obey the same full-boundary rule as
 /// dates: a boundary has not elapsed when the end's time is before the
 /// start's time.
+fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
+    const MONTH_NAMES: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August",
+        "September", "October", "November", "December",
+    ];
+    const WEEKDAY_NAMES: [&str; 7] = [
+        "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    ];
+    let result = (0..num_rows)
+        .map(|row| {
+            if field_arr.is_null(row) {
+                return Ok(None);
+            }
+            let field = field_arr.value(row).to_ascii_uppercase();
+            let Some((year, month, day, remainder)) = temporal_calendar_position(source, row)? else {
+                return Ok(None);
+            };
+            let days = ymd_to_days(year, month, day);
+            let value = match field.as_str() {
+                "YEAR" | "YY" | "YYYY" => year.to_string(),
+                "MONTH" | "MM" | "M" => MONTH_NAMES[(month - 1) as usize].to_owned(),
+                "DAY" | "DD" | "D" => day.to_string(),
+                "WEEKDAY" | "DW" | "W" | "DOW" | "DAYOFWEEK" => {
+                    WEEKDAY_NAMES[((days % 7 + 4 + 7) % 7) as usize].to_owned()
+                }
+                "DAYOFYEAR" | "DOY" => (days - ymd_to_days(year, 1, 1) + 1).to_string(),
+                "QUARTER" | "QQ" | "Q" => (((month - 1) / 3) + 1).to_string(),
+                "WEEK" | "WK" | "WW" => {
+                    ((days - ymd_to_days(year, 1, 1)) / 7 + 1).to_string()
+                }
+                "HOUR" | "HH" => (remainder / 3_600_000_000_000).to_string(),
+                "MINUTE" | "MI" | "N" => ((remainder / 60_000_000_000) % 60).to_string(),
+                "SECOND" | "SS" | "S" => ((remainder / 1_000_000_000) % 60).to_string(),
+                _ => {
+                    return Err(KaveonError::Execution(format!(
+                        "unsupported DATENAME field: {field}"
+                    )));
+                }
+            };
+            Ok(Some(value))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(StringArray::from(result)))
+}
+
 fn temporal_calendar_position(
     source: &ArrayRef,
     row: usize,
@@ -16132,6 +16186,35 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("invalid for 2023-02"), "{error}");
+    }
+
+    #[test]
+    fn date_name_returns_sql_server_calendar_names_and_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("day", DataType::Date32, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![
+                Some(ymd_to_days(2024, 2, 29) as i32),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_NAME".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("month".into())),
+                    Expr::Column("day".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(result.value(0), "February");
+        assert!(result.is_null(1));
     }
 
     #[test]
