@@ -63,6 +63,7 @@
     {"id": "convert_date_styles_iso_datetime", "sql": "SELECT TRY_CONVERT(DATE, value, 120), TRY_CONVERT(DATE, value, 121), TRY_CONVERT(DATE, value, 126) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_columns"},
     {"id": "convert_date_styles_odbc_aliases", "sql": "SELECT TRY_CONVERT(DATE, value, 20), TRY_CONVERT(DATE, value, 21) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_columns"},
     {"id": "convert_date_styles_numeric", "sql": "SELECT TRY_CONVERT(DATE, value, 102), TRY_CONVERT(DATE, value, 104), TRY_CONVERT(DATE, value, 105), TRY_CONVERT(DATE, value, 110), TRY_CONVERT(DATE, value, 111) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_columns"},
+    {"id": "convert_date_styles_named", "sql": "SELECT TRY_CONVERT(DATE, value, 106), TRY_CONVERT(DATE, value, 107) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_columns"},
     {"id": "pivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "pivot", "sql": "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p", "status": "explicit_rejection"},
     {"id": "unpivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
