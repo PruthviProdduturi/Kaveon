@@ -16,6 +16,26 @@ from dlm import engine
 from services import engine_bridge
 
 
+
+def active_native_catalog(identity="OpenSource"):
+    """Patch the store `_native_catalog` now asks.
+
+    It used to read `catalog_sources` in PostgreSQL, so these tests patched
+    `engine.meta.query_one`. Catalog sources live in KaveonDB, and the answer
+    has to discriminate: a registered Fabric or PostgreSQL source is not an
+    Engine catalog, so an unconditional yes would send its queries down the
+    Engine path instead of the connection pool.
+    """
+    import contextlib
+    from unittest.mock import patch
+    document = {"source_kind": "catalog", "lifecycle": "active",
+                "adapter_type": "native", "catalog_identity": identity}
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch("services.product_read_authority.enabled", return_value=True))
+    stack.enter_context(patch("services.product_read_authority.list_documents",
+                              return_value=[document]))
+    return stack
+
 class BridgeTimeoutTests(unittest.TestCase):
     def _run(self, timeout=None, side_effect=None):
         seen = {}
@@ -77,7 +97,7 @@ class BridgeTimeoutTests(unittest.TestCase):
 
 class BuildBoundTests(unittest.TestCase):
     def test_native_build_queries_carry_the_build_bound(self):
-        with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
+        with active_native_catalog(), \
              patch("services.engine_bridge.execute", return_value={"columns": [], "data": []}) as execute:
             engine._execute_dataset_query('SELECT COUNT(*) FROM "s"."t"', "OpenSource")
             engine._execute_dataset_query('SELECT COUNT(*) FROM "s"."t"', "OpenSource", timeout_seconds=120)

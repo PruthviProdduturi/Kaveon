@@ -95,38 +95,31 @@ class RebuildGuardTests(unittest.TestCase):
 
 
 class FreshnessSweepLifecycleTests(unittest.TestCase):
-    def test_write_fence_prevents_thread_start(self):
-        with patch.dict("os.environ", {"KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "true"}), \
-             patch.object(engine.threading, "Thread") as thread:
-            engine._start_sweep_loop()
-        thread.assert_not_called()
+    """The sweep is scheduled, not threaded.
 
-    def test_postgresql_free_mode_prevents_thread_start(self):
-        with patch.dict("os.environ", {"KAVEON_POSTGRESQL_RETIREMENT_MODE": "true"}), \
-             patch.object(engine.threading, "Thread") as thread:
-            engine._start_sweep_loop()
-        thread.assert_not_called()
+    `_start_sweep_loop` spawned a daemon thread at import time unless a write
+    fence or retirement disabled it. Retirement is permanent, so it had been
+    returning immediately; the schedule is the `kaveon-dlm-freshness` CronJob,
+    which calls the sweep with an identity. A thread started at import has no
+    identity to call it with.
+    """
 
-    def test_disabled_sweep_never_initializes_or_queries_postgresql(self):
-        with patch.dict("os.environ", {"KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "true"}), \
-             patch.object(engine, "ensure_tables") as ensure, \
+    def test_the_in_process_sweep_loop_is_gone(self):
+        for name in ("_start_sweep_loop", "_postgresql_freshness_sweep_disabled"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(engine, name), f"{name} came back")
+
+    def test_a_sweep_without_an_identity_reports_that_rather_than_nothing(self):
+        """Zero checked and no reason reads as "nothing was stale". The sweep
+        needs a caller to read product state as, so it says so."""
+        with patch.object(engine, "ensure_tables") as ensure, \
              patch.object(engine.meta, "query") as query:
             result = engine.freshness_sweep()
-        self.assertEqual(result, {"checked": 0, "stale": 0, "triggered": 0, "datasets": []})
+        self.assertEqual(result["checked"], 0)
+        self.assertEqual(result["triggered"], 0)
+        self.assertIn("identity", result["skipped"])
         ensure.assert_not_called()
         query.assert_not_called()
-
-    def test_normal_mode_still_starts_the_sweep_thread(self):
-        with patch.dict("os.environ", {
-                "KAVEON_POSTGRESQL_WRITE_FENCE_ENABLED": "false",
-                "KAVEON_POSTGRESQL_RETIREMENT_MODE": "false",
-                "KAVEON_POSTGRESQL_RESTART_REHEARSAL_MODE": "false",
-        }), patch.object(engine.threading, "Thread") as thread:
-            engine._start_sweep_loop()
-        thread.assert_called_once()
-        self.assertEqual(thread.call_args.kwargs["name"], "dlm-sweep")
-        self.assertTrue(thread.call_args.kwargs["daemon"])
-        thread.return_value.start.assert_called_once_with()
 
 
 class BoundedScanTests(unittest.TestCase):

@@ -701,53 +701,24 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
 
     if artifact_status == "ready":
         publication_actor = actor or str(ds.get("modified_by") or ds.get("created_by") or "")
-        from services import postgresql_retirement_runtime
-        if postgresql_retirement_runtime.requested():
-            from services import dlm_generation_cutover
-            state = _RETIREMENT_BUILD.get()
-            if state is None:
-                raise RuntimeError("Retirement DLM build state is missing")
-            dlm_generation_cutover.publish({
-                "dataset_id": str(dataset_id), "manifest": manifest,
-                "stats_rollup": stats_rollup, "usage_rollup": usage_rollup,
-                "source_hash": source_hash, "built_at": _now_iso(),
-                "status": "ready", "values_indexed": len(value_rows),
-                "compiled_context": {"values": state.values, "answers": state.answers,
-                    "sketches": state.sketches, "router": state.router,
-                    "curation": state.curation},
-            }, publication_actor, role)
-        else:
-            from services import dlm_compiled_artifact, dlm_definition_mutations
-            artifact_row = meta.query_one(
-                "SELECT version, source_hash, built_at FROM dlm_artifact WHERE dataset_id = @param0",
-                [str(dataset_id)],
-            ) or {}
-            compiled = dlm_compiled_artifact.publish({
-                "dataset_id": str(dataset_id), "version": artifact_row.get("version"),
-                "manifest": manifest, "stats_rollup": stats_rollup,
-                "usage_rollup": usage_rollup, "source_hash": artifact_row.get("source_hash"),
-                "built_at": str(artifact_row.get("built_at") or ""), "status": "ready",
-                "values_indexed": len(value_rows),
-            })
-            with meta.transaction() as transaction:
-                changed = transaction.execute(
-                    "UPDATE dlm_artifact SET status = 'ready', stats_rollup = @param0 "
-                    "WHERE dataset_id = @param1",
-                    [json.dumps(stats_rollup, default=str), str(dataset_id)],
-                )
-                if changed != 1:
-                    raise RuntimeError("DLM artifact disappeared before ready publication")
-                definition = dlm_definition_mutations.publish_ready(
-                    transaction, str(dataset_id), publication_actor,
-                )
-                if compiled is not None:
-                    dlm_compiled_artifact.enqueue_run(transaction, str(dataset_id),
-                        definition.owner, publication_actor, definition.revision, compiled)
+        from services import dlm_generation_cutover
+        state = _RETIREMENT_BUILD.get()
+        if state is None:
+            raise RuntimeError("Retirement DLM build state is missing")
+        dlm_generation_cutover.publish({
+            "dataset_id": str(dataset_id), "manifest": manifest,
+            "stats_rollup": stats_rollup, "usage_rollup": usage_rollup,
+            "source_hash": source_hash, "built_at": _now_iso(),
+            "status": "ready", "values_indexed": len(value_rows),
+            "compiled_context": {"values": state.values, "answers": state.answers,
+                "sketches": state.sketches, "router": state.router,
+                "curation": state.curation},
+        }, publication_actor, role)
         # A write this process performed does not wait to be rediscovered. The
         # banner is served from memory against a bounded staleness window, and
         # that window exists for writes by *other* processes — context the user
-        # has just had generated must be on their next load, whichever branch
-        # above published it, and whether the caller was the Studio action, the
+        # has just had generated must be on their next load, whether the caller
+        # was the Studio action, the
         # data-change webhook or the freshness sweep (all of which arrive here).
         _COVERAGE_CACHE.invalidate()
 
@@ -1262,34 +1233,20 @@ def _build_sketch_cuboids(dataset_id: str, database: str, schema: str, fact: Opt
 def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer",
             *, context=None) -> Optional[Dict[str, Any]]:
     """Return the compiled artifact row (manifest/rollups parsed) or None."""
-    from services import postgresql_retirement_runtime
-    if postgresql_retirement_runtime.requested():
-        if not actor:
-            raise RuntimeError("PostgreSQL-free DLM reads require actor identity")
-        from services import dlm_compiled_artifact
-        try:
-            return dlm_compiled_artifact.read(str(dataset_id), actor, role, context=context)
-        except dlm_compiled_artifact.DefinitionUnavailable:
-            # This function answers with the artifact or None, and the
-            # non-retirement branch below returns None for a dataset with no
-            # row. A dataset that has never been compiled is that same absence,
-            # so it answers the same way: the route turns None into a 404, and
-            # _serving_artifact already has a branch for it. Propagating it
-            # instead made /dlm/coverage fail outright whenever any one dataset
-            # was not yet compiled.
-            return None
-    ensure_tables()
-    row = meta.query_one(
-        "SELECT dataset_id, version, manifest, stats_rollup, usage_rollup, "
-        "source_hash, built_at, status FROM dlm_artifact WHERE dataset_id = @param0",
-        [str(dataset_id)],
-    )
-    if not row:
+    if not actor:
+        raise RuntimeError("PostgreSQL-free DLM reads require actor identity")
+    from services import dlm_compiled_artifact
+    try:
+        return dlm_compiled_artifact.read(str(dataset_id), actor, role, context=context)
+    except dlm_compiled_artifact.DefinitionUnavailable:
+        # This function answers with the artifact or None, and the
+        # non-retirement branch below returns None for a dataset with no
+        # row. A dataset that has never been compiled is that same absence,
+        # so it answers the same way: the route turns None into a 404, and
+        # _serving_artifact already has a branch for it. Propagating it
+        # instead made /dlm/coverage fail outright whenever any one dataset
+        # was not yet compiled.
         return None
-    for k in ("manifest", "stats_rollup", "usage_rollup"):
-        row[k] = _loads(row.get(k))
-    row["values_indexed"] = _value_count(str(dataset_id))
-    return row
 
 
 def resolve_value(dataset_id: str, term: str, limit: int = 5,
@@ -3881,11 +3838,6 @@ def maybe_auto_rebuild(dataset_id: str, actor: Optional[str] = None,
 _SWEEP_INTERVAL_SECONDS = 1800.0  # 30 minutes
 
 
-def _postgresql_freshness_sweep_disabled() -> bool:
-    from services import postgresql_retirement_runtime, postgresql_write_fence
-    return postgresql_write_fence.enabled() or postgresql_retirement_runtime.requested()
-
-
 def freshness_sweep(actor: Optional[str] = None, role: str = "Admin") -> Dict[str, Any]:
     """Check all datasets and trigger rebuilds for any that are stale. Returns
     a summary of what was found and triggered — useful for cron/health checks.
@@ -3895,72 +3847,29 @@ def freshness_sweep(actor: Optional[str] = None, role: str = "Admin") -> Dict[st
     caller instead. It needs an identity to read them: an unattended sweep has
     none and reports that rather than silently checking nothing, which is what
     the disabled sweep did."""
-    from services import postgresql_retirement_runtime
-    if postgresql_retirement_runtime.requested():
-        if not actor:
-            return {"checked": 0, "stale": 0, "triggered": 0, "datasets": [],
-                    "skipped": "a PostgreSQL-free sweep needs a caller identity"}
-        if _RETIREMENT_SERVING.get() is None:
-            return _with_serving_identity(actor, role,
-                                          lambda: freshness_sweep(actor, role))
-        results: Dict[str, Any] = {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
-        for artifact in _serving_artifacts():
-            dataset_id = str((artifact or {}).get("dataset_id") or "")
-            if not dataset_id:
-                continue
-            results["checked"] += 1
-            freshness = check_freshness(dataset_id)
-            if freshness["fresh"] or freshness["recommendation"] != "rebuild":
-                continue
-            results["stale"] += 1
-            triggered = _trigger_background_rebuild(dataset_id, actor)
-            if triggered:
-                results["triggered"] += 1
-            results["datasets"].append({"dataset_id": dataset_id,
-                                        "score": freshness["score"],
-                                        "triggered": triggered})
-        return results
-    if _postgresql_freshness_sweep_disabled():
-        return {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
-    ensure_tables()
-    arts = meta.query("SELECT dataset_id FROM dlm_artifact WHERE status = 'ready'", [])
+    if not actor:
+        return {"checked": 0, "stale": 0, "triggered": 0, "datasets": [],
+                "skipped": "a PostgreSQL-free sweep needs a caller identity"}
+    if _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role,
+                                      lambda: freshness_sweep(actor, role))
     results: Dict[str, Any] = {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
-    for a in arts.get("rows_objects", arts.get("rows", [])):
-        did = str(a.get("dataset_id"))
+    for artifact in _serving_artifacts():
+        dataset_id = str((artifact or {}).get("dataset_id") or "")
+        if not dataset_id:
+            continue
         results["checked"] += 1
-        freshness = check_freshness(did)
-        if not freshness["fresh"] and freshness["recommendation"] == "rebuild":
-            results["stale"] += 1
-            triggered = _trigger_background_rebuild(did)
-            if triggered:
-                results["triggered"] += 1
-            results["datasets"].append({"dataset_id": did, "score": freshness["score"], "triggered": triggered})
+        freshness = check_freshness(dataset_id)
+        if freshness["fresh"] or freshness["recommendation"] != "rebuild":
+            continue
+        results["stale"] += 1
+        triggered = _trigger_background_rebuild(dataset_id, actor)
+        if triggered:
+            results["triggered"] += 1
+        results["datasets"].append({"dataset_id": dataset_id,
+                                    "score": freshness["score"],
+                                    "triggered": triggered})
     return results
-
-
-def _start_sweep_loop():
-    """Background loop that runs freshness_sweep periodically. Started once at
-    import time so DLM context stays fresh without requiring user traffic."""
-    if _postgresql_freshness_sweep_disabled():
-        return
-
-    def _loop():
-        import time as _t
-        _t.sleep(30)  # let the app finish startup
-        while True:
-            try:
-                summary = freshness_sweep()
-                if summary["triggered"]:
-                    logger.info("DLM sweep: checked=%d stale=%d triggered=%d",
-                                summary["checked"], summary["stale"], summary["triggered"])
-            except Exception:
-                logger.exception("DLM sweep failed")
-            _t.sleep(_SWEEP_INTERVAL_SECONDS)
-
-    threading.Thread(target=_loop, daemon=True, name="dlm-sweep").start()
-
-
-_start_sweep_loop()
 
 
 _MONTH_RE = re.compile(r"\b(by month|monthly|per month|month over month)\b", re.I)
@@ -5915,25 +5824,40 @@ def _native_row_counts(database: str, schema: str, tables: List[str]) -> Dict[st
 
 
 def _native_catalog(database: str) -> Optional[Dict[str, Any]]:
+    """Whether *database* is an active, native-adapter Engine catalog.
+
+    This asked the `catalog_sources` table, and the retirement branch replaced
+    it with an unconditional yes on the reasoning that the Engine's own failure
+    would be the authority. That holds only where an Engine catalog is the one
+    kind of database there is. A registered Fabric, Azure SQL, PostgreSQL,
+    MySQL or StarRocks source is not an Engine catalog, and answering yes for
+    one sends its queries down the Engine path instead of the connection pool.
+
+    So the question is asked again, of the store that holds the answer now.
+    `kaveon-system` is the identity the catalog-source reads already use
+    (`routers/lab.py`), since a catalog's existence is not a per-user fact.
+    """
     if _RETIREMENT_BUILD.get() is not None:
         return {"engine_catalog": database}
     bound = _BOUND_ENGINE_CATALOG.get()
     if bound and bound == database:
         return {"engine_catalog": database}
-    from services import postgresql_retirement_runtime
-    if postgresql_retirement_runtime.requested():
-        # There is no catalog_sources table to read any more, and nothing here
-        # may touch PostgreSQL. The caller resolves the dataset's table through
-        # the Engine immediately after this, and returns no binding when that
-        # fails — so the Engine's own answer is the authority on whether the
-        # catalog is real, and asserting it twice would only add a way to be
-        # wrong.
-        return {"engine_catalog": database}
-    return meta.query_one(
-        "SELECT engine_catalog FROM catalog_sources "
-        "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
-        [database],
-    )
+    try:
+        from services import product_read_authority
+        if not product_read_authority.enabled("sources"):
+            return None
+        for document in product_read_authority.list_documents("sources", "kaveon-system", "Admin"):
+            if (document.get("source_kind") == "catalog"
+                    and document.get("lifecycle") == "active"
+                    and document.get("adapter_type") == "native"
+                    and document.get("catalog_identity") == database):
+                return {"engine_catalog": database}
+    except Exception:
+        # A store that cannot answer is not a licence to assume yes: claiming a
+        # catalog that is not there would route an external source's queries
+        # into the Engine.
+        return None
+    return None
 
 
 # ── Engine-backed datasets ─────────────────────────────────────────────────
@@ -6627,83 +6551,45 @@ def get_context_spec(dataset_id: str, actor: Optional[str] = None,
                      role: str = "Viewer") -> Dict[str, Any]:
     """Effective context spec (suggested ⊕ curation) for the curation editor, with
     the raw pieces so the UI can show default vs edited and offer a reset."""
-    from services import postgresql_retirement_runtime
-    if postgresql_retirement_runtime.requested():
-        if not actor:
-            raise RuntimeError("PostgreSQL-free DLM context reads require actor identity")
-        artifact = get_dlm(str(dataset_id), actor, role)
-        if not artifact:
-            return {"ok": False, "reason": "no_artifact", "dataset_id": str(dataset_id)}
-        context = artifact.get("compiled_context") or {}
-        suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
-        curation = context.get("curation") or {}
-        return {"ok": True, "dataset_id": str(dataset_id),
-                "dataset_name": (artifact.get("manifest") or {}).get("name"),
-                "status": artifact.get("status"), "built_at": artifact.get("built_at"),
-                "suggested": suggested, "curation": curation,
-                "effective": _merge_spec(suggested, curation)}
-    ensure_tables()
-    row = meta.query_one(
-        "SELECT manifest, curation, status, built_at FROM dlm_artifact WHERE dataset_id = @param0",
-        [str(dataset_id)])
-    if not row:
+    if not actor:
+        raise RuntimeError("PostgreSQL-free DLM context reads require actor identity")
+    artifact = get_dlm(str(dataset_id), actor, role)
+    if not artifact:
         return {"ok": False, "reason": "no_artifact", "dataset_id": str(dataset_id)}
-    manifest = _loads(row.get("manifest")) or {}
-    suggested = manifest.get("context_spec") or {}
-    curation = _loads(row.get("curation")) or {}
-    return {
-        "ok": True,
-        "dataset_id": str(dataset_id),
-        "dataset_name": manifest.get("name"),
-        "status": row.get("status"),
-        "built_at": row.get("built_at"),
-        "suggested": suggested,
-        "curation": curation,
-        "effective": _merge_spec(suggested, curation),
-    }
+    context = artifact.get("compiled_context") or {}
+    suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
+    curation = context.get("curation") or {}
+    return {"ok": True, "dataset_id": str(dataset_id),
+            "dataset_name": (artifact.get("manifest") or {}).get("name"),
+            "status": artifact.get("status"), "built_at": artifact.get("built_at"),
+            "suggested": suggested, "curation": curation,
+            "effective": _merge_spec(suggested, curation)}
 
 
 def save_curation(dataset_id: str, curation: Any, actor: Optional[str] = None) -> Dict[str, Any]:
     """Persist human curation overrides. Alias / display / default / value-alias edits
     take effect immediately (caches invalidated). Breakdown / depth edits change what
     is precomputed, so those need a regenerate — flagged as ``needs_regenerate``."""
-    from services import postgresql_retirement_runtime
-    if postgresql_retirement_runtime.requested():
-        if not actor:
-            raise RuntimeError("PostgreSQL-free DLM curation requires actor identity")
-        artifact = get_dlm(str(dataset_id), actor, "Admin")
-        if not artifact:
-            return {"ok": False, "reason": "no_artifact"}
-        context = artifact.get("compiled_context")
-        if not isinstance(context, dict):
-            raise RuntimeError("Compiled DLM context is unavailable for curation")
-        clean = _sanitize_curation(curation)
-        previous = context.get("curation") or {}
-        from services import dlm_generation_cutover
-        next_payload = {key: value for key, value in artifact.items() if key != "version"}
-        next_payload["built_at"] = _now_iso()
-        next_payload["compiled_context"] = {**context, "curation": clean}
-        dlm_generation_cutover.publish(next_payload, actor)
-        suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
-        _SPEC_CACHE.pop(str(dataset_id), None)
-        return {"ok": True, "dataset_id": str(dataset_id),
-                "needs_regenerate": _curation_affects_precompute(previous, clean),
-                "effective": _merge_spec(suggested, clean)}
-    ensure_tables()
-    row = meta.query_one(
-        "SELECT curation FROM dlm_artifact WHERE dataset_id = @param0", [str(dataset_id)])
-    if not row:
+    if not actor:
+        raise RuntimeError("PostgreSQL-free DLM curation requires actor identity")
+    artifact = get_dlm(str(dataset_id), actor, "Admin")
+    if not artifact:
         return {"ok": False, "reason": "no_artifact"}
+    context = artifact.get("compiled_context")
+    if not isinstance(context, dict):
+        raise RuntimeError("Compiled DLM context is unavailable for curation")
     clean = _sanitize_curation(curation)
-    prev = _loads(row.get("curation")) or {}
-    meta.execute("UPDATE dlm_artifact SET curation = @param0 WHERE dataset_id = @param1",
-                 [json.dumps(clean, default=str), str(dataset_id)])
+    previous = context.get("curation") or {}
+    from services import dlm_generation_cutover
+    next_payload = {key: value for key, value in artifact.items() if key != "version"}
+    next_payload["built_at"] = _now_iso()
+    next_payload["compiled_context"] = {**context, "curation": clean}
+    dlm_generation_cutover.publish(next_payload, actor)
+    suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
     _SPEC_CACHE.pop(str(dataset_id), None)
-    _evict_answers(str(dataset_id))
-    _SKETCH_CACHE.pop(str(dataset_id), None)
     return {"ok": True, "dataset_id": str(dataset_id),
-            "needs_regenerate": _curation_affects_precompute(prev, clean),
-            "effective": _effective_spec(str(dataset_id))}
+            "needs_regenerate": _curation_affects_precompute(previous, clean),
+            "effective": _merge_spec(suggested, clean)}
 
 
 def _sanitize_curation(c: Any) -> Dict[str, Any]:
