@@ -5626,6 +5626,13 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
             let year = parts.next()?.parse::<i32>().ok()?;
             (year, month, day)
         }
+        103 => {
+            let mut parts = value.split('/');
+            let day = parts.next()?.parse::<u32>().ok()?;
+            let month = parts.next()?.parse::<u32>().ok()?;
+            let year = parts.next()?.parse::<i32>().ok()?;
+            (year, month, day)
+        }
         0 => {
             let normalized = value.replace(',', " ");
             let mut parts = normalized.split_whitespace();
@@ -5648,6 +5655,19 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
                 _ => return None,
             };
             (year, month, day)
+        }
+        23 => {
+            if value.len() != 10
+                || value.as_bytes().get(4) != Some(&b'-')
+                || value.as_bytes().get(7) != Some(&b'-')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
+            )
         }
         112 => {
             if value.len() != 8 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -9111,7 +9131,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 63);
+        assert_eq!(cases.len(), 64);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

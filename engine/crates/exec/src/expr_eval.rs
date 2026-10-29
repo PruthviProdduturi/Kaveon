@@ -1566,6 +1566,13 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
             let year = parts.next()?.parse::<i32>().ok()?;
             (year, month, day)
         }
+        103 => {
+            let mut parts = value.split('/');
+            let day = parts.next()?.parse::<u32>().ok()?;
+            let month = parts.next()?.parse::<u32>().ok()?;
+            let year = parts.next()?.parse::<i32>().ok()?;
+            (year, month, day)
+        }
         0 => {
             let normalized = value.replace(',', " ");
             let mut parts = normalized.split_whitespace();
@@ -1588,6 +1595,19 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
                 parts.next()?.parse::<i32>().ok()?,
                 month,
                 parts.next()?.parse::<u32>().ok()?,
+            )
+        }
+        23 => {
+            if value.len() != 10
+                || value.as_bytes().get(4) != Some(&b'-')
+                || value.as_bytes().get(7) != Some(&b'-')
+            {
+                return None;
+            }
+            (
+                value[0..4].parse::<i32>().ok()?,
+                value[5..7].parse::<u32>().ok()?,
+                value[8..10].parse::<u32>().ok()?,
             )
         }
         112 => {
@@ -25622,6 +25642,40 @@ mod tests {
         assert_eq!(iso.value(1), 20_087);
         assert!(iso.is_null(2));
         assert!(iso.is_null(3));
+        let eu = evaluate(
+            &expression("TRY_CONVERT_DATE_STYLE_103"),
+            &RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![
+                    Some("31/12/2024"),
+                    Some("bad"),
+                    None,
+                ])) as ArrayRef,
+            )])
+            .unwrap(),
+        )
+        .unwrap();
+        let eu = eu.as_primitive::<Date32Type>();
+        assert_eq!(eu.value(0), 20_088);
+        assert!(eu.is_null(1));
+        assert!(eu.is_null(2));
+        let iso_dashed = evaluate(
+            &expression("TRY_CONVERT_DATE_STYLE_23"),
+            &RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![
+                    Some("2024-12-30"),
+                    Some("20241230"),
+                    None,
+                ])) as ArrayRef,
+            )])
+            .unwrap(),
+        )
+        .unwrap();
+        let iso_dashed = iso_dashed.as_primitive::<Date32Type>();
+        assert_eq!(iso_dashed.value(0), 20_087);
+        assert!(iso_dashed.is_null(1));
+        assert!(iso_dashed.is_null(2));
     }
 
     #[test]
