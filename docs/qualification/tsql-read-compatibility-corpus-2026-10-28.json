@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "d5c58049",
+  "engine_commit": "02fb3fe6",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -8,10 +8,10 @@
     {"id": "top_percent", "sql": "SELECT TOP 10 PERCENT * FROM t", "status": "planner_qualified"},
     {"id": "top_with_ties", "sql": "SELECT TOP 3 WITH TIES * FROM t ORDER BY score", "status": "planner_qualified"},
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
-    {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified"},
-    {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified"},
-    {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified"},
-    {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified"},
+    {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "getdate", "sql": "SELECT GETDATE() FROM t", "status": "planner_qualified"},
     {"id": "sysdatetime", "sql": "SELECT SYSDATETIME() FROM t", "status": "planner_qualified"},
     {"id": "convert_unstyled", "sql": "SELECT CONVERT(BIGINT, value) FROM t", "status": "planner_qualified"},
