@@ -104,8 +104,16 @@ gate.
   `id IN (...)` list, and is capped at 1,000 source records,
   enforces owner isolation, and reuses the existing conflict/CAS path. General
   lake-table source DML remains open.
-- [ ] Add `MERGE` and broader conflict handling only with explicit revision/CAS
-  semantics. Product `ON CONFLICT DO NOTHING` and the bounded
+- [x] Add the first bounded `MERGE` form with explicit revision/CAS semantics.
+  `MERGE` accepts one aliased `VALUES` row containing `id` and `document_json`,
+  an equality `target.id = source.id` predicate, and exactly `WHEN MATCHED
+  THEN UPDATE SET document_json = source.document_json` followed by `WHEN NOT
+  MATCHED THEN INSERT (id, document_json) VALUES (source.id,
+  source.document_json)`. It lowers to the existing owner-isolated `Upsert`
+  command, so commit/revision behavior is shared with the qualified conflict
+  upsert path. Evidence: `docs/qualification/track2-native-dml-merge-2026-10-28.md`.
+- [ ] Expand `MERGE` and broader conflict handling only with explicit
+  revision/CAS semantics. Product `ON CONFLICT DO NOTHING` and the bounded
   `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`
   upsert are now covered by parser and API tests; named constraints, conflict
   predicates, arbitrary assignments, and arbitrary conflict targets remain

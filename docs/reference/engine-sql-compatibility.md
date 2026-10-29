@@ -234,6 +234,7 @@ server or a general row-store protocol.
 | `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit |
 | `UPDATE` | Revision-checked replacement of one product document; `id` and `revision` are required in `WHERE` |
 | `DELETE` | Revision-checked deletion of one product document; `id` and `revision` are required in `WHERE` |
+| `MERGE` | One bounded aliased `VALUES` row can update-or-insert `id, document_json` through the existing revision/CAS upsert path |
 | `COMMIT` | Publishes a prepared immutable catalog snapshot through the configured product store |
 | `ROLLBACK` | Discards the session without publishing its staged changes |
 | `SAVEPOINT name` | Captures the staged product write set inside the transaction |
@@ -249,6 +250,11 @@ updates remain outside this contract. Multi-row `VALUES` are expanded into bound
 typed commands and committed atomically. Source-backed `INSERT ... SELECT`, document
 projections in `RETURNING`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
+The qualified `MERGE` form is intentionally narrow: one target product table
+alias, one source `VALUES` row aliased as `(id, document_json)`, an equality
+join on `target.id = source.id`, and the fixed matched-update/not-matched-insert
+clause pair. Source scans, multiple rows, predicates, deletes, arbitrary
+assignments, and other `MERGE` clause orderings remain rejected.
 Product `RETURNING id, revision` is evaluated from the staged revision/CAS
 write set. Product inserts also support the bounded `ON CONFLICT DO NOTHING`
 form, with an optional conflict target of `id`; a duplicate is a transaction-
