@@ -12,6 +12,8 @@ does not claim business-day or calendar-holiday behavior. `DATEPART` and
 numbering; the existing `WEEK` spelling remains a separate non-ISO contract.
 `DATENAME` also accepts the SQL Server day-of-year aliases `DOY`, `DY`, and
 `Y`.
+`DATEPART` accepts the `WEEK`/`WK`/`WW` and `QUARTER`/`QQ`/`Q` aliases as
+well.
 
 Evidence:
 
@@ -21,7 +23,8 @@ Evidence:
   `tsql_datepart_dayofyear_alias`, `tsql_dateadd_weekday_alias`, and
   `tsql_dateadd_dayofyear_alias`, `tsql_datepart_iso_week_alias`, and
   `tsql_datename_iso_week_alias`, and `tsql_datename_dayofyear_alias`.
+  The week/quarter alias case is `tsql_datepart_week_quarter_alias`.
 - Corpus cases: `datepart_weekday_alias`, `datepart_dayofyear_alias`,
   `dateadd_weekday_alias`, `dateadd_dayofyear_alias`,
   `datepart_iso_week_alias`, `datename_iso_week_alias`, and
-  `datename_dayofyear_alias`.
+  `datename_dayofyear_alias`, and `datepart_week_quarter_alias`.
