@@ -11,6 +11,26 @@ if "pyodbc" not in sys.modules:
 from dlm import engine
 
 
+
+def active_native_catalog(identity="OpenSource"):
+    """Patch the store `_native_catalog` now asks.
+
+    It used to read `catalog_sources` in PostgreSQL, so these tests patched
+    `engine.meta.query_one`. Catalog sources live in KaveonDB, and the answer
+    has to discriminate: a registered Fabric or PostgreSQL source is not an
+    Engine catalog, so an unconditional yes would send its queries down the
+    Engine path instead of the connection pool.
+    """
+    import contextlib
+    from unittest.mock import patch
+    document = {"source_kind": "catalog", "lifecycle": "active",
+                "adapter_type": "native", "catalog_identity": identity}
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch("services.product_read_authority.enabled", return_value=True))
+    stack.enter_context(patch("services.product_read_authority.list_documents",
+                              return_value=[document]))
+    return stack
+
 class ChartFreshnessTests(unittest.TestCase):
     def test_retirement_serving_uses_compiled_context_without_metadata_sql(self):
         context_spec = {
@@ -69,7 +89,13 @@ class ChartFreshnessTests(unittest.TestCase):
         dataset = {"id": "7", "database_name": "OpenSource", "schema_name": "public",
                    "table_name": "events", "source": None}
         definition = {"id": "table:OpenSource:public:events", "shape": None}
-        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch("services.engine_bridge.table_definition", return_value=definition),              patch.object(engine.meta, "query_one",
+        # The catalog document is what a deployment that can run Engine SQL
+        # necessarily has: routers/lab.py refuses execution without it. The
+        # lookup reads that rather than assuming every database is a catalog,
+        # which would claim a registered Fabric source as an Engine one.
+        with active_native_catalog(), \
+             patch("services.engine_bridge.table_definition", return_value=definition), \
+             patch.object(engine.meta, "query_one",
                           side_effect=AssertionError("PostgreSQL read reached")):
             engine._TABLE_ID_CACHE.pop("7", None)
             self.addCleanup(engine._TABLE_ID_CACHE.pop, "7", None)
@@ -114,7 +140,7 @@ class ChartFreshnessTests(unittest.TestCase):
             "columns": [{"name": "country"}, {"name": "total"}],
             "data": [["US", 42]],
         }
-        with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
+        with active_native_catalog(), \
              patch("services.engine_bridge.execute", return_value=bridge_result) as execute, \
              patch.object(engine.pool, "execute_query") as pool_execute:
             result = engine._execute_dataset_query(
@@ -132,7 +158,7 @@ class ChartFreshnessTests(unittest.TestCase):
         pool_execute.assert_not_called()
 
     def test_native_analyze_carries_the_relation_schema(self):
-        with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
+        with active_native_catalog(), \
              patch("services.engine_bridge.execute", return_value={"columns": [], "data": []}) as execute:
             engine._execute_dataset_query('ANALYZE "kaveon_product"."kaveon_events_enriched"', "OpenSource")
         execute.assert_called_once_with(
@@ -162,6 +188,12 @@ class ChartFreshnessTests(unittest.TestCase):
             stack.enter_context(patch.object(engine, "ensure_tables", lambda: None))
             stack.enter_context(patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset))
             stack.enter_context(patch.object(engine.profiler, "build_context", return_value={"supported": False}))
+            # Generation publishes through the cutover service now, which wants an
+            # Engine credential. This asserts the rebuild, not the transport.
+            stack.enter_context(patch("services.dlm_generation_cutover.publish"))
+            # `get_dlm` reads the compiled artifact rather than a metadata row.
+            stack.enter_context(patch("services.dlm_compiled_artifact.read",
+                                      return_value={"status": "ready", "version": 1}))
             stack.enter_context(patch.object(engine.meta, "query_one", return_value={"status": "ready"}))
             stack.enter_context(patch.object(engine.meta, "execute", lambda *a, **k: None))
             transaction = SimpleNamespace(execute=Mock(return_value=1))
@@ -228,7 +260,7 @@ class ChartFreshnessTests(unittest.TestCase):
         execute.assert_called_once_with("SELECT COUNT(*)", "warehouse", timeout_seconds=engine._BUILD_QUERY_TIMEOUT_SECONDS)
 
     def test_native_row_counts_are_exact_engine_queries(self):
-        with patch.object(engine.meta, "query_one", return_value={"engine_catalog": "OpenSource"}), \
+        with active_native_catalog(), \
              patch.object(engine, "_execute_dataset_query", side_effect=[
                  {"rows_objects": [{"row_count": 12}]},
                  {"rows": [[34]]},
