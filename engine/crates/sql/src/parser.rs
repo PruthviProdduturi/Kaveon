@@ -1921,6 +1921,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_sql_server_count_big_as_read_compatible_count() {
+        let statements = parse_sql("SELECT COUNT_BIG(*) AS row_count FROM t").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert!(format!("{:?}", statements[0]).contains("COUNT_BIG"));
+    }
+
+    #[test]
     fn bracketed_identifiers_are_not_parsed_as_arrays() {
         let statements = parse_sql("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
             .expect("bracketed identifier should parse");
