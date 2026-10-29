@@ -10,3 +10,6 @@ kaveon-core = { path = "../core" }
 arrow = { workspace = true }
 sqlparser = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
