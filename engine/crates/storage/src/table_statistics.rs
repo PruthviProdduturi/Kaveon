@@ -23,9 +23,9 @@ use arrow::{
 };
 use kaveon_core::{
     BatchSource, ColumnSketches, ColumnStatistics, DataFormat, FileColumnSketches,
-    FileColumnStatistics, FileStatistics, HllSketch, KaveonError, KllSketch, OperatorMemoryAccount,
-    Result, SourceVersion, StatValue, StatisticsDepth, TableId, TableStatistics,
-    statistics::MAX_PER_FILE_STATISTICS,
+    FileColumnStatistics, FileStatistics, HllSketch, KaveonError, KllSketch, NumericHistogram,
+    OperatorMemoryAccount, Result, SourceVersion, StatValue, StatisticsDepth, TableId,
+    TableStatistics, statistics::MAX_PER_FILE_STATISTICS,
 };
 use object_store::{ObjectStore, path::Path as ObjectPath};
 use serde::{Deserialize, Serialize};
@@ -387,6 +387,7 @@ fn statistics_from_source(source: &SourceFiles, table_id: TableId) -> Result<Tab
             distinct: None,
             distinct_exact: None,
             quantiles: None,
+            histogram: None,
             bytes: column.compressed_bytes,
         })
         .collect::<Vec<_>>();
@@ -1159,6 +1160,7 @@ pub fn apply_profiles(
         column.distinct = profile.distinct;
         column.distinct_exact = None;
         column.quantiles = profile.quantiles;
+        column.histogram = NumericHistogram::from_quantiles(column.quantiles.as_ref());
     }
     statistics.depth = StatisticsDepth::Full;
     Ok(())
@@ -1321,6 +1323,9 @@ mod tests {
         assert!((distinct - 12_000.0).abs() / 12_000.0 < 0.03, "{distinct}");
         let median = id.quantiles.as_ref().unwrap().quantile(0.5).unwrap();
         assert!((median - 6_000.0).abs() < 300.0, "{median}");
+        let histogram = id.histogram.as_ref().expect("numeric histogram");
+        assert!(histogram.is_valid());
+        assert_eq!(histogram.counts.len(), NumericHistogram::MAX_BUCKETS);
         let name = full.column("name").unwrap();
         assert_close(name.distinct_count(), 50);
         assert_eq!(name.min, Some(StatValue::Text("name-0".into())));

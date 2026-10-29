@@ -300,10 +300,107 @@ pub struct ColumnStatistics {
     /// numeric or temporal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantiles: Option<KllSketch>,
+    /// A persisted equi-depth histogram derived from the same numeric
+    /// sketch. It is deliberately bounded and approximate; the rank error is
+    /// recorded so planners do not mistake it for exact row counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub histogram: Option<NumericHistogram>,
     /// Compressed bytes of the column across the files, when the footers
     /// were read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
+}
+
+/// A bounded numeric equi-depth histogram. Boundaries are ordered and counts
+/// cover the half-open intervals between them, with the final interval closed
+/// at the maximum. It is persisted with the table statistics source version.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NumericHistogram {
+    pub boundaries: Vec<f64>,
+    pub counts: Vec<u64>,
+    pub rank_error: f64,
+}
+
+impl NumericHistogram {
+    pub const MAX_BUCKETS: usize = 16;
+
+    /// Build a deterministic equi-depth histogram from a KLL sketch. The
+    /// histogram is a compact planner summary, not a second data scan.
+    pub fn from_quantiles(sketch: Option<&KllSketch>) -> Option<Self> {
+        let sketch = sketch.filter(|sketch| !sketch.is_empty())?;
+        let fractions: Vec<f64> = (0..=Self::MAX_BUCKETS)
+            .map(|index| index as f64 / Self::MAX_BUCKETS as f64)
+            .collect();
+        let boundaries = sketch
+            .quantiles(&fractions)
+            .into_iter()
+            .collect::<Option<Vec<_>>>()?;
+        let mut counts = Vec::with_capacity(Self::MAX_BUCKETS);
+        let mut assigned = 0u64;
+        for index in 0..Self::MAX_BUCKETS {
+            let count = if index + 1 == Self::MAX_BUCKETS {
+                sketch.count().saturating_sub(assigned)
+            } else {
+                let from = if index == 0 {
+                    0.0
+                } else {
+                    sketch.rank(boundaries[index])
+                };
+                let to = sketch.rank(boundaries[index + 1]);
+                ((to - from).max(0.0) * sketch.count() as f64).round() as u64
+            };
+            assigned = assigned.saturating_add(count);
+            counts.push(count);
+        }
+        Some(Self {
+            boundaries,
+            counts,
+            rank_error: sketch.rank_error(),
+        })
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.boundaries.len() == self.counts.len() + 1
+            && !self.boundaries.is_empty()
+            && self.boundaries.windows(2).all(|pair| pair[0] <= pair[1])
+    }
+
+    /// Estimate the fraction inside a numeric range using the persisted bins.
+    pub fn fraction_between(
+        &self,
+        low: Option<(f64, bool)>,
+        high: Option<(f64, bool)>,
+    ) -> Option<f64> {
+        if !self.is_valid() || self.counts.iter().sum::<u64>() == 0 {
+            return None;
+        }
+        let total = self.counts.iter().sum::<u64>() as f64;
+        let cdf = |value: f64, inclusive: bool| {
+            let mut cumulative = 0.0;
+            for index in 0..self.counts.len() {
+                let left = self.boundaries[index];
+                let right = self.boundaries[index + 1];
+                let count = self.counts[index] as f64;
+                if value >= right || (inclusive && value == right) {
+                    cumulative += count;
+                } else if value > left {
+                    let width = right - left;
+                    cumulative += if width > 0.0 {
+                        count * ((value - left) / width).clamp(0.0, 1.0)
+                    } else {
+                        count
+                    };
+                    break;
+                } else {
+                    break;
+                }
+            }
+            cumulative / total
+        };
+        let from = low.map_or(0.0, |(value, inclusive)| cdf(value, !inclusive));
+        let to = high.map_or(1.0, |(value, inclusive)| cdf(value, inclusive));
+        Some((to - from).max(0.0))
+    }
 }
 
 impl ColumnStatistics {
@@ -567,11 +664,15 @@ impl TableStatistics {
                 for column in &mut self.columns {
                     column.distinct = None;
                     column.quantiles = None;
+                    column.histogram = None;
                 }
                 if self.depth == StatisticsDepth::Full {
                     self.depth = StatisticsDepth::Metadata;
                 }
             }
+        }
+        for column in &mut self.columns {
+            column.histogram = NumericHistogram::from_quantiles(column.quantiles.as_ref());
         }
         if self.per_file_complete {
             if self.per_file.len() + added.len() <= MAX_PER_FILE_STATISTICS {
@@ -664,6 +765,7 @@ mod tests {
                     distinct: None,
                     distinct_exact: None,
                     quantiles: None,
+                    histogram: None,
                     bytes: Some(400),
                 },
                 ColumnStatistics {
@@ -676,6 +778,7 @@ mod tests {
                     distinct: None,
                     distinct_exact: None,
                     quantiles: None,
+                    histogram: None,
                     bytes: Some(600),
                 },
             ],
@@ -923,5 +1026,27 @@ mod tests {
         }
         .label();
         assert_eq!(label, "delta v3 (0123456789ab)");
+    }
+
+    #[test]
+    fn numeric_histogram_is_bounded_serializable_and_estimates_ranges() {
+        let mut sketch = KllSketch::default_k();
+        for value in 0..10_000 {
+            sketch.update(value as f64);
+        }
+        let histogram = NumericHistogram::from_quantiles(Some(&sketch)).unwrap();
+        assert!(histogram.is_valid());
+        assert_eq!(
+            histogram.boundaries.len(),
+            NumericHistogram::MAX_BUCKETS + 1
+        );
+        assert_eq!(histogram.counts.iter().sum::<u64>(), sketch.count());
+        let middle = histogram
+            .fraction_between(Some((2_500.0, true)), Some((7_499.0, true)))
+            .unwrap();
+        assert!((middle - 0.5).abs() < 0.08, "{middle}");
+        let bytes = serde_json::to_vec(&histogram).unwrap();
+        let restored: NumericHistogram = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored, histogram);
     }
 }

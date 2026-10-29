@@ -834,6 +834,11 @@ fn range_selectivity(
     {
         return 0.0;
     }
+    if let Some(histogram) = &column.histogram
+        && let Some(fraction) = histogram.fraction_between(low, high)
+    {
+        return fraction * non_null;
+    }
     if let Some(quantiles) = &column.quantiles
         && !quantiles.is_empty()
     {
@@ -1234,8 +1239,8 @@ mod tests {
     use arrow::datatypes::DataType;
     use arrow::datatypes::Schema;
     use kaveon_core::{
-        AccessPattern, ColumnStatistics, HllSketch, KllSketch, ResolvedTable, SourceVersion,
-        SourceVersionKind, StatisticsDepth, StorageType, TableId, TableMeta,
+        AccessPattern, ColumnStatistics, HllSketch, KllSketch, NumericHistogram, ResolvedTable,
+        SourceVersion, SourceVersionKind, StatisticsDepth, StorageType, TableId, TableMeta,
     };
     use kaveon_sql::logical_plan::sql_to_logical_plan;
     use std::{fs, path::PathBuf};
@@ -1841,6 +1846,7 @@ mod tests {
         for value in 0..rows {
             quantiles.update((value % 1000) as f64);
         }
+        let histogram = NumericHistogram::from_quantiles(Some(&quantiles));
         TableStatistics {
             version: kaveon_core::statistics::TABLE_STATISTICS_VERSION,
             table_id: TableId::new("table:events").unwrap(),
@@ -1870,6 +1876,7 @@ mod tests {
                     distinct: Some(distinct),
                     distinct_exact: None,
                     quantiles: Some(quantiles),
+                    histogram,
                     bytes: None,
                 },
                 ColumnStatistics {
@@ -1882,6 +1889,7 @@ mod tests {
                     distinct: None,
                     distinct_exact: Some(4),
                     quantiles: None,
+                    histogram: None,
                     bytes: None,
                 },
             ],

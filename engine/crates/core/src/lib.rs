@@ -57,7 +57,8 @@ pub use shape::{
 pub use sketch::{HllSketch, KllSketch};
 pub use statistics::{
     ColumnSketches, ColumnStatistics, FileColumnSketches, FileColumnStatistics, FileStatistics,
-    SourceVersion, SourceVersionKind, StatValue, StatisticsDepth, TableStatistics,
+    NumericHistogram, SourceVersion, SourceVersionKind, StatValue, StatisticsDepth,
+    TableStatistics,
 };
 pub use telemetry::{
     NodeMetrics, OperatorMetrics, PlanMetricsSnapshot, PlanNode, PlanNodeId, PlanPhase, ScanMetrics,

@@ -148,8 +148,11 @@ gate.
 - [x] Persist source-version-bound row counts, bytes, distinct sketches, null
   fractions, quantiles, and bounds for supported Parquet/Delta/Iceberg paths.
   Evidence: `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
-- [ ] Add a persisted histogram model; sketches and quantiles are qualified,
-  but this is not yet a histogram claim.
+- [x] Add a bounded persisted numeric histogram model derived from the
+  source-version-bound KLL profile. Histogram boundaries/counts are used for
+  range selectivity when present; text and metadata-only columns remain
+  bounds/quantile-only. Evidence:
+  `docs/qualification/track3-statistics-histogram-2026-10-29.md`.
 - [x] Use qualified statistics for bounded local join ordering, broadcast
   choice, selectivity, and reader pruning. Cloud pruning and universal
   cost-based planning remain separate gates; see

@@ -16575,6 +16575,7 @@ mod tests {
             distinct: None,
             distinct_exact: None,
             quantiles: None,
+            histogram: None,
             bytes: None,
         };
         let columns = vec![
