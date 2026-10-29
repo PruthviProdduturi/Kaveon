@@ -176,7 +176,7 @@ class GenerationTests(unittest.TestCase):
             # the freshness sweep alike.
             engine._COVERAGE_CACHE.serve(("owner", "Admin"),
                                          lambda _previous: ([], "digest-a"))
-            result = engine.generate_dlm("2", force=True)
+            result = engine.generate_dlm("2", force=True, actor="owner", role="Admin")
 
         self.assertTrue(result["ok"] and result["status"] == "ready", result)
         self.assertEqual(engine._COVERAGE_CACHE.stats()["entries"], 0)

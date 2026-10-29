@@ -100,9 +100,6 @@ def _with_serving_identity(actor: Optional[str], role: str, invoke):
     branches would read nothing from it and re-enter its own value count."""
     if not actor or _RETIREMENT_SERVING.get() is not None:
         return invoke()
-    from services import postgresql_retirement_runtime
-    if not postgresql_retirement_runtime.requested():
-        return invoke()
     token = _RETIREMENT_SERVING.set(_RetirementServingState(actor, role))
     try:
         return invoke()
@@ -455,9 +452,6 @@ def ensure_tables() -> None:
 
 def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = None,
                  role: str = "Viewer") -> Dict[str, Any]:
-    from services import postgresql_retirement_runtime
-    if not postgresql_retirement_runtime.requested():
-        return _generate_dlm_impl(dataset_id, force, actor, role)
     state = _RetirementBuildState()
     token = _RETIREMENT_BUILD.set(state)
     try:
@@ -3868,8 +3862,7 @@ def maybe_auto_rebuild(dataset_id: str, actor: Optional[str] = None,
     when one is not already. Without that this returned False for every call
     the ask path made — freshness detected staleness correctly and nothing ever
     acted on it, leaving context to be refreshed only by hand."""
-    from services import postgresql_retirement_runtime
-    if postgresql_retirement_runtime.requested() and _RETIREMENT_SERVING.get() is None:
+    if _RETIREMENT_SERVING.get() is None:
         if not actor:
             return False
         return _with_serving_identity(
@@ -4964,8 +4957,7 @@ def _dashboard_combos(dashboard_id: str, actor: Optional[str] = None) -> Dict[st
 
 def curate_dashboard(dashboard_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
     """Curate through an isolated compiled-context transaction after retirement."""
-    from services import postgresql_retirement_runtime
-    if not postgresql_retirement_runtime.requested() or _RETIREMENT_BUILD.get() is not None:
+    if _RETIREMENT_BUILD.get() is not None:
         return _curate_dashboard_impl(dashboard_id, actor)
     if not actor:
         raise RuntimeError("PostgreSQL-free dashboard curation requires actor identity")
@@ -5783,7 +5775,6 @@ def _revalidated_coverage(actor: str, role: str,
         _RETIREMENT_SERVING.reset(token)
 
 
-COVERAGE_NOT_CACHED = "not cached"
 
 
 def warm_coverage(actor: str, role: str = "Viewer") -> str:
@@ -5792,16 +5783,13 @@ def warm_coverage(actor: str, role: str = "Viewer") -> str:
     Same validation the reader's recheck runs, and the same key — ``(actor,
     role)`` — so what is filled here can only ever be served back to the
     principal it was computed for. Returns what the cache did (see
-    ``RevalidatingCache.warm``), or ``COVERAGE_NOT_CACHED`` on a deployment
+    ``RevalidatingCache.warm``)
     whose banner comes from the legacy metadata DB, where the read is two
     local queries and there is nothing to warm. Raises what the Engine raised,
     so the warmer can report the read it could not make.
     """
     if not actor:
         raise ValueError("warming the context banner requires a principal")
-    from services import postgresql_retirement_runtime
-    if not postgresql_retirement_runtime.requested():
-        return COVERAGE_NOT_CACHED
     return _COVERAGE_CACHE.warm(
         (actor, role),
         lambda previous: _revalidated_coverage(actor, role, previous),
