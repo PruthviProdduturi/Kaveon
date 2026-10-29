@@ -335,6 +335,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datepart_iso_week_alias",
+        "SELECT TOP 5 DATEPART(iso_week, event_date) AS iso_week_number FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
+        "tsql_datename_iso_week_alias",
+        "SELECT TOP 5 DATENAME(isowk, event_date) AS iso_week_number FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_dateadd_weekday_alias",
         "SELECT TOP 5 DATEADD(dw, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,

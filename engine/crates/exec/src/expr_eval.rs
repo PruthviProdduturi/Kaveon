@@ -14727,8 +14727,19 @@ fn extract_from_micros(micros: i64, field: DateField) -> i64 {
             let doy = days - jan1;
             doy / 7 + 1
         }
+        DateField::IsoWeek => iso_week_number(days),
         DateField::Epoch => secs,
     }
+}
+
+fn iso_week_number(days: i64) -> i64 {
+    let iso_weekday = (days + 3).rem_euclid(7) + 1;
+    let thursday = days + (4 - iso_weekday);
+    let (iso_year, _, _) = days_to_ymd(thursday);
+    let jan4 = ymd_to_days(iso_year, 1, 4);
+    let jan4_weekday = (jan4 + 3).rem_euclid(7) + 1;
+    let first_monday = jan4 - (jan4_weekday - 1);
+    (days - first_monday).div_euclid(7) + 1
 }
 
 fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
@@ -15562,6 +15573,7 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "DOY" | "DAYOFYEAR" | "DY" | "Y" => DateField::DayOfYear,
                 "QUARTER" => DateField::Quarter,
                 "WEEK" => DateField::Week,
+                "ISO_WEEK" | "ISOWK" | "ISOWW" => DateField::IsoWeek,
                 "EPOCH" => DateField::Epoch,
                 _ => {
                     return Err(KaveonError::Execution(format!(
@@ -15897,6 +15909,7 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "DAYOFYEAR" | "DOY" => (days - ymd_to_days(year, 1, 1) + 1).to_string(),
                 "QUARTER" | "QQ" | "Q" => (((month - 1) / 3) + 1).to_string(),
                 "WEEK" | "WK" | "WW" => ((days - ymd_to_days(year, 1, 1)) / 7 + 1).to_string(),
+                "ISO_WEEK" | "ISOWK" | "ISOWW" => iso_week_number(days).to_string(),
                 "HOUR" | "HH" => (remainder / 3_600_000_000_000).to_string(),
                 "MINUTE" | "MI" | "N" => ((remainder / 60_000_000_000) % 60).to_string(),
                 "SECOND" | "SS" | "S" => ((remainder / 1_000_000_000) % 60).to_string(),
@@ -26185,6 +26198,19 @@ mod tests {
                 .as_primitive::<Int64Type>()
                 .value(0);
             assert_eq!(value, canonical, "day-of-year alias {alias}");
+        }
+        let source = Arc::new(Date32Array::from(vec![Some(18_628)])) as ArrayRef;
+        let canonical = eval_date_part(&StringArray::from(vec![Some("ISO_WEEK")]), &source, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        assert_eq!(canonical, 53);
+        for alias in ["ISOWK", "ISOWW"] {
+            let value = eval_date_part(&StringArray::from(vec![Some(alias)]), &source, 1)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0);
+            assert_eq!(value, canonical, "ISO-week alias {alias}");
         }
     }
 

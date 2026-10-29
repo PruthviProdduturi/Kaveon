@@ -7,7 +7,9 @@ the existing day-of-year result. The implementation does not change
 Kaveon's documented deterministic calendar convention.
 
 The same aliases are accepted by `DATEADD` as day-equivalent offsets. This
-does not claim business-day or calendar-holiday behavior.
+does not claim business-day or calendar-holiday behavior. `DATEPART` and
+`DATENAME` also accept `iso_week`, `isowk`, and `isoww` using ISO-8601 week
+numbering; the existing `WEEK` spelling remains a separate non-ISO contract.
 
 Evidence:
 
@@ -15,6 +17,8 @@ Evidence:
 - Planner regression: `lowers_common_tsql_scalar_aliases`.
 - Differential cases: `tsql_datepart_weekday_alias`,
   `tsql_datepart_dayofyear_alias`, `tsql_dateadd_weekday_alias`, and
-  `tsql_dateadd_dayofyear_alias`.
+  `tsql_dateadd_dayofyear_alias`, `tsql_datepart_iso_week_alias`, and
+  `tsql_datename_iso_week_alias`.
 - Corpus cases: `datepart_weekday_alias`, `datepart_dayofyear_alias`,
-  `dateadd_weekday_alias`, and `dateadd_dayofyear_alias`.
+  `dateadd_weekday_alias`, `dateadd_dayofyear_alias`,
+  `datepart_iso_week_alias`, and `datename_iso_week_alias`.
