@@ -25,7 +25,7 @@ and runtime T-SQL DATE conversion styles in `5b8c5031`). Planner, executor,
 and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-and the versioned 50-case corpus. The bounded `DATETIME2FROMPARTS` and
+and the versioned 51-case corpus. The bounded `DATETIME2FROMPARTS` and
 `SMALLDATETIMEFROMPARTS`
 qualification is recorded in
 `docs/qualification/track2-tsql-smalldatetimefromparts-2026-10-29.md`.

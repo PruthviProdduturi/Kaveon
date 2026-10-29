@@ -12244,6 +12244,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             eval_date_add_microseconds(&args[0], &args[1], num_rows)
         }
+        "DATE_ADD_NANOSECONDS" => {
+            check_arity(name, args, 2)?;
+            eval_date_add_nanoseconds(&args[0], &args[1], num_rows)
+        }
         "DATE_ADD_MONTHS" => {
             check_arity(name, args, 2)?;
             eval_date_add_months(&args[0], &args[1], num_rows)
@@ -15148,6 +15152,27 @@ fn eval_date_add_microseconds(
     }
 }
 
+fn eval_date_add_nanoseconds(
+    source: &ArrayRef,
+    delta: &ArrayRef,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let delta = delta.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+        KaveonError::Execution("DATE_ADD_NANOSECONDS requires an integer nanosecond count".into())
+    })?;
+    match source.data_type() {
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => add_timestamp_seconds::<
+            TimestampNanosecondType,
+            TimestampNanosecondArray,
+        >(
+            source, delta, num_rows, 1, tz.clone()
+        ),
+        other => Err(KaveonError::Execution(format!(
+            "DATE_ADD_NANOSECONDS requires a nanosecond timestamp input, got {other}"
+        ))),
+    }
+}
+
 fn add_timestamp_seconds<T, A>(
     source: &ArrayRef,
     delta: &Int64Array,
@@ -16852,6 +16877,38 @@ mod tests {
             result.value(0),
             19_753_i64 * 86_400_000 + time_of_day + 7_200_000
         );
+        assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn date_add_nanoseconds_preserves_nanosecond_precision_and_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(arrow::array::TimestampNanosecondArray::from(
+                vec![Some(1_000_000_000_i64), None],
+            ))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_NANOSECONDS".into(),
+                args: vec![
+                    Expr::Column("ts".into()),
+                    Expr::Literal(ScalarValue::Int64(123)),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
+        assert_eq!(result.value(0), 1_000_000_123);
         assert!(result.is_null(1));
     }
 
