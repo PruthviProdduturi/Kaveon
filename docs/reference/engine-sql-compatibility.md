@@ -218,9 +218,10 @@ failures.
   bounded, revisioned metadata-record DML subset; its typed-row facade
   validates declared primary/unique keys and product references, but it is not
   arbitrary OLTP SQL or general constraint DDL.
-- Scalar optimizer statistics beyond row count. Native `ANALYZE` persists the
-  exact row count and an immutable statistics document, but histogram/selectivity
-  planning is not yet implemented.
+- Universal cost-based optimization. Native `ANALYZE` persists an immutable
+  source-version-bound statistics document with exact metadata, sketches,
+  quantiles, and bounded numeric histograms; the planner still falls back
+  conservatively when a shape or source lacks a usable summary.
 - Dynamic filtering beyond the qualified scan paths. Build-side keys are
   propagated for supported single-key and composite-key joins into Parquet,
   Delta, Iceberg, and object-store readers before decode; exact-result local

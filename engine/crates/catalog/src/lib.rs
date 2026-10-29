@@ -1253,6 +1253,7 @@ mod tests {
                 distinct: Some(distinct),
                 distinct_exact: None,
                 quantiles: None,
+                histogram: None,
                 bytes: None,
             }],
             per_file: Vec::new(),
