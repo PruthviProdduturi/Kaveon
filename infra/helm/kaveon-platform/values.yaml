@@ -99,12 +99,16 @@ api:
   cutover:
     # Final retirement and first PostgreSQL-free restart rehearsal are mutually
     # exclusive. Runtime validation rejects incomplete evidence or family sets.
-    retirementMode: false
+    #
+    # Retirement is on by default because it is what the product is. PostgreSQL
+    # is retired: product records are committed through the Engine's
+    # transaction API, and `false` here rendered the branch that expects a
+    # metadata database -- a psycopg2 init container waiting on a schema, and a
+    # portal-init job creating one. A fresh install of this chart therefore
+    # disagreed with the product it was installing, and did so by defaulting to
+    # the path no deployment runs.
+    retirementMode: true
     restartRehearsalMode: false
-    # Keep the PostgreSQL StatefulSet, Service, and PVC rendered during the
-    # non-destructive restart rehearsal.  The PostgreSQL ingress policy is
-    # tightened separately so the API cannot use it.
-    retainPostgresDuringRestart: false
     authorityFamilies: ""
     readAuthorityFamilies: ""
     evidencePvc: ""
