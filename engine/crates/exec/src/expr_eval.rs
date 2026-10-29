@@ -14706,6 +14706,7 @@ fn extract_from_micros(micros: i64, field: DateField) -> i64 {
     let secs = micros / 1_000_000;
     let days = secs / 86400;
     let time_of_day = ((secs % 86400) + 86400) % 86400;
+    let subsecond = micros.rem_euclid(1_000_000);
 
     let (year, month, day) = days_to_ymd(days);
 
@@ -14716,6 +14717,9 @@ fn extract_from_micros(micros: i64, field: DateField) -> i64 {
         DateField::Hour => time_of_day / 3600,
         DateField::Minute => (time_of_day % 3600) / 60,
         DateField::Second => time_of_day % 60,
+        DateField::Millisecond => subsecond / 1_000,
+        DateField::Microsecond => subsecond,
+        DateField::Nanosecond => subsecond * 1_000,
         DateField::DayOfWeek => (days % 7 + 4 + 7) % 7,
         DateField::DayOfYear => {
             let jan1 = ymd_to_days(year, 1, 1);
@@ -15569,6 +15573,9 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "HOUR" | "HH" => DateField::Hour,
                 "MINUTE" | "MI" | "N" => DateField::Minute,
                 "SECOND" | "SS" | "S" => DateField::Second,
+                "MILLISECOND" | "MILLI" | "MS" => DateField::Millisecond,
+                "MICROSECOND" | "MICRO" | "MCS" | "US" => DateField::Microsecond,
+                "NANOSECOND" | "NANO" | "NS" => DateField::Nanosecond,
                 "DOW" | "DAYOFWEEK" | "WEEKDAY" | "DW" | "W" => DateField::DayOfWeek,
                 "DOY" | "DAYOFYEAR" | "DY" | "Y" => DateField::DayOfYear,
                 "QUARTER" | "QQ" | "Q" => DateField::Quarter,
@@ -15915,6 +15922,11 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "HOUR" | "HH" => (remainder / 3_600_000_000_000).to_string(),
                 "MINUTE" | "MI" | "N" => ((remainder / 60_000_000_000) % 60).to_string(),
                 "SECOND" | "SS" | "S" => ((remainder / 1_000_000_000) % 60).to_string(),
+                "MILLISECOND" | "MILLI" | "MS" => ((remainder / 1_000_000_000) % 1_000).to_string(),
+                "MICROSECOND" | "MICRO" | "MCS" | "US" => {
+                    ((remainder / 1_000_000) % 1_000_000).to_string()
+                }
+                "NANOSECOND" | "NANO" | "NS" => (remainder % 1_000_000_000).to_string(),
                 _ => {
                     return Err(KaveonError::Execution(format!(
                         "unsupported DATENAME field: {field}"
@@ -16669,6 +16681,27 @@ mod tests {
                 .as_primitive::<Int64Type>()
                 .value(0);
             assert_eq!(value, quarter, "DATEPART quarter alias {alias}");
+        }
+    }
+
+    #[test]
+    fn date_part_accepts_tsql_subsecond_aliases() {
+        let source = Arc::new(TimestampMicrosecondArray::from(vec![Some(1_234_567)])) as ArrayRef;
+        for (field, expected) in [
+            ("MILLISECOND", 234),
+            ("MILLI", 234),
+            ("MS", 234),
+            ("MICROSECOND", 234_567),
+            ("MCS", 234_567),
+            ("US", 234_567),
+            ("NANOSECOND", 234_567_000),
+            ("NS", 234_567_000),
+        ] {
+            let value = eval_date_part(&StringArray::from(vec![Some(field)]), &source, 1)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0);
+            assert_eq!(value, expected, "DATEPART subsecond alias {field}");
         }
     }
 
