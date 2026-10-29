@@ -13,7 +13,7 @@ during planning because 100-nanosecond storage is not representable.
 - Implementation: `0e8441d0`.
 - Planner regression:
   `lowers_tsql_datetime2fromparts_with_bounded_precision`.
-- Versioned corpus: 72 cases, including a precision-6 constructor.
+- Versioned corpus: 75 cases, including a precision-6 constructor.
 - Differential case: `tsql_datetime2fromparts`, executed against the local and
   three-worker-style paths with exact result comparison.
 - Focused precision-6 differential:
