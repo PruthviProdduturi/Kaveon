@@ -1307,6 +1307,7 @@ pub enum ProductDmlCommand {
     InsertSelect {
         kind: String,
         source_kind: String,
+        source_ids: Option<Vec<String>>,
         on_conflict_do_nothing: bool,
         on_conflict_do_update: bool,
     },
@@ -1441,7 +1442,9 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         || (!select.from.is_empty() && !is_bounded_product_source(select, &kind))
                         || !select.lateral_views.is_empty()
                         || select.prewhere.is_some()
-                        || select.selection.is_some()
+                        || (select.selection.is_some()
+                            && (select.from.is_empty()
+                                || !is_bounded_product_source(select, &kind)))
                         || !matches!(
                             &select.group_by,
                             GroupByExpr::Expressions(expressions, modifiers)
@@ -1461,7 +1464,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         ));
                     }
                     if !select.from.is_empty() {
-                        let source_kind = bounded_product_source_kind(select, &kind)?;
+                        let (source_kind, source_ids) = bounded_product_source_kind(select, &kind)?;
                         if !dml.returning.is_empty() {
                             return Err(sql_error(
                                 "product INSERT SELECT does not support RETURNING",
@@ -1470,6 +1473,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         return Ok(vec![ProductDmlCommand::InsertSelect {
                             kind,
                             source_kind,
+                            source_ids,
                             on_conflict_do_nothing: dml.on_conflict_do_nothing,
                             on_conflict_do_update: dml.on_conflict_do_update,
                         }]);
@@ -1561,7 +1565,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
 fn bounded_product_source_kind(
     select: &sqlparser::ast::Select,
     target_kind: &str,
-) -> Result<String> {
+) -> Result<(String, Option<Vec<String>>)> {
     if select.from.len() != 1 {
         return Err(sql_error(
             "product INSERT SELECT requires exactly one source table",
@@ -1589,6 +1593,36 @@ fn bounded_product_source_kind(
             "product INSERT SELECT source and target kinds must match",
         ));
     }
+    let source_ids = match select.selection.as_ref() {
+        None => None,
+        Some(Expr::InList {
+            expr,
+            list,
+            negated: false,
+        }) => {
+            if !matches!(expr.as_ref(), Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("id"))
+            {
+                return Err(sql_error(
+                    "product INSERT SELECT WHERE may filter only the id column",
+                ));
+            }
+            if list.is_empty() || list.len() > 1_000 {
+                return Err(sql_error(
+                    "product INSERT SELECT id filter must contain 1 to 1000 values",
+                ));
+            }
+            Some(
+                list.iter()
+                    .map(|value| string_literal(value, "product ID"))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        }
+        Some(_) => {
+            return Err(sql_error(
+                "product INSERT SELECT WHERE supports only id IN (literal, ...)",
+            ));
+        }
+    };
     if select.projection.len() != 2
         || !select.projection.iter().all(|item| {
             matches!(item, SelectItem::UnnamedExpr(Expr::Identifier(identifier))
@@ -1600,7 +1634,7 @@ fn bounded_product_source_kind(
             "product INSERT SELECT must project only id and document_json",
         ));
     }
-    Ok(source_kind)
+    Ok((source_kind, source_ids))
 }
 
 fn is_bounded_product_source(select: &sqlparser::ast::Select, target_kind: &str) -> bool {
@@ -2823,6 +2857,7 @@ mod tests {
             ProductDmlCommand::InsertSelect {
                 kind: "dataset".into(),
                 source_kind: "dataset".into(),
+                source_ids: None,
                 on_conflict_do_nothing: true,
                 on_conflict_do_update: false,
             }
@@ -2840,5 +2875,26 @@ mod tests {
                 assert!(adapt_product_dml(&dml).is_err(), "{sql}");
             }
         }
+    }
+
+    #[test]
+    fn product_insert_select_accepts_bounded_id_filter() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('one', 'two') ON CONFLICT DO NOTHING",
+        )
+        .expect("bounded source filter should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::InsertSelect {
+                kind: "dataset".into(),
+                source_kind: "dataset".into(),
+                source_ids: Some(vec!["one".into(), "two".into()]),
+                on_conflict_do_nothing: true,
+                on_conflict_do_update: false,
+            }
+        );
     }
 }

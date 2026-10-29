@@ -123,8 +123,9 @@ unchanged; nothing is approximated unless the statement writes an
 
 KaveonDB supports a bounded product-record source copy: one same-kind
 `kaveon.product` table, direct `id` and `document_json` projection, pinned
-snapshot, owner isolation, and a 1,000-row cap. It reuses product conflict
-and revision-CAS semantics. Joins, filters, CTEs, arbitrary expressions,
+snapshot, owner isolation, and a 1,000-row cap. A literal `id IN (...)`
+predicate may narrow the source. It reuses product conflict and revision-CAS
+semantics. Joins, other filters, CTEs, arbitrary expressions,
 cross-kind copies, lake/external sources, and `RETURNING` remain rejected;
 this is not general lake-table DML.
 
