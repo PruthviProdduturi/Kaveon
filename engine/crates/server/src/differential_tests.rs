@@ -7558,6 +7558,33 @@ fn bound_plan(statement: &str, manager: &CatalogManager) -> LogicalPlan {
     kaveon_optim::rules::push_projection_down(plan)
 }
 
+#[test]
+fn distributed_tsql_isdate_matches_local_and_rejects_numeric_coercion() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-isdate-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, ISDATE(event_date) AS valid_date, ISDATE(actions) AS numeric_date FROM events ORDER BY user_id LIMIT 5";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-isdate-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(
+        actual
+            .iter()
+            .all(|row| row.contains("true") && row.contains("false"))
+    );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// The grouped partial returns the same answer with adaptive partial
 /// aggregation enabled or disabled. The two-worker fixture gives each task
 /// one bounded input partition, so a task may finish its input before the
