@@ -250,6 +250,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_concat_ws",
+        "SELECT user_id, CONCAT_WS('-', region, industry, platform) AS label FROM {T} ORDER BY user_id, region, industry, platform LIMIT 12",
+        true,
+    ),
+    (
         "tsql_isnumeric",
         "SELECT TOP 5 ISNUMERIC(actions) AS is_numeric FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
@@ -7775,6 +7780,28 @@ fn distributed_tsql_isdate_matches_local_and_rejects_numeric_coercion() {
             .iter()
             .all(|row| row.contains("true") && row.contains("false"))
     );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_concat_ws_matches_local_with_null_fields() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-concat-ws-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, CONCAT_WS('-', region, industry, platform) AS label FROM events ORDER BY user_id, region, industry, platform LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-concat-ws-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
