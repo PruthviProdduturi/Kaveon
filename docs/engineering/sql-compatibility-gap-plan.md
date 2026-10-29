@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 37-case corpus has planner coverage and a completed exact
+  The current 41-case corpus has planner coverage and a completed exact
   three-worker differential sweep; evidence is retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 - [ ] Keep unbounded `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected
