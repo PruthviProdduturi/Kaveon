@@ -322,7 +322,28 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             }
             let evaluated_args: Vec<ArrayRef> = args
                 .iter()
-                .map(|a| {
+                .enumerate()
+                .map(|(index, a)| {
+                    // T-SQL date functions use an unquoted datepart token
+                    // (`DATEDIFF(dd, ...)`, `DATEPART(yyyy, ...)`).  The
+                    // planner intentionally preserves that token as a
+                    // column-shaped expression so it can normalize aliases;
+                    // at execution it is a constant unit, not a batch
+                    // column.  Materialize one string value per row here so
+                    // the existing vectorized date operators can consume it.
+                    if index == 0
+                        && matches!(
+                            name.to_ascii_uppercase().as_str(),
+                            "DATE_PART" | "DATE_DIFF"
+                        )
+                        && let Expr::Column(unit) = a
+                        && !unit.contains('.')
+                    {
+                        return Ok(
+                            Arc::new(StringArray::from(vec![unit.as_str(); batch.num_rows()]))
+                                as ArrayRef,
+                        );
+                    }
                     evaluate(a, batch)
                         .and_then(|array| decode_dictionary(&array))
                         .and_then(|array| normalize_large_list(&array))

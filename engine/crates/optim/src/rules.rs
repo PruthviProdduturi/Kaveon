@@ -411,6 +411,20 @@ fn collect_columns_scoped(expression: &Expr, columns: &mut HashSet<String>, boun
                 collect_columns_scoped(body, columns, &lambda_bound);
             }
         }
+        // SQL Server/Fabric date functions carry an unquoted datepart token
+        // (`DATEADD(dd, ...)`, `DATEDIFF(day, ...)`, `DATEPART(yyyy, ...)`).
+        // The parser represents that token as a column-shaped expression so
+        // it can be normalized by the SQL planner.  It is a unit literal, not
+        // a scan column; do not request it from Parquet during projection
+        // pushdown.  The evaluator still receives the token as the first
+        // function argument and uses it to select the temporal operation.
+        Expr::Function { name, args }
+            if matches!(name.as_str(), "DATE_ADD" | "DATE_DIFF" | "DATE_PART") =>
+        {
+            for argument in args.iter().skip(1) {
+                collect_columns_scoped(argument, columns, bound);
+            }
+        }
         Expr::Function { args, .. } => {
             for argument in args {
                 collect_columns_scoped(argument, columns, bound);

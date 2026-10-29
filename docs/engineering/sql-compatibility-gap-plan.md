@@ -29,11 +29,11 @@ The authoritative capability details remain in:
 
 ### Phase 1 — T-SQL/Fabric read compatibility
 
-- [ ] Create a versioned T-SQL corpus covering `TOP`, bracket identifiers,
+- [x] Create a versioned T-SQL corpus covering `TOP`, bracket identifiers,
   `DATEADD`, `DATEDIFF`, `DATEPART`, `CONVERT`, `TRY_CONVERT`, `ISNULL`,
   `GETDATE`, `SYSDATETIME`, `STRING_AGG`, `PIVOT`, `UNPIVOT`, and SQL Server
   pagination.
-- [ ] Classify every case as accepted, translated, or fail-closed with an
+- [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [ ] Add exact local and distributed result tests for accepted translations.
 - [ ] Keep `TOP PERCENT`, `TOP WITH TIES`, `PIVOT`, `UNPIVOT`, and unsupported
@@ -43,9 +43,12 @@ The authoritative capability details remain in:
 Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Literal DATE styles `0`, `1`, `101`, and `112` now
-normalize to ISO values. The focused planner regression passes; execution and
-distributed corpus evidence are still required before this becomes a fully
-qualified compatibility claim.
+normalize to ISO values. `ISNULL`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
+pass exact local-vs-three-worker differential checks across dictionary, plain,
+partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
+`TOP WITH TIES` remain planner-qualified only: the differential sweep found
+layout-dependent result differences, so they stay out of the distributed
+compatibility claim until global-limit semantics are corrected.
 
 ### Phase 2 — Transactional SQL surface
 
