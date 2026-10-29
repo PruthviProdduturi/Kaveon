@@ -4909,6 +4909,54 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // Fabric/Azure SQL DATE_BUCKET is accepted only for the conservative
+    // width-one/no-origin form. Those buckets are exactly the existing
+    // DATE_TRUNC calendar boundaries; wider buckets and custom origins stay
+    // fail-closed until their calendar arithmetic is qualified.
+    if name == "DATE_BUCKET" {
+        if !(args.len() == 3 || args.len() == 4) {
+            return Err(sql_err(
+                "DATE_BUCKET requires datepart, width, date, and optional origin",
+            ));
+        }
+        if args.len() == 4 {
+            return Err(sql_err(
+                "DATE_BUCKET custom origins are not supported in the bounded Engine contract",
+            ));
+        }
+        let unit = match &args[0] {
+            Expr::Literal(ScalarValue::Utf8(unit)) => unit.clone(),
+            Expr::Column(unit) if !unit.contains('.') => unit.clone(),
+            _ => {
+                return Err(sql_err(
+                    "DATE_BUCKET datepart must be a literal or identifier",
+                ));
+            }
+        };
+        let unit = normalize_tsql_date_unit(&unit);
+        if !matches!(
+            unit.as_str(),
+            "year" | "quarter" | "month" | "day" | "hour" | "minute" | "second"
+        ) {
+            return Err(sql_err(format!(
+                "DATE_BUCKET does not support datepart '{unit}' in the bounded Engine contract"
+            )));
+        }
+        match &args[1] {
+            Expr::Literal(ScalarValue::Int64(1)) => {}
+            Expr::Literal(ScalarValue::Int64(width)) => {
+                return Err(sql_err(format!(
+                    "DATE_BUCKET width {width} is not qualified; only width 1 is supported"
+                )));
+            }
+            _ => return Err(sql_err("DATE_BUCKET width must be the literal 1")),
+        }
+        return Ok(Expr::Function {
+            name: "DATE_TRUNC".into(),
+            args: vec![Expr::Literal(ScalarValue::Utf8(unit)), args[2].clone()],
+        });
+    }
+
     // SQL Server's EOMONTH returns the last day of the month containing the
     // input, optionally shifted by a row-local number of months.  Lower it to
     // the existing typed date operators so it retains the same null,
@@ -8501,6 +8549,22 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("DATE_NAME"), "{rendered}");
         assert!(rendered.contains("month"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_date_bucket_lowers_to_date_trunc_and_rejects_unqualified_forms() {
+        let plan = sql_to_logical_plan("SELECT DATE_BUCKET(month, 1, event_date) FROM t")
+            .expect("width-one DATE_BUCKET should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_TRUNC"), "{rendered}");
+        let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, 3, event_date) FROM t")
+            .expect_err("wider buckets must remain unqualified");
+        assert!(error.to_string().contains("only width 1 is supported"));
+        let error = sql_to_logical_plan(
+            "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t",
+        )
+        .expect_err("custom origins must remain unqualified");
+        assert!(error.to_string().contains("custom origins"));
     }
 
     #[test]

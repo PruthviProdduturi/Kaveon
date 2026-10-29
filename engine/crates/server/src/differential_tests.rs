@@ -620,6 +620,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "date_bucket_width_one",
+        "SELECT DATE_BUCKET(month, 1, TIMESTAMP '2026-02-17 12:34:56.789') AS month_bucket, DATE_BUCKET(day, 1, TIMESTAMP '2026-02-17 12:34:56.789') AS day_bucket FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "width_bucket_and_finiteness",
         "SELECT WIDTH_BUCKET(CAST(2.5 AS DOUBLE), 0, 10, 10) AS bucket, IS_FINITE(CAST(2.5 AS DOUBLE)) AS finite, IS_INFINITE(CAST('Infinity' AS DOUBLE)) AS infinite, IS_NAN(CAST('NaN' AS DOUBLE)) AS nan FROM {T} LIMIT 1",
         false,

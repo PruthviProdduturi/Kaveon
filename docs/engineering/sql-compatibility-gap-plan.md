@@ -31,7 +31,7 @@ The authoritative capability details remain in:
 
 - [x] Create a versioned T-SQL corpus covering `TOP`, bracket identifiers,
   `DATEADD`, `DATEDIFF`, `DATEPART`, `CONVERT`, `TRY_CONVERT`, `ISNULL`,
-  `GETDATE`, `SYSDATETIME`, bounded `PIVOT`, `UNPIVOT`, and `CROSS APPLY`,
+  `GETDATE`, `SYSDATETIME`, bounded `DATE_BUCKET`, `PIVOT`, `UNPIVOT`, and `CROSS APPLY`,
   explicit unsupported APPLY forms, and SQL Server pagination.
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
@@ -95,7 +95,10 @@ same distributed differential regression.
 `TRANSLATE` now has a bounded SQL Server-compatible Unicode scalar mapping
 path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
-gate.
+gate. Bounded `DATE_BUCKET` width-one buckets for year, quarter, month, day,
+hour, minute, and second lower to the existing typed `DATE_TRUNC` path and
+have exact local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); wider buckets, custom origins, and
+unsupported dateparts remain explicitly rejected.
 
 ### Phase 2 — Transactional SQL surface
 
