@@ -1601,15 +1601,18 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             alias: Some(alias),
         } if alias.columns.len() == 2 => {
             let SetExpr::Values(values) = subquery.body.as_ref() else {
-                return Err(sql_error("MERGE source must be one VALUES row"));
+                return Err(sql_error("MERGE source must be a bounded VALUES batch"));
             };
             if subquery.with.is_some()
                 || subquery.order_by.is_some()
                 || subquery.limit.is_some()
-                || values.rows.len() != 1
-                || values.rows[0].len() != 2
+                || values.rows.is_empty()
+                || values.rows.len() > 1000
+                || values.rows.iter().any(|row| row.len() != 2)
             {
-                return Err(sql_error("MERGE source must be one bounded VALUES row"));
+                return Err(sql_error(
+                    "MERGE source must be a bounded VALUES batch of at most 1000 two-column rows",
+                ));
             }
             (
                 alias.name.value.clone(),
@@ -1617,12 +1620,12 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                     alias.columns[0].name.value.clone(),
                     alias.columns[1].name.value.clone(),
                 ],
-                [values.rows[0][0].clone(), values.rows[0][1].clone()],
+                values.rows.clone(),
             )
         }
         _ => {
             return Err(sql_error(
-                "MERGE source must be one aliased VALUES row with id and document_json columns",
+                "MERGE source must be an aliased VALUES batch with id and document_json columns",
             ));
         }
     };
@@ -1633,8 +1636,6 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             "MERGE source columns must be id and document_json",
         ));
     }
-    let source_id = string_literal(&source_values[0], "MERGE source id")?;
-    let source_document = string_literal(&source_values[1], "MERGE source document_json")?;
     if !merge_id_predicate(on, &target_alias, &source_alias) {
         return Err(sql_error("MERGE ON must equate target.id with source.id"));
     }
@@ -1681,11 +1682,16 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             "MERGE WHEN NOT MATCHED must insert source id and document_json",
         ));
     }
-    Ok(vec![ProductDmlCommand::Upsert {
-        kind,
-        id: source_id,
-        document_json: source_document,
-    }])
+    source_values
+        .iter()
+        .map(|row| {
+            Ok(ProductDmlCommand::Upsert {
+                kind: kind.clone(),
+                id: string_literal(&row[0], "MERGE source id")?,
+                document_json: string_literal(&row[1], "MERGE source document_json")?,
+            })
+        })
+        .collect()
 }
 
 fn merge_id_predicate(expression: &Expr, target: &str, source: &str) -> bool {
@@ -2989,12 +2995,38 @@ mod tests {
     }
 
     #[test]
+    fn product_merge_expands_a_bounded_values_batch() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('one', '{}'), ('two', '{\"n\":2}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("bounded MERGE batch should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::Upsert {
+                    kind: "dataset".into(),
+                    id: "one".into(),
+                    document_json: "{}".into(),
+                },
+                ProductDmlCommand::Upsert {
+                    kind: "dataset".into(),
+                    id: "two".into(),
+                    document_json: "{\"n\":2}".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn product_merge_rejects_unbounded_or_ambiguous_shapes() {
         for sql in [
-            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.owner_principal = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("MERGE shape should parse")
@@ -3006,6 +3038,21 @@ mod tests {
                 "unexpectedly accepted unsupported MERGE: {sql}"
             );
         }
+        let rows = (0..=1000)
+            .map(|i| format!("('ds-{i}', '{{}}')"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "MERGE INTO product.datasets AS t USING (VALUES {rows}) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)"
+        );
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(&sql).expect("large MERGE shape should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        let error =
+            adapt_product_dml_batch(&dml).expect_err("MERGE source over the cap must fail closed");
+        assert!(error.to_string().contains("at most 1000"), "{error}");
     }
 
     #[test]
