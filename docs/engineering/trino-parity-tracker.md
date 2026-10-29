@@ -18,12 +18,15 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
-The latest SQL compatibility increment is `a51b595b` (typed DATE/TIMESTAMP
-literal origins for `DATE_BUCKET`, following runtime T-SQL DATE conversion
-styles in `5b8c5031`). Planner, executor, and focused three-worker differential
-evidence are recorded in
-`docs/qualification/track2-tsql-date-bucket-2026-10-29.md` and
-`docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`.
+The latest SQL compatibility increment is `62cff92b` (`SMALLDATETIMEFROMPARTS`,
+following typed DATE/TIMESTAMP literal origins for `DATE_BUCKET` in `a51b595b`
+and runtime T-SQL DATE conversion styles in `5b8c5031`). Planner, executor,
+and focused three-worker differential evidence are recorded in
+`docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
+`docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
+and the versioned 48-case corpus. The bounded `SMALLDATETIMEFROMPARTS`
+qualification is recorded in
+`docs/qualification/track2-tsql-smalldatetimefromparts-2026-10-29.md`.
 The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
