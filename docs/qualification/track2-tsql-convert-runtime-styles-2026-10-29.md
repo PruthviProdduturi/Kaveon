@@ -26,16 +26,19 @@ SELECT
   TRY_CONVERT(DATE, value, 0) AS named_date,
   TRY_CONVERT(DATE, value, 1) AS us_short_date,
   TRY_CONVERT(DATE, value, 101) AS us_date,
+  TRY_CONVERT(DATE, value, 103) AS eu_date,
+  TRY_CONVERT(DATE, value, 23) AS iso_dashed_date,
   TRY_CONVERT(DATE, value, 112) AS iso_date
 FROM (VALUES
-  ('Dec 31 2024'), ('12/31/2024'), ('20241230'), ('bad'), (NULL)
+  ('Dec 31 2024'), ('12/31/2024'), ('31/12/2024'), ('2024-12-30'),
+  ('20241230'), ('bad'), (NULL)
 ) AS values_table(value)
 ```
 
 Invalid and NULL inputs remain NULL under `TRY_CONVERT`; valid values use the
-style-specific parser. The current bounded runtime styles are `0`, `1`, `101`,
-and `112`; unsupported style codes remain explicit errors. The differential
-completed with **1 passed, 0 failed** after this four-style expansion.
+style-specific parser. The current bounded runtime styles are `0`, `1`, `23`,
+`101`, `103`, and `112`; unsupported style codes remain explicit errors. The
+differential completed with **1 passed, 0 failed** after this six-style expansion.
 
 ## Boundary
 
