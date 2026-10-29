@@ -15,7 +15,7 @@ by the selected database and Kaveon's API guardrails.
 | Column projection and aliases | Alpha | Projection is strict; unknown or duplicate requested columns fail |
 | `WHERE` comparisons and boolean expressions | Alpha | Row-level filter operator is implemented |
 | `GROUP BY` | Alpha | Local and distributed columnar hash aggregation: partials on several threads that flush on memory pressure, a hybrid final merge that spills sub-partitions; `GROUP BY` without an aggregate is DISTINCT over the keys |
-| `SUM`, `COUNT`, `AVG`, `MIN`, `MAX`, `COUNT(DISTINCT ...)` | Alpha | Weighted AVG and exact DISTINCT states are mergeable across workers |
+| `SUM`, `COUNT`, `COUNT_BIG`, `AVG`, `MIN`, `MAX`, `COUNT(DISTINCT ...)` | Alpha | `COUNT_BIG` is canonicalized to Kaveon's 64-bit `COUNT`; weighted AVG and exact DISTINCT states are mergeable across workers |
 | `LIMIT`, `OFFSET`, `FETCH FIRST/NEXT … ROWS [PERCENT] [WITH TIES]` | Alpha | Physical limit and offset operators; `LIMIT ALL` is an explicit no-limit form; ordinary `FETCH` plans as bounded TopN, `PERCENT` lowers through a full-row-count window and ceiling threshold, and `WITH TIES` lowers through a global `RANK()` boundary and preserves offset semantics; literal percentages are validated in the inclusive 0–100 range and conflicting `LIMIT`/`FETCH` forms are rejected explicitly |
 | Qualified table names | Alpha | `catalog.schema.table` resolution is supported by the catalog |
 | `ORDER BY`, `NULLS FIRST/LAST`, TopN | Alpha | Local/distributed execution; Sort/TopN support bounded external merge runs |

@@ -52,7 +52,10 @@ partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
 without a complete tie-breaker, SQL permits different tied rows and the
 qualification is intentionally withheld. Numeric `CONVERT` and
 `TRY_CONVERT` casts are also qualified across those layouts; date-style
-runtime-column conversion remains explicitly rejected.
+runtime-column conversion remains explicitly rejected. SQL Server `COUNT_BIG`
+now canonicalizes to the Engine's mergeable 64-bit `COUNT` state; it shares
+the existing distributed count semantics and does not claim a separate
+SQL Server numeric type.
 
 ### Phase 2 — Transactional SQL surface
 

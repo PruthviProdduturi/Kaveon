@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "f2fe2dc9",
+  "engine_commit": "1e98c7f5",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -9,6 +9,7 @@
     {"id": "top_with_ties", "sql": "SELECT TOP 3 WITH TIES * FROM t ORDER BY score", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
     {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "count_big", "sql": "SELECT COUNT_BIG(*) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
