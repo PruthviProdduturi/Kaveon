@@ -38,7 +38,9 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 
 - **Live Lake Path** (default): Kaveon Engine reads data where it lives. Parquet, Delta Lake and Iceberg on local disk and ADLS Gen2 run today (alpha); S3 is implemented through the same reader and not qualified. GCS is outside the current roadmap.
 - **Optimized ingest** (post-launch target): Engine reads source data and rewrites it in a sorted, partitioned, compressed layout in the same customer-controlled storage.
-- **Legacy passthrough**: Current PostgreSQL / Fabric SQL / Azure SQL direct query. Migration path. Eventually deprecated.
+- **External SQL connectors**: Optional direct query to registered PostgreSQL, Fabric SQL,
+  or Azure SQL sources. These are source integrations only; KaveonDB remains the
+  product's metadata and transaction authority and does not depend on them.
 
 ---
 
@@ -72,7 +74,7 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 | `sql` — parser, logical plan | | x |
 | `optim` — filter pushdown | x | |
 | `python` — PyO3 bindings | | x |
-| Benchmarks vs PostgreSQL | x | |
+| Transactional benchmark baselines | x | |
 | Integration + wiring | | x |
 
 Total: 4-6 agents working in parallel across all pillars.
@@ -103,7 +105,7 @@ Total: 4-6 agents working in parallel across all pillars.
 
 | Track | Work | Owner |
 |-------|------|-------|
-| Engine | ADLS Gen 2 reader, benchmarks vs PostgreSQL | Codex |
+| Engine | ADLS Gen 2 reader, transactional and analytical benchmark baselines | Codex |
 | Engine | PyO3 bindings, integration wiring | Claude |
 | Studio | Platform rebrand — about page, landing page, data source UI ("Add Lakehouse") | Claude |
 
