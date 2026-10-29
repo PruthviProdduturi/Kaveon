@@ -4892,6 +4892,46 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // SQL Server's EOMONTH returns the last day of the month containing the
+    // input, optionally shifted by a row-local number of months.  Lower it to
+    // the existing typed date operators so it retains the same null,
+    // calendar-month and distributed execution semantics as DATEADD.  Cast
+    // first because SQL Server returns a DATE even when the input is a
+    // timestamp.
+    if name == "EOMONTH" {
+        if !(args.len() == 1 || args.len() == 2) {
+            return Err(sql_err("EOMONTH requires a date and optional month offset"));
+        }
+        let value = Expr::Cast {
+            expr: Box::new(args[0].clone()),
+            data_type: CastTarget::Date32,
+        };
+        let month_offset = args
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Expr::Literal(ScalarValue::Int64(0)));
+        let shifted_offset = Expr::BinaryOp {
+            left: Box::new(month_offset),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::Literal(ScalarValue::Int64(1))),
+        };
+        let month_start = Expr::Function {
+            name: "DATE_TRUNC".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("month".into())),
+                value,
+            ],
+        };
+        let next_month = Expr::Function {
+            name: "DATE_ADD_MONTHS".into(),
+            args: vec![month_start, shifted_offset],
+        };
+        return Ok(Expr::Function {
+            name: "DATE_ADD_DAYS".into(),
+            args: vec![next_month, Expr::Literal(ScalarValue::Int64(-1))],
+        });
+    }
+
     // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A
     // safe cast is the most common and most useful form in lake queries, and
     // JSON_PARSE has the same row-local failure contract.  Lower both forms
@@ -8394,6 +8434,20 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_eomonth_to_typed_date_operators() {
+        let plan = sql_to_logical_plan(
+            "SELECT EOMONTH(event_date), EOMONTH(event_timestamp, 2) FROM t",
+        )
+        .expect("EOMONTH should lower through typed date operators");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
+        assert!(rendered.contains("DATE_ADD_MONTHS"), "{rendered}");
+        assert!(rendered.contains("DATE_TRUNC"), "{rendered}");
+        assert!(rendered.contains("Date32"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT EOMONTH(d, 1, 2) FROM t").is_err());
+    }
+
+    #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
         let plan =
             sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
@@ -8431,7 +8485,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 24);
+        assert_eq!(cases.len(), 25);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
