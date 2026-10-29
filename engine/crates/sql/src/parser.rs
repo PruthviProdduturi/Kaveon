@@ -1,8 +1,9 @@
 use kaveon_core::{KaveonError, Result};
 use sqlparser::ast::Statement;
 use sqlparser::ast::{
-    AssignmentTarget, BinaryOperator, Expr, FromTable, GroupByExpr, OnConflictAction, OnInsert,
-    SelectItem, SetExpr, TableFactor, TableWithJoins, Value,
+    AssignmentTarget, BinaryOperator, Expr, FromTable, GroupByExpr, MergeAction, MergeClauseKind,
+    MergeInsertKind, OnConflictAction, OnInsert, SelectItem, SetExpr, TableFactor, TableWithJoins,
+    Value,
 };
 use sqlparser::dialect::{
     BigQueryDialect, ClickHouseDialect, DatabricksDialect, DuckDbDialect, GenericDialect,
@@ -1260,6 +1261,7 @@ pub enum NativeDmlKind {
     Insert,
     Update,
     Delete,
+    Merge,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1556,8 +1558,152 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                 expected_revision,
             }])
         }
+        Statement::Merge { .. } => adapt_product_merge(&dml.ast),
         _ => Err(sql_error("statement is not product DML")),
     }
+}
+
+fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> {
+    let Statement::Merge {
+        table,
+        source,
+        on,
+        clauses,
+        ..
+    } = statement
+    else {
+        return Err(sql_error("statement is not MERGE"));
+    };
+    let (target_name, target_alias) = match table {
+        TableFactor::Table {
+            name,
+            alias: Some(alias),
+            args: None,
+            with_hints,
+            version: None,
+            with_ordinality: false,
+            partitions,
+            json_path: None,
+        } if with_hints.is_empty() && partitions.is_empty() => {
+            (validated_table_name(name)?, alias.name.value.clone())
+        }
+        _ => {
+            return Err(sql_error(
+                "MERGE target must be one aliased base product table",
+            ));
+        }
+    };
+    let kind = product_kind(&target_name)?;
+    let (source_alias, source_columns, source_values) = match source {
+        TableFactor::Derived {
+            lateral: false,
+            subquery,
+            alias: Some(alias),
+        } if alias.columns.len() == 2 => {
+            let SetExpr::Values(values) = subquery.body.as_ref() else {
+                return Err(sql_error("MERGE source must be one VALUES row"));
+            };
+            if subquery.with.is_some()
+                || subquery.order_by.is_some()
+                || subquery.limit.is_some()
+                || values.rows.len() != 1
+                || values.rows[0].len() != 2
+            {
+                return Err(sql_error("MERGE source must be one bounded VALUES row"));
+            }
+            (
+                alias.name.value.clone(),
+                [
+                    alias.columns[0].name.value.clone(),
+                    alias.columns[1].name.value.clone(),
+                ],
+                [values.rows[0][0].clone(), values.rows[0][1].clone()],
+            )
+        }
+        _ => {
+            return Err(sql_error(
+                "MERGE source must be one aliased VALUES row with id and document_json columns",
+            ));
+        }
+    };
+    if !source_columns[0].eq_ignore_ascii_case("id")
+        || !source_columns[1].eq_ignore_ascii_case("document_json")
+    {
+        return Err(sql_error(
+            "MERGE source columns must be id and document_json",
+        ));
+    }
+    let source_id = string_literal(&source_values[0], "MERGE source id")?;
+    let source_document = string_literal(&source_values[1], "MERGE source document_json")?;
+    if !merge_id_predicate(on, &target_alias, &source_alias) {
+        return Err(sql_error("MERGE ON must equate target.id with source.id"));
+    }
+    if clauses.len() != 2
+        || clauses.iter().any(|clause| clause.predicate.is_some())
+        || !matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
+        || !matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched)
+    {
+        return Err(sql_error(
+            "MERGE requires WHEN MATCHED UPDATE followed by WHEN NOT MATCHED INSERT",
+        ));
+    }
+    let MergeAction::Update { assignments } = &clauses[0].action else {
+        return Err(sql_error("MERGE WHEN MATCHED must update document_json"));
+    };
+    if assignments.len() != 1
+        || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
+            if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+        || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+    {
+        return Err(sql_error(
+            "MERGE WHEN MATCHED must set document_json from source",
+        ));
+    }
+    let MergeAction::Insert(insert) = &clauses[1].action else {
+        return Err(sql_error(
+            "MERGE WHEN NOT MATCHED must insert id and document_json",
+        ));
+    };
+    let MergeInsertKind::Values(values) = &insert.kind else {
+        return Err(sql_error("MERGE WHEN NOT MATCHED must use VALUES"));
+    };
+    if insert.columns.len() != 2
+        || !insert.columns[0].value.eq_ignore_ascii_case("id")
+        || !insert.columns[1]
+            .value
+            .eq_ignore_ascii_case("document_json")
+        || values.rows.len() != 1
+        || values.rows[0].len() != 2
+        || !merge_source_ref(&values.rows[0][0], &source_alias, "id")
+        || !merge_source_ref(&values.rows[0][1], &source_alias, "document_json")
+    {
+        return Err(sql_error(
+            "MERGE WHEN NOT MATCHED must insert source id and document_json",
+        ));
+    }
+    Ok(vec![ProductDmlCommand::Upsert {
+        kind,
+        id: source_id,
+        document_json: source_document,
+    }])
+}
+
+fn merge_id_predicate(expression: &Expr, target: &str, source: &str) -> bool {
+    let Expr::BinaryOp { left, op, right } = expression else {
+        return false;
+    };
+    if *op != BinaryOperator::Eq {
+        return false;
+    }
+    (merge_source_ref(left, target, "id") && merge_source_ref(right, source, "id"))
+        || (merge_source_ref(right, target, "id") && merge_source_ref(left, source, "id"))
+}
+
+fn merge_source_ref(expression: &Expr, alias: &str, column: &str) -> bool {
+    matches!(expression, Expr::CompoundIdentifier(parts)
+        if parts.len() == 2
+            && parts[0].value.eq_ignore_ascii_case(alias)
+            && parts[1].value.eq_ignore_ascii_case(column))
 }
 
 fn bounded_product_source_kind(
@@ -1939,8 +2085,22 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 },
             )))
         }
+        Statement::Merge { table, .. } => {
+            let table = merge_target_table(table)?;
+            product_kind(&table)?;
+            Ok(NativeTransactionalStatement::Dml(Box::new(
+                NativeDmlStatement {
+                    kind: NativeDmlKind::Merge,
+                    table,
+                    ast: statement,
+                    returning: Vec::new(),
+                    on_conflict_do_nothing: false,
+                    on_conflict_do_update: false,
+                },
+            )))
+        }
         _ => Err(sql_error(
-            "native transaction parser accepts INSERT, UPDATE, DELETE, BEGIN, COMMIT, or ROLLBACK only",
+            "native transaction parser accepts INSERT, UPDATE, DELETE, MERGE, BEGIN, COMMIT, or ROLLBACK only",
         )),
     }
 }
@@ -1990,6 +2150,24 @@ fn simple_table(table: &TableWithJoins) -> Result<String> {
             json_path: None,
         } if with_hints.is_empty() && partitions.is_empty() => validated_table_name(name),
         _ => Err(sql_error("write target must be an unaliased base table")),
+    }
+}
+
+fn merge_target_table(table: &TableFactor) -> Result<String> {
+    match table {
+        TableFactor::Table {
+            name,
+            alias: Some(_),
+            args: None,
+            with_hints,
+            version: None,
+            with_ordinality: false,
+            partitions,
+            json_path: None,
+        } if with_hints.is_empty() && partitions.is_empty() => validated_table_name(name),
+        _ => Err(sql_error(
+            "MERGE target must be one aliased base product table",
+        )),
     }
 }
 
@@ -2786,6 +2964,46 @@ mod tests {
             assert!(
                 parse_native_transactional(sql).is_err(),
                 "unexpectedly accepted unsafe upsert: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_update_or_insert() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("bounded MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(dml.kind, NativeDmlKind::Merge);
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn product_merge_rejects_unbounded_or_ambiguous_shapes() {
+        for sql in [
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.owner_principal = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("MERGE shape should parse")
+            else {
+                panic!("expected product MERGE");
+            };
+            assert!(
+                adapt_product_dml(&dml).is_err(),
+                "unexpectedly accepted unsupported MERGE: {sql}"
             );
         }
     }
