@@ -70,8 +70,10 @@ wildcards, returns zero for no match, preserves NULLs, and rejects bracket
 classes explicitly.
 Runtime text-column timestamp conversion has local vectorized evaluator coverage
 for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only style `101`.
-It is not included in the three-worker differential yet; the corpus records this
-as a local-only qualification until that distributed gate is run.
+Styles `126` and `101` are now included in
+`distributed_tsql_runtime_timestamp_styles_match_local`, which compares exact
+local and three-worker results. Other runtime timestamp styles remain local-only
+until their focused distributed cases are added.
 `DATE_BUCKET` is qualified for literal width-one year/quarter/month/day/hour/
 minute/second buckets and lowers to typed `DATE_TRUNC`; wider widths and
 custom origins are rejected rather than approximated.
