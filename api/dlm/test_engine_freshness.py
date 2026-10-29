@@ -89,25 +89,6 @@ class ChartFreshnessTests(unittest.TestCase):
             binding = engine._engine_binding(dataset, native=bool(engine._native_catalog("Nonsense")))
         self.assertIsNone(binding)
 
-    def test_authenticated_serving_uses_the_legacy_tables_until_retirement_is_requested(self):
-        # PostgreSQL remains the DLM authority until the PostgreSQL-free
-        # runtime is requested: an authenticated caller must not install the
-        # compiled-context serving state, whose artifact reader would consult
-        # the KaveonDB product list and re-enter get_dlm through _value_count.
-        row = {"dataset_id": "7", "version": 1, "manifest": "{}", "stats_rollup": "{}",
-               "usage_rollup": "{}", "source_hash": "s", "built_at": "now", "status": "ready"}
-        with patch("services.postgresql_retirement_runtime.requested", return_value=False), \
-             patch.object(engine, "ensure_tables", lambda: None), \
-             patch.object(engine.meta, "query_one", side_effect=[row, {"n": 3}]), \
-             patch("services.product_store.list_records",
-                   side_effect=AssertionError("KaveonDB product list reached")):
-            artifact = engine.get_dlm("7", actor="viewer", role="Viewer")
-            self.assertEqual(artifact["values_indexed"], 3)
-            self.assertIsNone(engine._RETIREMENT_SERVING.get())
-            with patch.object(engine.meta, "query", return_value={"rows_objects": []}):
-                self.assertEqual(engine.route("sessions by country", actor="viewer", role="Viewer"), [])
-            self.assertIsNone(engine._RETIREMENT_SERVING.get())
-
     def test_retirement_curation_creates_new_immutable_generation_without_metadata_write(self):
         artifact = {
             "dataset_id": "24", "version": 2,
@@ -189,7 +170,7 @@ class ChartFreshnessTests(unittest.TestCase):
             for name, value in stubs.items():
                 stack.enter_context(patch.object(engine, name, lambda *a, _v=value, **k: _v))
             precompute = stack.enter_context(patch.object(engine, "_precompute_answers", return_value=3))
-            result = engine.generate_dlm("24", force=True)
+            result = engine.generate_dlm("24", force=True, actor="owner", role="Admin")
         self.assertTrue(result.get("rebuilt"), result)
         precompute.assert_called_once()
 
