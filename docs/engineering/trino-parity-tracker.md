@@ -62,6 +62,8 @@ The current T-SQL corpus is 74 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics and `CHOOSE` lowered to a
 null-preserving one-based CASE, each with a focused three-worker differential.
+The `CHOOSE` evidence is retained in
+`docs/qualification/track2-tsql-choose-2026-10-29.md`.
 
 ## Owner execution target — 2026-10-21
 
