@@ -32,7 +32,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 72-case corpus. The bounded date-construction qualifications
+the versioned 75-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -164,8 +164,8 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 
 ## Qualification commands
 
-The T-SQL row above is backed by the versioned 72-case corpus pinned at
-`0e8441d0` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+The T-SQL row above is backed by the versioned 75-case corpus pinned at
+`64ae4fd5` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 
 Run from `engine/`:
