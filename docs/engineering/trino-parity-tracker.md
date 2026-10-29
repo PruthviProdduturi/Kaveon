@@ -18,19 +18,18 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
-The latest SQL compatibility increment is the in-progress `TIMEFROMPARTS`
-qualification (following `DATETIME2FROMPARTS` in `b0311ba2`,
-following the `SMALLDATETIMEFROMPARTS` commit `62cff92b`,
-following typed DATE/TIMESTAMP literal origins for `DATE_BUCKET` in `a51b595b`
-and runtime T-SQL DATE conversion styles in `5b8c5031`). Planner, executor,
-and focused three-worker differential evidence are recorded in
+The latest SQL compatibility increment is the qualified ISO-week alias slice
+(`DATEPART`/`DATENAME` with `iso_week`, `isowk`, and `isoww`) in `73eeb842`,
+following `DATETIMEOFFSETFROMPARTS` in `8f80bfbe`, `TIMEFROMPARTS` in
+`4740d413`, `DATETIME2FROMPARTS` in `b0311ba2`, and
+`SMALLDATETIMEFROMPARTS` in `62cff92b`. Planner, executor, and focused
+three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-and the versioned 60-case corpus. The bounded `DATETIME2FROMPARTS`,
-`TIMEFROMPARTS`, and
-`SMALLDATETIMEFROMPARTS`
-qualification is recorded in
-`docs/qualification/track2-tsql-smalldatetimefromparts-2026-10-29.md`.
+and the versioned 60-case corpus. The bounded date-construction qualifications
+are recorded in the corresponding `track2-tsql-*` documents, including
+`track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
+`track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
