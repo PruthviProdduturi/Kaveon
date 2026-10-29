@@ -5493,6 +5493,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEADD" => "DATE_ADD".to_owned(),
         "DATEDIFF" => "DATE_DIFF".to_owned(),
         "DATEPART" => "DATE_PART".to_owned(),
+        "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
         }
@@ -8448,6 +8449,13 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datefromparts_to_date_operator() {
+        let plan = sql_to_logical_plan("SELECT DATEFROMPARTS(2024, 2, 29) FROM t")
+            .expect("DATEFROMPARTS should canonicalize to the vectorized date operator");
+        assert!(format!("{plan:?}").contains("DATE_FROM_PARTS"));
+    }
+
+    #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
         let plan =
             sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
@@ -8485,7 +8493,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 25);
+        assert_eq!(cases.len(), 26);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

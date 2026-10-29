@@ -270,6 +270,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datefromparts",
+        "SELECT TOP 5 DATEFROMPARTS(DATEPART(yyyy, event_date), DATEPART(mm, event_date), DATEPART(dd, event_date)) AS rebuilt FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_dateadd",
         "SELECT TOP 5 DATEADD(dd, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,

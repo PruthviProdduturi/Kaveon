@@ -12033,6 +12033,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             eval_date_add_months(&args[0], &args[1], num_rows)
         }
+        "DATE_FROM_PARTS" => {
+            check_arity(name, args, 3)?;
+            eval_date_from_parts(&args[0], &args[1], &args[2], num_rows)
+        }
         "DATE_PART" => {
             if args.len() != 2 {
                 return Err(KaveonError::Execution(
@@ -14605,6 +14609,52 @@ fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Re
     }
 }
 
+fn eval_date_from_parts(
+    year: &ArrayRef,
+    month: &ArrayRef,
+    day: &ArrayRef,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let year = compute::cast(year, &DataType::Int64)?;
+    let month = compute::cast(month, &DataType::Int64)?;
+    let day = compute::cast(day, &DataType::Int64)?;
+    let year = year.as_primitive::<Int64Type>();
+    let month = month.as_primitive::<Int64Type>();
+    let day = day.as_primitive::<Int64Type>();
+    let result = (0..num_rows)
+        .map(|row| {
+            if year.is_null(row) || month.is_null(row) || day.is_null(row) {
+                return Ok(None);
+            }
+            let year_value = year.value(row);
+            let month_value = month.value(row);
+            let day_value = day.value(row);
+            if !(1..=9999).contains(&year_value) {
+                return Err(KaveonError::Execution(format!(
+                    "DATEFROMPARTS year {year_value} is outside 1..=9999"
+                )));
+            }
+            if !(1..=12).contains(&month_value) {
+                return Err(KaveonError::Execution(format!(
+                    "DATEFROMPARTS month {month_value} is outside 1..=12"
+                )));
+            }
+            let month_value = month_value as u32;
+            let max_day = i64::from(days_in_month(year_value as i32, month_value));
+            if !(1..=max_day).contains(&day_value) {
+                return Err(KaveonError::Execution(format!(
+                    "DATEFROMPARTS day {day_value} is invalid for {year_value:04}-{month_value:02}"
+                )));
+            }
+            let days = ymd_to_days(year_value as i32, month_value, day_value as u32);
+            i32::try_from(days)
+                .map(Some)
+                .map_err(|_| KaveonError::Execution("DATEFROMPARTS result is outside DATE range".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(Date32Array::from(result)))
+}
+
 fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
     let delta = delta.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
         KaveonError::Execution("DATE_ADD_DAYS requires an integer day count".into())
@@ -16036,6 +16086,52 @@ mod tests {
         let result = values.as_primitive::<TimestampMillisecondType>();
         assert_eq!(result.value(0), -86_400_000);
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn date_from_parts_builds_dates_and_rejects_invalid_parts() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("year", DataType::Int64, true),
+            arrow::datatypes::Field::new("month", DataType::Int64, true),
+            arrow::datatypes::Field::new("day", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(2024), None, Some(2023)])),
+                Arc::new(Int64Array::from(vec![Some(2), Some(1), Some(2)])),
+                Arc::new(Int64Array::from(vec![Some(29), Some(1), Some(28)])),
+            ],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_FROM_PARTS".into(),
+                args: vec![
+                    Expr::Column("year".into()),
+                    Expr::Column("month".into()),
+                    Expr::Column("day".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_primitive::<Date32Type>();
+        assert_eq!(days_to_ymd(i64::from(result.value(0))), (2024, 2, 29));
+        assert!(result.is_null(1));
+        let error = evaluate(
+            &Expr::Function {
+                name: "DATE_FROM_PARTS".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(2023)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                    Expr::Literal(ScalarValue::Int64(29)),
+                ],
+            },
+            &input,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid for 2023-02"), "{error}");
     }
 
     #[test]
