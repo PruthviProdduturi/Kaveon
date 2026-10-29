@@ -33,6 +33,7 @@
     {"id": "dateadd_abbreviation", "sql": "SELECT DATEADD(dd, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "dateadd_microsecond", "sql": "SELECT DATEADD(microsecond, 250, event_ts) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_timestamps"},
     {"id": "dateadd_nanosecond", "sql": "SELECT DATEADD(nanosecond, 250, event_ts) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_nanosecond_timestamps"},
+    {"id": "datediff_big", "sql": "SELECT DATEDIFF_BIG(dd, DATE '2026-01-01', event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "date_bucket_width_one", "sql": "SELECT DATE_BUCKET(month, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},

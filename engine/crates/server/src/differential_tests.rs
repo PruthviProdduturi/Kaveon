@@ -330,6 +330,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datediff_big",
+        "SELECT TOP 5 DATEDIFF_BIG(dd, DATE '2026-01-01', event_date) AS days FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datepart",
         "SELECT TOP 5 DATEPART(yyyy, event_date) AS event_year FROM {T} ORDER BY event_date",
         true,

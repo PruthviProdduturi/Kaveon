@@ -5848,7 +5848,7 @@ fn canonical_function_name(func: &ast::Function) -> String {
         // windows, and ordinary expressions) sees one canonical contract.
         "ISNULL" => "COALESCE".to_owned(),
         "DATEADD" => "DATE_ADD".to_owned(),
-        "DATEDIFF" => "DATE_DIFF".to_owned(),
+        "DATEDIFF" | "DATEDIFF_BIG" => "DATE_DIFF".to_owned(),
         "DATEPART" => "DATE_PART".to_owned(),
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
@@ -8955,7 +8955,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 51);
+        assert_eq!(cases.len(), 52);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
