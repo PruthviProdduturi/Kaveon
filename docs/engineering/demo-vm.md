@@ -19,7 +19,7 @@
 
 The public demo was planned on one Oracle Cloud **Always Free** instance —
 `VM.Standard.A1.Flex`, 4 OCPU / 24 GB, arm64 — hosting the Compose stack:
-KaveonDB coordinator and two workers, the API, PostgreSQL metadata, and Caddy as
+KaveonDB coordinator and two workers, the API, KaveonDB product metadata, and Caddy as
 the only public door. Studio stays on Vercel and reaches the API over HTTPS through
 its same-origin proxy. The work-tenant AKS cluster remains validation only.
 
@@ -87,7 +87,6 @@ generated fresh:
 KAVEON_API_HOST=<public DNS name for the API>
 KAVEON_WEB_URL=https://kaveon.io
 KAVEON_PROXY_SECRET=
-KAVEON_POSTGRES_PASSWORD=
 KAVEON_ENGINE_BRIDGE_TOKEN=
 KAVEON_CATALOG_ADMIN_TOKEN=
 KAVEON_EXCHANGE_TOKEN=
