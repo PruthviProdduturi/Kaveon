@@ -126,14 +126,14 @@ sequenceDiagram
   M-->>Client: Evidence report
 ```
 
-A transaction receipt is not evidence of PostgreSQL retirement. The runtime has
-direct typed KaveonDB mutations for product-record families and does not fall
-back to PostgreSQL once a family is cut over. Context cache is deliberately
-rebuilt, and legacy AI configuration requires an explicit delete-or-secret-store
-disposition. Retirement still requires all 16 families to reconcile, zero
-outbox lag, a write fence, shadow-read parity, restart recovery, backup/restore,
-rollback, and a verified PostgreSQL-unavailable rehearsal. Until those live
-gates pass, PostgreSQL remains the deployment authority and rollback source.
+A transaction receipt is evidence of a KaveonDB product-record mutation only
+for a family explicitly enabled in `KAVEONDB_READ_AUTHORITY_FAMILIES`: the
+runtime validates ownership, references, uniqueness, and revision/CAS before
+publishing the immutable record and audit event. Families not yet enabled stay
+on the configured metadata backend and are not described as migrated. A
+PostgreSQL or Fabric SQL database may also be registered as an external
+passthrough source. General row-store DML, isolation breadth, and WAL-equivalent
+recovery remain explicit Engine targets rather than hidden compatibility claims.
 
 ## Storage and recovery boundaries
 
@@ -165,7 +165,7 @@ evidence artifact is a failed gate, never an implicit pass.
 | Distributed SQL | Coordinator/workers, binder, streamed Arrow exchange, columnar aggregates with spill, joins, retry with forced-worker-loss evidence, admission queue, result cache; three benchmark tiers running (`../qualification/benchmark-program.md`) | Completed benchmark rounds, spill under skew, adaptive planning, sustained soak |
 | Transactions | Typed product-record protocol with revisions and checkpointed migration tooling | General row DML, isolation, durable WAL-equivalent recovery and crash testing |
 | Lake storage | Parquet, Delta (v1 checkpoints) and Iceberg on ADLS Gen2 with workload identity; S3 implemented and unqualified; plain Parquet directories not yet tables | Multi-format snapshot qualification and object-store performance evidence |
-| PostgreSQL replacement | Direct reads/mutations, 16-family replay and reconciliation, durable ADLS checkpoints, write fencing and strict evidence runners are implemented; live retirement is not yet qualified | One fresh immutable AKS run passes every gate, then PostgreSQL is scaled to zero while its PVC/snapshot remain through the rollback window |
+| Product metadata authority | KaveonDB owns typed product records, revisions, references, uniqueness, audit events, and transaction receipts for explicitly cut-over families; remaining families use the configured metadata backend | Complete family cutover evidence, broader row-store DML, isolation, durable journal/recovery, and release-qualified restart/restore evidence |
 | Operations | Bicep/Helm deployment materials, immutable image references and bounded rehearsal tooling | Recreate-from-zero on a clean subscription and verified live backup/restore |
 
 The architecture is deliberately honest: Kaveon can be a unified product with
