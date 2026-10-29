@@ -8807,7 +8807,7 @@ mod tests {
     #[test]
     fn lowers_common_tsql_scalar_aliases() {
         let plan = sql_to_logical_plan(
-            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date), GETDATE(), SYSDATETIME() FROM t",
+            "SELECT ISNULL(name, 'unknown'), DATEADD(dd, 1, event_date), DATEDIFF(dd, start_date, end_date), DATEPART(yyyy, event_date), DATEPART(dw, event_date), DATEPART(dy, event_date), GETDATE(), SYSDATETIME() FROM t",
         )
         .expect("common T-SQL scalar aliases should lower");
         let rendered = format!("{plan:?}");
@@ -8980,7 +8980,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 53);
+        assert_eq!(cases.len(), 55);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

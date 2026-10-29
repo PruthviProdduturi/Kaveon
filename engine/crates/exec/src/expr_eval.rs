@@ -15539,8 +15539,8 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "HOUR" | "HH" => DateField::Hour,
                 "MINUTE" | "MI" | "N" => DateField::Minute,
                 "SECOND" | "SS" | "S" => DateField::Second,
-                "DOW" | "DAYOFWEEK" => DateField::DayOfWeek,
-                "DOY" | "DAYOFYEAR" => DateField::DayOfYear,
+                "DOW" | "DAYOFWEEK" | "WEEKDAY" | "DW" | "W" => DateField::DayOfWeek,
+                "DOY" | "DAYOFYEAR" | "DY" | "Y" => DateField::DayOfYear,
                 "QUARTER" => DateField::Quarter,
                 "WEEK" => DateField::Week,
                 "EPOCH" => DateField::Epoch,
@@ -26139,6 +26139,33 @@ mod tests {
         for source in sources {
             let result = eval_date_part(&fields, &source, 1).unwrap();
             assert_eq!(result.as_primitive::<Int64Type>().value(0), expected);
+        }
+    }
+
+    #[test]
+    fn date_part_accepts_tsql_weekday_and_dayofyear_aliases() {
+        let source = Arc::new(Date32Array::from(vec![Some(19_345)])) as ArrayRef;
+        let canonical = eval_date_part(&StringArray::from(vec![Some("DAYOFWEEK")]), &source, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        for alias in ["WEEKDAY", "DW", "W"] {
+            let value = eval_date_part(&StringArray::from(vec![Some(alias)]), &source, 1)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0);
+            assert_eq!(value, canonical, "weekday alias {alias}");
+        }
+        let canonical = eval_date_part(&StringArray::from(vec![Some("DAYOFYEAR")]), &source, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        for alias in ["DOY", "DY", "Y"] {
+            let value = eval_date_part(&StringArray::from(vec![Some(alias)]), &source, 1)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0);
+            assert_eq!(value, canonical, "day-of-year alias {alias}");
         }
     }
 
