@@ -26,7 +26,7 @@ or arbitrary `RETURNING` expressions.
 - `cargo test -p kaveon-sql --lib accepts_identity_returning_for_product_update_and_delete -- --nocapture`
 - `cargo test -p kaveon-server sql_endpoint_update_and_delete_return_identity_and_revision -- --nocapture`
 
-Both tests passed on commit `PENDING_COMMIT`.
+Both tests passed on commit `764f6b99`.
 
 ## Contract
 
