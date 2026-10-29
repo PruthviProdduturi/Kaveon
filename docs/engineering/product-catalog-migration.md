@@ -1,4 +1,9 @@
-# Product catalog migration to ADLS
+# Product catalog migration to ADLS (historical cutover record)
+
+> This document records the pre-KaveonDB migration design and evidence. Its
+> statements that PostgreSQL is authoritative describe that historical phase,
+> not the current runtime architecture. New deployments use KaveonDB-native
+> product transactions; do not use this document as a deployment runbook.
 
 Kaveon will move durable product and Engine-definition state to an ADLS-backed
 catalog. PostgreSQL remains the production authority until the protocol,
