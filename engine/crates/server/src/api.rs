@@ -1059,6 +1059,13 @@ mod query_journal {
                 let _ = std::fs::remove_file(&staged);
                 return;
             }
+            // The rename makes the replacement inode visible atomically.  On
+            // filesystems that expose directory fsync, persist that name
+            // change as well; otherwise a power loss can acknowledge the
+            // staged file while the old directory entry reappears.  Windows
+            // does not provide a portable directory handle, so the file sync
+            // above remains the available guarantee there.
+            let _ = sync_parent_directory(&self.path);
             if let Ok(file) = std::fs::OpenOptions::new().append(true).open(&self.path) {
                 self.file = file;
                 self.recent = recent;
@@ -1082,6 +1089,23 @@ mod query_journal {
             text.push('\n');
         }
         text
+    }
+
+    fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                return std::fs::OpenOptions::new()
+                    .read(true)
+                    .open(parent)
+                    .and_then(|directory| directory.sync_all());
+            }
+        }
+        let _ = path;
+        Ok(())
     }
 
     static JOURNAL: std::sync::LazyLock<Mutex<Option<Journal>>> =
