@@ -447,25 +447,48 @@ impl TransactionRegistry {
                     id: row_id,
                     document_json,
                 } => {
-                    let product_kind = record_kind(&kind)?;
-                    let current = session
-                        .transaction
-                        .snapshot()
-                        .product_record(product_kind, &row_id)
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-                    if let Some(current) = current {
-                        require_product_owner(current, owner)?;
-                        kaveon_sql::parser::ProductDmlCommand::Update {
-                            kind,
-                            id: row_id,
-                            expected_revision: current.revision,
-                            document_json,
+                    if kind == "typed_row" {
+                        match find_typed_row(session.transaction.snapshot(), &row_id, owner) {
+                            Ok((_table, current)) => {
+                                kaveon_sql::parser::ProductDmlCommand::Update {
+                                    kind,
+                                    id: row_id,
+                                    expected_revision: current.revision,
+                                    document_json,
+                                }
+                            }
+                            Err(RegistryError::Invalid(message))
+                                if message == "typed row does not exist" =>
+                            {
+                                kaveon_sql::parser::ProductDmlCommand::Create {
+                                    kind,
+                                    id: row_id,
+                                    document_json,
+                                }
+                            }
+                            Err(error) => return Err(error),
                         }
                     } else {
-                        kaveon_sql::parser::ProductDmlCommand::Create {
-                            kind,
-                            id: row_id,
-                            document_json,
+                        let product_kind = record_kind(&kind)?;
+                        let current = session
+                            .transaction
+                            .snapshot()
+                            .product_record(product_kind, &row_id)
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                        if let Some(current) = current {
+                            require_product_owner(current, owner)?;
+                            kaveon_sql::parser::ProductDmlCommand::Update {
+                                kind,
+                                id: row_id,
+                                expected_revision: current.revision,
+                                document_json,
+                            }
+                        } else {
+                            kaveon_sql::parser::ProductDmlCommand::Create {
+                                kind,
+                                id: row_id,
+                                document_json,
+                            }
                         }
                     }
                 }
@@ -1014,6 +1037,47 @@ fn product_change(
             id,
             document_json,
         } => {
+            if kind == "typed_row" {
+                match find_typed_row(snapshot, &id, owner) {
+                    Ok((table, current)) => {
+                        let expected_revision = current.revision;
+                        let next_revision = expected_revision.checked_add(1).ok_or_else(|| {
+                            RegistryError::Invalid("typed row revision overflow".into())
+                        })?;
+                        let (incoming_table, _) =
+                            typed_row_document(&id, &document_json, owner, next_revision)?;
+                        if incoming_table != table {
+                            return Err(RegistryError::Invalid(
+                                "typed row upsert cannot change its table".into(),
+                            ));
+                        }
+                        return product_change(
+                            snapshot,
+                            owner,
+                            ProductDmlCommand::Update {
+                                kind,
+                                id,
+                                expected_revision,
+                                document_json,
+                            },
+                        );
+                    }
+                    Err(RegistryError::Invalid(message))
+                        if message == "typed row does not exist" =>
+                    {
+                        return product_change(
+                            snapshot,
+                            owner,
+                            ProductDmlCommand::Create {
+                                kind,
+                                id,
+                                document_json,
+                            },
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             let product_kind = record_kind(&kind)?;
             let current = snapshot
                 .product_record(product_kind, &id)
@@ -2674,13 +2738,27 @@ fn product_returning_response(
                     return Err("product INSERT SELECT cannot use RETURNING".to_owned());
                 }
                 kaveon_sql::parser::ProductDmlCommand::Upsert { kind, id, .. } => {
-                    let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
-                    let revision = snapshot
-                        .product_record(product_kind, id)
-                        .map_err(|error| error.to_string())?
-                        .map(|record| record.revision)
-                        .unwrap_or(1);
-                    (id.clone(), revision)
+                    if kind == "typed_row" {
+                        let mut matches =
+                            snapshot.typed_rows.values().filter_map(|rows| rows.get(id));
+                        let revision = matches
+                            .next()
+                            .ok_or_else(|| "typed row does not exist".to_owned())?
+                            .revision;
+                        if matches.next().is_some() {
+                            return Err("typed row primary key is ambiguous across tables".into());
+                        }
+                        (id.clone(), revision)
+                    } else {
+                        let product_kind =
+                            record_kind(kind).map_err(|error| format!("{error:?}"))?;
+                        let revision = snapshot
+                            .product_record(product_kind, id)
+                            .map_err(|error| error.to_string())?
+                            .map(|record| record.revision)
+                            .unwrap_or(1);
+                        (id.clone(), revision)
+                    }
                 }
                 kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. } => {
                     return Err(
@@ -5015,12 +5093,38 @@ mod tests {
         transaction.bind_request_digest(b"typed-update").unwrap();
         transaction.commit().await.unwrap();
 
+        let upsert = registry.begin("alice").await.unwrap();
+        registry
+            .stage_product_command(
+                "alice",
+                &upsert.transaction_id,
+                ProductDmlCommand::Upsert {
+                    kind: "typed_row".into(),
+                    id: "u-1".into(),
+                    document_json: create
+                        .replace("ada@example.com", "linus@example.com")
+                        .replace("\"revision\":1", "\"revision\":3"),
+                },
+            )
+            .await
+            .unwrap();
+        let mut transaction = registry
+            .take("alice", &upsert.transaction_id)
+            .await
+            .unwrap();
+        transaction.bind_request_digest(b"typed-upsert").unwrap();
+        transaction.commit().await.unwrap();
+        assert_eq!(
+            catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
+            3
+        );
+
         let delete_returning = registry.begin("alice").await.unwrap();
         let response = execute_sql_request(
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 2 RETURNING id, revision, document_json".into(),
+                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 3 RETURNING id, revision, document_json".into(),
                 transaction_id: Some(delete_returning.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -5033,7 +5137,7 @@ mod tests {
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "u-1");
-        assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(value["returning"][0]["revision"], 3);
         assert!(
             value["returning"][0]["document_json"]
                 .as_str()
@@ -5048,7 +5152,7 @@ mod tests {
                 ProductDmlCommand::Delete {
                     kind: "typed_row".into(),
                     id: "u-1".into(),
-                    expected_revision: 2,
+                    expected_revision: 3,
                 },
             )
             .await
@@ -5059,11 +5163,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             transaction.rollback().typed_rows["app.users"]["u-1"].revision,
-            2
+            3
         );
         assert_eq!(
             catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
-            2
+            3
         );
     }
 
