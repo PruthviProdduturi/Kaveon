@@ -21,8 +21,8 @@ scope.
 - Planner coverage is included in the versioned 96-case T-SQL corpus.
 - Focused three-worker differential:
   `differential_tests::distributed_tsql_string_split_matches_local`.
-- The full Parquet-layout and execution-path differential sweep passes both
-  value-only and ordinal forms with deterministic ordering.
+- The full Parquet-layout and execution-path differential sweep passes
+  value-only, ordinal, and row-local lateral forms with deterministic ordering.
 
 Scalar row-local string and separator expressions are supported when the
 function is invoked through `CROSS JOIN LATERAL`; the ordinal mode remains a
