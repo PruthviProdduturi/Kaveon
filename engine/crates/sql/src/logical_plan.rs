@@ -9794,6 +9794,7 @@ mod tests {
         assert!(
             sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT USING 'en-US') FROM t").is_err()
         );
+        assert!(sql_to_logical_plan("SELECT TRY_PARSE(value AS DATE) FROM t").is_err());
     }
 
     #[test]
