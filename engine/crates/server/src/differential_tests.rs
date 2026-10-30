@@ -7941,6 +7941,7 @@ fn distributed_tsql_string_split_matches_local() {
         "SELECT value FROM STRING_SPLIT('alpha,beta,gamma', ',') AS parts(value) ORDER BY value",
         "SELECT value, ordinal FROM STRING_SPLIT('alpha,beta,gamma', ',', 1) AS parts(value, ordinal) ORDER BY ordinal",
         "SELECT value FROM events CROSS JOIN LATERAL STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value) ORDER BY value LIMIT 20",
+        "SELECT value FROM events CROSS APPLY STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value) ORDER BY value LIMIT 20",
     ] {
         let plan = bound_plan(statement, &manager);
         let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)

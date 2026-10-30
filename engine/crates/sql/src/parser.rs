@@ -477,19 +477,30 @@ fn normalize_bounded_apply(sql: &str) -> Result<Option<String>> {
         return Ok(None);
     };
     let after = sql[position + keyword.len()..].trim_start();
-    if !after.starts_with('(') {
-        return Ok(None);
-    }
-    let open = sql.len() - after.len();
+    let base = sql.len() - after.len();
+    let open = if after.starts_with('(') {
+        base
+    } else {
+        let upper_after = after.to_ascii_uppercase();
+        if !upper_after.starts_with("STRING_SPLIT")
+            || !after["STRING_SPLIT".len()..].trim_start().starts_with('(')
+        {
+            return Ok(None);
+        }
+        base + after.find('(').expect("STRING_SPLIT opening delimiter")
+    };
     let close = matching_delimiter(sql, open, b'(', b')')
         .ok_or_else(|| sql_error("bounded APPLY has an unbalanced derived relation"))?;
     let body = sql[open + 1..close].trim();
-    let body_upper = body.to_ascii_uppercase();
-    if !(body_upper.starts_with("SELECT ")
-        || body_upper == "VALUES"
-        || body_upper.starts_with("VALUES "))
-    {
-        return Ok(None);
+    let function_apply = !after.starts_with('(');
+    if !function_apply {
+        let body_upper = body.to_ascii_uppercase();
+        if !(body_upper.starts_with("SELECT ")
+            || body_upper == "VALUES"
+            || body_upper.starts_with("VALUES "))
+        {
+            return Ok(None);
+        }
     }
     let suffix = sql[close + 1..].trim_start();
     if suffix.is_empty() {
@@ -3453,6 +3464,17 @@ mod tests {
         .expect("correlated derived OUTER APPLY should lower");
         let rendered = statements[0].to_string();
         assert!(rendered.contains("LEFT JOIN LATERAL"), "{rendered}");
+    }
+
+    #[test]
+    fn string_split_cross_apply_lowers_to_lateral_join() {
+        let statements = parse_sql(
+            "SELECT t.id, parts.value FROM t CROSS APPLY STRING_SPLIT(t.csv, ',') AS parts(value)",
+        )
+        .expect("STRING_SPLIT CROSS APPLY should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("CROSS JOIN LATERAL"), "{rendered}");
+        assert!(rendered.contains("STRING_SPLIT"), "{rendered}");
     }
 
     #[test]
