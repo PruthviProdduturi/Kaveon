@@ -195,6 +195,10 @@ and `SMALLDATETIMEFROMPARTS` is
 qualified for valid calendar parts with minute precision, with SQL Server-style
 NULL propagation and explicit
 rejection of invalid calendar dates or unsupported arities.
+`DATETRUNC(datepart, value)` is a qualified SQL Server alias for the same
+typed `DATE_TRUNC` path, with the identical supported datepart and precision
+boundary. See
+[`track2-tsql-datetrunc-2026-10-30.md`](../qualification/track2-tsql-datetrunc-2026-10-30.md).
 `DATENAME` is qualified for calendar parts and returns deterministic English
 month/weekday names or textual numeric parts; locale/session-language
 formatting is intentionally not claimed.
