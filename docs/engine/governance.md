@@ -99,13 +99,12 @@ catalog therefore fails at bind with the same text an absent catalog gets
 ### `KaveonDB`
 
 The transactional application and catalog authority is reserved: it is
-never grantable (400 `RESERVED_CATALOG`), and it is hidden from every
-role — administrators included — until its read-only `product` and
-`catalog` views exist. They do not yet
-(`docs/engineering/unified-kaveondb-metadata.md`, "Current state"), so
-the evaluator fails closed on the name whatever its case rather than
-expose internals. When the projection ships, administrators get the
-read-only views and `system`; nobody else sees it.
+never grantable (400 `RESERVED_CATALOG`). Its read-only `product`, `catalog`,
+and `system` projections are available to administrators; ordinary roles do
+not receive the reserved catalog through grants. The projection is refreshed
+from the KaveonDB transaction authority when the published catalog snapshot
+changes, so administrators can inspect migrated families without exposing
+control-plane internals to other principals.
 
 ### Managing grants
 
