@@ -15952,6 +15952,59 @@ mod tests {
     }
 
     #[test]
+    fn plan_estimates_bound_semi_anti_and_set_outputs() {
+        let estimates = std::collections::BTreeMap::from([
+            (
+                "left".to_owned(),
+                super::PlanEstimate {
+                    rows: 120,
+                    bytes: None,
+                    source: "source_metadata",
+                    source_version: "left-v1".to_owned(),
+                },
+            ),
+            (
+                "right".to_owned(),
+                super::PlanEstimate {
+                    rows: 45,
+                    bytes: None,
+                    source: "source_metadata",
+                    source_version: "right-v1".to_owned(),
+                },
+            ),
+        ]);
+        let make_scan = |id, table| {
+            kaveon_core::PlanNode::new(id, kaveon_core::PlanPhase::Physical, "Scan")
+                .with_attribute("table", table)
+        };
+
+        let mut semi = kaveon_core::PlanNode::new(10, kaveon_core::PlanPhase::Physical, "SemiJoin")
+            .with_child(make_scan(11, "left"))
+            .with_child(make_scan(12, "right"));
+        super::annotate_plan_estimates(&mut semi, &estimates);
+        assert_eq!(semi.attributes["estimated_output_rows"], "120");
+
+        let mut union = kaveon_core::PlanNode::new(20, kaveon_core::PlanPhase::Physical, "Union")
+            .with_child(make_scan(21, "left"))
+            .with_child(make_scan(22, "right"));
+        super::annotate_plan_estimates(&mut union, &estimates);
+        assert_eq!(union.attributes["estimated_output_rows"], "165");
+
+        let mut intersect =
+            kaveon_core::PlanNode::new(30, kaveon_core::PlanPhase::Physical, "Intersect")
+                .with_child(make_scan(31, "left"))
+                .with_child(make_scan(32, "right"));
+        super::annotate_plan_estimates(&mut intersect, &estimates);
+        assert_eq!(intersect.attributes["estimated_output_rows"], "45");
+
+        let mut except = kaveon_core::PlanNode::new(40, kaveon_core::PlanPhase::Physical, "Except")
+            .with_child(make_scan(41, "left"))
+            .with_child(make_scan(42, "right"));
+        super::annotate_plan_estimates(&mut except, &estimates);
+        assert_eq!(except.attributes["estimated_output_rows"], "120");
+    }
+
+    #[test]
     fn runtime_regression_requires_five_runs_and_uses_a_doubled_p95() {
         assert_eq!(
             super::runtime_regression(&[10, 11, 12, 13], 100),
