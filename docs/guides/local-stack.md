@@ -149,51 +149,14 @@ It discovers schemas and tables, probes their locations through the Engine,
 and reports the final table count. A fresh local volume should finish with
 the same 25 showcase tables as the checked-in mirror.
 
-## 5. Legacy telemetry registration (optional)
+## 5. Optional synthetic telemetry
 
-The procedure below is retained for the historical synthetic telemetry build.
-It is not required for the PostgreSQL-free Docker stack and should not be used
-to configure a new installation.
-
-One-time, from the host, using the API's virtual environment (`cd api; python
--m venv venv; venv\Scripts\pip install -r requirements.txt` if it does not exist
-yet). The script records catalog, schema and table definitions on the
-coordinator, runs a distributed `COUNT(*)` against every table and refuses to
-proceed on a mismatch, then records the source in `kaveonmeta` so Studio and
-SQL Lab can see it.
-
-`KAVEON_LOCAL_LAKE_PATH` is the path **as the containers see it** — `/data` —
-not the host path.
-
-```powershell
-cd api
-$env:KAVEON_ENGINE_URL = "http://127.0.0.1:8081"
-$env:KAVEON_ENGINE_CATALOG_TOKEN = "kaveon-local-catalog-admin"
-$env:KAVEON_ENGINE_BRIDGE_TOKEN = "kaveon-local-bridge-token-not-for-production"
-$env:KAVEON_LOCAL_LAKE_PATH = "/data"
-$env:METADATA_DB_TYPE = "postgresql"; $env:METADATA_HOST = "127.0.0.1"; $env:METADATA_PORT = "5433"
-$env:METADATA_DATABASE = "kaveonmeta"; $env:METADATA_USER = "kaveon"; $env:METADATA_PASSWORD = "kaveon-local-only"; $env:METADATA_SSLMODE = "disable"
-$env:PYTHONPATH = "."
-.\venv\Scripts\python.exe ..\scripts\register-curated-catalog.py ..\tmp\kaveon-events\kaveon-events-singlefile-manifest.json
-cd ..
-```
-
-On macOS/Linux, export the same variables and run `venv/bin/python`. In Git
-Bash on Windows, prefix the command with `MSYS_NO_PATHCONV=1`; otherwise MSYS
-rewrites `/data` into `C:/Program Files/Git/data` and every scan fails with
-`No such file or directory`.
-
-Expected output ends with:
-
-```text
-Verified usage.kaveon_events_users: 3000000
-Verified usage.kaveon_events_enriched: 504000000
-{"catalog": "Kaveon", "registered_tables": 2}
-```
-
-The registration lives in the `catalog-data` volume and survives restarts and
-image rebuilds. Re-running the script is safe; it verifies rather than
-duplicates.
+The PostgreSQL-backed telemetry registration procedure is historical and is not
+part of a new installation. The PostgreSQL-free stack is populated by
+`bootstrap-local-catalog.py` above; use that idempotent command for a fresh
+volume. Older migration manifests and database environment variables remain in
+archived qualification records only and must not be copied into `.env` or a new
+deployment.
 
 ## 6. Query it
 
