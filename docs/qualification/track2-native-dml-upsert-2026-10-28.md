@@ -30,10 +30,14 @@ not general lake-table DML.
 - SQL parser test: `typed_row_insert_supports_bounded_conflict_update`.
 - Server transaction test:
   `typed_row_transactions_are_owner_isolated_and_rollback_is_invisible`.
+  This test now exercises the same typed-row upsert through
+  `/v1/transaction/sql`, including `RETURNING id, revision`, commits the
+  staged revision, and then verifies the revision-checked delete and rollback
+  path.
 - The API test creates `orders` at revision 1, executes the bounded upsert,
   verifies `RETURNING id, revision` reports revision 2, commits, and verifies
   the committed product record is revision 2.
-- Full SQL crate suite: 279 passed, 0 failed.
+- Full SQL crate suite: 312 passed, 0 failed.
 - Targeted server upsert test: passed.
 
 This is a qualified product-transaction increment, not general PostgreSQL
