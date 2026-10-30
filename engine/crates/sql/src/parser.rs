@@ -197,6 +197,18 @@ fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
             return Err(sql_error(guidance));
         }
     }
+    if bytes
+        .windows(b"STRING_AGG".len())
+        .enumerate()
+        .any(|(offset, window)| {
+            window.eq_ignore_ascii_case(b"STRING_AGG")
+                && is_sql_word_at(bytes, offset, b"STRING_AGG")
+        })
+    {
+        return Err(sql_error(
+            "STRING_AGG is not implemented; use ARRAY_AGG plus ARRAY_JOIN after a bounded rewrite",
+        ));
+    }
     Ok(())
 }
 
@@ -3608,6 +3620,17 @@ mod tests {
                 "expected supported single statement: {sql}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_string_agg_with_a_bounded_rewrite_hint() {
+        let error = parse_sql("SELECT STRING_AGG(name, ',') FROM events")
+            .expect_err("STRING_AGG must remain explicitly bounded");
+        assert!(
+            error
+                .to_string()
+                .contains("STRING_AGG is not implemented; use ARRAY_AGG plus ARRAY_JOIN")
+        );
     }
 
     #[test]

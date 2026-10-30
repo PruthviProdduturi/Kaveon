@@ -251,6 +251,9 @@ three-worker execution; scalar correlated `VALUES` expressions are qualified
 on the same path. Unbounded forms, arbitrary correlated derived `SELECT`
 forms, and table-valued APPLY are recognized and rejected with rewrite
 guidance rather than being treated as generic syntax failures.
+`STRING_AGG` remains explicitly rejected until Kaveon has an ordered,
+mergeable distributed string-aggregate state; clients should use a bounded
+`ARRAY_AGG`/`ARRAY_JOIN` rewrite only where that contract is acceptable.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
