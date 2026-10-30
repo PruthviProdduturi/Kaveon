@@ -62,6 +62,8 @@ evidence pass.
 The corpus currently contains 111 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice and its remaining
 ordered-state boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
+the embedded/local CLI planner now uses the same qualified bounded
+`STRING_AGG` state and separator checks as the server path;
 the SQL Server `DATETRUNC` alias qualified through `DATE_TRUNC`, and the JSON
 corpus remains the authoritative case list. `DATETRUNC` evidence is retained
 in `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
