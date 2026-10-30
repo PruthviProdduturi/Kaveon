@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "b2f7c909",
+  "engine_commit": "01dad237",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -35,6 +35,7 @@
     {"id": "trim_trailing_characters", "sql": "SELECT TRIM(TRAILING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_trailing_character_set"},
     {"id": "choose", "sql": "SELECT CHOOSE(2, region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "count_big", "sql": "SELECT COUNT_BIG(*) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "count_big_distinct", "sql": "SELECT COUNT_BIG(DISTINCT user_id) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "len", "sql": "SELECT LEN(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "iif", "sql": "SELECT IIF(actions > 10, 'yes', 'no') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "charindex", "sql": "SELECT CHARINDEX('a', name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
