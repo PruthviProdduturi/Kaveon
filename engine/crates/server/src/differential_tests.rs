@@ -335,6 +335,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_count_big_distinct",
+        "SELECT COUNT_BIG(DISTINCT country) AS countries FROM {T}",
+        true,
+    ),
+    (
         "tsql_len",
         "SELECT TOP 5 LEN(country) AS country_length FROM {T} ORDER BY country",
         true,
