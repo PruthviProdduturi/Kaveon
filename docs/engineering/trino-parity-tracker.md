@@ -49,15 +49,19 @@ explicit rejection because the engine stores microseconds). It follows the
 qualified ISO-week alias slice (`DATEPART`/`DATENAME` with `iso_week`, `isowk`,
 and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
-`docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
+`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 110-case corpus. The bounded date-construction qualifications
+the versioned 111-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus pins the latest implementation commit `01b63979`; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
+
+The weekly `DATE_BUCKET` evidence supersedes the earlier date-bucket note:
+`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` is the current
+qualification record for the added week unit.
 
 The corpus currently contains 111 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice and its remaining
