@@ -11113,6 +11113,29 @@ mod tests {
     }
 
     #[test]
+    fn count_big_distinct_lowers_to_exact_distinct_count() {
+        let LogicalPlan::Project { input, .. } =
+            sql_to_logical_plan("SELECT COUNT_BIG(DISTINCT user_id) FROM events").unwrap()
+        else {
+            panic!("expected project")
+        };
+        let LogicalPlan::Aggregate {
+            aggregates, input, ..
+        } = *input
+        else {
+            panic!("expected aggregate")
+        };
+        assert!(matches!(
+            aggregates.as_slice(),
+            [AggregateExpr::Count {
+                expr: Expr::Column(name),
+                distinct: false,
+            }] if name == "user_id"
+        ));
+        assert!(matches!(*input, LogicalPlan::Distinct { .. }));
+    }
+
+    #[test]
     fn the_approximate_setting_turns_exact_distinct_counts_into_sketches() {
         let sql = "SELECT COUNT(DISTINCT user_id), COUNT(user_id), SUM(DISTINCT n) FROM events";
         let LogicalPlan::Project { input, .. } =
