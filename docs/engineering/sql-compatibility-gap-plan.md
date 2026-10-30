@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 103-case corpus has planner coverage and focused exact
+  The current 104-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -152,8 +152,9 @@ exact local/three-worker evidence in
 The bounded SQL Server scalar math aliases `ABS`, `SIGN`, and `SQRT`, together
 with `POWER`, and the Unicode text functions `UPPER`, `LOWER`, and `REPLACE`
 are now included in the exact local/three-worker corpus; unsupported parser
-shapes such as `SUBSTRING` remain outside this qualification until their AST
-lowering is implemented.
+shapes remain explicitly rejected until their AST lowering is implemented.
+`SUBSTRING` is now lowered from the dedicated SQL AST form and is qualified for
+Unicode-safe bounded scalar inputs in the same corpus.
 Bounded SQL Server `STRING_SPLIT` now lowers to the existing typed `SPLIT` and
 `UNNEST` path for scalar inputs; optional literal ordinal mode `0`/`1`, alias
 columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the lateral boundary are qualified in

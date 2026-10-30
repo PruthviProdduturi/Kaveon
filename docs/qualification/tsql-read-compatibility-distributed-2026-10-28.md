@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 103 cases, including exact local/three-worker qualification for
+- Corpus: 104 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -19,7 +19,7 @@ parity or external-client parity.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
-  with exact local-vs-distributed results for the 103-case corpus, including
+  with exact local-vs-distributed results for the 104-case corpus, including
   row-local `STRING_SPLIT` and `ROUND` operation mode, without worker failures
   or retained exchange/spill files.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
@@ -42,6 +42,8 @@ parity or external-client parity.
   The current revision also qualifies bounded SQL Server-compatible scalar
   math (`ABS`, `SIGN`, `SQRT`, and `POWER`) and text (`UPPER`, `LOWER`, and
   `REPLACE`) expressions through the existing vectorized evaluator.
+  `SUBSTRING` now lowers from the SQL parser's dedicated AST form to the same
+  Unicode-safe vectorized substring evaluator.
 
 The bounded `PIVOT`/`UNPIVOT` evidence is retained in
 [`track2-tsql-pivot-unpivot-distributed-2026-10-28.md`](track2-tsql-pivot-unpivot-distributed-2026-10-28.md).

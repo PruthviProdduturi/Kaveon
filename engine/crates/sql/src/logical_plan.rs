@@ -4526,6 +4526,25 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             }
         }
 
+        ast::Expr::Substring {
+            expr,
+            substring_from,
+            substring_for,
+            ..
+        } => {
+            let Some(start) = substring_from else {
+                return Err(sql_err("SUBSTRING requires a start position"));
+            };
+            let mut args = vec![ast_expr_to_expr(expr)?, ast_expr_to_expr(start)?];
+            if let Some(length) = substring_for {
+                args.push(ast_expr_to_expr(length)?);
+            }
+            Ok(Expr::Function {
+                name: "SUBSTRING".into(),
+                args,
+            })
+        }
+
         ast::Expr::Interval(_) => Err(sql_err(
             "an INTERVAL is only supported added to or subtracted from a date",
         )),
@@ -9812,7 +9831,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 103);
+        assert_eq!(cases.len(), 104);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

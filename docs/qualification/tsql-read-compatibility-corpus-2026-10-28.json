@@ -24,6 +24,7 @@
     {"id": "math_scalar_compatibility", "sql": "SELECT ABS(actions - 10), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "power_scalar_compatibility", "sql": "SELECT POWER(CAST(actions AS DOUBLE), 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "string_scalar_compatibility", "sql": "SELECT UPPER(name), LOWER(name), REPLACE(name, 'a', 'A') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
+    {"id": "substring_scalar_compatibility", "sql": "SELECT SUBSTRING(name, 1, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "try_parse_numeric", "sql": "SELECT TRY_PARSE(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_numeric_parsing"},
     {"id": "square", "sql": "SELECT SQUARE(actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_power_lowering"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
