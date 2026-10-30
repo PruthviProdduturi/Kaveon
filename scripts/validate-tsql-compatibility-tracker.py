@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -58,6 +59,18 @@ def main() -> int:
     engine_commit = corpus.get("engine_commit")
     if not isinstance(engine_commit, str) or not re.fullmatch(r"[0-9a-f]{7,40}", engine_commit):
         fail("corpus engine_commit must be a lower-case hexadecimal Git revision")
+    try:
+        resolved = subprocess.run(
+            ["git", "cat-file", "-e", f"{engine_commit}^{{commit}}"],
+            cwd=ROOT,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        fail(f"cannot validate corpus engine_commit: {error}")
+    if resolved.returncode != 0:
+        fail(f"corpus engine_commit is not present in this repository: {engine_commit}")
 
     try:
         tracker = TRACKER.read_text(encoding="utf-8")
