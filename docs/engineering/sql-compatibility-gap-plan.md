@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 98-case corpus has planner coverage and focused exact
+  The current 99-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -142,6 +142,10 @@ vectorized null-preserving conditional path.
 SQL Server `ROUND` now accepts the bounded third `operation` argument (`0` for
 rounding and `1` for truncation toward zero), including row-local integer
 expressions; other operation values fail closed.
+`TRY_PARSE(value AS type)` now lowers to the existing invariant `TRY_CAST`
+path for numeric targets, with exact local/three-worker evidence in
+`docs/qualification/track2-tsql-try-parse-2026-10-29.md`; culture-aware `USING`
+forms remain explicitly rejected.
 Bounded SQL Server `STRING_SPLIT` now lowers to the existing typed `SPLIT` and
 `UNNEST` path for scalar inputs; optional literal ordinal mode `0`/`1`, alias
 columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the lateral boundary are qualified in

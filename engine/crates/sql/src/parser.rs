@@ -27,7 +27,8 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     let json_clauses_normalized = normalize_json_null_clauses(&json_exists_normalized)?;
     let json_unique_normalized = normalize_json_object_unique_keys(&json_clauses_normalized)?;
     let json_returning_normalized = normalize_json_returning(&json_unique_normalized);
-    let normalized = normalize_lateral_unnest(&json_returning_normalized);
+    let try_parse_normalized = normalize_try_parse(&json_returning_normalized);
+    let normalized = normalize_lateral_unnest(&try_parse_normalized);
     // Lower the one recursive shape that has a finite, deterministic
     // equivalent in the existing UNNEST/SEQUENCE execution path.  More
     // general recursive graphs remain explicitly unsupported in the logical
@@ -106,6 +107,43 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
             Err(KaveonError::Sql(primary.to_string()))
         }
     }
+}
+
+/// Lower the bounded SQL Server `TRY_PARSE(value AS type)` spelling to the
+/// Engine's existing safe cast path. Culture-aware `USING` forms are left
+/// untouched and therefore fail closed; parsing those would require a locale
+/// contract rather than silently applying invariant rules.
+fn normalize_try_parse(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let Some(position) = find_top_level_keyword(&upper, "TRY_PARSE") else {
+        return sql.to_owned();
+    };
+    let mut open = position + "TRY_PARSE".len();
+    while open < sql.len() && sql.as_bytes()[open].is_ascii_whitespace() {
+        open += 1;
+    }
+    if sql.as_bytes().get(open) != Some(&b'(') {
+        return sql.to_owned();
+    }
+    let Some(close) = matching_delimiter(sql, open, b'(', b')') else {
+        return sql.to_owned();
+    };
+    let body = sql[open + 1..close].trim();
+    let body_upper = body.to_ascii_uppercase();
+    let Some(as_position) = find_top_level_keyword(&body_upper, "AS") else {
+        return sql.to_owned();
+    };
+    let value = body[..as_position].trim();
+    let target = body[as_position + 2..].trim();
+    if value.is_empty() || target.is_empty() || target.to_ascii_uppercase().contains(" USING ") {
+        return sql.to_owned();
+    }
+    let replacement = format!(
+        "{}TRY_CAST({value} AS {target}){}",
+        &sql[..position],
+        &sql[close + 1..]
+    );
+    normalize_try_parse(&replacement)
 }
 
 /// Keep SQL Server/Fabric relational extensions fail-closed with a useful

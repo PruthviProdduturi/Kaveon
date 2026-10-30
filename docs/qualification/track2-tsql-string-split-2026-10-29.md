@@ -18,7 +18,7 @@ scope.
 
 ## Evidence
 
-- Planner coverage is included in the versioned 98-case T-SQL corpus.
+- Planner coverage is included in the versioned 99-case T-SQL corpus.
 - `OUTER APPLY STRING_SPLIT(...)` is qualified as a bounded left-lateral
   lowering alongside `CROSS APPLY` and explicit `CROSS JOIN LATERAL`.
 - Focused three-worker differential:
