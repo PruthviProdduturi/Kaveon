@@ -135,7 +135,27 @@ fn normalize_try_parse(sql: &str) -> String {
     };
     let value = body[..as_position].trim();
     let target = body[as_position + 2..].trim();
-    if value.is_empty() || target.is_empty() || target.to_ascii_uppercase().contains(" USING ") {
+    let target_upper = target.to_ascii_uppercase();
+    let numeric_target = [
+        "TINYINT",
+        "SMALLINT",
+        "INT",
+        "INTEGER",
+        "BIGINT",
+        "REAL",
+        "FLOAT",
+        "DOUBLE",
+        "DECIMAL",
+        "NUMERIC",
+        "MONEY",
+        "SMALLMONEY",
+    ]
+    .iter()
+    .any(|candidate| {
+        target_upper == *candidate || target_upper.starts_with(&format!("{candidate}("))
+    });
+    if value.is_empty() || target.is_empty() || target_upper.contains(" USING ") || !numeric_target
+    {
         return sql.to_owned();
     }
     let replacement = format!(
