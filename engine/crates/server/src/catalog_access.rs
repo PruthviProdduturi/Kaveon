@@ -13,9 +13,9 @@
 //! The policy is default deny: a principal without a grant sees no
 //! catalog. An Admin's access is a property of the role, never of a grant,
 //! so no grant or revoke can reduce it and the last Admin cannot be locked
-//! out. `KaveonDB` is reserved: it is never grantable, and it stays hidden
-//! from everyone — Admins included — until its read-only `product` and
-//! `catalog` views exist ([`kaveondb_views_available`]).
+//! out. `KaveonDB` is reserved: it is never grantable. Its read-only
+//! `product`, `catalog`, and `system` projections are available to
+//! administrators; ordinary roles cannot browse the reserved authority.
 //!
 //! Enforcement works by projection, not by a second check at each site: a
 //! principal's statement, metadata call and definitions read all resolve
@@ -50,7 +50,7 @@ use crate::{
 pub const GRANTS_TABLE: &str = "catalog_grants";
 
 /// The transactional application and catalog authority. Never grantable;
-/// hidden until its read-only SQL views exist.
+/// administrators receive its read-only projections.
 pub const RESERVED_CATALOG: &str = "KaveonDB";
 
 const MAX_PRINCIPAL_LEN: usize = 96;
