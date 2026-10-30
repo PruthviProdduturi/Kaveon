@@ -88,6 +88,10 @@ parseable-text inputs without claiming locale-specific currency parsing.
 scalar positions, NULL propagation, and explicit rejection of bracket classes;
 the local and three-worker evidence is retained in
 `docs/qualification/track2-tsql-patindex-2026-10-28.md`.
+Bracket-quoted identifiers remain identifiers in `DISTINCT` projections and
+ordered pagination shapes; the local/three-worker evidence across Parquet
+encodings is retained in
+`docs/qualification/track2-tsql-bracket-identifiers-2026-10-29.md`.
 `LEFT` and `RIGHT` preserve SQL Server's Unicode scalar character semantics
 for bounded text lengths and are covered by the distributed differential
 regression.
