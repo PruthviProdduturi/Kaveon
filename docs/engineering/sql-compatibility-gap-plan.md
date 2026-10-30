@@ -263,7 +263,9 @@ the contract.
   `TopN`, `LIMIT`, and `OFFSET`. Row-preserving `Filter`, `Project`, `Sort`,
   and `Window` nodes propagate the same upper bound; joins and set operations
   now expose mathematically safe product/sum/minimum/left-input caps without
-  inventing selectivity estimates. Evidence:
+  inventing selectivity estimates. Aggregate, hash-aggregate, final-aggregate,
+  and distinct nodes also expose a safe child-row upper bound, without
+  claiming group cardinality. Evidence:
   `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
