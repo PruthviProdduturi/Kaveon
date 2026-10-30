@@ -147,14 +147,11 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                     out,
                     &encode_aggregate_value(&AggregateValue::Utf8(delimiter.clone()))?,
                 )?;
-                payload(
-                    out,
-                    &encode_aggregate_value(
-                        &value.as_ref().map_or(AggregateValue::Null, |value| {
-                            AggregateValue::Utf8(value.clone())
-                        }),
-                    )?,
-                )?;
+                let encoded_value = match value {
+                    Some(value) => encode_aggregate_value(&AggregateValue::Utf8(value.clone()))?,
+                    None => vec![VALUE_NULL],
+                };
+                payload(out, &encoded_value)?;
             }
             AggregateState::CountDistinct(values)
             | AggregateState::SumDistinct(values)
