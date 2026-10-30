@@ -347,7 +347,7 @@ const CASES: &[(&str, &str, bool)] = &[
     (
         "tsql_string_agg_filter",
         "SELECT STRING_AGG(country, ',') FILTER (WHERE actions > 10 AND country = 'Japan') AS countries FROM {T}",
-        false,
+        true,
     ),
     (
         "tsql_pivot_count_big",
