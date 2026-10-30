@@ -129,14 +129,14 @@ semantics. Joins, other filters, CTEs, arbitrary expressions,
 cross-kind copies, lake/external sources, and `RETURNING` remain rejected;
 this is not general lake-table DML.
 
-## Not currently executable
+## Bounded compatibility aliases
 
 ### SQL Server/Fabric compatibility aliases
 
 The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, bounded `TOP n PERCENT`, `TOP n PERCENT WITH TIES`, and `TOP n WITH TIES`
 with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
-`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `TRANSLATE`, `LEFT`, `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, `RTRIM`, unstyled `CONVERT`, and
+`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `TRANSLATE`, `LEFT`, `RIGHT`, `REVERSE`, `TRIM` (including qualified BOTH, LEADING, and TRAILING character sets), `LTRIM`, `RTRIM`, unstyled `CONVERT`, and
 unstyled `TRY_CONVERT`. Literal DATE conversion styles `0`, `1`, `23`, `101`,
 `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`,
 `120`, `121`, and `126` are normalized to ISO dates;
@@ -164,7 +164,7 @@ qualification is limited to those input types; it does not imply support for
 the broader SQL Server date-construction family. `DATEFROMPARTS` is qualified
 for valid year/month/day parts, `DATETIMEFROMPARTS` is qualified for valid
 calendar and time parts, `DATETIME2FROMPARTS` is qualified for valid calendar
-and time parts at precisions 0 through 3, bounded UTC-normalized
+and time parts at precisions 0 through 6, bounded UTC-normalized
 `DATETIMEOFFSETFROMPARTS` is qualified at precisions 0 through 6,
 `TIMEFROMPARTS` is qualified for valid time parts at precisions 0 through 6,
 and `SMALLDATETIMEFROMPARTS` is
