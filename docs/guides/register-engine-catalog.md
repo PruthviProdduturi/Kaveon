@@ -1,7 +1,7 @@
 # Register an ADLS catalog
 
 A catalog contains schemas, which contain tables. Registering a catalog does not
-copy PostgreSQL data or automatically discover every file in storage.
+copy source data or automatically discover every file in storage.
 
 ## Requirements
 
@@ -58,8 +58,10 @@ System Settings shows a server-verified Engine connection and embeds catalog
 source registration. The native-source Sync action calls this API explicitly;
 it does not automatically activate the source or register tables. Merely seeing
 an active source does not prove it is queryable.
-The Engine catalog and the PostgreSQL platform source registry are separate
-stores. Do not create a second same-named Engine catalog through a different
+The Engine catalog and the KaveonDB platform source registry are separate
+surfaces backed by the same KaveonDB-native control plane. An external
+PostgreSQL source, when registered, is a connector only; it is not a metadata
+authority. Do not create a second same-named Engine catalog through a different
 registration path.
 
 `OpenSource` is a bootstrap-managed, queryable catalog with Engine ID
