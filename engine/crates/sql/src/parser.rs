@@ -2020,10 +2020,11 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                                 || dml.returning.iter().any(|column| {
                                     !column.eq_ignore_ascii_case("id")
                                         && !column.eq_ignore_ascii_case("revision")
+                                        && !column.eq_ignore_ascii_case("document_json")
                                 }))
                         {
                             return Err(sql_error(
-                                "source-backed product INSERT SELECT RETURNING requires an id filter and supports only id or revision",
+                                "source-backed product INSERT SELECT RETURNING requires an id filter and supports only id, revision, or document_json",
                             ));
                         }
                         return Ok(vec![ProductDmlCommand::InsertSelect {
@@ -3891,13 +3892,13 @@ mod tests {
     #[test]
     fn product_insert_select_accepts_bounded_identity_returning() {
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
-            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('one') RETURNING id, revision",
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('one') RETURNING id, revision, document_json",
         )
         .expect("bounded source RETURNING should parse")
         else {
             panic!("expected product DML");
         };
-        assert_eq!(dml.returning, ["id", "revision"]);
+        assert_eq!(dml.returning, ["id", "revision", "document_json"]);
         let commands =
             adapt_product_dml_batch(&dml).expect("bounded source RETURNING should adapt");
         assert_eq!(commands.len(), 1);
@@ -3907,7 +3908,8 @@ mod tests {
                 source_ids: Some(ids),
                 returning,
                 ..
-            } if ids == &["one".to_owned()] && returning == &["id".to_owned(), "revision".to_owned()]
+            } if ids == &["one".to_owned()]
+                && returning == &["id".to_owned(), "revision".to_owned(), "document_json".to_owned()]
         ));
     }
 
