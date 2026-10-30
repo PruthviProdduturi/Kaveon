@@ -34,6 +34,11 @@ new create. Commit, revision-CAS, replay, ownership, and transaction
 visibility therefore use the same tested paths as the bounded conflict-upsert
 operation.
 
+The SQL Server spelling `WHEN NOT MATCHED BY TARGET` is accepted as an alias
+for the same not-matched clause. Source ids must be unique within the bounded
+batch; duplicate keys fail closed before any write is staged, avoiding
+order-dependent revisions inside one transaction.
+
 ## Rejections
 
 The parser fails closed for source-query inputs, joins, batches over 1,000 rows,
@@ -47,6 +52,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_expands_a_bounded_values_batch`
 - `parser::tests::product_merge_supports_bounded_delete_or_insert`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
+- `parser::tests::rejects_duplicate_merge_source_ids`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
 - `transaction_api::tests::sql_endpoint_bounded_merge_delete_or_insert_is_owner_checked_and_atomic`
 - `cargo test -p kaveon-sql --lib product_merge_` — 4 passed, 0 failed on 2026-10-29
