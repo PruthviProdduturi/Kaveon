@@ -11510,7 +11510,21 @@ fn collect_join_statistics_tables(
     }
 }
 
-async fn commit_query_record(record: QueryRecord) -> bool {
+fn annotate_actual_root(plan: &mut Option<kaveon_core::PlanNode>, row_count: Option<u64>) {
+    let Some(row_count) = row_count else {
+        return;
+    };
+    let Some(root) = plan.as_mut() else {
+        return;
+    };
+    root.attributes
+        .insert("actual_output_rows".to_owned(), row_count.to_string());
+    root.attributes
+        .insert("actual_rows_scope".to_owned(), "query_result".to_owned());
+}
+
+async fn commit_query_record(mut record: QueryRecord) -> bool {
+    annotate_actual_root(&mut record.plan.physical, record.row_count);
     let mut store = QUERY_STORE.write().await;
     if store
         .queries
@@ -15985,6 +15999,24 @@ mod tests {
         assert_eq!(
             aggregate.attributes["estimate_scope"],
             "bounded_upper_bound"
+        );
+    }
+
+    #[test]
+    fn actual_root_rows_are_scoped_to_the_query_result() {
+        let scan = kaveon_core::PlanNode::new(10, kaveon_core::PlanPhase::Physical, "Scan");
+        let mut plan = Some(
+            kaveon_core::PlanNode::new(11, kaveon_core::PlanPhase::Physical, "Limit")
+                .with_child(scan),
+        );
+        super::annotate_actual_root(&mut plan, Some(7));
+        let root = plan.unwrap();
+        assert_eq!(root.attributes["actual_output_rows"], "7");
+        assert_eq!(root.attributes["actual_rows_scope"], "query_result");
+        assert!(
+            !root.children[0]
+                .attributes
+                .contains_key("actual_output_rows")
         );
     }
 

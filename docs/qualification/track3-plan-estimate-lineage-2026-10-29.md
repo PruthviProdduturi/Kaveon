@@ -22,6 +22,11 @@ final-aggregate, and distinct nodes now expose the same safe child-row upper
 bound; this is still a bound, not a group-cardinality estimate. None of these
 values claim join selectivity.
 
+Finished query records now annotate the physical-plan root with
+`actual_output_rows` and `actual_rows_scope=query_result` when a result row
+count is available. This is measured delivered-result telemetry only; it does
+not pretend to attribute rows to child operators.
+
 ## Evidence
 
 ```text
