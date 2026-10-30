@@ -55,7 +55,7 @@ the versioned 112-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
-The versioned T-SQL corpus pins the latest implementation commit `6869460a`; later
+The versioned T-SQL corpus pins the latest implementation commit `9408835b`; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
@@ -252,7 +252,7 @@ source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
 The T-SQL row above is backed by the versioned 112-case corpus pinned at
-`6869460a` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+`9408835b` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
 `NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
