@@ -47,7 +47,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 90-case corpus. The bounded date-construction qualifications
+the versioned 105-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -87,7 +87,7 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 104 cases (the implementation pin is updated after
+The current T-SQL corpus is 105 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -227,7 +227,7 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 104-case corpus pinned at
+The T-SQL row above is backed by the versioned 105-case corpus pinned at
 `aafe9d81` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
@@ -237,7 +237,7 @@ locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
 supersedes the older case-count wording embedded in the capability table.
-The capability row's historical corpus pointer is superseded by the 104-case
+The capability row's historical corpus pointer is superseded by the 105-case
 corpus and pin above; do not use its older count as current evidence.
 
 Run from `engine/`:
