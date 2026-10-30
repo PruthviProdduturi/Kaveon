@@ -179,7 +179,7 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 ## Qualification commands
 
 The T-SQL row above is backed by the versioned 82-case corpus pinned at
-`37abcee0` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+`3405318f` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 
 Run from `engine/`:
