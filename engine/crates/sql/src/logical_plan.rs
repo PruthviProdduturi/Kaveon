@@ -6579,6 +6579,9 @@ fn canonical_function_name(func: &ast::Function) -> String {
         // windows, and ordinary expressions) sees one canonical contract.
         "ISNULL" => "COALESCE".to_owned(),
         "DATEADD" => "DATE_ADD".to_owned(),
+        // SQL Server 2022's DATETRUNC has the same bounded two-argument
+        // calendar contract as the Engine's DATE_TRUNC path.
+        "DATETRUNC" => "DATE_TRUNC".to_owned(),
         "DATEDIFF" | "DATEDIFF_BIG" => "DATE_DIFF".to_owned(),
         "DATEPART" => "DATE_PART".to_owned(),
         "DATENAME" => "DATE_NAME".to_owned(),
@@ -9600,6 +9603,13 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datetrunc_to_date_trunc() {
+        let plan = sql_to_logical_plan("SELECT DATETRUNC(month, event_date) FROM t")
+            .expect("DATETRUNC should share the bounded DATE_TRUNC path");
+        assert!(format!("{plan:?}").contains("DATE_TRUNC"));
+    }
+
+    #[test]
     fn lowers_tsql_datefromparts_to_date_operator() {
         let plan = sql_to_logical_plan("SELECT DATEFROMPARTS(2024, 2, 29) FROM t")
             .expect("DATEFROMPARTS should canonicalize to the vectorized date operator");
@@ -9895,7 +9905,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 105);
+        assert_eq!(cases.len(), 106);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
