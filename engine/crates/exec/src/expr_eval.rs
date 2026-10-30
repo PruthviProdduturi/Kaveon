@@ -8405,6 +8405,35 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, str::to_lowercase)
         }
+        "STRING_ESCAPE" => {
+            check_arity(name, args, 2)?;
+            if num_rows == 0 {
+                return Ok(Arc::new(StringBuilder::new().finish()));
+            }
+            let mode = text_value(&args[1], 0)?.ok_or_else(|| {
+                KaveonError::Execution("STRING_ESCAPE mode must be the literal 'json'".into())
+            })?;
+            if !mode.eq_ignore_ascii_case("json") {
+                return Err(KaveonError::Execution(
+                    "STRING_ESCAPE supports only the 'json' escape mode".into(),
+                ));
+            }
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows * 8);
+            for row in 0..num_rows {
+                match text_value(&args[0], row)? {
+                    Some(value) => {
+                        let escaped = serde_json::to_string(value).map_err(|error| {
+                            KaveonError::Execution(format!(
+                                "STRING_ESCAPE JSON encoding failed: {error}"
+                            ))
+                        })?;
+                        result.append_value(&escaped[1..escaped.len() - 1]);
+                    }
+                    None => result.append_null(),
+                }
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "TRIM" => {
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, |value| value.trim().to_owned())
@@ -29190,6 +29219,35 @@ mod tests {
         .unwrap();
         let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
         assert_eq!(values.value(0), "KAvEon 2026");
+        assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_string_escape_json_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![
+                    Some("quote \" and newline\n"),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "mode",
+                Arc::new(StringArray::from(vec![Some("json"), Some("JSON")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "STRING_ESCAPE".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("mode".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), r#"quote \" and newline\n"#);
         assert!(values.is_null(1));
     }
 
