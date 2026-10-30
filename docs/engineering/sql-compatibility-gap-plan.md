@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 87-case corpus has planner coverage and focused exact
+  The current 90-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -127,6 +127,13 @@ DATE/TIMESTAMP values. Invariant patterns cover the common `yyyy`, `MM`, `dd`,
 overloads remain rejected. The same evaluator now honors the supplied pattern
 for `DATE_FORMAT`/`TO_CHAR`, with exact local and three-worker evidence in
 `docs/qualification/track2-tsql-format-temporal-2026-10-29.md`.
+
+`ASCII`, `UNICODE`, and bounded `CHAR` are also qualified: ASCII returns the
+leading ASCII scalar and NULL for a non-ASCII leading scalar, UNICODE returns
+the leading Unicode scalar, and CHAR accepts only integer byte values 0..255,
+returning NULL outside that range. This is an explicit invariant UTF-8/byte
+contract, not locale/code-page emulation; local and three-worker evidence is
+recorded in `docs/qualification/track2-tsql-character-code-2026-10-29.md`.
 
 ### Phase 2 — Transactional SQL surface
 
