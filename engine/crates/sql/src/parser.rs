@@ -267,7 +267,10 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
     let aggregate_close = matching_delimiter(body, aggregate_open, b'(', b')')
         .ok_or_else(|| sql_error("bounded PIVOT aggregate is unbalanced"))?;
     let aggregate = body[..aggregate_open].trim().to_ascii_uppercase();
-    if !matches!(aggregate.as_str(), "SUM" | "AVG" | "MIN" | "MAX" | "COUNT") {
+    if !matches!(
+        aggregate.as_str(),
+        "SUM" | "AVG" | "MIN" | "MAX" | "COUNT" | "COUNT_BIG"
+    ) {
         return Ok(None);
     }
     let value_column = body[aggregate_open + 1..aggregate_close].trim();
@@ -347,7 +350,7 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
         .map(|column| (*column).to_owned())
         .collect::<Vec<_>>();
     for (label, literal) in parsed_items {
-        let value = if aggregate == "COUNT" {
+        let value = if matches!(aggregate.as_str(), "COUNT" | "COUNT_BIG") {
             "1".to_owned()
         } else {
             value_column.to_owned()
@@ -3570,6 +3573,18 @@ mod tests {
         let rendered = statements[0].to_string();
         assert!(
             rendered.contains("COUNT(CASE WHEN month = 'Jan' THEN 1 END)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("GROUP BY region"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_pivot_count_big_star_lowers_to_conditional_aggregation() {
+        let sql = "SELECT * FROM (SELECT region, month FROM sales) src PIVOT (COUNT_BIG(*) FOR month IN ([Jan], [Feb])) p";
+        let statements = parse_sql(sql).expect("COUNT_BIG(*) PIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("COUNT_BIG(CASE WHEN month = 'Jan' THEN 1 END)"),
             "{rendered}"
         );
         assert!(rendered.contains("GROUP BY region"), "{rendered}");
