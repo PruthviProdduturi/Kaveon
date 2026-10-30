@@ -291,7 +291,8 @@ All six repaired in place and verified ASCII: `🚕 NYC busiest pickup zones`
 (stored as `ð NYC busiest pickup zones`, D-42) became
 `NYC busiest pickup zones`. Stripping the emoji removed both this and the
 mojibake in one pass, and leaves names the corrupting write path cannot damage
-again — which is why this repair is permanent while D-42 is still open.
+again — which is why this repair is permanent while the historical repair
+remains separate from the fixed parser path.
 
 ### D-7 · Engine chart is outside CI/CD
 **fixed (unverified)** · `.github/workflows/deploy-aks-engine.yml` · the
@@ -447,7 +448,8 @@ decision rather than a committed default. Until it is set, the behaviour is
 unchanged.
 
 ### D-42 · Every non-ASCII character in every SQL statement is corrupted
-**open** · 2026-10-13 · **Engine — @Codex** · data integrity
+**fixed (unverified)** · `eca3273b` · local parser regression passes; live
+catalog repair and installation verification remain separate
 
 `engine/crates/sql/src/parser.rs`, `normalize_bracket_identifiers`: the
 function walks the statement with `sql.as_bytes()` and rebuilds it with
@@ -473,6 +475,11 @@ three, because the passes compound on every rewrite — it had been saved three
 times. Repair is `encode('latin-1').decode('utf-8')` applied once per pass,
 and must wait until the write path is fixed or it will simply be re-corrupted.
 A helper already exists at `api/services/dlm_run_backfill.py:61`.
+
+The parser defect is fixed by `eca3273b`: untouched SQL slices are copied and
+only identifier-shaped bracket spans are rewritten. The regression covers
+emoji, en-dash, accented, CJK, and quoted text. Historical catalog values may
+still require the separately approved repair/backfill described above.
 
 ### D-43 · A maintenance build takes capacity from interactive queries
 **fixed, with a residual** · 2026-10-14
