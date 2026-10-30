@@ -18,12 +18,14 @@ scope.
 
 ## Evidence
 
-- Planner coverage is included in the versioned 93-case T-SQL corpus.
+- Planner coverage is included in the versioned 94-case T-SQL corpus.
 - Focused three-worker differential:
   `differential_tests::distributed_tsql_string_split_matches_local`.
 - The full Parquet-layout and execution-path differential sweep passes both
   value-only and ordinal forms with deterministic ordering.
 
-NULL propagation and delimiter behavior are inherited from the qualified
+Scalar row-local string and separator expressions are supported when the
+function is invoked through `CROSS JOIN LATERAL`; the ordinal mode remains a
+literal `0` or `1`. NULL propagation and delimiter behavior are inherited from the qualified
 vectorized `SPLIT` evaluator; the row-producing boundary adds only the
 SQL Server-compatible relation and ordinal contract described above.
