@@ -34,6 +34,14 @@ new create. Commit, revision-CAS, replay, ownership, and transaction
 visibility therefore use the same tested paths as the bounded conflict-upsert
 operation.
 
+A third bounded form supports `WHEN MATCHED THEN DELETE` without an insert
+clause. Existing source keys are deleted with the same revision-CAS and
+ownership checks; source keys with no match are explicit transactional no-ops,
+as required by `MERGE` semantics. The source still carries the fixed
+two-column `(id, document_json)` shape because the parser uses one bounded
+batch contract for all product-record `MERGE` forms; the document value is
+ignored for this delete-only form.
+
 The SQL Server spelling `WHEN NOT MATCHED BY TARGET` is accepted as an alias
 for the same not-matched clause. Source ids must be unique within the bounded
 batch; duplicate keys fail closed before any write is staged, avoiding
@@ -51,12 +59,14 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_supports_bounded_update_or_insert`
 - `parser::tests::product_merge_expands_a_bounded_values_batch`
 - `parser::tests::product_merge_supports_bounded_delete_or_insert`
+- `parser::tests::product_merge_supports_bounded_matched_delete`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
 - `parser::tests::rejects_duplicate_merge_source_ids`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
 - `transaction_api::tests::sql_endpoint_bounded_merge_delete_or_insert_is_owner_checked_and_atomic`
-- `cargo test -p kaveon-sql --lib product_merge_` — 4 passed, 0 failed on 2026-10-29
-- `cargo test -p kaveon-server --bin kaveon-server transaction_api::tests::sql_endpoint_bounded_merge` — 2 passed, 0 failed on 2026-10-29
+- `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
+- `cargo test -p kaveon-sql --lib product_merge_` — 5 passed, 0 failed on 2026-10-30
+- `cargo test -p kaveon-server --bin kaveon-server transaction_api::tests::sql_endpoint_bounded_merge` — 3 passed, 0 failed on 2026-10-30
 
 The transaction API test commits two revisions and one insert atomically, then
 reads the committed snapshot and verifies revisions `2, 2, 1`. It stages the

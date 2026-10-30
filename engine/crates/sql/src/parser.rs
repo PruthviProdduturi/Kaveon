@@ -1994,6 +1994,9 @@ pub enum ProductDmlCommand {
         id: String,
         document_json: String,
     },
+    /// Bounded MERGE semantics: delete a matched product row.  An unmatched
+    /// source row is a transactional no-op, matching SQL MERGE semantics.
+    MergeDelete { kind: String, id: String },
     /// Copy product records from another product table in the pinned
     /// transactional snapshot.  The server expands this bounded form into
     /// ordinary create/update commands; it is deliberately not a lake-table
@@ -2347,16 +2350,32 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     if !merge_id_predicate(on, &target_alias, &source_alias) {
         return Err(sql_error("MERGE ON must equate target.id with source.id"));
     }
+    if clauses.iter().any(|clause| clause.predicate.is_some()) {
+        return Err(sql_error("MERGE clauses cannot have predicates"));
+    }
+    let matched_delete = matches!(clauses[0].action, MergeAction::Delete);
+    let matched_only_delete = clauses.len() == 1
+        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
+        && matched_delete;
+    if matched_only_delete {
+        return source_values
+            .iter()
+            .map(|row| {
+                Ok(ProductDmlCommand::MergeDelete {
+                    kind: kind.clone(),
+                    id: string_literal(&row[0], "MERGE source id")?,
+                })
+            })
+            .collect();
+    }
     if clauses.len() != 2
-        || clauses.iter().any(|clause| clause.predicate.is_some())
         || !matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
         || !matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched)
     {
         return Err(sql_error(
-            "MERGE requires WHEN MATCHED UPDATE or DELETE followed by WHEN NOT MATCHED INSERT",
+            "MERGE requires WHEN MATCHED UPDATE or DELETE followed by WHEN NOT MATCHED INSERT, or matched DELETE only",
         ));
     }
-    let matched_delete = matches!(clauses[0].action, MergeAction::Delete);
     if !matched_delete {
         let MergeAction::Update { assignments } = &clauses[0].action else {
             return Err(sql_error("MERGE WHEN MATCHED must update or delete"));
@@ -4042,6 +4061,30 @@ mod tests {
                 id: "ds-1".into(),
                 document_json: "{\"name\":\"Orders\"}".into(),
             }
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_matched_delete() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE",
+        )
+        .expect("bounded matched-delete MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::MergeDelete {
+                    kind: "dataset".into(),
+                    id: "ds-1".into(),
+                },
+                ProductDmlCommand::MergeDelete {
+                    kind: "dataset".into(),
+                    id: "ds-2".into(),
+                },
+            ]
         );
     }
 
