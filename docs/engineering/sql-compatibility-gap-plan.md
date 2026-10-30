@@ -137,8 +137,10 @@ dynamic origins remain rejected.
   copies `id` and `document_json` from one same-kind `kaveon.product` table
   under the pinned transaction snapshot, optionally narrowed by a literal
   `id IN (...)` list, and is capped at 1,000 source records,
-  enforces owner isolation, and reuses the existing conflict/CAS path. General
-  lake-table source DML remains open.
+  enforces owner isolation, and reuses the existing conflict/CAS path. With an
+  explicit ID filter, `RETURNING id, revision` is also qualified from the
+  staged snapshot. General lake-table source DML and document projections
+  remain open.
 - [x] Add bounded `MERGE` with explicit revision/CAS semantics. `MERGE`
   accepts one aliased `VALUES` batch of up to 1,000 rows containing `id` and
   `document_json`, an equality `target.id = source.id` predicate, and exactly
