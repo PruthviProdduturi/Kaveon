@@ -13,6 +13,7 @@
     {"id": "ascii", "sql": "SELECT ASCII(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_ascii_scalars"},
     {"id": "unicode", "sql": "SELECT UNICODE(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalars"},
     {"id": "char", "sql": "SELECT CHAR(code) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_byte_values"},
+    {"id": "nchar", "sql": "SELECT NCHAR(code) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalars"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "concat", "sql": "SELECT CONCAT(region, '-', industry, '-', platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "trim_characters", "sql": "SELECT TRIM(BOTH 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_both_mode_character_set"},

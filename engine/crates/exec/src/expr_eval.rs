@@ -8432,8 +8432,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         // SQL Server's character-code helpers are intentionally bounded to
         // Unicode scalar values. ASCII rejects a non-ASCII leading scalar
         // rather than silently applying a locale/code-page conversion;
-        // UNICODE returns the scalar value and CHAR accepts the documented
-        // 0..255 byte range.
+        // UNICODE returns the scalar value, CHAR accepts the documented
+        // 0..255 byte range, and NCHAR accepts valid Unicode scalar values.
         "ASCII" | "UNICODE" => {
             check_arity(name, args, 1)?;
             let mut result = Int32Builder::with_capacity(num_rows);
@@ -8465,6 +8465,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         result.append_null();
                     } else {
                         result.append_value(char::from(value as u8).to_string());
+                    }
+                }
+            }
+            Ok(Arc::new(result.finish()))
+        }
+        "NCHAR" => {
+            check_arity(name, args, 1)?;
+            let numeric = compute::cast(&args[0], &DataType::Int64)?;
+            let numeric = numeric.as_primitive::<Int64Type>();
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows);
+            for row in 0..num_rows {
+                if numeric.is_null(row) {
+                    result.append_null();
+                } else {
+                    let value = numeric.value(row);
+                    let scalar = u32::try_from(value).ok().and_then(char::from_u32);
+                    match scalar {
+                        Some(scalar) => result.append_value(scalar.to_string()),
+                        None => result.append_null(),
                     }
                 }
             }
@@ -29682,6 +29701,10 @@ mod tests {
                 "code",
                 Arc::new(Int64Array::from(vec![Some(65), Some(256), None])) as ArrayRef,
             ),
+            (
+                "unicode_code",
+                Arc::new(Int64Array::from(vec![Some(0x1f600), Some(0xd800), None])) as ArrayRef,
+            ),
         ])
         .unwrap();
         let ascii = evaluate(
@@ -29730,6 +29753,18 @@ mod tests {
         assert_eq!(chars.value(0), "A");
         assert!(chars.is_null(1));
         assert!(chars.is_null(2));
+        let nchars = evaluate(
+            &Expr::Function {
+                name: "NCHAR".into(),
+                args: vec![Expr::Column("unicode_code".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let nchars = nchars.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(nchars.value(0), "😀");
+        assert!(nchars.is_null(1));
+        assert!(nchars.is_null(2));
     }
 
     #[test]
