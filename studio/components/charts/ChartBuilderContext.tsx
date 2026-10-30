@@ -1053,7 +1053,8 @@ export type ChartKind =
   | "calendar_heatmap"
   | "histogram"
   | "parallel_coordinates"
-  | "world_map";
+  | "world_map"
+  | "bubble_map";
 
 export type TimeRangePreset =
   | "all_time"
@@ -1482,6 +1483,12 @@ export const TEMPLATES: ChartTemplate[] = [
     name: "Parallel coordinates",
     description: "Compare multi-dimensional numeric data across parallel axes.",
     category: "Custom",
+  },
+  {
+    id: "bubble_map",
+    name: "Bubble map",
+    description: "Plot points on a map, sized by value. Query needs a place name, or latitude and longitude columns.",
+    category: "Map",
   },
   {
     id: "world_map",
