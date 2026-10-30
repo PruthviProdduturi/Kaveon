@@ -5119,25 +5119,55 @@ mod tests {
             3
         );
 
+        let sql_upsert = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "INSERT INTO product.typed_rows (id, document_json) VALUES ('u-1', '{\"table\":\"app.users\",\"primary_key\":\"u-1\",\"revision\":4,\"owner_principal\":\"alice\",\"columns\":{\"email\":{\"type\":\"string\",\"value\":\"alan@example.com\"}},\"unique_keys\":{\"email\":\"alan@example.com\"}}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision".into(),
+                transaction_id: Some(sql_upsert.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "u-1");
+        assert_eq!(value["returning"][0]["revision"], 4);
+        let mut transaction = registry
+            .take("alice", &sql_upsert.transaction_id)
+            .await
+            .unwrap();
+        transaction
+            .bind_request_digest(b"typed-sql-upsert")
+            .unwrap();
+        transaction.commit().await.unwrap();
+
         let delete_returning = registry.begin("alice").await.unwrap();
         let response = execute_sql_request(
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 3 RETURNING id, revision, document_json".into(),
+                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 4 RETURNING id, revision, document_json".into(),
                 transaction_id: Some(delete_returning.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
             },
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
             .await
             .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "u-1");
-        assert_eq!(value["returning"][0]["revision"], 3);
+        assert_eq!(value["returning"][0]["revision"], 4);
         assert!(
             value["returning"][0]["document_json"]
                 .as_str()
@@ -5152,7 +5182,7 @@ mod tests {
                 ProductDmlCommand::Delete {
                     kind: "typed_row".into(),
                     id: "u-1".into(),
-                    expected_revision: 3,
+                    expected_revision: 4,
                 },
             )
             .await
@@ -5163,11 +5193,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             transaction.rollback().typed_rows["app.users"]["u-1"].revision,
-            3
+            4
         );
         assert_eq!(
             catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
-            3
+            4
         );
     }
 
