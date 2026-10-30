@@ -241,6 +241,12 @@ binds them before the native transaction parser, supports scalar values and
 nested arrays, and rejects missing or extra values. Objects must be sent as
 JSON strings because product documents are stored as immutable JSON bytes.
 
+Finished query records also retain plan attributes for runtime diagnostics:
+`actual_output_rows` with `actual_rows_scope=query_result` on the physical root,
+and, when scan telemetry maps one-to-one to physical scans,
+`actual_rows_selected` with `actual_rows_scope=scan_selected_rows` on each scan.
+Ambiguous mappings are intentionally omitted.
+
 ### Catalog statements
 
 `POST /v1/statement` accepts the Trino-shaped catalog DDL below. A catalog
