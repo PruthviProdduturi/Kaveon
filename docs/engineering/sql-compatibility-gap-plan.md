@@ -182,7 +182,9 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   by `WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id,
   source.document_json)`. Each source row lowers to the existing
   owner-isolated `Upsert` command, so commit/revision behavior is shared with
-  the qualified conflict upsert path. Evidence:
+  the qualified conflict upsert path. Explicit `WHEN NOT MATCHED BY TARGET`
+  is accepted as an alias, and duplicate source ids fail closed before staging
+  to keep revisions deterministic. Evidence:
   `docs/qualification/track2-native-dml-merge-2026-10-28.md`.
 - [ ] Expand `MERGE` and broader conflict handling only with explicit
   revision/CAS semantics. Product `ON CONFLICT DO NOTHING` and the bounded

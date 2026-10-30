@@ -2263,6 +2263,16 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             "MERGE source columns must be id and document_json",
         ));
     }
+    let mut source_ids = Vec::with_capacity(source_values.len());
+    for row in &source_values {
+        let id = string_literal(&row[0], "MERGE source id")?;
+        if source_ids.iter().any(|existing| existing == &id) {
+            return Err(sql_error(
+                "MERGE source ids must be unique within the bounded batch",
+            ));
+        }
+        source_ids.push(id);
+    }
     if !merge_id_predicate(on, &target_alias, &source_alias) {
         return Err(sql_error("MERGE ON must equate target.id with source.id"));
     }
@@ -3621,6 +3631,19 @@ mod tests {
         let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED BY TARGET THEN INSERT (id, document_json) VALUES (s.id, s.document_json)";
         parse_native_transactional(sql)
             .unwrap_or_else(|error| panic!("MERGE BY TARGET alias rejected: {error}"));
+    }
+
+    #[test]
+    fn rejects_duplicate_merge_source_ids() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-1', '{\"duplicate\":true}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("duplicate ids remain syntactically valid")
+        else {
+            panic!("expected MERGE DML");
+        };
+        let error =
+            adapt_product_dml_batch(&dml).expect_err("duplicate MERGE ids must fail closed");
+        assert!(error.to_string().contains("source ids must be unique"));
     }
 
     #[test]
