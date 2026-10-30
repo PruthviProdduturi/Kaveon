@@ -271,7 +271,9 @@ is recorded in
 `docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`.
 The embedded/local CLI planner uses the same bounded aggregate state and
 separator validation, so local and server execution share this declared
-surface; ordered forms remain rejected in both paths.
+surface; ordered forms remain rejected in both paths. Local evidence is
+recorded in
+`docs/qualification/track2-tsql-string-agg-local-cli-2026-10-30.md`.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
