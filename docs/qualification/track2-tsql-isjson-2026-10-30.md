@@ -2,12 +2,12 @@
 
 ## Scope
 
-Kaveon qualifies the one-argument SQL Server/Fabric `ISJSON(text)` predicate
-over UTF-8, large UTF-8, and dictionary-backed text columns. It returns the
-SQL Server-style integer result `1` for valid JSON, `0` for invalid text or a
-non-text input, and `NULL` for a NULL text value. The optional JSON type
-constraint argument is rejected explicitly; no locale or compatibility-level
-behavior is implied.
+Kaveon qualifies the SQL Server/Fabric `ISJSON(text[, type_constraint])`
+predicate over UTF-8, large UTF-8, and dictionary-backed text columns. It
+returns the SQL Server-style integer result `1` for valid/matching JSON, `0`
+for invalid, non-text, or non-matching input, and `NULL` for a NULL text value.
+The bounded type constraints are `VALUE`, `ARRAY`, `OBJECT`, and `SCALAR`; no
+locale or compatibility-level behavior is implied.
 
 ## Evidence
 
@@ -22,5 +22,5 @@ behavior is implied.
 
 ## Boundary
 
-`ISJSON(text, type_constraint)` and broader SQL/JSON type-constraint rules are
-not part of this qualification and must continue to fail closed.
+Other `ISJSON` type-constraint values and broader SQL/JSON rules are not part
+of this qualification and must continue to fail closed.

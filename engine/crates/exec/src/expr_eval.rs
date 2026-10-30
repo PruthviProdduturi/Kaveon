@@ -9122,10 +9122,34 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             Ok(Arc::new(numeric))
         }
         // Bounded SQL Server ISJSON: return 1/0 for text JSON validity and
-        // NULL for NULL text. The optional type-constraint overload remains
-        // outside the compatibility contract.
+        // NULL for NULL text. The optional type constraint is limited to the
+        // SQL Server VALUE/ARRAY/OBJECT/SCALAR forms.
         "IS_JSON" | "ISJSON" => {
-            check_arity(name, args, 1)?;
+            if args.len() != 1 && args.len() != 2 {
+                return Err(KaveonError::Execution(format!(
+                    "{name} requires one argument and an optional type constraint"
+                )));
+            }
+            let constraint = if args.len() == 2 {
+                let value = args[1]
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .and_then(|values| (!values.is_null(0)).then(|| values.value(0)))
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "ISJSON type constraint must be VALUE, ARRAY, OBJECT, or SCALAR".into(),
+                        )
+                    })?
+                    .to_uppercase();
+                if !matches!(value.as_str(), "VALUE" | "ARRAY" | "OBJECT" | "SCALAR") {
+                    return Err(KaveonError::Execution(
+                        "ISJSON type constraint must be VALUE, ARRAY, OBJECT, or SCALAR".into(),
+                    ));
+                }
+                Some(value)
+            } else {
+                None
+            };
             let input = &args[0];
             match input.data_type() {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Dictionary(_, _) => {
@@ -9133,10 +9157,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         .map(|row| {
                             text_value(input, row).map(|value| {
                                 value.map(|document| {
-                                    if serde_json::from_str::<serde_json::Value>(document).is_ok() {
-                                        1
-                                    } else {
-                                        0
+                                    match serde_json::from_str::<serde_json::Value>(document) {
+                                        Ok(parsed) if constraint.as_deref() == Some("ARRAY") => {
+                                            i32::from(parsed.is_array())
+                                        }
+                                        Ok(parsed) if constraint.as_deref() == Some("OBJECT") => {
+                                            i32::from(parsed.is_object())
+                                        }
+                                        Ok(parsed) if constraint.as_deref() == Some("SCALAR") => {
+                                            i32::from(!parsed.is_array() && !parsed.is_object())
+                                        }
+                                        Ok(_) => 1,
+                                        Err(_) => 0,
                                     }
                                 })
                             })
@@ -28580,6 +28612,18 @@ mod tests {
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), 0);
         assert!(values.is_null(2));
+
+        for (constraint, expected) in [("ARRAY", 0), ("OBJECT", 1), ("SCALAR", 0)] {
+            let constrained = Expr::Function {
+                name: "IS_JSON".into(),
+                args: vec![
+                    Expr::Column("document".into()),
+                    Expr::Literal(ScalarValue::Utf8(constraint.into())),
+                ],
+            };
+            let result = evaluate(&constrained, &batch).unwrap();
+            assert_eq!(result.as_primitive::<Int32Type>().value(0), expected);
+        }
     }
 
     #[test]

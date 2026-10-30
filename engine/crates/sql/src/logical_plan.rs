@@ -5076,7 +5076,17 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             for (arg_index, arg) in arg_list.args.iter().enumerate() {
                 match arg {
                     ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)) => {
-                        lowered.push(if written_name == "FORMAT" && arg_index == 0 {
+                        lowered.push(if written_name == "ISJSON" && arg_index == 1 {
+                            // SQL Server spells the optional JSON type
+                            // constraint as an identifier. Keep it literal so
+                            // it cannot accidentally bind to a table column.
+                            match e {
+                                ast::Expr::Identifier(identifier) => {
+                                    Expr::Literal(ScalarValue::Utf8(identifier.value.clone()))
+                                }
+                                _ => ast_expr_to_expr(e)?,
+                            }
+                        } else if written_name == "FORMAT" && arg_index == 0 {
                             // Keep typed DATE projections as Date32 rather
                             // than the compact Int64 day representation used
                             // by storage predicates. This makes FORMAT's
