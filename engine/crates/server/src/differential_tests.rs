@@ -7895,7 +7895,7 @@ fn distributed_tsql_replicate_matches_local() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-tsql-replicate-{}", uuid::Uuid::new_v4()));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, REPLICATE(country, actions) AS repeated FROM events ORDER BY user_id, country LIMIT 12";
+    let statement = "SELECT user_id, REPLICATE(country, actions - 20) AS repeated FROM events ORDER BY user_id, country LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-replicate-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)

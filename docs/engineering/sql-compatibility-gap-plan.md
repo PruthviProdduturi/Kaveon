@@ -100,7 +100,8 @@ encodings is retained in
 and three-worker evidence in
 `docs/qualification/track2-tsql-quotename-2026-10-29.md`.
 `REPLICATE` now canonicalizes to the bounded Unicode `REPEAT` path for
-non-negative counts and is included in the distributed corpus.
+non-negative literals and bounded row-local BIGINT expressions, returning NULL
+for negative counts; it is included in the distributed corpus.
 `LEFT` and `RIGHT` preserve SQL Server's Unicode scalar character semantics
 for bounded text lengths and are covered by the distributed differential
 regression.

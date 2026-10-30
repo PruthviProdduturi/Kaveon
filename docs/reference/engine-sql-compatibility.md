@@ -210,8 +210,9 @@ NULL propagation; escape modes other than `json` are rejected explicitly.
 doubles closing delimiters, preserves NULLs, and returns NULL for identifiers
 longer than 128 Unicode characters; other delimiters are rejected explicitly.
 SQL Server `REPLICATE(text, count)` is accepted through the bounded Unicode
-`REPEAT` path for non-negative integer-literal or row-local `BIGINT` counts;
-NULLs propagate and a negative row-local count returns NULL as in SQL Server.
+`REPEAT` path for non-negative integer-literal or bounded row-local `BIGINT`
+expressions (including arithmetic and casts); NULLs propagate and a negative
+count returns NULL as in SQL Server.
 Binary inputs, legacy 8,000-byte truncation, and unbounded expansion remain
 outside the qualified contract.
 

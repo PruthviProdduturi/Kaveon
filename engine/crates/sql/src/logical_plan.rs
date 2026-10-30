@@ -4917,7 +4917,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             }
             _ => {
                 let count = args[1].clone();
-                if !matches!(count, Expr::Column(_) | Expr::Function { .. }) {
+                if !is_row_local_replicate_count(&count) {
                     return Err(sql_err(
                         "REPLICATE count must be a BIGINT expression or non-negative integer literal",
                     ));
@@ -5760,6 +5760,34 @@ fn normalize_tsql_date_unit(unit: &str) -> String {
         "mcs" | "us" => "microsecond".into(),
         "ns" => "nanosecond".into(),
         other => other.into(),
+    }
+}
+
+fn is_row_local_replicate_count(expr: &Expr) -> bool {
+    match expr {
+        Expr::Column(_) => true,
+        Expr::Literal(ScalarValue::Int64(_)) => true,
+        Expr::BinaryOp { left, right, .. } => {
+            is_row_local_replicate_count(left) && is_row_local_replicate_count(right)
+        }
+        Expr::Cast { expr, .. } => is_row_local_replicate_count(expr),
+        Expr::Function { name, args } => {
+            !is_aggregate_function(name) && args.iter().all(is_row_local_replicate_count)
+        }
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => {
+            operand.as_deref().is_none_or(is_row_local_replicate_count)
+                && when_then.iter().all(|(condition, value)| {
+                    is_row_local_replicate_count(condition) && is_row_local_replicate_count(value)
+                })
+                && else_expr
+                    .as_deref()
+                    .is_none_or(is_row_local_replicate_count)
+        }
+        _ => false,
     }
 }
 
@@ -9248,12 +9276,17 @@ mod tests {
             .expect("REPLICATE should lower through the bounded repeat operator");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("REPEAT"), "{rendered}");
-        assert!(sql_to_logical_plan("SELECT REPLICATE(name, -1) FROM t").is_err());
+        let negative = sql_to_logical_plan("SELECT REPLICATE(name, -1) FROM t")
+            .expect("negative row-local REPLICATE counts should lower to NULL semantics");
+        assert!(format!("{negative:?}").contains("Case"));
         let dynamic = sql_to_logical_plan("SELECT REPLICATE(name, actions) FROM t")
             .expect("row-local BIGINT REPLICATE counts should lower");
         let dynamic = format!("{dynamic:?}");
         assert!(dynamic.contains("REPEAT"), "{dynamic}");
         assert!(dynamic.contains("Case"), "{dynamic}");
+        sql_to_logical_plan("SELECT REPLICATE(name, actions - 1) FROM t")
+            .expect("row-local arithmetic REPLICATE counts should lower");
+        assert!(sql_to_logical_plan("SELECT REPLICATE(name, COUNT(*)) FROM t").is_err());
     }
 
     #[test]
