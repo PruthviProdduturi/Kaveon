@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 76-case corpus has planner coverage and focused exact
+  The current 78-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -52,7 +52,7 @@ The authoritative capability details remain in:
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
-Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, character-set `TRIM` in BOTH mode, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
+Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, character-set `TRIM` in BOTH/LEADING/TRAILING modes, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Runtime DATE and timestamp styles have qualified local
 and three-worker coverage for the declared style set. Literal DATE styles `0`, `1`, `101`, and `112` now
@@ -91,8 +91,10 @@ regression.
 `REVERSE` preserves Unicode scalar order for text values and is covered by the
 same distributed differential path.
 `TRIM`, `LTRIM`, and `RTRIM` preserve NULLs and remove only the documented
-ASCII-space boundaries on the width-aware text path; they are covered by the
-same distributed differential regression.
+ASCII-space boundaries on the width-aware text path. Character-set `TRIM`
+now qualifies BOTH, LEADING, and TRAILING forms with local and three-worker
+differential evidence in `docs/qualification/track2-tsql-trim-characters-2026-10-29.md`
+and `docs/qualification/track2-tsql-trim-directional-characters-2026-10-29.md`.
 `TRANSLATE` now has a bounded SQL Server-compatible Unicode scalar mapping
 path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
