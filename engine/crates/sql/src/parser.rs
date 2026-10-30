@@ -2467,7 +2467,8 @@ fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
 /// This validates syntax only. It does not imply that the coordinator can
 /// execute, isolate, commit, or recover the returned statement.
 pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatement> {
-    let mut statements = parse_sql(sql)?;
+    let normalized = normalize_transaction_control_aliases(sql);
+    let mut statements = parse_sql(&normalized)?;
     if statements.len() != 1 {
         return Err(sql_error(
             "native transactions accept exactly one statement per request",
@@ -2684,6 +2685,27 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             "native transaction parser accepts INSERT, UPDATE, DELETE, MERGE, BEGIN, COMMIT, or ROLLBACK only",
         )),
     }
+}
+
+/// SQL Server clients commonly spell the transaction controls with an
+/// optional `TRAN`/`TRANSACTION` keyword.  They are aliases for the same
+/// single-statement controls; normalize only the complete statement so a
+/// keyword inside a DML statement is never rewritten.
+fn normalize_transaction_control_aliases(sql: &str) -> String {
+    let trimmed = sql.trim();
+    let (body, terminator) = match trimmed.strip_suffix(';') {
+        Some(body) => (body.trim_end(), ";"),
+        None => (trimmed, ""),
+    };
+    let canonical = match body.to_ascii_uppercase().as_str() {
+        "BEGIN TRAN" | "BEGIN TRANSACTION" => Some("BEGIN"),
+        "COMMIT TRAN" | "COMMIT TRANSACTION" => Some("COMMIT"),
+        "ROLLBACK TRAN" | "ROLLBACK TRANSACTION" => Some("ROLLBACK"),
+        _ => None,
+    };
+    canonical
+        .map(|statement| format!("{statement}{terminator}"))
+        .unwrap_or_else(|| sql.to_owned())
 }
 
 /// The product transaction contract can return stable identity, revision, and
@@ -3517,6 +3539,22 @@ mod tests {
                 parse_native_transactional(sql).is_ok(),
                 "expected supported single statement: {sql}"
             );
+        }
+    }
+
+    #[test]
+    fn accepts_sql_server_transaction_control_aliases() {
+        for sql in [
+            "BEGIN TRANSACTION",
+            "BEGIN TRAN",
+            "COMMIT TRANSACTION",
+            "COMMIT TRAN",
+            "ROLLBACK TRANSACTION",
+            "ROLLBACK TRAN",
+        ] {
+            parse_native_transactional(sql).unwrap_or_else(|error| {
+                panic!("SQL Server transaction alias rejected: {sql}: {error}")
+            });
         }
     }
 

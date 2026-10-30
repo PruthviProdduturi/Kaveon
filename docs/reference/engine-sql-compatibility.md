@@ -310,13 +310,13 @@ server or a general row-store protocol.
 
 | Existing operation | Behavior |
 |---|---|
-| `BEGIN` | Creates an owner-isolated transaction session against the current product snapshot |
+| `BEGIN` / `BEGIN TRAN` / `BEGIN TRANSACTION` | Creates an owner-isolated transaction session against the current product snapshot |
 | `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit |
 | `UPDATE` | Revision-checked replacement of one product document; `id` and `revision` are required in `WHERE` |
 | `DELETE` | Revision-checked deletion of one product document; `id` and `revision` are required in `WHERE` |
 | `MERGE` | One bounded aliased `VALUES` batch (up to 1,000 rows) can update-or-insert, or delete-or-insert, `id, document_json` through owner-checked revision/CAS paths |
-| `COMMIT` | Publishes a prepared immutable catalog snapshot through the configured product store |
-| `ROLLBACK` | Discards the session without publishing its staged changes |
+| `COMMIT` / `COMMIT TRAN` / `COMMIT TRANSACTION` | Publishes a prepared immutable catalog snapshot through the configured product store |
+| `ROLLBACK` / `ROLLBACK TRAN` / `ROLLBACK TRANSACTION` | Discards the session without publishing its staged changes |
 | `SAVEPOINT name` | Captures the staged product write set inside the transaction |
 | `ROLLBACK TO SAVEPOINT name` | Restores the staged write set while retaining the savepoint |
 | `RELEASE SAVEPOINT name` | Removes a savepoint without changing staged writes |
