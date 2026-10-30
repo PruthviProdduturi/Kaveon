@@ -2,12 +2,24 @@
 
 > Verified September 10, 2026. Competitor behavior is referenced to the vendor primary sources cited at the end. Kaveon states are taken from `dev` at `c78878a`. This is a positioning and maturity assessment, not a benchmark claim and not a superiority claim.
 
+> **Current status — October 30, 2026.** The September snapshot below predates
+> the native KaveonDB transaction slices now qualified in the Trino parity
+> tracker. KaveonDB now owns bounded typed product-record create, update,
+> delete, upsert, merge, savepoint, revision-CAS, owner-isolation, and
+> RETURNING paths locally. The broad claim of PostgreSQL-equivalent general
+> transactions remains a target; the bounded product-state contract is
+> implemented and evidence-backed.
+
 ## Executive position
 
 Unifying transactional and analytical processing on cloud object storage is a contested market with at least four credible entrants, not an empty category. Kaveon must not describe its transactional direction as unprecedented. Two claims in particular fail immediately under scrutiny and must not be used:
 
 1. **"No other engine does distributed and transactional directly on cloud storage."** False. Snowflake Unistore has been generally available since November 2024, TiDB X moved persistence to object storage in October 2025, and Databricks announced LTAP in June 2026.
-2. **"Kaveon is a transactional database today."** False. The SQL layer parses a bounded DML surface and returns an AST; no row execution, parameter binding, constraint checking, isolation, or durable commit exists. Production transaction startup deliberately returns HTTP 503 because no ADLS product store is configured.
+2. **"Kaveon is a PostgreSQL-equivalent transactional database today."** False.
+   KaveonDB now executes a bounded product-record transaction contract, but it
+   does not claim general SQL DML, PostgreSQL MVCC, or arbitrary lake-table
+   mutation. The correct distinction is implemented bounded product state versus
+   the still-open general transaction surface.
 
 What remains defensible is narrower, accurate, and still differentiating: Kaveon is the only open-source, self-hostable platform pairing a unified transactional and analytical engine over customer-owned storage with a deterministic, model-free natural-language interface. The second half of that sentence ships today. The first half is a target with published acceptance gates.
 
@@ -19,7 +31,7 @@ What remains defensible is narrower, accurate, and still differentiating: Kaveon
 | Databricks LTAP | **Two**: Postgres (Lakebase) and Spark/Photon | Object storage, Delta and Iceberg | Claimed, no sync pipelines | Partial | Announced June 2026, "coming soon" |
 | TiDB X | One | **Object storage as single source of truth** | Yes | **Apache 2.0** | Announced October 2025; GA unconfirmed |
 | Microsoft Fabric SQL database | SQL plus Spark | OneLake | **No** — near-real-time mirror to a read-only Delta copy | No | GA |
-| **Kaveon** | One (target) | ADLS Gen2 (target) | Target | **MIT** | Analytics alpha; transactional layer not implemented |
+| **Kaveon** | One (bounded product-state path) | ADLS Gen2 (qualified local/native path; cloud recovery separately gated) | Bounded product state | **MIT** | Analytics alpha; bounded transactional product state implemented |
 
 ## Platform notes
 
@@ -53,7 +65,19 @@ Two differences survive scrutiny.
 
 Kaveon is behind every platform in this document on transactional maturity, and materially so. TiDB has approximately a decade of production operation and a CNCF Graduated storage engine. Snowflake Unistore has been generally available for close to two years.
 
-Kaveon's current transactional position is a foundation: typed product records with revision-checked create, update, and delete; uniqueness and reference validation; immutable digest-verified documents published before a conditional head update; bounded snapshot reads and cursor pagination. Catalog validation is 36 tests with strict Clippy clean. The gaps are enumerated in [the native engine target](../engineering/native-engine-target.md) and [the ADLS transaction protocol](../engineering/adls-transaction-protocol.md); the largest are row DML execution, constraints and isolation, index shard splitting beyond the current 1,024-operation bound, and verified head recovery against a live account. The local Docker profile is KaveonDB-authoritative; cloud retirement remains environment-gated until its live migration, fencing, restart, backup/restore, and rollback evidence is complete.
+Kaveon's current transactional position is a bounded product-state contract:
+typed product records with revision-checked create, update, delete, upsert and
+merge; uniqueness and reference validation; immutable digest-verified
+documents published before a conditional head update; savepoints; bounded
+snapshot reads and cursor pagination; and staged RETURNING values. Catalog
+validation is covered by the native DML qualification slices. The gaps are
+enumerated in [the native engine target](../engineering/native-engine-target.md)
+and [the ADLS transaction protocol](../engineering/adls-transaction-protocol.md):
+general typed lake-table DML, PostgreSQL-equivalent isolation/WAL semantics,
+broader constraints and indexes, and verified cloud recovery remain outside the
+qualified contract. The local Docker profile is KaveonDB-authoritative; cloud
+retirement requires its own migration, fencing, restart, backup/restore, and
+rollback evidence.
 
 Analytical maturity is separately assessed at 74/100 in [the readiness qualification](../engineering/engine-readiness-qualification.md), with the 1.9x throughput objective unmet at a measured 1.057x.
 
