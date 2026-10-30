@@ -55,10 +55,12 @@ style `101`; all six styles also have exact three-worker differential evidence
 
 The bounded product DML contract now also returns staged `document_json` on
 create/update/upsert and revision-checked DELETE statements, including the
-typed-row facade. Source-copy `INSERT ... SELECT` document projections remain
-explicitly rejected. Evidence: `track2-native-dml-returning-document-2026-10-29.md`.
-This supersedes the older Native DML row wording that listed all document
-projections as open; arbitrary expressions and lake-table DML remain open.
+typed-row facade. Bounded source-copy `INSERT ... SELECT` document projections
+are qualified only with a literal `id IN (...)` filter of at most 1,000 source
+IDs; unbounded source-copy returning remains rejected. Evidence:
+`docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md` and
+`track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
+lake-table DML remain open.
 
 The current T-SQL corpus is 86 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
