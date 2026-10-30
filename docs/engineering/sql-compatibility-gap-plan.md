@@ -117,10 +117,10 @@ path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
 gate. `DATE_BUCKET` buckets for year, quarter, month, day, hour, minute, and
 second lower to the existing typed `DATE_TRUNC` path and have exact
-local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); custom origins and
-unsupported dateparts remain explicitly rejected. Row-local BIGINT widths are
-guarded at runtime: zero, negative, or NULL widths return typed NULL, while
-dynamic origins remain rejected.
+local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); row-local and
+typed-literal custom origins are qualified, while unsupported origin shapes
+and dateparts remain explicitly rejected. Row-local BIGINT widths are guarded
+at runtime: zero, negative, or NULL widths return typed NULL.
 
 ### Phase 2 — Transactional SQL surface
 
