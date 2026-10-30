@@ -200,7 +200,11 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
 - [ ] Add a durable journal/recovery qualification for cloud/object-store
   failures and multi-coordinator restart. This remains distinct from the
-  bounded snapshot contract above.
+  bounded snapshot contract above. The local coordinator journal now fsyncs
+  the replacement directory entry on Unix during compaction (Windows keeps
+  file-level sync); this narrows the crash window but does not close the
+  cloud/object-store or cross-host recovery boundary. Evidence:
+  `docs/qualification/track1-coordinator-journal-compaction-durability-2026-10-18.md`.
 - [x] Qualify primary/unique indexes, typed-schema validation, and bounded
   product-reference enforcement for KaveonDB-owned typed rows. Evidence:
   `docs/qualification/track2-typed-schema-integrity-2026-10-28.md`.
