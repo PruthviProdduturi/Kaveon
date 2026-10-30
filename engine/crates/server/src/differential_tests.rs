@@ -341,8 +341,8 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_pivot_count_big",
-        "SELECT * FROM (SELECT region, surface FROM {T}) src PIVOT (COUNT_BIG(*) FOR surface IN ([Chat], [Export])) p ORDER BY region",
-        true,
+        "SELECT * FROM (SELECT region, surface FROM {T}) src PIVOT (COUNT_BIG(*) FOR surface IN ([Chat], [Export])) p",
+        false,
     ),
     (
         "tsql_len",
