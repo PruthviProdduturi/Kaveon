@@ -1368,6 +1368,7 @@ fn is_array_unnest_expression(expression: &Expr) -> bool {
                     || name.eq_ignore_ascii_case("MAP_VALUES")
                     || name.eq_ignore_ascii_case("MAP_ENTRIES")
                     || name.eq_ignore_ascii_case("ARRAY_HISTOGRAM")
+                    || name.eq_ignore_ascii_case("SPLIT")
                     || name.eq_ignore_ascii_case("MAP")
         )
 }
@@ -1510,6 +1511,83 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     expressions,
                     columns,
                     with_ordinality: *with_ordinality,
+                    ordinality_column,
+                    ordinality_start: 1,
+                });
+            }
+            if table_name
+                .rsplit('.')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("STRING_SPLIT"))
+            {
+                let function = args
+                    .as_ref()
+                    .ok_or_else(|| sql_err("STRING_SPLIT requires a string and separator"))?;
+                if !(function.args.len() == 2 || function.args.len() == 3) {
+                    return Err(sql_err(
+                        "STRING_SPLIT requires a string and separator, with optional literal ordinal mode",
+                    ));
+                }
+                let expressions = function
+                    .args
+                    .iter()
+                    .take(2)
+                    .map(|argument| {
+                        let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(value)) = argument
+                        else {
+                            return Err(sql_err("STRING_SPLIT arguments must be expressions"));
+                        };
+                        ast_expr_to_expr(value)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let with_ordinality = if let Some(argument) = function.args.get(2) {
+                    let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(value)) = argument
+                    else {
+                        return Err(sql_err("STRING_SPLIT ordinal mode must be literal 0 or 1"));
+                    };
+                    match ast_expr_to_expr(value)? {
+                        Expr::Literal(ScalarValue::Int64(0)) => false,
+                        Expr::Literal(ScalarValue::Int64(1)) => true,
+                        _ => {
+                            return Err(sql_err(
+                                "STRING_SPLIT ordinal mode must be literal 0 or 1",
+                            ));
+                        }
+                    }
+                } else {
+                    false
+                };
+                let split = Expr::Function {
+                    name: "SPLIT".into(),
+                    args: expressions,
+                };
+                if expression_contains_column(&split) {
+                    return Err(sql_err(
+                        "correlated STRING_SPLIT requires CROSS JOIN LATERAL",
+                    ));
+                }
+                let columns = alias
+                    .as_ref()
+                    .and_then(|alias| alias.columns.first())
+                    .map(|column| vec![column.name.value.clone()])
+                    .unwrap_or_else(|| vec!["value".to_owned()]);
+                let ordinality_column = alias
+                    .as_ref()
+                    .and_then(|alias| alias.columns.get(1))
+                    .map(|column| column.name.value.clone())
+                    .unwrap_or_else(|| "ordinal".to_owned());
+                if alias
+                    .as_ref()
+                    .is_some_and(|alias| alias.columns.len() != usize::from(with_ordinality) + 1)
+                {
+                    return Err(sql_err(
+                        "STRING_SPLIT alias must expose value and optional ordinal columns",
+                    ));
+                }
+                return Ok(LogicalPlan::Unnest {
+                    expressions: vec![split],
+                    columns,
+                    with_ordinality,
                     ordinality_column,
                     ordinality_start: 1,
                 });
@@ -1771,6 +1849,82 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 expressions,
                 columns,
                 with_ordinality: false,
+                ordinality_column,
+                ordinality_start: 1,
+            })
+        }
+        ast::TableFactor::Function {
+            name,
+            args,
+            alias,
+            lateral,
+            ..
+        } if name
+            .0
+            .last()
+            .is_some_and(|part| part.value.eq_ignore_ascii_case("STRING_SPLIT")) =>
+        {
+            if !(args.len() == 2 || args.len() == 3) {
+                return Err(sql_err(
+                    "STRING_SPLIT requires a string and separator, with optional literal ordinal mode",
+                ));
+            }
+            let expressions = args
+                .iter()
+                .take(2)
+                .map(|argument| {
+                    let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(value)) = argument
+                    else {
+                        return Err(sql_err("STRING_SPLIT arguments must be expressions"));
+                    };
+                    ast_expr_to_expr(value)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let with_ordinality = if let Some(argument) = args.get(2) {
+                let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(value)) = argument else {
+                    return Err(sql_err("STRING_SPLIT ordinal mode must be literal 0 or 1"));
+                };
+                match ast_expr_to_expr(value)? {
+                    Expr::Literal(ScalarValue::Int64(0)) => false,
+                    Expr::Literal(ScalarValue::Int64(1)) => true,
+                    _ => {
+                        return Err(sql_err("STRING_SPLIT ordinal mode must be literal 0 or 1"));
+                    }
+                }
+            } else {
+                false
+            };
+            let split = Expr::Function {
+                name: "SPLIT".into(),
+                args: expressions,
+            };
+            if expression_contains_column(&split) && !*lateral {
+                return Err(sql_err(
+                    "correlated STRING_SPLIT requires CROSS JOIN LATERAL",
+                ));
+            }
+            let columns = alias
+                .as_ref()
+                .and_then(|alias| alias.columns.first())
+                .map(|column| vec![column.name.value.clone()])
+                .unwrap_or_else(|| vec!["value".to_owned()]);
+            let ordinality_column = alias
+                .as_ref()
+                .and_then(|alias| alias.columns.get(1))
+                .map(|column| column.name.value.clone())
+                .unwrap_or_else(|| "ordinal".to_owned());
+            if alias.as_ref().is_some_and(|alias| {
+                alias.columns.len() > usize::from(with_ordinality) + 1
+                    || alias.columns.len() < usize::from(with_ordinality) + 1
+            }) {
+                return Err(sql_err(
+                    "STRING_SPLIT alias must expose value and optional ordinal columns",
+                ));
+            }
+            Ok(LogicalPlan::Unnest {
+                expressions: vec![split],
+                columns,
+                with_ordinality,
                 ordinality_column,
                 ordinality_start: 1,
             })
@@ -9627,7 +9781,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 87);
+        assert_eq!(cases.len(), 93);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

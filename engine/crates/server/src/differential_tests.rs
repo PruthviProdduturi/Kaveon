@@ -225,6 +225,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_string_split",
+        "SELECT value FROM STRING_SPLIT('alpha,beta,gamma', ',') AS parts(value) ORDER BY value",
+        true,
+    ),
+    (
+        "tsql_string_split_ordinal",
+        "SELECT value, ordinal FROM STRING_SPLIT('alpha,beta,gamma', ',', 1) AS parts(value, ordinal) ORDER BY ordinal",
+        true,
+    ),
+    (
         "order_by_dict_desc",
         "SELECT country, region FROM {T} WHERE surface = 'Export' AND event_date = '2026-07-20' ORDER BY country DESC, region LIMIT 5",
         true,
@@ -7902,6 +7912,32 @@ fn distributed_tsql_nchar_matches_local() {
         false,
     );
     assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_string_split_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-string-split-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let pool = QueryMemoryPool::new("tsql-string-split-differential", 64 << 20).unwrap();
+    for statement in [
+        "SELECT value FROM STRING_SPLIT('alpha,beta,gamma', ',') AS parts(value) ORDER BY value",
+        "SELECT value, ordinal FROM STRING_SPLIT('alpha,beta,gamma', ',', 1) AS parts(value, ordinal) ORDER BY ordinal",
+    ] {
+        let plan = bound_plan(statement, &manager);
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+        let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+        drop(local);
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool)
+                .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+            false,
+        );
+        assert_eq!(actual, expected, "{statement}");
+    }
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
