@@ -27,6 +27,11 @@ Finished query records now annotate the physical-plan root with
 count is available. This is measured delivered-result telemetry only; it does
 not pretend to attribute rows to child operators.
 
+When the finished record has an unambiguous one-to-one mapping between scan
+nodes and scan telemetry, each physical `Scan` node also records
+`actual_rows_selected` with `actual_rows_scope=scan_selected_rows`. Ambiguous
+plan/telemetry cardinalities are left unannotated rather than guessed.
+
 ## Evidence
 
 ```text
