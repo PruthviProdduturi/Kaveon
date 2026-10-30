@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 94 cases, including exact local/three-worker qualification for
+- Corpus: 95 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -63,6 +63,9 @@ and SQL Server type-coercion extensions remain outside the contract.
 through `CROSS JOIN LATERAL`; literal ordinal mode and the value/ordinal alias
 contract remain bounded. The focused regression is
 `distributed_tsql_string_split_matches_local`.
+
+`NULLIF` is covered as a row-local scalar expression in the same exact
+local-vs-three-worker differential sweep.
 
 `LEFT` and `RIGHT` return bounded Unicode scalar prefixes/suffixes, preserve
 NULLs, and use the Engine's width-aware text path for narrow and large UTF-8
