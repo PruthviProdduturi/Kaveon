@@ -850,6 +850,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "date_bucket_week_datepart",
+        "SELECT DATE_BUCKET(week, 2, event_date) AS fortnight_bucket, COUNT(*) AS n FROM {T} GROUP BY DATE_BUCKET(week, 2, event_date) ORDER BY fortnight_bucket",
+        false,
+    ),
+    (
         "date_bucket_custom_origin",
         "SELECT DATE_BUCKET(month, 1, TIMESTAMP '2026-02-17 12:34:56.789', TIMESTAMP '2020-02-15 00:00:00') AS timestamp_bucket, DATE_BUCKET(month, 3, DATE '2026-02-17', DATE '2020-01-01') AS date_bucket FROM {T} LIMIT 1",
         false,
