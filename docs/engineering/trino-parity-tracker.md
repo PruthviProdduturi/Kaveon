@@ -47,7 +47,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 109-case corpus. The bounded date-construction qualifications
+the versioned 110-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -55,7 +55,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 109 bounded T-SQL read cases, including the
+The corpus currently contains 110 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice and its remaining
 ordered-state boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
 the SQL Server `DATETRUNC` alias qualified through `DATE_TRUNC`, and the JSON
@@ -65,6 +65,8 @@ in `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
 `COUNT(DISTINCT ...)` and is covered by the planner and distributed corpus.
 Bounded derived-source `PIVOT(COUNT_BIG(*))` uses the same conditional
 aggregation lowering as `COUNT(*)` and is covered by the same corpus gate.
+Expression-valued `PIVOT(COUNT_BIG(value))` preserves NULL-exclusion semantics
+instead of rewriting the expression to a row count.
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -234,8 +236,8 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 109-case corpus pinned at
-`f82a5e67` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+The T-SQL row above is backed by the versioned 110-case corpus pinned at
+`56c73965` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
 `NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
@@ -244,7 +246,7 @@ locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
 supersedes the older case-count wording embedded in the capability table.
-The capability row's historical corpus pointer is superseded by the 109-case
+The capability row's historical corpus pointer is superseded by the 110-case
 corpus and pin above; do not use its older count as current evidence.
 
 Run from `engine/`:

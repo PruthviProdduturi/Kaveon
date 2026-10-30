@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "f82a5e67",
+  "engine_commit": "56c73965",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -37,6 +37,7 @@
     {"id": "count_big", "sql": "SELECT COUNT_BIG(*) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "count_big_distinct", "sql": "SELECT COUNT_BIG(DISTINCT user_id) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "pivot_count_big", "sql": "SELECT * FROM (SELECT region, month FROM t) src PIVOT (COUNT_BIG(*) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "pivot_count_big_expression", "sql": "SELECT * FROM (SELECT region, month, value FROM t) src PIVOT (COUNT_BIG(value) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "len", "sql": "SELECT LEN(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "iif", "sql": "SELECT IIF(actions > 10, 'yes', 'no') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "charindex", "sql": "SELECT CHARINDEX('a', name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},

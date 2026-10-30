@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 109 cases, including exact local/three-worker qualification for
+- Corpus: 110 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -22,8 +22,10 @@ parity or external-client parity.
   with exact local-vs-distributed results for the 106-case corpus, including
   row-local `STRING_SPLIT` and `ROUND` operation mode, without worker failures
   or retained exchange/spill files. The revision also includes bounded
-  `PIVOT(COUNT(*))` and `PIVOT(COUNT_BIG(*))` over the explicit derived-source contract and
-  `COUNT_BIG(DISTINCT ...)` through the exact distinct-count path.
+  `PIVOT(COUNT(*))`, `PIVOT(COUNT_BIG(*))`, and expression-valued
+  `PIVOT(COUNT_BIG(value))` over the explicit derived-source contract and
+  `COUNT_BIG(DISTINCT ...)` through the exact distinct-count path. Expression
+  forms preserve SQL NULL-counting semantics.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
   completed 1/1 with exact results in 729.75 seconds; the full differential
   workload completed without worker or spill failures.
