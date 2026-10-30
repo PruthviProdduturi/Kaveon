@@ -99,16 +99,17 @@ as a rule rather than per page — one surface should be derived from the other,
 or the two should be reported with their difference made visible.
 
 ### D-25 · The Engine's query log does not survive a coordinator restart
-**open** · 2026-10-13 · Codex owns the Engine side
+**fixed (unverified)** · `cec6a098` + `ff20486f` · local restart/takeover
+qualification passes; live-install verification remains separate
 
-`GET /v1/queries` returned 0 rows with a coordinator uptime of 107 seconds,
-having returned rows before the restart. So the Engine console's "No queries
-yet" is not an empty history, it is a lost one — and the coordinator has been
-restarted a dozen times today by benchmark campaigns.
-
-The platform's own `query_history` is unaffected and durable: 1,000 records in
-KaveonDB, verified at the same moment. Two different histories, one of which
-reads as the other's absence, which is why it was reported as data loss.
+The coordinator now appends terminal query records to its bounded durable
+journal and restores them on restart. Concurrent coordinator append/reopen
+behavior and compaction directory-entry durability are covered by
+`docs/qualification/track1-coordinator-journal-takeover-2026-10-18.md` and
+`docs/qualification/track1-coordinator-journal-compaction-durability-2026-10-18.md`.
+The journal deliberately restores history without pretending that old plan or
+task telemetry is still live. A live-install restart check is still required
+before changing this status to verified.
 
 ### D-26 · An unavailable Engine is reported as an empty catalog
 **fixed, deployed** · `f769e508` + `d825ac30` · nineteen surfaces plus the home
