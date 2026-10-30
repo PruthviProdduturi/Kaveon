@@ -12,7 +12,10 @@ These fields are diagnostic metadata only. Kaveon does not present them as
 post-filter, post-join, or post-aggregation output cardinalities, and they do
 not alter execution or join selection. `TopN`, `LIMIT`, and `OFFSET` additionally
 expose a conservative bounded output cap derived from the child estimate and
-the operator's literal bound.
+the operator's literal bound. Row-preserving `Filter`, `Project`, `Sort`, and
+`Window` nodes propagate the same conservative child upper bound so a bounded
+operator above them can remain safely capped; the filter predicate itself is
+not estimated.
 
 ## Evidence
 

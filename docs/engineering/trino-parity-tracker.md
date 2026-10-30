@@ -26,7 +26,9 @@ shapes. This is local evidence only; cloud/deployed endurance remains open
 Physical plan display now adds conservative child-input estimate lineage for
 joins, semi/anti joins, unary operators, and set operations; it deliberately
 does not claim post-filter or post-aggregate output estimates. `TopN`, `LIMIT`,
-and `OFFSET` additionally expose conservative bounded output caps. Evidence:
+and `OFFSET` additionally expose conservative bounded output caps, while
+row-preserving `Filter`, `Project`, `Sort`, and `Window` nodes propagate a
+child upper bound without estimating predicate selectivity. Evidence:
 `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 
 The latest SQL compatibility increments are literal `CONVERT(DATE, ..., style)`

@@ -10576,9 +10576,10 @@ fn planning_estimate_map(planning: &PlanningStatistics) -> BTreeMap<String, Plan
 }
 
 /// Attach bounded estimate metadata to displayable plan nodes. Scan rows are
-/// source facts; non-scan nodes receive only conservative child-input
-/// lineage. We intentionally do not manufacture output cardinalities after
-/// filters, joins, aggregation, or duplicate elimination.
+/// source facts; row-preserving nodes receive only conservative upper bounds
+/// derived from their child. We intentionally do not manufacture output
+/// cardinalities after filters' predicates, joins, aggregation, or duplicate
+/// elimination.
 fn annotate_plan_estimates(
     node: &mut kaveon_core::PlanNode,
     estimates: &BTreeMap<String, PlanEstimate>,
@@ -10657,6 +10658,14 @@ fn annotate_plan_estimates(
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0);
             let output = child.saturating_sub(skip);
+            node.attributes
+                .insert("estimated_output_rows".into(), output.to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(output)
+        }
+        "filter" | "project" | "sort" | "window" => {
+            let output = known[0];
             node.attributes
                 .insert("estimated_output_rows".into(), output.to_string());
             node.attributes
@@ -15885,6 +15894,18 @@ mod tests {
             .with_child(scan);
         super::annotate_plan_estimates(&mut offset, &estimates);
         assert_eq!(offset.attributes["estimated_output_rows"], "90");
+
+        let scan = kaveon_core::PlanNode::new(5, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "events");
+        let filter = kaveon_core::PlanNode::new(6, kaveon_core::PlanPhase::Physical, "Filter")
+            .with_child(scan);
+        let mut limit = kaveon_core::PlanNode::new(7, kaveon_core::PlanPhase::Physical, "Limit")
+            .with_attribute("rows", "200")
+            .with_child(filter);
+        super::annotate_plan_estimates(&mut limit, &estimates);
+        assert_eq!(limit.attributes["estimated_output_rows"], "120");
+        assert_eq!(limit.attributes["estimate_scope"], "bounded_upper_bound");
+        assert_eq!(limit.children[0].attributes["estimated_output_rows"], "120");
     }
 
     #[test]

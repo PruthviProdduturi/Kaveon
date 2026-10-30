@@ -248,8 +248,9 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   selectivity boundary; this remains open. Physical plan display now carries
   conservative child-input lineage for unary operators, joins, semi/anti
   joins, and set operations, plus conservative bounded output caps for
-  `TopN`, `LIMIT`, and `OFFSET`, without inventing selectivity estimates.
-  Evidence:
+  `TopN`, `LIMIT`, and `OFFSET`. Row-preserving `Filter`, `Project`, `Sort`,
+  and `Window` nodes propagate the same upper bound without inventing
+  selectivity estimates. Evidence:
   `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
