@@ -614,7 +614,7 @@ struct QueryContext {
     settings: QuerySettings,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Default)]
 struct ScanTelemetry {
     files_considered: u64,
     files_opened: u64,
@@ -11523,8 +11523,45 @@ fn annotate_actual_root(plan: &mut Option<kaveon_core::PlanNode>, row_count: Opt
         .insert("actual_rows_scope".to_owned(), "query_result".to_owned());
 }
 
+fn annotate_actual_scans(
+    node: &mut kaveon_core::PlanNode,
+    scans: &[ScanTelemetry],
+    next_scan: &mut usize,
+) {
+    if node.operator.eq_ignore_ascii_case("Scan") {
+        if let Some(scan) = scans.get(*next_scan) {
+            node.attributes.insert(
+                "actual_rows_selected".to_owned(),
+                scan.rows_selected.to_string(),
+            );
+            node.attributes.insert(
+                "actual_rows_scope".to_owned(),
+                "scan_selected_rows".to_owned(),
+            );
+        }
+        *next_scan = next_scan.saturating_add(1);
+    }
+    for child in &mut node.children {
+        annotate_actual_scans(child, scans, next_scan);
+    }
+}
+
+fn count_plan_scans(node: &kaveon_core::PlanNode) -> usize {
+    usize::from(node.operator.eq_ignore_ascii_case("Scan"))
+        + node.children.iter().map(count_plan_scans).sum::<usize>()
+}
+
 async fn commit_query_record(mut record: QueryRecord) -> bool {
     annotate_actual_root(&mut record.plan.physical, record.row_count);
+    if let Some(plan) = record.plan.physical.as_mut()
+        && !record.scans.is_empty()
+    {
+        let scan_count = count_plan_scans(plan);
+        if scan_count == record.scans.len() {
+            let mut next_scan = 0;
+            annotate_actual_scans(plan, &record.scans, &mut next_scan);
+        }
+    }
     let mut store = QUERY_STORE.write().await;
     if store
         .queries
@@ -16017,6 +16054,34 @@ mod tests {
             !root.children[0]
                 .attributes
                 .contains_key("actual_output_rows")
+        );
+    }
+
+    #[test]
+    fn actual_scan_rows_are_attached_only_when_scan_order_is_known() {
+        let left = kaveon_core::PlanNode::new(20, kaveon_core::PlanPhase::Physical, "Scan");
+        let right = kaveon_core::PlanNode::new(21, kaveon_core::PlanPhase::Physical, "Scan");
+        let mut plan = kaveon_core::PlanNode::new(22, kaveon_core::PlanPhase::Physical, "HashJoin")
+            .with_child(left)
+            .with_child(right);
+        let scans = vec![
+            super::ScanTelemetry {
+                rows_selected: 11,
+                ..Default::default()
+            },
+            super::ScanTelemetry {
+                rows_selected: 17,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(super::count_plan_scans(&plan), 2);
+        let mut next_scan = 0;
+        super::annotate_actual_scans(&mut plan, &scans, &mut next_scan);
+        assert_eq!(plan.children[0].attributes["actual_rows_selected"], "11");
+        assert_eq!(plan.children[1].attributes["actual_rows_selected"], "17");
+        assert_eq!(
+            plan.children[0].attributes["actual_rows_scope"],
+            "scan_selected_rows"
         );
     }
 
