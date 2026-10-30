@@ -5062,8 +5062,8 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     // (1900-01-01) when no origin is supplied. Width one is exactly the
     // existing DATE_TRUNC boundary. Wider literal widths use DATE_DIFF plus
     // a normalized remainder and the typed date-add operators. Custom origins
-    // are accepted only when they are typed date/timestamp literals. Widths
-    // may also be bounded row-local BIGINT expressions; invalid runtime
+    // may be typed date/timestamp literals or bounded row-local date/timestamp
+    // expressions. Widths may also be bounded row-local BIGINT expressions; invalid runtime
     // widths return a typed NULL instead of dividing by zero.
     if name == "DATE_BUCKET" {
         if !(args.len() == 3 || args.len() == 4) {
