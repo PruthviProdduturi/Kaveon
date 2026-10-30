@@ -1864,6 +1864,7 @@ pub enum ProductDmlCommand {
         source_ids: Option<Vec<String>>,
         on_conflict_do_nothing: bool,
         on_conflict_do_update: bool,
+        returning: Vec<String>,
     },
     Update {
         kind: String,
@@ -2014,9 +2015,15 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                     }
                     if !select.from.is_empty() {
                         let (source_kind, source_ids) = bounded_product_source_kind(select, &kind)?;
-                        if !dml.returning.is_empty() {
+                        if !dml.returning.is_empty()
+                            && (source_ids.is_none()
+                                || dml.returning.iter().any(|column| {
+                                    !column.eq_ignore_ascii_case("id")
+                                        && !column.eq_ignore_ascii_case("revision")
+                                }))
+                        {
                             return Err(sql_error(
-                                "product INSERT SELECT does not support RETURNING",
+                                "source-backed product INSERT SELECT RETURNING requires an id filter and supports only id or revision",
                             ));
                         }
                         return Ok(vec![ProductDmlCommand::InsertSelect {
@@ -2025,6 +2032,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                             source_ids,
                             on_conflict_do_nothing: dml.on_conflict_do_nothing,
                             on_conflict_do_update: dml.on_conflict_do_update,
+                            returning: dml.returning.clone(),
                         }]);
                     }
                     let mut values = [None, None];
@@ -3862,12 +3870,13 @@ mod tests {
                 source_ids: None,
                 on_conflict_do_nothing: true,
                 on_conflict_do_update: false,
+                returning: Vec::new(),
             }
         );
     }
 
     #[test]
-    fn product_insert_select_rejects_joins_and_returning() {
+    fn product_insert_select_rejects_joins_and_unbounded_returning() {
         for sql in [
             "INSERT INTO product.datasets (id, document_json) SELECT a.id, a.document_json FROM product.datasets a JOIN product.datasets b ON a.id = b.id",
             "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets RETURNING id",
@@ -3877,6 +3886,29 @@ mod tests {
                 assert!(adapt_product_dml(&dml).is_err(), "{sql}");
             }
         }
+    }
+
+    #[test]
+    fn product_insert_select_accepts_bounded_identity_returning() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('one') RETURNING id, revision",
+        )
+        .expect("bounded source RETURNING should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(dml.returning, ["id", "revision"]);
+        let commands =
+            adapt_product_dml_batch(&dml).expect("bounded source RETURNING should adapt");
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            ProductDmlCommand::InsertSelect {
+                source_ids: Some(ids),
+                returning,
+                ..
+            } if ids == &["one".to_owned()] && returning == &["id".to_owned(), "revision".to_owned()]
+        ));
     }
 
     #[test]
@@ -3896,6 +3928,7 @@ mod tests {
                 source_ids: Some(vec!["one".into(), "two".into()]),
                 on_conflict_do_nothing: true,
                 on_conflict_do_update: false,
+                returning: Vec::new(),
             }
         );
     }

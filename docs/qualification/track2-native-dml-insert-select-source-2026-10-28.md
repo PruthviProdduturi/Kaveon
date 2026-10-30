@@ -19,8 +19,10 @@ The parser and transaction layer intentionally keep this contract narrow:
 - exactly one `kaveon.product` source table;
 - source and target are the same product-record kind;
 - direct, unaliased `id` and `document_json` projection only;
-- no joins, CTEs, ordering, grouping, limits, or `RETURNING`; the only
-  predicate allowed is a literal `id IN (...)` list of at most 1,000 values;
+- no joins, CTEs, ordering, grouping, or limits; the only predicate allowed is
+  a literal `id IN (...)` list of at most 1,000 values. With that bounded
+  predicate, `RETURNING id, revision` is supported; document projections and
+  unbounded source-copy `RETURNING` remain rejected;
 - source rows are read from the transaction's pinned catalog snapshot;
 - the source is owner-filtered, with a hard cap of 1,000 rows per statement;
 - conflict handling reuses the existing `DO NOTHING` or revision-CAS upsert path.
@@ -28,10 +30,11 @@ The parser and transaction layer intentionally keep this contract narrow:
 Evidence:
 
 - parser accepts the bounded form and rejects joins, aliases, modifiers, and
-  `RETURNING` (`cargo test -p kaveon-sql product_insert_select`);
+  unbounded/document `RETURNING` (`cargo test -p kaveon-sql product_insert_select`);
 - the server API seeds a product record, executes the source copy with the
-  revision-CAS conflict form, commits, and verifies revision 2 and document
-  equality (`transaction_api::tests::sql_endpoint_commits_bounded_product_table_insert_select`).
+  revision-CAS conflict form, returns the committed identity/revision, commits,
+  and verifies revision 2 and document equality
+  (`transaction_api::tests::sql_endpoint_commits_bounded_product_table_insert_select`).
 
 This is not general `INSERT … SELECT` over Parquet/Delta or registered
 external sources. Cross-kind copies, arbitrary expressions, filters, joins,

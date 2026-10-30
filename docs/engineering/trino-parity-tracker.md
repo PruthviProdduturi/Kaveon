@@ -180,6 +180,12 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 
 ## Qualification commands
 
+The bounded product-table `INSERT ... SELECT` path now also qualifies
+`RETURNING id, revision` when the source is narrowed by a literal `id IN (...)`
+list. Source-copy document projections, unbounded source-copy returning, and
+general lake-table DML remain outside the contract; evidence is recorded in
+`docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md`.
+
 The T-SQL row above is backed by the versioned 86-case corpus pinned at
 `4a60d214` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.

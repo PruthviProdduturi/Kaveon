@@ -331,6 +331,7 @@ impl TransactionRegistry {
                 source_ids,
                 on_conflict_do_nothing,
                 on_conflict_do_update,
+                ..
             } = command
             {
                 let catalog = catalog.as_ref().ok_or(RegistryError::Disabled)?;
@@ -2690,12 +2691,24 @@ async fn execute_sql_request(
             {
                 Ok(snapshot) if returning.is_empty() => Json(snapshot).into_response(),
                 Ok(snapshot) => {
-                    match product_returning_response(
-                        &snapshot,
-                        &returning,
-                        &commands,
-                        &deleted_documents,
-                    ) {
+                    let result = match commands.as_slice() {
+                        [
+                            kaveon_sql::parser::ProductDmlCommand::InsertSelect {
+                                kind,
+                                source_ids: Some(source_ids),
+                                ..
+                            },
+                        ] => product_insert_select_returning_response(
+                            &snapshot, &returning, kind, source_ids,
+                        ),
+                        _ => product_returning_response(
+                            &snapshot,
+                            &returning,
+                            &commands,
+                            &deleted_documents,
+                        ),
+                    };
+                    match result {
                         Ok(body) => Json(body).into_response(),
                         Err(error) => error_response(RegistryError::Invalid(error)),
                     }
@@ -2704,6 +2717,47 @@ async fn execute_sql_request(
             }
         }
     }
+}
+
+fn product_insert_select_returning_response(
+    snapshot: &CatalogSnapshot,
+    columns: &[String],
+    kind: &str,
+    source_ids: &[String],
+) -> Result<serde_json::Value, String> {
+    let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
+    let rows = source_ids
+        .iter()
+        .filter_map(|id| {
+            let record = match snapshot.product_record(product_kind, id) {
+                Ok(Some(record)) => record,
+                Ok(None) => return None,
+                Err(error) => return Some(Err(error.to_string())),
+            };
+            let mut row = serde_json::Map::new();
+            for column in columns {
+                match column.to_ascii_lowercase().as_str() {
+                    "id" => {
+                        row.insert("id".into(), serde_json::Value::String(id.clone()));
+                    }
+                    "revision" => {
+                        row.insert("revision".into(), serde_json::json!(record.revision));
+                    }
+                    other => {
+                        return Some(Err(format!(
+                            "unsupported source-copy RETURNING column: {other}"
+                        )));
+                    }
+                }
+            }
+            Some(Ok(serde_json::Value::Object(row)))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut body = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+    body.as_object_mut()
+        .ok_or_else(|| "transaction snapshot is not a JSON object".to_owned())?
+        .insert("returning".to_owned(), serde_json::Value::Array(rows));
+    Ok(body)
 }
 
 fn product_returning_response(
@@ -4620,7 +4674,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json".into(),
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision".into(),
                 transaction_id: Some(copy.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4628,6 +4682,12 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "orders");
+        assert_eq!(value["returning"][0]["revision"], 2);
         let response = execute_sql_request(
             &registry,
             "alice",
