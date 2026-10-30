@@ -351,7 +351,11 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
         .collect::<Vec<_>>();
     for (label, literal) in parsed_items {
         let value = if matches!(aggregate.as_str(), "COUNT" | "COUNT_BIG") {
-            "1".to_owned()
+            if value_column == "*" {
+                "1".to_owned()
+            } else {
+                value_column.to_owned()
+            }
         } else {
             value_column.to_owned()
         };
@@ -3585,6 +3589,18 @@ mod tests {
         let rendered = statements[0].to_string();
         assert!(
             rendered.contains("COUNT_BIG(CASE WHEN month = 'Jan' THEN 1 END)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("GROUP BY region"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_pivot_count_big_expression_preserves_null_counting() {
+        let sql = "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (COUNT_BIG(amount) FOR month IN ([Jan], [Feb])) p";
+        let statements = parse_sql(sql).expect("COUNT_BIG(expression) PIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("COUNT_BIG(CASE WHEN month = 'Jan' THEN amount END)"),
             "{rendered}"
         );
         assert!(rendered.contains("GROUP BY region"), "{rendered}");
