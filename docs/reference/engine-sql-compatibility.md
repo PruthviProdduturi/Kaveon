@@ -171,7 +171,9 @@ NULL for a non-ASCII leading scalar, `UNICODE` returns the leading Unicode
 scalar, and `CHAR` accepts integer values 0 through 255, returning NULL outside
 that range. `NCHAR` accepts valid Unicode scalar values and returns NULL for
 NULL, surrogate, negative, or out-of-range values. Locale/code-page conversion
-is not claimed.
+is not claimed. `NULLIF` is qualified for row-local scalar expressions and
+preserves SQL NULL-on-equality semantics through the vectorized conditional
+path.
 The bounded SQL Server table-valued `STRING_SPLIT` form is also qualified for
 scalar value/separator inputs (including row-local expressions through
 `CROSS JOIN LATERAL`) and literal ordinal mode `0`/`1`, lowering to `SPLIT`
