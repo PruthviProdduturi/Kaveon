@@ -971,6 +971,9 @@ const AdvancedChartOptions: React.FC = () => {
   const isLineOrBar = selectedTemplate && ["line", "bar"].some(t => (selectedTemplate.previewKind || "").includes(t));
   const isLineChart = selectedTemplate && (selectedTemplate.category === "Line" || (selectedTemplate.previewKind || "").includes("line"));
   const isBarType = chartType ? ["bar_vertical","bar_horizontal","stacked_bar_vertical","stacked_bar_horizontal","grouped_bar"].includes(chartType) : false;
+  // The two types whose renderer honours `showAsPercentage`. Keep this in
+  // step with `isStackedBarPercentage` in ChartBuilderContext.
+  const isStackedBar = chartType === "stacked_bar_vertical" || chartType === "stacked_bar_horizontal";
   const isPieType = chartType === "pie" || chartType === "donut";
   const isScatterType = chartType === "scatter" || chartType === "bubble";
   const isKpiType = chartType === "big_number" || chartType === "big_number_trend";
@@ -1299,10 +1302,24 @@ const AdvancedChartOptions: React.FC = () => {
               <CheckRow id="stack-series" label="Stack series" checked={stacking} onChange={handleStacking} />
             )}
             {isShareChart && (
+              /* A share chart is a share chart: percentage on unless turned off. */
               <CheckRow id="show-pct" label="Stacked (100%)" checked={advancedOptions?.showAsPercentage !== false}
                 onChange={isStacked => {
                   setAdvancedOptions((p: any) => ({ ...(p||{}), showAsPercentage: isStacked }));
                   setPreviewOptions((p: any) => ({ ...(p||{}), series: (p?.series||[]).map((s: any) => ({ ...s, stack: isStacked ? "total" : undefined })) }));
+                }} />
+            )}
+            {isStackedBar && (
+              /* The renderer has normalised a stacked bar to percentages all
+                 along -- `isStackedBarPercentage` in both option builders --
+                 but this toggle only rendered for `_share` chart types, so the
+                 two types the flag actually changes could never be asked for
+                 it. Unlike a share chart, percentage is off until requested,
+                 which is the `=== true` the renderer tests. */
+              <CheckRow id="show-pct-bar" label="Show as 100%" checked={advancedOptions?.showAsPercentage === true}
+                onChange={asPercentage => {
+                  setAdvancedOptions((p: any) => ({ ...(p||{}), showAsPercentage: asPercentage }));
+                  setPreviewOptions((p: any) => ({ ...(p||{}), series: (p?.series||[]).map((s: any) => ({ ...s, stack: "total" })) }));
                 }} />
             )}
             {isLineOrAreaChart && (
