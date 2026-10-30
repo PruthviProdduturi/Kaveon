@@ -28,7 +28,8 @@ parity or external-client parity.
   passed with three workers and zero retained memory reservations.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CONCAT` with NULL-as-empty arguments, `CONCAT_WS` with NULL-skipping arguments,
-  `CHOOSE`, `CHARINDEX`, bounded `PATINDEX`,
+  `CHOOSE`, literal `CONVERT(DATE, …, style)` for styles `0`, `101`, and `112`,
+  `CHARINDEX`, bounded `PATINDEX`,
   `TRANSLATE`, bounded width-one
   `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `DATETIME2FROMPARTS` (precision 0–6), `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `TIMEFROMPARTS` (precision 0–6), bounded UTC-normalized
