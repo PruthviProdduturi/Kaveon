@@ -156,6 +156,12 @@ and the DLM. They are not KaveonDB catalogs; a query runs on the source. The
 API can route a selected source, but the Engine does not yet join across these
 sources or across multiple KaveonDB catalogs.
 
+The routing boundary is qualified: only an active native Engine catalog
+adapter resolves to Engine execution; Fabric SQL and Azure SQL remain explicit
+ODBC passthrough sources. See
+`docs/qualification/track1-fabric-passthrough-routing-2026-10-29.md` for the
+regression evidence.
+
 SQL Lab's interactive bare `SELECT *` guard is dialect-safe for these sources:
 the API keeps the original statement and passes a bounded fetch to the driver
 instead of appending Engine-style `LIMIT` syntax to T-SQL sources. PostgreSQL
