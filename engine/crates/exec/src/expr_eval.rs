@@ -8357,6 +8357,38 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, |value| value.trim().to_owned())
         }
+        "TRIM_CHARS" => {
+            check_arity(name, args, 2)?;
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    let (Some(value), Some(characters)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    result.append_value(
+                        value.trim_matches(|character| characters.contains(character)),
+                    );
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    let (Some(value), Some(characters)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    result.append_value(
+                        value.trim_matches(|character| characters.contains(character)),
+                    );
+                }
+                Ok(Arc::new(result.finish()))
+            }
+        }
         "CHR" => {
             check_arity(name, args, 1)?;
             let values = compute::cast(&args[0], &DataType::Int64)?;
