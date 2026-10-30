@@ -42,7 +42,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 100 bounded T-SQL read cases, including the
+The corpus currently contains 103 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -72,13 +72,16 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 100 cases (the implementation pin is updated after
+The current T-SQL corpus is 103 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
 null-preserving one-based CASE, each with
 a focused three-worker differential. The `CONCAT` evidence is retained in
 `docs/qualification/track2-tsql-concat-2026-10-29.md`.
+The latest three cases qualify bounded SQL Server scalar math (`ABS`, `SIGN`,
+`SQRT`, and `POWER`) plus Unicode text transforms (`UPPER`, `LOWER`, and
+`REPLACE`) through the same vectorized local/three-worker path.
 The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
 `QUOTENAME` identifier quoting (square brackets or double quotes, with the
 128-character SQL Server limit); evidence is retained in
@@ -204,7 +207,7 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 100-case corpus pinned at
+The T-SQL row above is backed by the versioned 103-case corpus pinned at
 `1aa49768` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
@@ -214,7 +217,7 @@ locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
 supersedes the older case-count wording embedded in the capability table.
-The capability row's historical corpus pointer is superseded by the 100-case
+The capability row's historical corpus pointer is superseded by the 103-case
 corpus and pin above; do not use its older count as current evidence.
 
 Run from `engine/`:

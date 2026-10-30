@@ -250,6 +250,21 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_math_scalar_compatibility",
+        "SELECT user_id, ABS(actions - 10), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM {T} ORDER BY user_id, actions LIMIT 20",
+        true,
+    ),
+    (
+        "tsql_power_scalar_compatibility",
+        "SELECT user_id, POWER(CAST(actions AS DOUBLE), 2) FROM {T} ORDER BY user_id, actions LIMIT 20",
+        true,
+    ),
+    (
+        "tsql_string_scalar_compatibility",
+        "SELECT user_id, UPPER(country), LOWER(country), REPLACE(country, 'a', 'A') FROM {T} ORDER BY user_id, country, actions LIMIT 20",
+        true,
+    ),
+    (
         "order_by_dict_desc",
         "SELECT country, region FROM {T} WHERE surface = 'Export' AND event_date = '2026-07-20' ORDER BY country DESC, region LIMIT 5",
         true,
