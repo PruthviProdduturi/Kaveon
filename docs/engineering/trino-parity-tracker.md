@@ -235,7 +235,7 @@ source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
 The T-SQL row above is backed by the versioned 107-case corpus pinned at
-`64fe2060` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+`f82a5e67` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
 `NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
