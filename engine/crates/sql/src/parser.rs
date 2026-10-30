@@ -281,12 +281,15 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
     };
     let in_pos = for_pos + "FOR".len() + in_pos_rel;
     let pivot_column = body[for_pos + "FOR".len()..in_pos].trim();
-    if !is_simple_identifier(value_column) || !is_simple_identifier(pivot_column) {
+    if (value_column != "*" && !is_simple_identifier(value_column))
+        || !is_simple_identifier(pivot_column)
+    {
         return Ok(None);
     }
-    if !columns
-        .iter()
-        .any(|column| column.eq_ignore_ascii_case(value_column))
+    if (value_column != "*"
+        && !columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(value_column)))
         || !columns
             .iter()
             .any(|column| column.eq_ignore_ascii_case(pivot_column))
@@ -3548,6 +3551,18 @@ mod tests {
         );
         assert!(
             rendered.contains("SUM(CASE WHEN month = 'Feb' THEN amount END)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("GROUP BY region"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_pivot_count_star_lowers_to_conditional_aggregation() {
+        let sql = "SELECT * FROM (SELECT region, month FROM sales) src PIVOT (COUNT(*) FOR month IN ([Jan], [Feb])) p";
+        let statements = parse_sql(sql).expect("COUNT(*) PIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(
+            rendered.contains("COUNT(CASE WHEN month = 'Jan' THEN 1 END)"),
             "{rendered}"
         );
         assert!(rendered.contains("GROUP BY region"), "{rendered}");
