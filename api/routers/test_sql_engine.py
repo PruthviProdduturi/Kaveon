@@ -18,6 +18,21 @@ from services.query_generator import build_chart_preview_query, build_distinct_f
 
 
 class EngineChartSqlTests(unittest.TestCase):
+    def test_native_catalog_resolution_is_distinct_from_fabric_passthrough(self):
+        with patch.object(sql.meta_db, "query_one", return_value={
+            "id": "native-1", "engine_catalog": "OpenSource",
+        }) as lookup:
+            self.assertEqual(
+                sql._engine_source_for_catalog("OpenSource"),
+                {"id": "native-1", "engine_catalog": "OpenSource"},
+            )
+        self.assertIn("adapter_type = 'native'", lookup.call_args.args[0])
+
+    def test_fabric_catalog_without_native_adapter_stays_passthrough(self):
+        with patch.object(sql.meta_db, "query_one", return_value=None) as lookup:
+            self.assertIsNone(sql._engine_source_for_catalog("FabricWarehouse"))
+        self.assertIn("adapter_type = 'native'", lookup.call_args.args[0])
+
     def test_active_catalog_is_resolved_server_side_and_result_is_chart_shape(self):
         ctx = UserContext("analyst@example.com", "Analyst")
         body = SqlExecuteBody(
