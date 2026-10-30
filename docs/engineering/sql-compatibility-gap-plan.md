@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 81-case corpus has planner coverage and focused exact
+  The current 82-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -96,6 +96,8 @@ encodings is retained in
 (square brackets and double quotes, 128-Unicode-character limit) with local
 and three-worker evidence in
 `docs/qualification/track2-tsql-quotename-2026-10-29.md`.
+`REPLICATE` now canonicalizes to the bounded Unicode `REPEAT` path for
+non-negative counts and is included in the distributed corpus.
 `LEFT` and `RIGHT` preserve SQL Server's Unicode scalar character semantics
 for bounded text lengths and are covered by the distributed differential
 regression.

@@ -34,7 +34,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 81-case corpus. The bounded date-construction qualifications
+the versioned 82-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -42,7 +42,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 81 bounded T-SQL read cases, including the
+The corpus currently contains 82 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -60,7 +60,7 @@ explicitly rejected. Evidence: `track2-native-dml-returning-document-2026-10-29.
 This supersedes the older Native DML row wording that listed all document
 projections as open; arbitrary expressions and lake-table DML remain open.
 
-The current T-SQL corpus is 81 cases (the implementation pin is updated after
+The current T-SQL corpus is 82 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -72,6 +72,8 @@ The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
 128-character SQL Server limit); evidence is retained in
 `docs/qualification/track2-tsql-string-escape-2026-10-29.md` and
 `docs/qualification/track2-tsql-quotename-2026-10-29.md`.
+The SQL Server `REPLICATE` spelling is also qualified through the bounded
+Unicode `REPEAT` path for non-negative counts.
 Literal `CONVERT(DATE, ..., style)` styles `0`, `101`, and `112` also have
 exact three-worker evidence in
 `docs/qualification/track2-tsql-convert-date-literals-2026-10-29.md`.
@@ -175,7 +177,7 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 
 ## Qualification commands
 
-The T-SQL row above is backed by the versioned 80-case corpus pinned at
+The T-SQL row above is backed by the versioned 82-case corpus pinned at
 `9333762e` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 

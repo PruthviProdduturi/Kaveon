@@ -6236,6 +6236,10 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "SMALLDATETIMEFROMPARTS" => "SMALLDATETIME_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
         "ISNUMERIC" => "IS_NUMERIC".to_owned(),
+        // SQL Server's REPLICATE has the same bounded string semantics as
+        // the Engine's UTF-8 REPEAT path; canonicalize it before expression
+        // planning so local and distributed evaluation share one operator.
+        "REPLICATE" => "REPEAT".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
         }
@@ -9189,6 +9193,14 @@ mod tests {
         assert!(rendered.contains("when_then"), "{rendered}");
         assert!(rendered.contains("Int64(2)"), "{rendered}");
         assert!(sql_to_logical_plan("SELECT CHOOSE(1) FROM t").is_err());
+    }
+
+    #[test]
+    fn lowers_tsql_replicate_to_bounded_repeat() {
+        let plan = sql_to_logical_plan("SELECT REPLICATE(name, 2) FROM t")
+            .expect("REPLICATE should lower through the bounded repeat operator");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("REPEAT"), "{rendered}");
     }
 
     #[test]
