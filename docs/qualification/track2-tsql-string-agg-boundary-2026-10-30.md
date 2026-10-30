@@ -20,8 +20,9 @@ silently execute only a coordinator-local fragment.
   `distributed_status: requires_mergeable_ordered_string_state`.
 - `cargo test -p kaveon-sql --lib rejects_string_agg_with_a_bounded_rewrite_hint`
   passes.
-- The parser rejects the function by a word-boundary match, so identifiers such
-  as `STRING_AGG_value` are not misclassified.
+- The parser rejects the function by a lexical word-boundary match that skips
+  quoted literals, quoted identifiers, and comments, so identifiers such as
+  `STRING_AGG_value` and text such as `'STRING_AGG'` are not misclassified.
 - The diagnostic names the missing contract and suggests
   `ARRAY_AGG` plus `ARRAY_JOIN` only where that bounded rewrite is semantically
   acceptable.
