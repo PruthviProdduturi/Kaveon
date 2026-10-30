@@ -9130,11 +9130,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "{name} requires one argument and an optional type constraint"
                 )));
             }
+            // Literal arguments on an empty fragment may have an empty
+            // evaluated array even though their expression is valid. There
+            // are no rows to classify, so preserve the typed empty result
+            // without indexing a non-existent constraint value.
+            if num_rows == 0 {
+                return Ok(Arc::new(Int32Array::from(Vec::<Option<i32>>::new())));
+            }
             let constraint = if args.len() == 2 {
                 let value = args[1]
                     .as_any()
                     .downcast_ref::<StringArray>()
-                    .and_then(|values| (!values.is_null(0)).then(|| values.value(0)))
+                    .and_then(|values| {
+                        (values.len() > 0 && !values.is_null(0)).then(|| values.value(0))
+                    })
                     .ok_or_else(|| {
                         KaveonError::Execution(
                             "ISJSON type constraint must be VALUE, ARRAY, OBJECT, or SCALAR".into(),
@@ -28624,6 +28633,20 @@ mod tests {
             let result = evaluate(&constrained, &batch).unwrap();
             assert_eq!(result.as_primitive::<Int32Type>().value(0), expected);
         }
+
+        let empty = RecordBatch::new_empty(batch.schema());
+        let result = evaluate(
+            &Expr::Function {
+                name: "IS_JSON".into(),
+                args: vec![
+                    Expr::Column("document".into()),
+                    Expr::Literal(ScalarValue::Utf8("OBJECT".into())),
+                ],
+            },
+            &empty,
+        )
+        .unwrap();
+        assert_eq!(result.len(), 0);
     }
 
     #[test]

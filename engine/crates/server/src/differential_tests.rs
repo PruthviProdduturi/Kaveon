@@ -330,6 +330,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_isjson_constraints",
+        "SELECT ISJSON('{\"x\":1}') AS valid_object, ISJSON('[1,2]', ARRAY) AS valid_array, ISJSON('{\"x\":1}', SCALAR) AS object_is_scalar FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "tsql_count_big",
         "SELECT COUNT_BIG(*) AS row_count FROM {T}",
         true,

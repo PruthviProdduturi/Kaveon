@@ -54,7 +54,7 @@
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
     {"id": "isnumeric", "sql": "SELECT ISNUMERIC(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_and_parseable_text_inputs"},
-    {"id": "isjson", "sql": "SELECT ISJSON(payload) FROM t", "status": "planner_qualified", "distributed_status": "pending_distributed_qualification"},
+    {"id": "isjson", "sql": "SELECT ISJSON(payload) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_json_validity_and_type_constraints"},
     {"id": "left", "sql": "SELECT LEFT(name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "right", "sql": "SELECT RIGHT(name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "reverse", "sql": "SELECT REVERSE(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
