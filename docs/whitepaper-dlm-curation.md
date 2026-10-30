@@ -26,7 +26,7 @@ dashboard charts and the majority of natural-language questions are served with
 **zero database queries**. The system stores 375 precomputed answers for a single
 10.1-million-row dataset, serves them as microsecond dict lookups from an
 in-memory cache, and keeps them current through a freshness algorithm that reads
-the database's own change counters rather than re-scanning the data.
+source-version and manifest watermarks rather than re-scanning unchanged data.
 
 This paper provides the exact SQL templates, the constants that govern the
 precomputation budget, the storage schema, the incremental refresh mechanism, and
@@ -37,7 +37,7 @@ the production numbers across 10 datasets, 9 dashboards, and 71 charts.
 ## 1. The Problem
 
 Consider a dashboard with 10 charts over a 10.1-million-row fact table on a B1ms
-PostgreSQL instance (1 vCore, 2 GB RAM). Each chart issues a GROUP BY query. Ten
+historical PostgreSQL baseline instance (1 vCore, 2 GB RAM). Each chart issues a GROUP BY query. Ten
 concurrent scans against the same table:
 
 - Each scan reads ~10M rows.
@@ -508,8 +508,9 @@ system's scale proof point.
 | **Total** | **375** | **~25 scans** |
 
 **Build time:** ~60--90 seconds for the full compilation. The 25 scans run
-sequentially but each is a single GROUP BY over the fact table — PostgreSQL's
-sequential scan is efficient when the entire table is read.
+sequentially but each is a single GROUP BY over the fact table. This is a
+historical PostgreSQL baseline; the native Kaveon path uses Engine execution and
+KaveonDB-backed DLM artifacts instead of a PostgreSQL authority.
 
 **Storage:** ~375 rows in `dlm_answers` (JSON columns + rows), plus sparse HLL
 register vectors in `dlm_sketch`. Total metadata footprint: < 5 MB.

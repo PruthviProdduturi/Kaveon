@@ -70,9 +70,10 @@ The DLM replaces both with a single compiled artifact:
    novel.
 
 3. **No clock for freshness.** A composite validity score built from the
-   database's own change counters (`pg_stat_user_tables.n_mod_since_analyze`)
-   determines whether each element of the context is still valid. The system
-   re-queries exactly when -- and only the parts that -- the data has moved.
+   KaveonDB source-version and manifest watermarks, together with qualified
+   catalog statistics, determines whether each element of the context is still
+   valid. The system re-queries exactly when -- and only the parts that -- the
+   data has moved.
 
 ---
 
@@ -92,10 +93,13 @@ database, separate from the data warehouse. It contains:
 | **Curation overlay** | Human editorial overrides (aliases, hidden dims, default metrics) | `dlm_artifact.curation` (JSON) |
 
 The DLM is **compiled, not trained.** There is no model, no gradient, no training
-data. The compilation reads the database's own catalogs (`pg_stats`,
-`pg_stat_user_tables`, `pg_constraint`) for structure and statistics, runs a
-bounded set of GROUP BY scans for the answer store, and persists the result. The
-artifact is fully deterministic: the same schema and data produce the same DLM.
+data. The compilation reads KaveonDB catalog metadata and the Engine's
+source-version-bound statistics for structure and data profiles, runs a bounded
+set of GROUP BY scans for the answer store, and persists the result in the
+transactional product catalog. Registered external connectors may provide
+source-specific metadata through an adapter, but PostgreSQL catalogs are not a
+native dependency. The artifact is fully deterministic: the same schema and
+data produce the same DLM.
 
 ---
 
@@ -107,15 +111,16 @@ artifact is fully deterministic: the same schema and data produce the same DLM.
 columns, metrics). If the hash matches an existing artifact with status `ready`,
 the compilation short-circuits. `force=True` overrides.
 
-**Step 2 — Statistics substrate.** Runs `ANALYZE` on all relevant tables, then
-calls the context profiler to read `pg_stats` (column distributions, distinct
-counts, null fractions, histograms) and `pg_stat_user_tables` (row counts,
-modification counters). This is O(1) per table — a 100-million-row table costs
-the same as a 100-row one.
+**Step 2 — Statistics substrate.** Reads the Engine's version-bound source
+statistics for all relevant tables: row counts, bytes, null fractions, bounds,
+distinct sketches, quantiles, and qualified histograms. A refresh is tied to the
+catalog/source version rather than a database-specific modification counter.
+This is metadata work per table; a 100-million-row table does not require a full
+scan when a current profile is available.
 
 **Step 3 — Value inventory.** For each low-cardinality dimension column (up to
 1,000 distinct values), scans `SELECT col, COUNT(*) GROUP BY col LIMIT
-1001`. Falls back to `pg_stats.most_common_vals` when the scan fails. Produces
+1001`. Falls back to the Engine's persisted value profile when the scan fails. Produces
 normalized (value, frequency) pairs for entity resolution.
 
 **Step 4 — Usage rollup.** Reads `query_history.tables_used` from the metadata
@@ -131,8 +136,8 @@ semantic type, synonyms), join graph (dimension tables, fact keys, join keys),
 metrics (name, expression, type, format, synonyms), and a `context_spec`
 (auto-suggested aliases, additivity flags, precompute configuration).
 
-**Step 7 — Persist.** Atomically upserts `dlm_artifact`, `dlm_value_index`, and
-`dlm_router` in the metadata database.
+**Step 7 — Persist.** Atomically upserts the DLM artifact, value index, and
+router records in KaveonDB's transactional product catalog.
 
 **Step 8 — Precompute answers.** Four tiers of precomputation (detailed in
 Section 5 and in the companion paper *DLM Curation at Scale*).
@@ -314,11 +319,11 @@ change_factor = e^(-ln2 × change_frac / CHANGE_HALF_FRACTION)
 since capture has its change factor fall to 0.5; a table that hasn't moved stays
 at 1.0.
 
-The change signal is read from `pg_stat_user_tables.n_mod_since_analyze` — a
-running count of inserts, updates, and deletes that PostgreSQL maintains for its
-own autovacuum scheduling. **Reading this counter is a metadata lookup, not a
-table scan.** This is the enablement core: staleness is measured from a counter,
-not from a re-query.
+The change signal is read from the KaveonDB source-version and manifest
+watermarks, plus the qualified Engine statistics profile for that version.
+**Reading these records is a metadata lookup, not a table scan.** This is the
+enablement core: staleness is measured from an immutable source identity and
+profile, not from a database-specific counter or a blind re-query.
 
 | Rows Churned | Score |
 |-------------|-------|
