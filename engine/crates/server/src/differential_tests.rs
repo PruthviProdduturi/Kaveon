@@ -220,6 +220,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_nchar",
+        "SELECT user_id, NCHAR(actions) FROM {T} ORDER BY user_id, country, actions LIMIT 12",
+        true,
+    ),
+    (
         "order_by_dict_desc",
         "SELECT country, region FROM {T} WHERE surface = 'Export' AND event_date = '2026-07-20' ORDER BY country DESC, region LIMIT 5",
         true,
@@ -7864,6 +7869,29 @@ fn distributed_tsql_character_code_helpers_match_local() {
     let statement = "SELECT user_id, ASCII(country), UNICODE(country), CHAR(actions) FROM events ORDER BY user_id, country, actions LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-char-codes-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_nchar_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-nchar-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement =
+        "SELECT user_id, NCHAR(actions) FROM events ORDER BY user_id, country, actions LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-nchar-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);
