@@ -149,8 +149,9 @@ forms remain explicitly rejected.
 `SQUARE(value)` lowers to the existing vectorized `POWER(value, 2)` path with
 exact local/three-worker evidence in
 `docs/qualification/track2-tsql-square-2026-10-29.md`.
-The bounded SQL Server scalar math aliases `ABS`, `SIGN`, and `SQRT`, together
-with `POWER`, and the Unicode text functions `UPPER`, `LOWER`, and `REPLACE`
+The bounded SQL Server scalar math aliases `ABS`, `CEILING`, `FLOOR`, `SIGN`,
+and `SQRT`, together with `POWER`, and the Unicode text functions `UPPER`,
+`LOWER`, and `REPLACE`
 are now included in the exact local/three-worker corpus; unsupported parser
 shapes remain explicitly rejected until their AST lowering is implemented.
 `SUBSTRING` is now lowered from the dedicated SQL AST form and is qualified for

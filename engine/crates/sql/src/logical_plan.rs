@@ -4545,6 +4545,10 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             })
         }
 
+        ast::Expr::Ceil { expr, field } => lower_ceil_floor("CEILING", expr, field),
+
+        ast::Expr::Floor { expr, field } => lower_ceil_floor("FLOOR", expr, field),
+
         ast::Expr::Interval(_) => Err(sql_err(
             "an INTERVAL is only supported added to or subtracted from a date",
         )),
@@ -4997,6 +5001,32 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
         ast::BinaryOperator::StringConcat => Some(BinaryOp::StringConcat),
         _ => None,
     }
+}
+
+fn lower_ceil_floor(
+    function_name: &str,
+    expr: &ast::Expr,
+    field: &ast::CeilFloorKind,
+) -> Result<Expr> {
+    match field {
+        ast::CeilFloorKind::DateTimeField(ast::DateTimeField::NoDateTime) => {}
+        ast::CeilFloorKind::DateTimeField(_) => {
+            return Err(sql_err(
+                "CEILING/FLOOR datetime units are outside the bounded numeric contract",
+            ));
+        }
+        ast::CeilFloorKind::Scale(scale) if !matches!(scale, ast::Value::Number(value, _) if value == "0") =>
+        {
+            return Err(sql_err(
+                "CEILING/FLOOR accepts only the default numeric scale",
+            ));
+        }
+        ast::CeilFloorKind::Scale(_) => {}
+    }
+    Ok(Expr::Function {
+        name: function_name.into(),
+        args: vec![ast_expr_to_expr(expr)?],
+    })
 }
 
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
@@ -9822,6 +9852,24 @@ mod tests {
             .expect("SQUARE should lower through POWER");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("POWER"), "{rendered}");
+    }
+
+    #[test]
+    fn lowers_tsql_ceil_and_floor_to_numeric_functions() {
+        for (sql, function) in [
+            (
+                "SELECT CEILING(CAST(actions AS DOUBLE) / 3) FROM t",
+                "CEILING",
+            ),
+            ("SELECT FLOOR(CAST(actions AS DOUBLE) / 3) FROM t", "FLOOR"),
+        ] {
+            let plan = sql_to_logical_plan(sql).expect("numeric ceil/floor should lower");
+            let rendered = format!("{plan:?}");
+            assert!(rendered.contains(function), "{rendered}");
+        }
+        let error = sql_to_logical_plan("SELECT FLOOR(event_date TO DAY) FROM t")
+            .expect_err("datetime floor must remain outside numeric contract");
+        assert!(error.to_string().contains("datetime units"), "{error}");
     }
 
     #[test]
