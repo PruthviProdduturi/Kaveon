@@ -10619,6 +10619,7 @@ fn annotate_plan_estimates(
                 .insert("estimated_right_input_rows".into(), known[1].to_string());
             node.attributes
                 .insert("estimate_scope".into(), "child_inputs_only".into());
+            None
         }
         "union" | "intersect" | "except" => {
             node.attributes.insert(
@@ -10627,15 +10628,49 @@ fn annotate_plan_estimates(
             );
             node.attributes
                 .insert("estimate_scope".into(), "child_inputs_only".into());
+            None
+        }
+        "topn" | "limit" => {
+            let child = known[0];
+            let rows = node
+                .attributes
+                .get("rows")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(child);
+            let skip = node
+                .attributes
+                .get("skip")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let output = child.saturating_sub(skip).min(rows);
+            node.attributes
+                .insert("estimated_output_rows".into(), output.to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(output)
+        }
+        "offset" => {
+            let child = known[0];
+            let skip = node
+                .attributes
+                .get("rows")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let output = child.saturating_sub(skip);
+            node.attributes
+                .insert("estimated_output_rows".into(), output.to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(output)
         }
         _ => {
             node.attributes
                 .insert("estimated_input_rows".into(), known[0].to_string());
             node.attributes
                 .insert("estimate_scope".into(), "child_input_only".into());
+            None
         }
     }
-    None
 }
 
 /// Tables whose statistics are being refreshed in the background, so one
@@ -15821,6 +15856,35 @@ mod tests {
         assert_eq!(join.attributes["estimated_left_input_rows"], "120");
         assert_eq!(join.attributes["estimated_right_input_rows"], "45");
         assert_eq!(join.attributes["estimate_scope"], "child_inputs_only");
+    }
+
+    #[test]
+    fn plan_estimates_bound_limit_and_offset_outputs() {
+        let scan = kaveon_core::PlanNode::new(1, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "events");
+        let mut limit = kaveon_core::PlanNode::new(2, kaveon_core::PlanPhase::Physical, "Limit")
+            .with_attribute("rows", "50")
+            .with_child(scan);
+        let estimates = std::collections::BTreeMap::from([(
+            "events".to_owned(),
+            super::PlanEstimate {
+                rows: 120,
+                bytes: None,
+                source: "source_metadata",
+                source_version: "v1".to_owned(),
+            },
+        )]);
+        super::annotate_plan_estimates(&mut limit, &estimates);
+        assert_eq!(limit.attributes["estimated_output_rows"], "50");
+        assert_eq!(limit.attributes["estimate_scope"], "bounded_upper_bound");
+
+        let scan = kaveon_core::PlanNode::new(3, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "events");
+        let mut offset = kaveon_core::PlanNode::new(4, kaveon_core::PlanPhase::Physical, "Offset")
+            .with_attribute("rows", "30")
+            .with_child(scan);
+        super::annotate_plan_estimates(&mut offset, &estimates);
+        assert_eq!(offset.attributes["estimated_output_rows"], "90");
     }
 
     #[test]
