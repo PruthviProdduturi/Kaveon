@@ -34,7 +34,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 87-case corpus. The bounded date-construction qualifications
+the versioned 90-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -42,7 +42,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 87 bounded T-SQL read cases, including the
+The corpus currently contains 90 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -56,6 +56,12 @@ Temporal `FORMAT` now shares the vectorized `TO_CHAR` path for invariant date
 patterns, and `DATE_FORMAT`/`TO_CHAR` honor their supplied pattern rather than
 falling back to a fixed ISO rendering
 (`docs/qualification/track2-tsql-format-temporal-2026-10-29.md`).
+The same bounded slice now qualifies SQL Server `ASCII`, `UNICODE`, and
+`CHAR`: ASCII returns NULL for a non-ASCII leading scalar, UNICODE returns the
+leading Unicode scalar, and CHAR accepts only integer byte values from 0
+through 255. These semantics are deliberately locale-independent and are
+qualified locally and across three workers in
+`docs/qualification/track2-tsql-character-code-2026-10-29.md`.
 
 The bounded product DML contract now also returns staged `document_json` on
 create/update/upsert and revision-checked DELETE statements, including the
@@ -66,7 +72,7 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 87 cases (the implementation pin is updated after
+The current T-SQL corpus is 90 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -198,9 +204,13 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 87-case corpus pinned at
-`d87ee9c9` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+The T-SQL row above is backed by the versioned 90-case corpus pinned at
+`c2612fdf` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
+The latest three cases are bounded `ASCII`, `UNICODE`, and `CHAR`, with
+locale-independent UTF-8/byte semantics documented in
+`docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
+supersedes the older case-count wording embedded in the capability table.
 
 Run from `engine/`:
 
