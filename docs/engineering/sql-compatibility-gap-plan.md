@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 110-case corpus has planner coverage and focused exact
+  The current 111-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -122,7 +122,7 @@ and `docs/qualification/track2-tsql-trim-directional-characters-2026-10-29.md`.
 `TRANSLATE` now has a bounded SQL Server-compatible Unicode scalar mapping
 path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
-gate. `DATE_BUCKET` buckets for year, quarter, month, day, hour, minute, and
+gate. `DATE_BUCKET` buckets for year, quarter, month, week, day, hour, minute, and
 second lower to the existing typed `DATE_TRUNC` path and have exact
 local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); row-local and
 typed-literal custom origins are qualified, while unsupported origin shapes

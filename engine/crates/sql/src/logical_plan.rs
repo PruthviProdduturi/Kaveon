@@ -5324,7 +5324,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         let unit = normalize_tsql_date_unit(&unit);
         if !matches!(
             unit.as_str(),
-            "year" | "quarter" | "month" | "day" | "hour" | "minute" | "second"
+            "year" | "quarter" | "month" | "week" | "day" | "hour" | "minute" | "second"
         ) {
             return Err(sql_err(format!(
                 "DATE_BUCKET does not support datepart '{unit}' in the bounded Engine contract"
@@ -5354,9 +5354,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             },
             other => other.clone(),
         };
+        let bucket_unit = if unit == "week" { "day" } else { unit.as_str() };
         let truncated = Expr::Function {
             name: "DATE_TRUNC".into(),
-            args: vec![Expr::Literal(ScalarValue::Utf8(unit.clone())), bucket_value],
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8(bucket_unit.to_owned())),
+                bucket_value,
+            ],
         };
         if dynamic_width.is_none() && width == 1 && args.len() == 3 {
             return Ok(truncated);
@@ -5398,10 +5402,11 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 data_type: origin_type.clone(),
             }
         };
+        let difference_unit = if unit == "week" { "day" } else { unit.as_str() };
         let difference = Expr::Function {
             name: "DATE_DIFF".into(),
             args: vec![
-                Expr::Literal(ScalarValue::Utf8(unit.clone())),
+                Expr::Literal(ScalarValue::Utf8(difference_unit.to_owned())),
                 origin,
                 truncated.clone(),
             ],
@@ -5455,6 +5460,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "year" => 12,
             "quarter" => 3,
             "month" | "day" | "hour" | "minute" | "second" => 1,
+            "week" => 7,
             _ => unreachable!("DATE_BUCKET unit was validated above"),
         };
         let amount = Expr::BinaryOp {
@@ -5464,7 +5470,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         };
         let operator = if matches!(unit.as_str(), "year" | "quarter" | "month") {
             "DATE_ADD_MONTHS"
-        } else if unit == "day" {
+        } else if matches!(unit.as_str(), "week" | "day") {
             "DATE_ADD_DAYS"
         } else {
             "DATE_ADD_SECONDS"
@@ -9779,6 +9785,11 @@ mod tests {
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("MOD"), "{rendered}");
         assert!(rendered.contains("DATE_ADD_MONTHS"), "{rendered}");
+        let week_plan = sql_to_logical_plan("SELECT DATE_BUCKET(week, 2, event_date) FROM t")
+            .expect("DATE_BUCKET week should lower through day arithmetic");
+        let week_rendered = format!("{week_plan:?}");
+        assert!(week_rendered.contains("DATE_DIFF"), "{week_rendered}");
+        assert!(week_rendered.contains("DATE_ADD_DAYS"), "{week_rendered}");
         let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, 0, event_date) FROM t")
             .expect_err("non-positive buckets must remain unqualified");
         assert!(error.to_string().contains("positive literal"));
