@@ -113,7 +113,7 @@ table — carries an **`evidence`** object:
 | `sql` | The statement that ran, or that would compute a context answer — in the source's dialect |
 | `dataset` | `{id, name}` |
 | `source` | `{kind: "engine", table_id, catalog, schema, table}` for a dataset bound to an Engine table (or over a native catalog), `{kind: "warehouse", database, schema, table}` otherwise |
-| `source_version` | What the answer reflects. Engine: the record's `execution.source_version` for a context answer, the table's `GET /v1/catalog/tables/{id}/version` for a read (`{identity_sha256, kind: delta_version \| iceberg_snapshot \| listing \| file, …}`). Warehouse: `{kind: "postgresql_change_counter", table, row_count, mods_since_analyze, last_analyze, observed_at}` — the snapshot the artifact was compiled against for a context answer, the counter as read now for a live one; `{kind: "unavailable"}` on a source without the counter |
+| `source_version` | What the answer reflects. Engine: the record's `execution.source_version` for a context answer, the table's `GET /v1/catalog/tables/{id}/version` for a read (`{identity_sha256, kind: delta_version \| iceberg_snapshot \| listing \| file, …}`). Legacy external warehouse connectors may expose `{kind: "postgresql_change_counter", ...}` when their adapter provides it; this is not KaveonDB authority. Native KaveonDB answers use the Engine source version; sources without a version return `{kind: "unavailable"}` |
 | `lane` | `context` (answered without reading the rows: the Engine's cube or statistics, or the DLM's precomputed cells), `cache` (the Engine's result cache), `live` (the rows were read) |
 | `execution` | The Engine's query-record `execution` object verbatim (`mode`, `detail`, `source_version`, `current_source_version`, `approximate[]`); `null` on the warehouse |
 | `settings` | The per-statement settings the DLM chose on the Engine: `result_cache` per the dataset's freshness policy, `use_statistics: true`, `approximate: true` only for a metric the context spec marks approximate; `null` on the warehouse |
@@ -131,8 +131,8 @@ the caller's rate limit), answering `{ok, columns, rows, evidence, duration_ms}`
 with the evidence of that run, so a client can set the live number beside the
 context one. `GET /api/v1/datasets/{id}/freshness` reports `signal:
 "engine_source_version"` with `source_version`, `current_source_version` and
-`observed_at_ms` for an Engine-backed dataset (`postgresql_change_counter`
-otherwise).
+`observed_at_ms` for an Engine-backed dataset. Legacy external-source datasets
+may report an adapter-provided freshness counter instead.
 
 A dataset is bound to an Engine table with `source: {kind: "engine", table_id}`
 on `POST`/`PUT`/`PATCH /api/v1/datasets`: the catalog, schema and table names,
