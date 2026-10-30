@@ -760,6 +760,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "tsql_format_temporal",
+        "SELECT FORMAT(TIMESTAMP '2026-02-17 12:34:56.789', 'yyyy-MM-dd HH:mm:ss') AS formatted, FORMAT(DATE '2026-02-17', 'yyyyMMdd') AS compact_date FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "date_bucket_width_one",
         "SELECT DATE_BUCKET(month, 1, TIMESTAMP '2026-02-17 12:34:56.789') AS month_bucket, DATE_BUCKET(day, 1, TIMESTAMP '2026-02-17 12:34:56.789') AS day_bucket FROM {T} LIMIT 1",
         false,

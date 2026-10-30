@@ -12781,8 +12781,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         "TO_CHAR" | "DATE_FORMAT" => {
             check_arity(name, args, 2)?;
             let source = &args[0];
-            let fmt_arr = as_string_array(&args[1])?;
-            eval_to_char(source, fmt_arr, num_rows)
+            eval_to_char(source, &args[1], num_rows)
         }
         "FROM_UNIXTIME" => {
             check_arity(name, args, 1)?;
@@ -16381,52 +16380,167 @@ fn calendar_month_difference(start: (i32, u32, u32, i128), end: (i32, u32, u32, 
     }
 }
 
-fn eval_to_char(source: &ArrayRef, _fmt: &StringArray, num_rows: usize) -> Result<ArrayRef> {
+fn eval_to_char(source: &ArrayRef, fmt: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
+    let render =
+        |row: usize, y: i32, m: u32, d: u32, h: u32, minute: u32, second: u32, micros: u32| {
+            let pattern = text_value(fmt, row)?.unwrap_or("%Y-%m-%d %H:%i:%s");
+            Ok::<Option<String>, KaveonError>(Some(render_date_format(
+                pattern,
+                TemporalParts {
+                    year: y,
+                    month: m,
+                    day: d,
+                    hour: h,
+                    minute,
+                    second,
+                    micros,
+                },
+            )))
+        };
     match source.data_type() {
         DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
             let ts = source.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
-            let result: StringArray = (0..num_rows)
+            let values: Vec<Option<String>> = (0..num_rows)
                 .map(|i| {
                     if ts.is_null(i) {
-                        None
+                        Ok(None)
                     } else {
                         let us = ts.value(i);
                         let secs = us / 1_000_000;
                         let days = secs / 86400;
                         let tod = ((secs % 86400) + 86400) % 86400;
                         let (y, m, d) = days_to_ymd(days);
-                        Some(format!(
-                            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                        let micros = ((us % 1_000_000) + 1_000_000) % 1_000_000;
+                        render(
+                            i,
                             y,
                             m,
                             d,
-                            tod / 3600,
-                            (tod % 3600) / 60,
-                            tod % 60
-                        ))
+                            (tod / 3600) as u32,
+                            ((tod % 3600) / 60) as u32,
+                            (tod % 60) as u32,
+                            micros as u32,
+                        )
                     }
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
+            let result = StringArray::from(values);
             Ok(Arc::new(result))
         }
         DataType::Date32 => {
             let d = source.as_primitive::<arrow::datatypes::Date32Type>();
-            let result: StringArray = (0..num_rows)
+            let values: Vec<Option<String>> = (0..num_rows)
                 .map(|i| {
                     if d.is_null(i) {
-                        None
+                        Ok(None)
                     } else {
                         let (y, m, day) = days_to_ymd(d.value(i) as i64);
-                        Some(format!("{:04}-{:02}-{:02}", y, m, day))
+                        render(i, y, m, day, 0, 0, 0, 0)
                     }
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
+            let result = StringArray::from(values);
             Ok(Arc::new(result))
+        }
+        // The planner keeps typed DATE literals as epoch-day Int64 values for
+        // storage predicates.  FORMAT/TO_CHAR is a projection surface, so
+        // interpret that compact representation as a date here rather than
+        // rejecting a valid typed DATE literal.
+        DataType::Int64 => {
+            let values = source.as_primitive::<Int64Type>();
+            let rendered: Vec<Option<String>> = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) {
+                        Ok(None)
+                    } else {
+                        let (y, m, day) = days_to_ymd(values.value(i));
+                        render(i, y, m, day, 0, 0, 0, 0)
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(StringArray::from(rendered)))
         }
         dt => Err(KaveonError::Execution(format!(
             "TO_CHAR not supported for type {dt}"
         ))),
     }
+}
+
+/// Render the bounded format tokens shared by Trino DATE_FORMAT, PostgreSQL
+/// TO_CHAR's common temporal tokens, and SQL Server FORMAT's invariant date
+/// forms. Unknown characters are retained as literals; unsupported culture or
+/// numeric formatting is rejected before reaching this temporal path.
+#[derive(Clone, Copy)]
+struct TemporalParts {
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    micros: u32,
+}
+
+fn render_date_format(pattern: &str, parts: TemporalParts) -> String {
+    let TemporalParts {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        micros,
+    } = parts;
+    let mut output = String::with_capacity(pattern.len() + 16);
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '%' && index + 1 < chars.len() {
+            let token = chars[index + 1];
+            let value = match token {
+                'Y' => Some(format!("{year:04}")),
+                'm' => Some(format!("{month:02}")),
+                'd' => Some(format!("{day:02}")),
+                'H' => Some(format!("{hour:02}")),
+                'i' => Some(format!("{minute:02}")),
+                's' => Some(format!("{second:02}")),
+                'f' => Some(format!("{micros:06}")),
+                '%' => Some("%".to_owned()),
+                _ => None,
+            };
+            if let Some(value) = value {
+                output.push_str(&value);
+                index += 2;
+                continue;
+            }
+        }
+        let remaining: String = chars[index..].iter().collect();
+        let token = [
+            ("yyyy", format!("{year:04}")),
+            ("YYYY", format!("{year:04}")),
+            ("HH24", format!("{hour:02}")),
+            ("MM", format!("{month:02}")),
+            ("DD", format!("{day:02}")),
+            ("dd", format!("{day:02}")),
+            ("HH", format!("{hour:02}")),
+            ("mm", format!("{minute:02}")),
+            ("MI", format!("{minute:02}")),
+            ("ss", format!("{second:02}")),
+            ("SS", format!("{second:02}")),
+            ("fff", format!("{:03}", micros / 1_000)),
+            ("FFF", format!("{:03}", micros / 1_000)),
+        ]
+        .into_iter()
+        .find(|(token, _)| remaining.starts_with(token));
+        if let Some((token, value)) = token {
+            output.push_str(&value);
+            index += token.len();
+        } else {
+            output.push(chars[index]);
+            index += 1;
+        }
+    }
+    output
 }
 
 fn check_arity(name: &str, args: &[ArrayRef], expected: usize) -> Result<()> {
@@ -29627,5 +29741,32 @@ mod tests {
         let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
         assert_eq!(values.value(0), "Kaveo");
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn formats_temporal_values_with_runtime_patterns() {
+        let source =
+            Arc::new(arrow::array::Date32Array::from(vec![Some(19_783), None])) as ArrayRef;
+        let format = Arc::new(StringArray::from(vec![
+            Some("%Y-%m-%d"),
+            Some("yyyy-MM-dd"),
+        ])) as ArrayRef;
+        let result = eval_to_char(&source, &format, 2).unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "2024-03-01");
+        assert!(values.is_null(1));
+
+        let timestamp_value = ymd_to_days(2024, 3, 1) * 86_400_000_000
+            + 12 * 3_600_000_000
+            + 34 * 60_000_000
+            + 56 * 1_000_000
+            + 789_000;
+        let timestamp = Arc::new(arrow::array::TimestampMicrosecondArray::from(vec![Some(
+            timestamp_value,
+        )])) as ArrayRef;
+        let format = Arc::new(StringArray::from(vec![Some("yyyy-MM-dd HH:mm:ss")])) as ArrayRef;
+        let result = eval_to_char(&timestamp, &format, 1).unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "2024-03-01 12:34:56");
     }
 }

@@ -42,7 +42,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 86 bounded T-SQL read cases, including the
+The corpus currently contains 87 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -52,6 +52,10 @@ Runtime text-column timestamp conversion now has local vectorized evaluator
 coverage for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only
 style `101`; all six styles also have exact three-worker differential evidence
 (`docs/qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md`).
+Temporal `FORMAT` now shares the vectorized `TO_CHAR` path for invariant date
+patterns, and `DATE_FORMAT`/`TO_CHAR` honor their supplied pattern rather than
+falling back to a fixed ISO rendering
+(`docs/qualification/track2-tsql-format-temporal-2026-10-29.md`).
 
 The bounded product DML contract now also returns staged `document_json` on
 create/update/upsert and revision-checked DELETE statements, including the
@@ -62,7 +66,7 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 86 cases (the implementation pin is updated after
+The current T-SQL corpus is 87 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a

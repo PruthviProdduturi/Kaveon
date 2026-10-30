@@ -6364,6 +6364,10 @@ fn canonical_function_name(func: &ast::Function) -> String {
         // the Engine's UTF-8 REPEAT path; canonicalize it before expression
         // planning so local and distributed evaluation share one operator.
         "REPLICATE" => "REPEAT".to_owned(),
+        // SQL Server FORMAT over temporal values shares the Engine's bounded
+        // date-formatting path. Numeric/culture variants remain rejected by
+        // the evaluator rather than being silently approximated.
+        "FORMAT" => "TO_CHAR".to_owned(),
         "GETDATE" | "GETUTCDATE" | "SYSDATETIME" | "SYSUTCDATETIME" => {
             "CURRENT_TIMESTAMP".to_owned()
         }
@@ -9615,7 +9619,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 86);
+        assert_eq!(cases.len(), 87);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
@@ -10920,6 +10924,14 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(!debug.contains("name: \"ARRAY\""), "{debug}");
         assert!(debug.contains("year"), "{debug}");
+    }
+
+    #[test]
+    fn lowers_tsql_format_to_bounded_temporal_formatter() {
+        let plan = sql_to_logical_plan("SELECT FORMAT(event_ts, 'yyyy-MM-dd HH:mm:ss') FROM t")
+            .expect("temporal FORMAT should lower through TO_CHAR");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("TO_CHAR"), "{debug}");
     }
 
     #[test]
