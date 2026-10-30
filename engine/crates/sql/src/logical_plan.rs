@@ -5141,9 +5141,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                     data_type: CastTarget::TimestampMicros { .. },
                     ..
                 } => custom_origin.clone(),
+                expression if is_row_local_replicate_count(expression) => Expr::Cast {
+                    expr: Box::new(expression.clone()),
+                    data_type: origin_type.clone(),
+                },
                 _ => {
                     return Err(sql_err(
-                        "DATE_BUCKET origin must be a typed DATE or TIMESTAMP literal",
+                        "DATE_BUCKET origin must be a typed DATE or TIMESTAMP expression",
                     ));
                 }
             }
@@ -9489,6 +9493,12 @@ mod tests {
         )
         .expect("typed custom origins should lower");
         assert!(format!("{plan:?}").contains("DATE_DIFF"));
+        let plan =
+            sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date, origin_date) FROM t")
+                .expect("row-local custom origins should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATE_DIFF"), "{rendered}");
+        assert!(rendered.contains("origin_date"), "{rendered}");
     }
 
     #[test]
@@ -9605,7 +9615,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 84);
+        assert_eq!(cases.len(), 85);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

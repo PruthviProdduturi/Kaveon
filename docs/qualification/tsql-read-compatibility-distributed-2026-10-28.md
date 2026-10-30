@@ -79,8 +79,9 @@ local and three-worker results.
 `DATE_BUCKET` is qualified for literal and bounded row-local BIGINT widths over
 year/quarter/month/day/hour/minute/second buckets. Widths are checked at
 runtime: zero, negative, and NULL values produce typed NULL rather than a
-divide-by-zero or approximation. Literal DATE/TIMESTAMP origins are qualified;
-dynamic origins remain rejected rather than approximated.
+divide-by-zero or approximation. Literal DATE/TIMESTAMP origins and bounded
+row-local DATE/TIMESTAMP origins are qualified; unsupported origin shapes
+remain rejected rather than approximated.
 
 ## Contract
 
