@@ -5,8 +5,8 @@
 The westus2 cluster (`test-prproddu-test-westus2` / `kaveon-test-aks`) is
 paused over the weekend, not deleted: `az aks stop` deallocates the control
 plane and both node pools while the managed disks stay, so the coordinator's
-catalog PVC, the PostgreSQL PVC, the storage account with the benchmark
-objects (ClickBench `hits.parquet`, TPC-H SF100 as Delta under
+KaveonDB catalog PVC, the storage account with the benchmark objects
+(ClickBench `hits.parquet`, TPC-H SF100 as Delta under
 `opensource/benchmarks/tpch/v2/sf100/`) and the ACR images all come back
 as they were. Worker `emptyDir` state (exchange spools, spills) is lost,
 which is by design.
@@ -54,9 +54,10 @@ This is the procedure used on the eastus cluster (resource group
 the names below are that cluster's and the snapshot named is that cluster's.
 It is kept because it is the recovery path if a stopped cluster ever has to be
 rebuilt: `az aks stop` is the weekend procedure now. The runbook removes only
-the `kaveon-test-aks` resource. It does not delete the resource group,
-PostgreSQL, ADLS Gen2, ACR, managed identities, VNet, or network security
-groups.
+the `kaveon-test-aks` resource. It does not delete the resource group, ADLS
+Gen2, ACR, managed identities, VNet, or network security groups. PostgreSQL
+references in this subsection describe the retired migration baseline only;
+current deployments use KaveonDB.
 
 ## Before suspension
 
@@ -69,15 +70,15 @@ az aks show --resource-group $rg --name $aks --query "{name:name,state:provision
 az resource list --resource-group $rg --query "[].{name:name,type:type,id:id}" -o json > tmp/test-prproddu-test-resources-before-aks-delete.json
 ```
 
-Create and verify a PostgreSQL disk snapshot before deleting AKS. The PVC uses
-the AKS managed node resource group and its reclaim policy is `Delete`, so this
-snapshot is the recovery boundary for the metadata database:
+Create and verify a KaveonDB catalog disk snapshot before deleting AKS. The
+PVC uses the AKS managed node resource group and its reclaim policy is `Delete`,
+so this snapshot is the recovery boundary for the native catalog:
 
 ```powershell
 $nodeRg = az aks show --resource-group $rg --name $aks --query nodeResourceGroup -o tsv
-$postgresDisk = az disk show --resource-group $nodeRg --name pvc-c050911c-b695-4b6e-924d-0d241ca17f5c --query id -o tsv
-az snapshot create --resource-group $rg --name kaveon-postgres-pre-aks-delete-20260912 --source $postgresDisk --sku Standard_LRS
-az snapshot show --resource-group $rg --name kaveon-postgres-pre-aks-delete-20260912 --query "{name:name,state:provisioningState}" -o json
+$catalogDisk = az disk show --resource-group $nodeRg --name <kaveondb-catalog-disk> --query id -o tsv
+az snapshot create --resource-group $rg --name kaveondb-catalog-pre-aks-delete-20260912 --source $catalogDisk --sku Standard_LRS
+az snapshot show --resource-group $rg --name kaveondb-catalog-pre-aks-delete-20260912 --query "{name:name,state:provisioningState}" -o json
 az storage account show --resource-group $rg --name kvtestegmf6oweugsno --query "{name:name,defaultAction:networkRuleSet.defaultAction,sku:sku.name}" -o json
 ```
 
@@ -89,15 +90,16 @@ az aks show --resource-group $rg --name $aks --query provisioningState -o tsv
 ```
 
 Wait for the resource to disappear, then verify that the storage account,
-PostgreSQL pod PVC resources, ACR, identities, and VNet still exist. Do not use
-`az group delete`.
+KaveonDB catalog PVC resources, ACR, identities, and VNet still exist. Do not
+use `az group delete`.
 
 ## Resume on Monday (after a delete)
 
 Recreate the cluster from the
 checked-in Bicep/Helm deployment using the same subscription, resource group,
 network, identity, storage, and image digests. Reapply the saved values and
-verify the PostgreSQL PVC and ADLS catalog before starting Engine workers.
+verify the KaveonDB catalog PVC and ADLS catalog before starting Engine
+workers.
 
 ADLS migration to a personal subscription is a separate operation. It needs a
 destination subscription, resource group, storage account, container, and
