@@ -187,24 +187,11 @@ fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
             "CROSS/OUTER APPLY is not implemented; use a supported join or rewrite",
         ),
     ] {
-        if bytes
-            .windows(word.len())
-            .enumerate()
-            .any(|(offset, window)| {
-                window.eq_ignore_ascii_case(word) && is_sql_word_at(bytes, offset, word)
-            })
-        {
+        if contains_sql_word(bytes, word) {
             return Err(sql_error(guidance));
         }
     }
-    if bytes
-        .windows(b"STRING_AGG".len())
-        .enumerate()
-        .any(|(offset, window)| {
-            window.eq_ignore_ascii_case(b"STRING_AGG")
-                && is_sql_word_at(bytes, offset, b"STRING_AGG")
-        })
-    {
+    if contains_sql_word(bytes, b"STRING_AGG") {
         return Err(sql_error(
             "STRING_AGG is not implemented; use ARRAY_AGG plus ARRAY_JOIN after a bounded rewrite",
         ));
@@ -1799,6 +1786,73 @@ fn is_sql_word_at(bytes: &[u8], offset: usize, word: &[u8]) -> bool {
         && bytes[offset..offset + word.len()].eq_ignore_ascii_case(word)
         && (offset == 0 || !is_sql_word_byte(bytes[offset - 1]))
         && (offset + word.len() == bytes.len() || !is_sql_word_byte(bytes[offset + word.len()]))
+}
+
+/// Find an unsupported SQL word in executable text, ignoring quoted values,
+/// quoted identifiers, and comments. A substring scan is not sufficient here:
+/// a valid query such as `SELECT 'pivot'` must not be rejected merely because
+/// its literal contains the word.
+fn contains_sql_word(sql: &[u8], word: &[u8]) -> bool {
+    let mut index = 0usize;
+    while index < sql.len() {
+        match sql[index] {
+            b'\'' | b'"' | b'`' => {
+                let quote = sql[index];
+                index += 1;
+                while index < sql.len() {
+                    if sql[index] == quote {
+                        if index + 1 < sql.len() && sql[index + 1] == quote {
+                            index += 2;
+                            continue;
+                        }
+                        index += 1;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            b'[' => {
+                index += 1;
+                while index < sql.len() {
+                    if sql[index] == b']' {
+                        if index + 1 < sql.len() && sql[index + 1] == b']' {
+                            index += 2;
+                            continue;
+                        }
+                        index += 1;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            b'-' if sql.get(index + 1) == Some(&b'-') => {
+                index += 2;
+                while index < sql.len() && sql[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if sql.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < sql.len() {
+                    if sql[index] == b'*' && sql[index + 1] == b'/' {
+                        index += 2;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            _ => {
+                if index + word.len() <= sql.len()
+                    && sql[index..index + word.len()].eq_ignore_ascii_case(word)
+                    && is_sql_word_at(sql, index, word)
+                {
+                    return true;
+                }
+                index += 1;
+            }
+        }
+    }
+    false
 }
 
 fn is_sql_word_byte(byte: u8) -> bool {
@@ -3631,6 +3685,20 @@ mod tests {
                 .to_string()
                 .contains("STRING_AGG is not implemented; use ARRAY_AGG plus ARRAY_JOIN")
         );
+    }
+
+    #[test]
+    fn unsupported_word_guard_ignores_literals_comments_and_quoted_identifiers() {
+        for sql in [
+            "SELECT 'pivot', 'string_agg', 'apply' FROM events",
+            "SELECT 1 /* pivot unpivot apply string_agg */ FROM events",
+            "SELECT 1 -- pivot string_agg apply\nFROM events",
+            "SELECT [pivot], [string_agg] FROM events",
+        ] {
+            parse_sql(sql).unwrap_or_else(|error| {
+                panic!("text inside a literal/comment/identifier was rejected: {sql}: {error}")
+            });
+        }
     }
 
     #[test]
