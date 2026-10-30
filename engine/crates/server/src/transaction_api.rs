@@ -4793,6 +4793,58 @@ mod tests {
         assert_eq!(other.revision, 1);
     }
 
+    #[tokio::test]
+    async fn bounded_source_copy_returning_document_is_owner_isolated() {
+        let (registry, _catalog) = registry().await;
+        let seed = registry.begin("bob").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "bob",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('private', '{"owner":"bob"}')"#.into(),
+                transaction_id: Some(seed.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "bob",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(seed.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let copy = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('private') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision, document_json".into(),
+                transaction_id: Some(copy.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["error"],
+            "product record owner does not match the authenticated principal"
+        );
+    }
+
     #[test]
     fn transaction_parameter_binder_preserves_literals_comments_and_arrays() {
         let bound = bind_transaction_parameters(
