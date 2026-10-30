@@ -292,7 +292,9 @@ pointer, a listing digest or a file's identity — a metadata read): a version
 equal to the one the artifact recorded is no change; a moved version is a
 change of at least the half fraction, the same per-element rule a re-analyzed
 warehouse table takes, and the sweep rebuilds the value index. The
-PostgreSQL counter path is unchanged for warehouse datasets.
+For external warehouse datasets, freshness follows the registered source's
+version/change signal. Native KaveonDB datasets use the Engine source version;
+no PostgreSQL counter is required or consulted by the native path.
 
 **Evidence and reproduction.** Every answer's `evidence` names the statement,
 the dataset and its source (table id and catalog names), the source version
