@@ -27,6 +27,12 @@ request is a control statement: `BEGIN|COMMIT|ROLLBACK TRAN` and
 regression `accepts_sql_server_transaction_control_aliases` covers all six
 aliases; multi-statement requests remain rejected.
 
+The bounded product `MERGE` parser also accepts SQL Server's explicit
+`WHEN NOT MATCHED BY TARGET` spelling. The regression
+`accepts_merge_not_matched_by_target_alias` confirms it lowers to the existing
+two-clause revision/CAS contract; source scans, predicates, and unbounded
+targets remain rejected.
+
 The contract is covered by:
 
 - `kaveon_catalog::product_transaction::tests::metadata_pins_identity_and_base_snapshot`

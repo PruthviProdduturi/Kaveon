@@ -3559,6 +3559,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_merge_not_matched_by_target_alias() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED BY TARGET THEN INSERT (id, document_json) VALUES (s.id, s.document_json)";
+        parse_native_transactional(sql)
+            .unwrap_or_else(|error| panic!("MERGE BY TARGET alias rejected: {error}"));
+    }
+
+    #[test]
     fn accepts_identity_returning_for_product_update_and_delete() {
         for sql in [
             "UPDATE product.datasets SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
