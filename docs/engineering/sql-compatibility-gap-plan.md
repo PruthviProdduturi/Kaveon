@@ -45,9 +45,12 @@ The authoritative capability details remain in:
   `PIVOT`, `UNPIVOT`, and `CROSS APPLY` lower to conditional aggregation,
   `UNION ALL`, or the existing lateral path and are qualified across local
   layouts and three-worker fragments; see the corresponding qualification
-  records under `docs/qualification/`. Unbounded `PIVOT`/`UNPIVOT`, `OUTER
-  APPLY`, and table-valued APPLY remain explicitly rejected.
-  `TOP PERCENT` and `TOP WITH
+  records under `docs/qualification/`. Unbounded `PIVOT`/`UNPIVOT`, arbitrary
+  correlated APPLY, and table-valued APPLY remain explicitly rejected.
+  bounded derived-source `OUTER APPLY` is also qualified through the existing
+  left-lateral path, including NULL extension. Unbounded table-valued APPLY,
+  arbitrary correlated APPLY, and unbounded PIVOT/UNPIVOT remain explicitly
+  rejected. `TOP PERCENT` and `TOP WITH
   TIES` are qualified only when their `ORDER BY` keys define a deterministic
   order.
 - [x] Add Fabric/Azure SQL passthrough routing tests without implying Engine
