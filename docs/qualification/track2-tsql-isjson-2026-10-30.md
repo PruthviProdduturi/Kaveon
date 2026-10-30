@@ -16,9 +16,11 @@ locale or compatibility-level behavior is implied.
   with `serde_json` validation and SQL NULL propagation.
 - `expr_eval::tests::isjson_returns_sql_server_style_validity` covers valid,
   invalid, and NULL rows exactly.
-- The authoritative corpus includes `isjson` with a
-  `pending_distributed_qualification` status; this record does not overclaim
-  a worker differential that has not been run yet.
+- The authoritative corpus includes `isjson` with distributed qualification
+  for text validity and the four bounded type constraints.
+- Focused `KAVEON_DIFF_ONLY=tsql_isjson_constraints` execution passed across
+  the differential sweep's local, dictionary, partitioned, clustered, and
+  multi-file layouts with three-worker execution.
 
 ## Boundary
 
