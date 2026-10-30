@@ -8429,6 +8429,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         return eval_tsql_runtime_timestamp_style(name, &args[0], style, num_rows);
     }
     match upper.as_str() {
+        // SQL Server's character-code helpers are intentionally bounded to
+        // Unicode scalar values. ASCII rejects a non-ASCII leading scalar
+        // rather than silently applying a locale/code-page conversion;
+        // UNICODE returns the scalar value and CHAR accepts the documented
+        // 0..255 byte range.
+        "ASCII" | "UNICODE" => {
+            check_arity(name, args, 1)?;
+            let mut result = Int32Builder::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let value = text_value(&args[0], row)?;
+                let code = value.and_then(|value| {
+                    let scalar = value.chars().next()? as u32;
+                    if upper == "ASCII" && scalar > 0x7f {
+                        None
+                    } else {
+                        i32::try_from(scalar).ok()
+                    }
+                });
+                result.append_option(code);
+            }
+            Ok(Arc::new(result.finish()))
+        }
+        "CHAR" => {
+            check_arity(name, args, 1)?;
+            let numeric = compute::cast(&args[0], &DataType::Int64)?;
+            let numeric = numeric.as_primitive::<Int64Type>();
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows);
+            for row in 0..num_rows {
+                if numeric.is_null(row) {
+                    result.append_null();
+                } else {
+                    let value = numeric.value(row);
+                    if !(0..=255).contains(&value) {
+                        result.append_null();
+                    } else {
+                        result.append_value(char::from(value as u8).to_string());
+                    }
+                }
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "UPPER" => {
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, str::to_uppercase)
@@ -29628,6 +29669,67 @@ mod tests {
         .unwrap();
         let values = codepoint.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(955), None]);
+    }
+
+    #[test]
+    fn evaluates_sql_server_character_code_helpers() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("A"), Some("é"), None])) as ArrayRef,
+            ),
+            (
+                "code",
+                Arc::new(Int64Array::from(vec![Some(65), Some(256), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let ascii = evaluate(
+            &Expr::Function {
+                name: "ASCII".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            ascii
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(65), None, None]
+        );
+        let unicode = evaluate(
+            &Expr::Function {
+                name: "UNICODE".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            unicode
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(65), Some(233), None]
+        );
+        let chars = evaluate(
+            &Expr::Function {
+                name: "CHAR".into(),
+                args: vec![Expr::Column("code".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let chars = chars.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(chars.value(0), "A");
+        assert!(chars.is_null(1));
+        assert!(chars.is_null(2));
     }
 
     #[test]
