@@ -4853,10 +4853,18 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 }
             }
             let mut lowered = Vec::new();
-            for arg in &arg_list.args {
+            for (arg_index, arg) in arg_list.args.iter().enumerate() {
                 match arg {
                     ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)) => {
-                        lowered.push(ast_expr_to_expr(e)?);
+                        lowered.push(if written_name == "FORMAT" && arg_index == 0 {
+                            // Keep typed DATE projections as Date32 rather
+                            // than the compact Int64 day representation used
+                            // by storage predicates. This makes FORMAT's
+                            // temporal contract distinct from numeric input.
+                            ast_projection_expr_to_expr(e)?
+                        } else {
+                            ast_expr_to_expr(e)?
+                        });
                     }
                     ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard) => {
                         lowered.push(Expr::Star);

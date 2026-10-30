@@ -7830,6 +7830,28 @@ fn distributed_tsql_isdate_matches_local_and_rejects_numeric_coercion() {
 }
 
 #[test]
+fn distributed_tsql_format_temporal_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-format-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT FORMAT(TIMESTAMP '2026-02-17 12:34:56.789', 'yyyy-MM-dd HH:mm:ss') AS formatted, FORMAT(DATE '2026-02-17', 'yyyyMMdd') AS compact_date FROM events LIMIT 1";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-format-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_tsql_concat_ws_matches_local_with_null_fields() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-tsql-concat-ws-{}", uuid::Uuid::new_v4()));

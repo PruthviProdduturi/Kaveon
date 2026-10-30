@@ -16442,24 +16442,6 @@ fn eval_to_char(source: &ArrayRef, fmt: &ArrayRef, num_rows: usize) -> Result<Ar
             let result = StringArray::from(values);
             Ok(Arc::new(result))
         }
-        // The planner keeps typed DATE literals as epoch-day Int64 values for
-        // storage predicates.  FORMAT/TO_CHAR is a projection surface, so
-        // interpret that compact representation as a date here rather than
-        // rejecting a valid typed DATE literal.
-        DataType::Int64 => {
-            let values = source.as_primitive::<Int64Type>();
-            let rendered: Vec<Option<String>> = (0..num_rows)
-                .map(|i| {
-                    if values.is_null(i) {
-                        Ok(None)
-                    } else {
-                        let (y, m, day) = days_to_ymd(values.value(i));
-                        render(i, y, m, day, 0, 0, 0, 0)
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(StringArray::from(rendered)))
-        }
         dt => Err(KaveonError::Execution(format!(
             "TO_CHAR not supported for type {dt}"
         ))),
