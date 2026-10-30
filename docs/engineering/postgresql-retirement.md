@@ -8,9 +8,10 @@
 
 ## Family-scoped read authority
 
-`KAVEONDB_READ_AUTHORITY_FAMILIES` is empty by default, so PostgreSQL remains
-the read authority. Point reads for `datasets`, `charts`, and `dashboards` can
-be moved independently with a comma-separated value such as
+In the historical rehearsal represented here, an empty
+`KAVEONDB_READ_AUTHORITY_FAMILIES` left PostgreSQL as the read authority. Point
+reads for `datasets`, `charts`, and `dashboards` could be moved independently
+with a comma-separated value such as
 `datasets,charts`. A selected family reads only KaveonDB: target errors and
 invalid documents fail closed and never fall back to PostgreSQL. Unknown family
 names reject the configuration. The API reapplies visibility rules after its
