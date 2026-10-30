@@ -199,7 +199,11 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   the qualified conflict upsert path. Explicit `WHEN NOT MATCHED BY TARGET`
   is accepted as an alias, and duplicate source ids fail closed before staging
   to keep revisions deterministic. Evidence:
-  `docs/qualification/track2-native-dml-merge-2026-10-28.md`.
+`docs/qualification/track2-native-dml-merge-2026-10-28.md`. The bounded
+product-record MERGE surface now also qualifies matched-delete-only batches:
+matched rows use revision-CAS and ownership checks, while unmatched source
+rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
+the contract.
 - [ ] Expand `MERGE` and broader conflict handling only with explicit
   revision/CAS semantics. Product `ON CONFLICT DO NOTHING` and the bounded
   `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`

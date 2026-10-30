@@ -519,6 +519,25 @@ impl TransactionRegistry {
                         }
                     }
                 }
+                kaveon_sql::parser::ProductDmlCommand::MergeDelete { kind, id: row_id } => {
+                    let product_kind = record_kind(&kind)?;
+                    let current = session
+                        .transaction
+                        .snapshot()
+                        .product_record(product_kind, &row_id)
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                    if let Some(current) = current {
+                        require_product_owner(current, owner)?;
+                        kaveon_sql::parser::ProductDmlCommand::Delete {
+                            kind,
+                            id: row_id,
+                            expected_revision: current.revision,
+                        }
+                    } else {
+                        session.transaction.mark_noop();
+                        continue;
+                    }
+                }
                 other => other,
             };
             // Migration batches are replayable.  A typed-row create that is
@@ -1219,6 +1238,9 @@ fn product_change(
                 )
             }
         }
+        ProductDmlCommand::MergeDelete { .. } => Err(RegistryError::Invalid(
+            "MERGE matched-delete must be resolved before staging".into(),
+        )),
         ProductDmlCommand::Update {
             kind,
             id,
@@ -2948,6 +2970,9 @@ fn product_returning_response(
                         "MERGE delete-or-insert must be resolved before RETURNING".to_owned()
                     );
                 }
+                kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. } => {
+                    return Err("MERGE matched-delete must be resolved before RETURNING".to_owned());
+                }
             };
             let mut row = serde_json::Map::new();
             for column in columns {
@@ -2976,6 +3001,12 @@ fn product_returning_response(
                             kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
                                 ..
                             } => {
+                                return Err(
+                                    "document_json RETURNING is unavailable for this command"
+                                        .to_owned(),
+                                );
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. } => {
                                 return Err(
                                     "document_json RETURNING is unavailable for this command"
                                         .to_owned(),
@@ -4484,6 +4515,93 @@ mod tests {
                 revision
             );
         }
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop() {
+        let (registry, catalog) = registry().await;
+        let first = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('remove-me', '{}'), ('keep-me', '{}')".into(),
+                    transaction_id: Some(first.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(first.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "MERGE INTO product.datasets AS target USING (VALUES ('remove-me', '{}'), ('missing', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE".into(),
+                    transaction_id: Some(merge.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(merge.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "remove-me")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "keep-me")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "missing")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
