@@ -34,7 +34,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 79-case corpus. The bounded date-construction qualifications
+the versioned 80-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -42,7 +42,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 79 bounded T-SQL read cases, including the
+The corpus currently contains 80 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -60,13 +60,18 @@ explicitly rejected. Evidence: `track2-native-dml-returning-document-2026-10-29.
 This supersedes the older Native DML row wording that listed all document
 projections as open; arbitrary expressions and lake-table DML remain open.
 
-The current T-SQL corpus is 79 cases (the implementation pin is updated after
+The current T-SQL corpus is 80 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
 null-preserving one-based CASE, each with
 a focused three-worker differential. The `CONCAT` evidence is retained in
 `docs/qualification/track2-tsql-concat-2026-10-29.md`.
+The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
+`QUOTENAME` identifier quoting (square brackets or double quotes, with the
+128-character SQL Server limit); evidence is retained in
+`docs/qualification/track2-tsql-string-escape-2026-10-29.md` and
+`docs/qualification/track2-tsql-quotename-2026-10-29.md`.
 Literal `CONVERT(DATE, ..., style)` styles `0`, `101`, and `112` also have
 exact three-worker evidence in
 `docs/qualification/track2-tsql-convert-date-literals-2026-10-29.md`.

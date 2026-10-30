@@ -201,6 +201,9 @@ first-match behavior, unmapped-character preservation, source-only removal,
 and NULL propagation.
 `STRING_ESCAPE(value, 'json')` is qualified for UTF-8 text with SQL Server
 NULL propagation; escape modes other than `json` are rejected explicitly.
+`QUOTENAME` supports default square-bracket and double-quote delimiters,
+doubles closing delimiters, preserves NULLs, and returns NULL for identifiers
+longer than 128 Unicode characters; other delimiters are rejected explicitly.
 
 `PIVOT` and `UNPIVOT` have bounded lowerings for derived sources with simple
 columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
