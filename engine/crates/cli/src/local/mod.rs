@@ -361,6 +361,20 @@ mod tests {
     }
 
     #[test]
+    fn executes_bounded_string_agg_with_literal_separator() {
+        let (engine, dir) = open_fixture();
+        let result = engine
+            .execute("SELECT STRING_AGG(kind, '|') AS joined FROM events")
+            .expect("bounded string aggregation should run locally");
+        assert_eq!(
+            result.columns,
+            vec![("joined".to_owned(), "Utf8".to_owned())]
+        );
+        assert_eq!(result.rows, vec![vec![json!("click|view")]]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn projects_rows_with_nulls_as_json() {
         let (engine, dir) = open_fixture();
         let result = engine
