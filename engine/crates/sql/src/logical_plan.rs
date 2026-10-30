@@ -9778,6 +9778,9 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT) FROM t")
             .expect("TRY_PARSE numeric should lower");
         assert!(format!("{plan:?}").contains("TRY_CAST_INT64"));
+        assert!(
+            sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT USING 'en-US') FROM t").is_err()
+        );
     }
 
     #[test]
