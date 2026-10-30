@@ -47,7 +47,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 105-case corpus. The bounded date-construction qualifications
+the versioned 108-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -55,12 +55,14 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 107 bounded T-SQL read cases, including the
+The corpus currently contains 108 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice and its remaining
 ordered-state boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
 the SQL Server `DATETRUNC` alias qualified through `DATE_TRUNC`, and the JSON
 corpus remains the authoritative case list. `DATETRUNC` evidence is retained
 in `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
+`COUNT_BIG(DISTINCT ...)` now shares the exact distinct-count state path with
+`COUNT(DISTINCT ...)` and is covered by the planner and distributed corpus.
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
