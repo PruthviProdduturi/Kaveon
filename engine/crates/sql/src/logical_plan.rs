@@ -5119,6 +5119,19 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // SQL Server's SQUARE is exactly POWER(value, 2). Lower it before
+    // planning so it shares the existing vectorized numeric implementation
+    // and distributed expression semantics.
+    if name == "SQUARE" {
+        if args.len() != 1 {
+            return Err(sql_err("SQUARE requires exactly one argument"));
+        }
+        return Ok(Expr::Function {
+            name: "POWER".into(),
+            args: vec![args.remove(0), Expr::Literal(ScalarValue::Int64(2))],
+        });
+    }
+
     // Trino exposes calendar arithmetic as DATE_ADD/DATE_SUB(unit, amount,
     // value). Keep the unit validation in the SQL layer, then reuse the typed
     // vectorized date operators used by interval arithmetic.
@@ -9784,13 +9797,21 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_square_to_power() {
+        let plan = sql_to_logical_plan("SELECT SQUARE(actions) FROM t")
+            .expect("SQUARE should lower through POWER");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("POWER"), "{rendered}");
+    }
+
+    #[test]
     fn versioned_tsql_corpus_matches_declared_boundaries() {
         let corpus: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json"
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 99);
+        assert_eq!(cases.len(), 100);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
