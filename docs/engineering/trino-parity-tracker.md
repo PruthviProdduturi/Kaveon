@@ -14,9 +14,10 @@ The latest source/build gate record is retained in
 release workflow record remains in `docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
 The current release-readiness snapshot is in
 `docs/qualification/release-readiness-2026-10-20.md`.
-The current local server suite passes 658/658, including the full differential
-sweep; the earlier 611/611 release-binary record remains historical
-(`docs/qualification/server-suite-release-2026-10-20.md`).
+The last recorded local server suite passes 658/658, including the full
+differential sweep; that record predates the current ISJSON zero-row fix, so a
+post-fix full sweep remains a release gate. The earlier 611/611 release-binary
+record remains historical (`docs/qualification/server-suite-release-2026-10-20.md`).
 The current cloud start precondition is recorded in
 `docs/qualification/track1-cloud-precondition-2026-10-19.md`.
 The latest subscription-state check is in
