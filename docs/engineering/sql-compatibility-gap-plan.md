@@ -76,6 +76,9 @@ rule, `IIF` uses the existing vectorized conditional path, and `CHARINDEX`
 uses a bounded Unicode scalar search with SQL Server's argument order.
 `EOMONTH` now lowers to typed month truncation and calendar arithmetic and is
 qualified for date/timestamp inputs with an optional row-local month offset.
+`DATETRUNC` now canonicalizes to the same typed `DATE_TRUNC` path for the
+qualified SQL Server datepart/input boundary; evidence is retained in
+`docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
 `DATEFROMPARTS` now builds validated `DATE` values from integer parts with
 NULL propagation and distributed differential coverage.
 `DATENAME` now returns deterministic English calendar names or textual numeric
