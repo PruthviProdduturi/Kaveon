@@ -202,6 +202,11 @@ are neither transaction authority nor a replacement for application history.
 
 ## Migration, cutover, telemetry and qualification
 
+> **Historical cutover procedure.** This section describes the PostgreSQL-to-
+> KaveonDB migration protocol and is retained for audit and rollback evidence.
+> It is not the current authority model: native deployments read and write
+> KaveonDB directly, with no PostgreSQL fallback.
+
 PostgreSQL remains authoritative during transition. For each family, write a
 source outbox row in the same PostgreSQL transaction as the source mutation,
 take a repeatable snapshot/watermark, import through this protocol, replay the
