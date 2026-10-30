@@ -10575,13 +10575,14 @@ fn planning_estimate_map(planning: &PlanningStatistics) -> BTreeMap<String, Plan
         .collect()
 }
 
-/// Attach bounded estimate metadata to displayable scan nodes. This is
-/// intentionally descriptive: it does not alter execution or pretend that
-/// source row counts are operator output estimates after filters and joins.
+/// Attach bounded estimate metadata to displayable plan nodes. Scan rows are
+/// source facts; non-scan nodes receive only conservative child-input
+/// lineage. We intentionally do not manufacture output cardinalities after
+/// filters, joins, aggregation, or duplicate elimination.
 fn annotate_plan_estimates(
     node: &mut kaveon_core::PlanNode,
     estimates: &BTreeMap<String, PlanEstimate>,
-) {
+) -> Option<u64> {
     if node.operator.eq_ignore_ascii_case("Scan")
         && let Some(table) = node.attributes.get("table").cloned()
         && let Some(estimate) = estimates.get(&table)
@@ -10598,10 +10599,43 @@ fn annotate_plan_estimates(
             "estimate_source_version".to_owned(),
             estimate.source_version.clone(),
         );
+        return Some(estimate.rows);
     }
-    for child in &mut node.children {
-        annotate_plan_estimates(child, estimates);
+    let child_rows = node
+        .children
+        .iter_mut()
+        .map(|child| annotate_plan_estimates(child, estimates))
+        .collect::<Vec<_>>();
+    let known = child_rows.iter().copied().flatten().collect::<Vec<_>>();
+    if known.is_empty() {
+        return None;
     }
+    let operator = node.operator.to_ascii_lowercase();
+    match operator.as_str() {
+        "join" | "semijoin" | "antijoin" if known.len() >= 2 => {
+            node.attributes
+                .insert("estimated_left_input_rows".into(), known[0].to_string());
+            node.attributes
+                .insert("estimated_right_input_rows".into(), known[1].to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "child_inputs_only".into());
+        }
+        "union" | "intersect" | "except" => {
+            node.attributes.insert(
+                "estimated_input_rows".into(),
+                known.iter().sum::<u64>().to_string(),
+            );
+            node.attributes
+                .insert("estimate_scope".into(), "child_inputs_only".into());
+        }
+        _ => {
+            node.attributes
+                .insert("estimated_input_rows".into(), known[0].to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "child_input_only".into());
+        }
+    }
+    None
 }
 
 /// Tables whose statistics are being refreshed in the background, so one
@@ -15753,6 +15787,40 @@ mod tests {
         assert_eq!(plan.attributes["estimated_bytes"], "5600000000");
         assert_eq!(plan.attributes["estimate_source"], "current_statistics");
         assert_eq!(plan.attributes["estimate_source_version"], "abc123");
+    }
+
+    #[test]
+    fn plan_estimates_expose_conservative_join_input_lineage() {
+        let mut estimates = std::collections::BTreeMap::new();
+        estimates.insert(
+            "left".to_owned(),
+            super::PlanEstimate {
+                rows: 120,
+                bytes: None,
+                source: "source_metadata",
+                source_version: "left-v1".to_owned(),
+            },
+        );
+        estimates.insert(
+            "right".to_owned(),
+            super::PlanEstimate {
+                rows: 45,
+                bytes: None,
+                source: "source_metadata",
+                source_version: "right-v1".to_owned(),
+            },
+        );
+        let left = kaveon_core::PlanNode::new(1, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "left");
+        let right = kaveon_core::PlanNode::new(2, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "right");
+        let mut join = kaveon_core::PlanNode::new(3, kaveon_core::PlanPhase::Physical, "Join")
+            .with_child(left)
+            .with_child(right);
+        super::annotate_plan_estimates(&mut join, &estimates);
+        assert_eq!(join.attributes["estimated_left_input_rows"], "120");
+        assert_eq!(join.attributes["estimated_right_input_rows"], "45");
+        assert_eq!(join.attributes["estimate_scope"], "child_inputs_only");
     }
 
     #[test]

@@ -245,7 +245,10 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   evidence: `docs/qualification/track3-plan-estimate-visibility-2026-10-29.md`;
   estimate-vs-actual evidence: `docs/qualification/track3-estimate-vs-actual-query-diagnostic-2026-10-29.md`.
 - [ ] Extend estimate-vs-actual diagnostics to every physical operator and
-  selectivity boundary; this remains open.
+  selectivity boundary; this remains open. Physical plan display now carries
+  conservative child-input lineage for unary operators, joins, semi/anti
+  joins, and set operations without inventing output estimates. Evidence:
+  `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
   pinned source versions, and time zone; it reports cache execution mode,

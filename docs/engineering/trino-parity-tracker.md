@@ -23,6 +23,10 @@ passed, including bounded four-to-eight-way join reordering, broadcast
 admission, filter propagation, decorrelation, and fail-closed unsupported
 shapes. This is local evidence only; cloud/deployed endurance remains open
 (`docs/qualification/track1-optimizer-local-suite-2026-10-29.md`).
+Physical plan display now adds conservative child-input estimate lineage for
+joins, semi/anti joins, unary operators, and set operations; it deliberately
+does not claim post-filter or post-aggregate output estimates. Evidence:
+`docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 
 The latest SQL compatibility increments are literal `CONVERT(DATE, ..., style)`
 styles `0`, `101`, and `112`, plus `CONCAT`, all qualified in the current
