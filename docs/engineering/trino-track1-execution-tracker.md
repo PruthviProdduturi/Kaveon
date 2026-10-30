@@ -1,5 +1,10 @@
 # Track 1 execution tracker
 
+Cloud/AKS results in this reviewed matrix are historical qualification
+evidence unless a dated current-image run is linked. They must not be read as
+present deployment status; local evidence and the linked qualification record
+are the active authority.
+
 This tracker breaks the distributed-runtime work in the Trino parity matrix
 into one auditable item per row. Work proceeds in order: only one item is
 `Active` at a time. A `Qualified` item needs code, focused tests, and the
