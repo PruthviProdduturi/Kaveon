@@ -101,7 +101,13 @@ Kaveon is one platform with three cooperating pillars:
 - Kaveon DLM: deterministic Data Language Model that compiles governed dataset context into SQL without requiring a hosted LLM.
 - Kaveon Studio: Ask, SQL Lab, dashboards, administration, and operational surfaces.
 
-Studio Data Sources owns the user-facing connection lifecycle. The platform PostgreSQL registry and Engine native catalog are still separate authorities until the revision-aware bridge is implemented. Engine workers execute coordinator-resolved immutable source URIs and do not independently reinterpret Studio metadata.
+Studio Data Sources owns the user-facing connection lifecycle. In the current
+native profile, KaveonDB is the product/catalog authority and the Engine native
+catalog is the analytical source authority; they are connected through the
+revision-aware bridge. Engine workers execute coordinator-resolved immutable
+source URIs and do not independently reinterpret Studio metadata. The older
+PostgreSQL registry wording in this historical brief describes the superseded
+migration snapshot only.
 
 ## Required session start
 
