@@ -157,6 +157,11 @@ SQL permits different tied rows and the qualification is withheld. Unsupported
 `CONVERT` style codes, procedural T-SQL,
 and unsupported SQL Server functions remain rejected explicitly.
 
+The bounded identifier/string aliases also include `QUOTENAME` (square-bracket
+or double-quote delimiters, with the 128-character limit) and
+`STRING_ESCAPE(value, 'json')`; unsupported delimiter and escape-mode forms
+fail closed.
+
 `LEN`, `IIF`, and `CHARINDEX` are also qualified on the distributed path.
 `EOMONTH` is translated to the typed calendar operators and returns a `DATE`
 for date or timestamp inputs, including a row-local month offset. Its
