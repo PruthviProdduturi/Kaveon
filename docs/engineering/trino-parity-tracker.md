@@ -73,7 +73,8 @@ The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
 `docs/qualification/track2-tsql-string-escape-2026-10-29.md` and
 `docs/qualification/track2-tsql-quotename-2026-10-29.md`.
 The SQL Server `REPLICATE` spelling is also qualified through the bounded
-Unicode `REPEAT` path for non-negative counts.
+Unicode `REPEAT` path for non-negative integer-literal counts; dynamic and
+negative counts fail closed.
 Literal `CONVERT(DATE, ..., style)` styles `0`, `101`, and `112` also have
 exact three-worker evidence in
 `docs/qualification/track2-tsql-convert-date-literals-2026-10-29.md`.

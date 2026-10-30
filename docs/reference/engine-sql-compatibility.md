@@ -210,8 +210,9 @@ NULL propagation; escape modes other than `json` are rejected explicitly.
 doubles closing delimiters, preserves NULLs, and returns NULL for identifiers
 longer than 128 Unicode characters; other delimiters are rejected explicitly.
 SQL Server `REPLICATE(text, count)` is accepted through the bounded Unicode
-`REPEAT` path for non-negative counts; NULLs propagate and negative counts are
-clamped to the empty result by the shared bounded operator.
+`REPEAT` path for non-negative integer-literal counts; NULLs propagate. Dynamic
+or negative counts fail closed until SQL Server's exact row-local semantics are
+implemented separately.
 
 `PIVOT` and `UNPIVOT` have bounded lowerings for derived sources with simple
 columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
