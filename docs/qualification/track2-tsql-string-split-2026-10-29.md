@@ -18,7 +18,7 @@ scope.
 
 ## Evidence
 
-- Planner coverage is included in the versioned 95-case T-SQL corpus.
+- Planner coverage is included in the versioned 96-case T-SQL corpus.
 - Focused three-worker differential:
   `differential_tests::distributed_tsql_string_split_matches_local`.
 - The full Parquet-layout and execution-path differential sweep passes both
