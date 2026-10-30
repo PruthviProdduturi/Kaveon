@@ -24,7 +24,9 @@ admission, filter propagation, decorrelation, and fail-closed unsupported
 shapes. This is local evidence only; cloud/deployed endurance remains open
 (`docs/qualification/track1-optimizer-local-suite-2026-10-29.md`).
 
-The latest SQL compatibility increment is `DATETIME2FROMPARTS` precision 4–6,
+The latest SQL compatibility increments are literal `CONVERT(DATE, ..., style)`
+styles `0`, `101`, and `112`, plus `CONCAT`, all qualified in the current
+three-worker differential gates. `DATETIME2FROMPARTS` precision 4–6 remains
 qualified in `0e8441d0` with microsecond arithmetic (precision 7 remains an
 explicit rejection because the engine stores microseconds). It follows the
 qualified ISO-week alias slice (`DATEPART`/`DATENAME` with `iso_week`, `isowk`,
@@ -168,7 +170,7 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 ## Qualification commands
 
 The T-SQL row above is backed by the versioned 75-case corpus pinned at
-`a647ff6a` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+`65da9f3d` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 
 Run from `engine/`:
