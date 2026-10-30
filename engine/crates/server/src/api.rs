@@ -11651,6 +11651,18 @@ struct QueryEstimateDiagnostics {
     ratio: Option<f64>,
     classification: &'static str,
     estimate_sources: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    per_scan: Option<Vec<ScanEstimateDiagnostic>>,
+}
+
+#[derive(Serialize)]
+struct ScanEstimateDiagnostic {
+    node_id: kaveon_core::PlanNodeId,
+    estimated_rows: u64,
+    actual_rows_selected: u64,
+    ratio: f64,
+    classification: &'static str,
+    estimate_source: Option<String>,
 }
 
 fn collect_scan_estimates(node: &kaveon_core::PlanNode, rows: &mut u64, sources: &mut Vec<String>) {
@@ -11670,6 +11682,25 @@ fn collect_scan_estimates(node: &kaveon_core::PlanNode, rows: &mut u64, sources:
     }
 }
 
+fn collect_scan_estimate_details(
+    node: &kaveon_core::PlanNode,
+    scans: &mut Vec<(kaveon_core::PlanNodeId, u64, Option<String>)>,
+) {
+    if node.operator.eq_ignore_ascii_case("Scan")
+        && let Some(value) = node.attributes.get("estimated_rows")
+        && let Ok(value) = value.parse::<u64>()
+    {
+        scans.push((
+            node.id,
+            value,
+            node.attributes.get("estimate_source").cloned(),
+        ));
+    }
+    for child in &node.children {
+        collect_scan_estimate_details(child, scans);
+    }
+}
+
 /// Compares the source-row estimate attached to the optimized plan with the
 /// rows selected by finished scan telemetry. This is deliberately query-level
 /// evidence: per-operator actual attribution remains a separate qualification.
@@ -11686,8 +11717,10 @@ async fn estimate_diagnostics(
     }
     let mut estimated_rows = 0u64;
     let mut estimate_sources = Vec::new();
+    let mut scan_estimates = Vec::new();
     if let Some(plan) = record.plan.optimized.as_ref() {
         collect_scan_estimates(plan, &mut estimated_rows, &mut estimate_sources);
+        collect_scan_estimate_details(plan, &mut scan_estimates);
     }
     let actual_rows_selected = record
         .scans
@@ -11703,6 +11736,38 @@ async fn estimate_diagnostics(
         Some(value) if value < 0.5 => "overestimated",
         Some(_) => "within_2x",
     };
+    let per_scan =
+        (scan_estimates.len() == record.scans.len() && !scan_estimates.is_empty()).then(|| {
+            scan_estimates
+                .into_iter()
+                .zip(record.scans.iter())
+                .map(|((node_id, estimated_rows, estimate_source), scan)| {
+                    let actual_rows_selected = scan.rows_selected;
+                    let ratio = if estimated_rows == 0 {
+                        0.0
+                    } else {
+                        actual_rows_selected as f64 / estimated_rows as f64
+                    };
+                    let classification = if estimated_rows == 0 {
+                        "unavailable"
+                    } else if ratio > 2.0 {
+                        "underestimated"
+                    } else if ratio < 0.5 {
+                        "overestimated"
+                    } else {
+                        "within_2x"
+                    };
+                    ScanEstimateDiagnostic {
+                        node_id,
+                        estimated_rows,
+                        actual_rows_selected,
+                        ratio,
+                        classification,
+                        estimate_source,
+                    }
+                })
+                .collect()
+        });
     Json(QueryEstimateDiagnostics {
         query_id,
         available,
@@ -11711,6 +11776,7 @@ async fn estimate_diagnostics(
         ratio,
         classification,
         estimate_sources,
+        per_scan,
     })
     .into_response()
 }
@@ -15633,6 +15699,16 @@ mod tests {
         super::collect_scan_estimates(&plan, &mut rows, &mut sources);
         assert_eq!(rows, 100);
         assert_eq!(sources, vec!["current_statistics"]);
+    }
+
+    #[test]
+    fn estimate_diagnostic_collects_scan_identity_for_bounded_attribution() {
+        let plan = kaveon_core::PlanNode::new(7, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("estimated_rows", "100")
+            .with_attribute("estimate_source", "current_statistics");
+        let mut scans = Vec::new();
+        super::collect_scan_estimate_details(&plan, &mut scans);
+        assert_eq!(scans, vec![(7, 100, Some("current_statistics".to_owned()))]);
     }
 
     #[test]
