@@ -32,6 +32,12 @@ parity or external-client parity.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
   completed 1/1 with exact results in 729.75 seconds; the full differential
   workload completed without worker or spill failures.
+- A complete 113-case differential sweep was rerun on 2026-10-30 from the
+  current Engine source and completed 1/1 with exact local/layout/three-worker
+  results in 642.30 seconds. The run included the qualified filtered
+  `STRING_AGG`, deterministic `TOP` row limiting, and bracket-quoted
+  identifier cases; it reported no worker failures or retained exchange/spill
+  files.
 - Focused `ISJSON` validity and `VALUE`/`ARRAY`/`OBJECT`/`SCALAR` constraint
   execution passed through the same differential layouts and three-worker
   path (`KAVEON_DIFF_ONLY=tsql_isjson_constraints`).
