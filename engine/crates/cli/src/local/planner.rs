@@ -1,5 +1,5 @@
 use kaveon_core::{
-    BatchOperator, BatchSource, CatalogManager, DataFormat, Expr, KaveonError, Result, ScalarValue,
+    BatchOperator, BatchSource, CatalogManager, DataFormat, Expr, KaveonError, Result,
     TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc, HashAggregate};
@@ -384,7 +384,15 @@ fn logical_agg_to_exec(
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
         AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
-        AggregateExpr::StringAgg { expr, .. } => (AggFunc::StringAgg, expr, false),
+        // The local CLI planner intentionally does not execute STRING_AGG.
+        // The server planner owns its bounded distributed implementation;
+        // reject it explicitly here instead of silently lowering it to a
+        // different aggregate or leaving this match non-exhaustive.
+        AggregateExpr::StringAgg { .. } => {
+            return Err(KaveonError::Execution(
+                "STRING_AGG is available through the server execution path; local mode does not support it".into(),
+            ));
+        }
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
@@ -404,19 +412,6 @@ fn logical_agg_to_exec(
     };
 
     let mut expression = AggExpr::new(func, column);
-    if let AggregateExpr::StringAgg { delimiter, .. } = agg {
-        let Expr::Literal(ScalarValue::Utf8(value)) = delimiter else {
-            return Err(KaveonError::Execution(
-                "STRING_AGG separator must be a text literal".into(),
-            ));
-        };
-        if value.len() > 64 * 1024 {
-            return Err(KaveonError::Execution(
-                "STRING_AGG separator exceeds the 64 KiB limit".into(),
-            ));
-        }
-        expression.delimiter = Some(value.clone());
-    }
     if let AggregateExpr::ApproxPercentile { percentiles, .. } = agg {
         expression.percentiles = Some(percentiles.clone());
     }
