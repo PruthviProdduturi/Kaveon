@@ -174,6 +174,9 @@ NULL, surrogate, negative, or out-of-range values. Locale/code-page conversion
 is not claimed. `NULLIF` is qualified for row-local scalar expressions and
 preserves SQL NULL-on-equality semantics through the vectorized conditional
 path.
+SQL Server `ROUND` is qualified for one- and two-argument forms plus the
+bounded third `operation` argument (`0` round, `1` truncate toward zero), with
+NULL propagation and explicit rejection of other operation values.
 The bounded SQL Server table-valued `STRING_SPLIT` form is also qualified for
 scalar value/separator inputs (including row-local expressions through
 `CROSS JOIN LATERAL`) and literal ordinal mode `0`/`1`, lowering to `SPLIT`

@@ -12322,9 +12322,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             unary_float_fn(&args[0], f64::floor)
         }
         "ROUND" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.is_empty() || args.len() > 3 {
                 return Err(KaveonError::Execution(
-                    "ROUND requires 1 or 2 arguments".into(),
+                    "ROUND requires 1, 2, or 3 arguments".into(),
                 ));
             }
             let arr = compute::cast(&args[0], &DataType::Float64)?;
@@ -12333,14 +12333,42 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 let result: Float64Array = vals.iter().map(|v| v.map(f64::round)).collect();
                 Ok(Arc::new(result))
             } else {
-                let precision = args[1].as_primitive::<Int64Type>();
+                let precision = compute::cast(&args[1], &DataType::Int64)?;
+                let precision = precision.as_primitive::<Int64Type>();
+                let operation_array = if args.len() == 3 {
+                    Some(compute::cast(&args[2], &DataType::Int64)?)
+                } else {
+                    None
+                };
+                let operation = if let Some(operation_array) = operation_array.as_ref() {
+                    let operation = operation_array.as_primitive::<Int64Type>();
+                    for row in 0..num_rows {
+                        if !operation.is_null(row) && !matches!(operation.value(row), 0 | 1) {
+                            return Err(KaveonError::Execution(
+                                "ROUND operation must be 0 (round) or 1 (truncate)".into(),
+                            ));
+                        }
+                    }
+                    Some(operation)
+                } else {
+                    None
+                };
                 let result: Float64Array = (0..num_rows)
                     .map(|i| {
-                        if vals.is_null(i) || precision.is_null(i) {
+                        if vals.is_null(i)
+                            || precision.is_null(i)
+                            || operation.is_some_and(|op| op.is_null(i))
+                        {
                             None
                         } else {
                             let factor = 10_f64.powi(precision.value(i) as i32);
-                            Some((vals.value(i) * factor).round() / factor)
+                            let scaled = vals.value(i) * factor;
+                            let value = if operation.is_some_and(|op| op.value(i) == 1) {
+                                scaled.trunc()
+                            } else {
+                                scaled.round()
+                            };
+                            Some(value / factor)
                         }
                     })
                     .collect();

@@ -67,6 +67,10 @@ contract remain bounded. The focused regression is
 `NULLIF` is covered as a row-local scalar expression in the same exact
 local-vs-three-worker differential sweep.
 
+`ROUND` is qualified for the SQL Server third `operation` argument when it is
+`0` (round) or `1` (truncate toward zero), including row-local integer values;
+invalid operation values fail closed.
+
 `LEFT` and `RIGHT` return bounded Unicode scalar prefixes/suffixes, preserve
 NULLs, and use the Engine's width-aware text path for narrow and large UTF-8
 values.
