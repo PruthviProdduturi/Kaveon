@@ -163,7 +163,7 @@ unsupported dateparts remain explicitly rejected.
   choice, selectivity, and reader pruning. Cloud pruning and universal
   cost-based planning remain separate gates; see
   `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
-- [ ] Add plan-vs-runtime diagnostics. A bounded query-level estimate-vs-actual
+- [x] Add bounded plan-vs-runtime diagnostics. The query-level estimate-vs-actual
   endpoint now compares source-row estimates with finished scan telemetry and
   exposes ordinal per-scan attribution when scan cardinalities match exactly;
   broader per-operator attribution remains open. Runtime-only comparison now exposes a
@@ -171,7 +171,9 @@ unsupported dateparts remain explicitly rejected.
   evidence: `docs/qualification/track3-runtime-regression-threshold-2026-10-29.md`;
   optimized and physical scan plans now expose versioned source estimates;
   evidence: `docs/qualification/track3-plan-estimate-visibility-2026-10-29.md`;
-  estimate-vs-actual operator diagnostics remain open.
+  estimate-vs-actual evidence: `docs/qualification/track3-estimate-vs-actual-query-diagnostic-2026-10-29.md`.
+- [ ] Extend estimate-vs-actual diagnostics to every physical operator and
+  selectivity boundary; this remains open.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
   pinned source versions, and time zone; it reports cache execution mode,
