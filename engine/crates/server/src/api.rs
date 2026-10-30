@@ -1205,6 +1205,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/query", get(list_queries))
         .route("/v1/query/{query_id}", get(get_query))
         .route("/v1/query/{query_id}/comparison", get(compare_query))
+        .route(
+            "/v1/query/{query_id}/estimate-diagnostics",
+            get(estimate_diagnostics),
+        )
         .route("/v1/query/{query_id}/results/{page}", get(get_result_page))
         .route("/v1/query/{query_id}", delete(cancel_query))
         .route("/v1/cluster", get(get_cluster))
@@ -11638,6 +11642,79 @@ async fn compare_query(
     .into_response()
 }
 
+#[derive(Serialize)]
+struct QueryEstimateDiagnostics {
+    query_id: String,
+    available: bool,
+    estimated_rows: Option<u64>,
+    actual_rows_selected: Option<u64>,
+    ratio: Option<f64>,
+    classification: &'static str,
+    estimate_sources: Vec<String>,
+}
+
+fn collect_scan_estimates(node: &kaveon_core::PlanNode, rows: &mut u64, sources: &mut Vec<String>) {
+    if node.operator.eq_ignore_ascii_case("Scan")
+        && let Some(value) = node.attributes.get("estimated_rows")
+        && let Ok(value) = value.parse::<u64>()
+    {
+        *rows = rows.saturating_add(value);
+        if let Some(source) = node.attributes.get("estimate_source")
+            && !sources.iter().any(|known| known == source)
+        {
+            sources.push(source.clone());
+        }
+    }
+    for child in &node.children {
+        collect_scan_estimates(child, rows, sources);
+    }
+}
+
+/// Compares the source-row estimate attached to the optimized plan with the
+/// rows selected by finished scan telemetry. This is deliberately query-level
+/// evidence: per-operator actual attribution remains a separate qualification.
+async fn estimate_diagnostics(
+    Path(query_id): Path<String>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    let store = QUERY_STORE.read().await;
+    let Some(record) = store.queries.get(&query_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !identity.can_view(record.context.principal.as_deref()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mut estimated_rows = 0u64;
+    let mut estimate_sources = Vec::new();
+    if let Some(plan) = record.plan.optimized.as_ref() {
+        collect_scan_estimates(plan, &mut estimated_rows, &mut estimate_sources);
+    }
+    let actual_rows_selected = record
+        .scans
+        .iter()
+        .map(|scan| scan.rows_selected)
+        .reduce(u64::saturating_add);
+    let available = estimated_rows > 0 && actual_rows_selected.is_some();
+    let ratio =
+        available.then(|| actual_rows_selected.unwrap_or_default() as f64 / estimated_rows as f64);
+    let classification = match ratio {
+        None => "unavailable",
+        Some(value) if value > 2.0 => "underestimated",
+        Some(value) if value < 0.5 => "overestimated",
+        Some(_) => "within_2x",
+    };
+    Json(QueryEstimateDiagnostics {
+        query_id,
+        available,
+        estimated_rows: available.then_some(estimated_rows),
+        actual_rows_selected: available.then_some(actual_rows_selected.unwrap_or_default()),
+        ratio,
+        classification,
+        estimate_sources,
+    })
+    .into_response()
+}
+
 async fn cancel_query(
     State(state): State<Arc<AppState>>,
     Extension(identity): Extension<Identity>,
@@ -15546,6 +15623,18 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn estimate_diagnostic_collects_versioned_scan_rows() {
+        let plan = kaveon_core::PlanNode::new(1, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("estimated_rows", "100")
+            .with_attribute("estimate_source", "current_statistics");
+        let mut rows = 0;
+        let mut sources = Vec::new();
+        super::collect_scan_estimates(&plan, &mut rows, &mut sources);
+        assert_eq!(rows, 100);
+        assert_eq!(sources, vec!["current_statistics"]);
+    }
+
     #[test]
     fn plan_scan_displays_versioned_source_estimates_without_rewriting_execution() {
         let mut plan = kaveon_core::PlanNode::new(1, kaveon_core::PlanPhase::Physical, "Scan")

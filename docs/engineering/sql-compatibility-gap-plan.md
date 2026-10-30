@@ -161,7 +161,9 @@ unsupported dateparts remain explicitly rejected.
   choice, selectivity, and reader pruning. Cloud pruning and universal
   cost-based planning remain separate gates; see
   `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
-- [ ] Add plan-vs-runtime diagnostics. Runtime-only comparison now exposes a
+- [ ] Add plan-vs-runtime diagnostics. A bounded query-level estimate-vs-actual
+  endpoint now compares source-row estimates with finished scan telemetry;
+  per-operator attribution remains open. Runtime-only comparison now exposes a
   conservative doubled-P95 regression threshold after five comparable runs;
   evidence: `docs/qualification/track3-runtime-regression-threshold-2026-10-29.md`;
   optimized and physical scan plans now expose versioned source estimates;
