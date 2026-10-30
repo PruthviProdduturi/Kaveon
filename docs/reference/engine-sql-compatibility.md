@@ -173,6 +173,9 @@ or double-quote delimiters, with the 128-character limit) and
 fail closed.
 
 `LEN`, `IIF`, and `CHARINDEX` are also qualified on the distributed path.
+`ISJSON(text[, VALUE|ARRAY|OBJECT|SCALAR])` is qualified on the same bounded
+distributed path, with SQL Server's integer validity result and NULL input
+semantics; other type constraints fail closed.
 SQL Server `ASCII`, `UNICODE`, bounded `CHAR`, and bounded `NCHAR` are qualified as an
 invariant UTF-8/byte contract: `ASCII` returns the leading ASCII scalar and
 NULL for a non-ASCII leading scalar, `UNICODE` returns the leading Unicode
