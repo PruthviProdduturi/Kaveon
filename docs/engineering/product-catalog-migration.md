@@ -5,13 +5,14 @@
 > not the current runtime architecture. New deployments use KaveonDB-native
 > product transactions; do not use this document as a deployment runbook.
 
-Kaveon will move durable product and Engine-definition state to an ADLS-backed
-catalog. PostgreSQL remains the production authority until the protocol,
-backfill, reconciliation, fencing, and rollback gates in this document have
-passed. The manifest/CAS transaction substrate, authenticated product CRUD
-endpoint, and typed API client now exist. PostgreSQL repository integration,
-backfill, outbox, reconciliation, fencing and cutover do not; this document is
-therefore not evidence that PostgreSQL can be retired.
+At the time this historical design was written, Kaveon planned to move durable
+product and Engine-definition state to an ADLS-backed catalog while PostgreSQL
+remained the production authority pending protocol, backfill, reconciliation,
+fencing, and rollback gates. The manifest/CAS transaction substrate,
+authenticated product CRUD endpoint, and typed API client existed in that
+snapshot; repository integration, backfill, outbox, reconciliation, fencing,
+and cutover were still open. None of those historical statements describe the
+current runtime or authorize restoring PostgreSQL as an authority.
 
 The Engine implements immutable documents and manifests with an ADLS head CAS,
 bounded typed product records, optimistic revisions, owner-scoped reads and
