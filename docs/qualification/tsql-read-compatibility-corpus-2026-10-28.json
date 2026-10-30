@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "19766e5b",
+  "engine_commit": "ed5b63ae",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -14,6 +14,8 @@
     {"id": "unicode", "sql": "SELECT UNICODE(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalars"},
     {"id": "char", "sql": "SELECT CHAR(code) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_byte_values"},
     {"id": "nchar", "sql": "SELECT NCHAR(code) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalars"},
+    {"id": "string_split", "sql": "SELECT value FROM STRING_SPLIT('a,b', ',') AS parts(value)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_literal_inputs"},
+    {"id": "string_split_ordinal", "sql": "SELECT value, ordinal FROM STRING_SPLIT('a,b', ',', 1) AS parts(value, ordinal)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_ordinal_mode"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "concat", "sql": "SELECT CONCAT(region, '-', industry, '-', platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "trim_characters", "sql": "SELECT TRIM(BOTH 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_both_mode_character_set"},
