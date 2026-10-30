@@ -10,7 +10,9 @@ expose the sum of known child inputs. Each value is marked
 
 These fields are diagnostic metadata only. Kaveon does not present them as
 post-filter, post-join, or post-aggregation output cardinalities, and they do
-not alter execution or join selection.
+not alter execution or join selection. `TopN`, `LIMIT`, and `OFFSET` additionally
+expose a conservative bounded output cap derived from the child estimate and
+the operator's literal bound.
 
 ## Evidence
 
@@ -20,5 +22,5 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The focused test and workspace clippy gate pass on 2026-10-29. Exact
-operator-output estimates and selectivity attribution remain a separate open
-qualification boundary.
+operator-output estimates for filters, joins, and aggregates, plus selectivity
+attribution, remain a separate open qualification boundary.
