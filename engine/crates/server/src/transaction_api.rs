@@ -650,6 +650,45 @@ impl TransactionRegistry {
         Ok(documents)
     }
 
+    async fn source_copy_documents(
+        &self,
+        owner: &str,
+        id: &str,
+        kind: &str,
+        source_ids: &[String],
+    ) -> Result<Vec<(String, String)>, RegistryError> {
+        let catalog = self.catalog.clone().ok_or(RegistryError::Disabled)?;
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        let snapshot = session.transaction.snapshot().clone();
+        let product_kind = record_kind(kind)?;
+        let mut documents = Vec::new();
+        for source_id in source_ids {
+            let Some(record) = snapshot
+                .product_record(product_kind, source_id)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?
+            else {
+                continue;
+            };
+            require_product_owner(record, owner)?;
+            let bytes = catalog
+                .fetch_product_document_at(&snapshot, product_kind, source_id)
+                .await
+                .map_err(|error| match error {
+                    kaveon_storage::CommitErrorKind::Missing
+                    | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                    _ => RegistryError::Unavailable,
+                })?
+                .ok_or(RegistryError::Corrupt)?;
+            documents.push((
+                source_id.clone(),
+                String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?,
+            ));
+        }
+        Ok(documents)
+    }
+
     async fn read_product(
         &self,
         identity: &Identity,
@@ -2685,6 +2724,27 @@ async fn execute_sql_request(
             } else {
                 Vec::new()
             };
+            let source_copy_documents = match commands.as_slice() {
+                [
+                    kaveon_sql::parser::ProductDmlCommand::InsertSelect {
+                        kind,
+                        source_ids: Some(source_ids),
+                        ..
+                    },
+                ] if returning
+                    .iter()
+                    .any(|column| column.eq_ignore_ascii_case("document_json")) =>
+                {
+                    match registry
+                        .source_copy_documents(owner, &id, kind, source_ids)
+                        .await
+                    {
+                        Ok(documents) => documents,
+                        Err(error) => return error_response(error),
+                    }
+                }
+                _ => Vec::new(),
+            };
             match registry
                 .stage_product_commands(owner, &id, commands.clone())
                 .await
@@ -2699,7 +2759,11 @@ async fn execute_sql_request(
                                 ..
                             },
                         ] => product_insert_select_returning_response(
-                            &snapshot, &returning, kind, source_ids,
+                            &snapshot,
+                            &returning,
+                            kind,
+                            source_ids,
+                            &source_copy_documents,
                         ),
                         _ => product_returning_response(
                             &snapshot,
@@ -2724,35 +2788,42 @@ fn product_insert_select_returning_response(
     columns: &[String],
     kind: &str,
     source_ids: &[String],
+    source_documents: &[(String, String)],
 ) -> Result<serde_json::Value, String> {
     let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
-    let rows = source_ids
-        .iter()
-        .filter_map(|id| {
-            let record = match snapshot.product_record(product_kind, id) {
-                Ok(Some(record)) => record,
-                Ok(None) => return None,
-                Err(error) => return Some(Err(error.to_string())),
-            };
-            let mut row = serde_json::Map::new();
-            for column in columns {
-                match column.to_ascii_lowercase().as_str() {
-                    "id" => {
-                        row.insert("id".into(), serde_json::Value::String(id.clone()));
-                    }
-                    "revision" => {
-                        row.insert("revision".into(), serde_json::json!(record.revision));
-                    }
-                    other => {
-                        return Some(Err(format!(
-                            "unsupported source-copy RETURNING column: {other}"
-                        )));
-                    }
+    let mut rows = Vec::new();
+    for id in source_ids {
+        let Some(record) = snapshot
+            .product_record(product_kind, id)
+            .map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        let mut row = serde_json::Map::new();
+        for column in columns {
+            match column.to_ascii_lowercase().as_str() {
+                "id" => {
+                    row.insert("id".into(), serde_json::Value::String(id.clone()));
+                }
+                "revision" => {
+                    row.insert("revision".into(), serde_json::json!(record.revision));
+                }
+                "document_json" => {
+                    let document = source_documents
+                        .iter()
+                        .find_map(|(source_id, document)| {
+                            (source_id == id).then_some(document.clone())
+                        })
+                        .ok_or_else(|| format!("product document is missing: {id}"))?;
+                    row.insert("document_json".into(), serde_json::Value::String(document));
+                }
+                other => {
+                    return Err(format!("unsupported source-copy RETURNING column: {other}"));
                 }
             }
-            Some(Ok(serde_json::Value::Object(row)))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+        }
+        rows.push(serde_json::Value::Object(row));
+    }
     let mut body = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
     body.as_object_mut()
         .ok_or_else(|| "transaction snapshot is not a JSON object".to_owned())?
@@ -4674,7 +4745,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision".into(),
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision, document_json".into(),
                 transaction_id: Some(copy.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4688,6 +4759,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "orders");
         assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            value["returning"][0]["document_json"],
+            r#"{"name":"Orders"}"#
+        );
         let response = execute_sql_request(
             &registry,
             "alice",

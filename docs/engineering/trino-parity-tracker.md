@@ -181,8 +181,8 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 ## Qualification commands
 
 The bounded product-table `INSERT ... SELECT` path now also qualifies
-`RETURNING id, revision` when the source is narrowed by a literal `id IN (...)`
-list. Source-copy document projections, unbounded source-copy returning, and
+`RETURNING id, revision, document_json` when the source is narrowed by a literal
+`id IN (...)` list. Unbounded source-copy returning and
 general lake-table DML remain outside the contract; evidence is recorded in
 `docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md`.
 

@@ -126,9 +126,9 @@ KaveonDB supports a bounded product-record source copy: one same-kind
 snapshot, owner isolation, and a 1,000-row cap. A literal `id IN (...)`
 predicate may narrow the source. It reuses product conflict and revision-CAS
 semantics. Joins, other filters, CTEs, arbitrary expressions,
-cross-kind copies, lake/external sources, and unbounded/document `RETURNING`
+cross-kind copies, lake/external sources, and unbounded source-copy `RETURNING`
 remain rejected. A literal `id IN (...)` source filter qualifies
-`RETURNING id, revision` from the staged snapshot;
+`RETURNING id, revision, document_json` from the staged snapshot;
 this is not general lake-table DML.
 
 ## Bounded compatibility aliases
@@ -312,7 +312,7 @@ replay-safe `ON CONFLICT DO NOTHING`, and bounded
 that preserve the declared table identity; arbitrary typed schemas and
 assignments remain outside this contract. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. Unbounded or cross-kind source-backed
-`INSERT ... SELECT`, source-copy document projections on `INSERT ... SELECT`,
+`INSERT ... SELECT`, unbounded source-copy `RETURNING`,
 general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 The qualified `MERGE` form is intentionally narrow: one target product table
