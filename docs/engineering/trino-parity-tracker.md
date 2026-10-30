@@ -73,9 +73,9 @@ The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
 `docs/qualification/track2-tsql-string-escape-2026-10-29.md` and
 `docs/qualification/track2-tsql-quotename-2026-10-29.md`.
 The SQL Server `REPLICATE` spelling is also qualified through the bounded
-Unicode `REPEAT` path for non-negative integer-literal or row-local BIGINT
-counts; negative row-local counts return NULL, while binary and truncation
-semantics remain outside the contract. Focused evidence is retained in
+Unicode `REPEAT` path for non-negative integer-literal or bounded row-local
+BIGINT expressions (including arithmetic and casts); negative counts return
+NULL, while binary and truncation semantics remain outside the contract. Focused evidence is retained in
 `docs/qualification/track2-tsql-replicate-2026-10-29.md`.
 Literal `CONVERT(DATE, ..., style)` styles `0`, `101`, and `112` also have
 exact three-worker evidence in

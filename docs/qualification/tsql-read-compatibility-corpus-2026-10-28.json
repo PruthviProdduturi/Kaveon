@@ -64,7 +64,7 @@
     {"id": "quotename_default_brackets", "sql": "SELECT QUOTENAME(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "quotename_double_quote", "sql": "SELECT QUOTENAME(name, '\"') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "replicate", "sql": "SELECT REPLICATE(name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns_and_nonnegative_counts"},
-    {"id": "replicate_dynamic_count", "sql": "SELECT REPLICATE(name, actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_nonnegative_row_local_bigint_counts"},
+    {"id": "replicate_dynamic_count", "sql": "SELECT REPLICATE(name, actions - 20) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_row_local_bigint_expressions_and_negative_null_semantics"},
     {"id": "try_cast", "sql": "SELECT TRY_CAST(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "convert_date_style_us", "sql": "SELECT CONVERT(DATE, '12/31/2024', 101)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
     {"id": "convert_date_style_text", "sql": "SELECT CONVERT(DATE, 'Dec 31 2024', 0)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
