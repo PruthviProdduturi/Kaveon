@@ -207,8 +207,8 @@ qualified.
 The T-SQL row above is backed by the versioned 95-case corpus pinned at
 `bde0c874` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
-The latest eight cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`, and the
-value-only/ordinal/row-local-lateral `STRING_SPLIT` forms, with
+The latest eight cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
+`NULLIF`, and the value-only/ordinal/row-local-lateral `STRING_SPLIT` forms, with
 locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
