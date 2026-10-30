@@ -304,9 +304,11 @@ server or a general row-store protocol.
 Each request carries one statement and a transaction ID after `BEGIN`. Product
 operations are authenticated, owner-isolated, revision-checked, and limited to
 the supported product families. The `kaveon.product.typed_rows` facade also
-supports revisioned typed-row create/update/delete with owner isolation and
-replay-safe `ON CONFLICT DO NOTHING`; arbitrary typed schemas and conflict
-updates remain outside this contract. Multi-row `VALUES` are expanded into bounded
+supports revisioned typed-row create/update/delete with owner isolation,
+replay-safe `ON CONFLICT DO NOTHING`, and bounded
+`ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` upserts
+that preserve the declared table identity; arbitrary typed schemas and
+assignments remain outside this contract. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. Source-backed `INSERT ... SELECT`,
 source-copy document projections on `INSERT ... SELECT`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
