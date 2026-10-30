@@ -327,7 +327,9 @@ creates, updates, upserts, and deletes are evaluated from the revision/CAS
 write set. Product inserts
 also support the bounded `ON CONFLICT DO NOTHING`
 form, with an optional conflict target of `id`; a duplicate is a transaction-
-local no-op that can still be committed. They also support the bounded
+local no-op that can still be committed. `RETURNING id, revision, document_json`
+on this form returns the inserted row and returns an empty result for a
+duplicate. They also support the bounded
 `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` form;
 an existing owned record is updated with revision CAS, while a missing record
 is created. Conflict predicates, named constraints, arbitrary assignments, and

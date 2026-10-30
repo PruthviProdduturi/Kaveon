@@ -130,7 +130,9 @@ at runtime: zero, negative, or NULL widths return typed NULL.
   bounded `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`
   form with table-identity preservation. The same upsert is exercised through
   `/v1/transaction/sql` with `RETURNING id, revision` and a committed
-  revision/CAS follow-up. Arbitrary typed-table schemas and conflict updates
+  revision/CAS follow-up. Bounded `ON CONFLICT DO NOTHING RETURNING id,
+  revision, document_json` is also qualified: duplicates return no rows and
+  stage no write. Arbitrary typed-table schemas and conflict updates
   remain outside this contract. Evidence:
   `docs/qualification/track2-native-dml-typed-row-conflict-ignore-2026-10-28.md`.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form

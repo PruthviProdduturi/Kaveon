@@ -41,5 +41,8 @@ not general lake-table DML.
 - Targeted server upsert test: passed.
 
 This is a qualified product-transaction increment, not general PostgreSQL
-`ON CONFLICT` or `MERGE` compatibility. Source-backed `INSERT … SELECT`,
-general typed-table DML, and broader conflict expressions remain open work.
+`ON CONFLICT` or `MERGE` compatibility. The bounded `ON CONFLICT DO NOTHING`
+form also accepts `RETURNING id, revision, document_json`: an insert returns
+its staged row, while a duplicate owned record returns an empty result and
+stages no write. Source-backed `INSERT … SELECT`, general typed-table DML,
+and broader conflict expressions remain open work.
