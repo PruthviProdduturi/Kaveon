@@ -199,7 +199,7 @@ source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
 The T-SQL row above is backed by the versioned 87-case corpus pinned at
-`91bf9401` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+`d87ee9c9` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 
 Run from `engine/`:

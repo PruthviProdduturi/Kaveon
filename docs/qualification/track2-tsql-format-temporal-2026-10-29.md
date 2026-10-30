@@ -34,6 +34,9 @@ type checks.
   in `engine/crates/server/src/differential_tests.rs`, including
   `tsql_format_temporal` across dictionary, plain, partitioned, clustered, and
   fragmented layouts and local versus three-worker execution.
+- Focused local/distributed gate:
+  `distributed_tsql_format_temporal_matches_local` in the same module verifies
+  typed TIMESTAMP and DATE literals, exact rows, and released query memory.
 
 ## Gate result
 
