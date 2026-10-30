@@ -656,14 +656,14 @@ impl TransactionRegistry {
         id: &str,
         kind: &str,
         source_ids: &[String],
-    ) -> Result<Vec<(String, String)>, RegistryError> {
+    ) -> Result<HashMap<String, String>, RegistryError> {
         let catalog = self.catalog.clone().ok_or(RegistryError::Disabled)?;
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
         let snapshot = session.transaction.snapshot().clone();
         let product_kind = record_kind(kind)?;
-        let mut documents = Vec::new();
+        let mut documents = HashMap::with_capacity(source_ids.len());
         for source_id in source_ids {
             let Some(record) = snapshot
                 .product_record(product_kind, source_id)
@@ -681,10 +681,10 @@ impl TransactionRegistry {
                     _ => RegistryError::Unavailable,
                 })?
                 .ok_or(RegistryError::Corrupt)?;
-            documents.push((
+            documents.insert(
                 source_id.clone(),
                 String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?,
-            ));
+            );
         }
         Ok(documents)
     }
@@ -2743,7 +2743,7 @@ async fn execute_sql_request(
                         Err(error) => return error_response(error),
                     }
                 }
-                _ => Vec::new(),
+                _ => HashMap::new(),
             };
             match registry
                 .stage_product_commands(owner, &id, commands.clone())
@@ -2788,7 +2788,7 @@ fn product_insert_select_returning_response(
     columns: &[String],
     kind: &str,
     source_ids: &[String],
-    source_documents: &[(String, String)],
+    source_documents: &HashMap<String, String>,
 ) -> Result<serde_json::Value, String> {
     let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
     let mut rows = Vec::new();
@@ -2810,10 +2810,8 @@ fn product_insert_select_returning_response(
                 }
                 "document_json" => {
                     let document = source_documents
-                        .iter()
-                        .find_map(|(source_id, document)| {
-                            (source_id == id).then_some(document.clone())
-                        })
+                        .get(id)
+                        .cloned()
                         .ok_or_else(|| format!("product document is missing: {id}"))?;
                     row.insert("document_json".into(), serde_json::Value::String(document));
                 }
