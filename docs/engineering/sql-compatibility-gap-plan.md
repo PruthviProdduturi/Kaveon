@@ -115,9 +115,9 @@ and `docs/qualification/track2-tsql-trim-directional-characters-2026-10-29.md`.
 `TRANSLATE` now has a bounded SQL Server-compatible Unicode scalar mapping
 path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
-gate. Bounded `DATE_BUCKET` width-one buckets for year, quarter, month, day,
-hour, minute, and second lower to the existing typed `DATE_TRUNC` path and
-have exact local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); wider buckets, custom origins, and
+gate. `DATE_BUCKET` buckets for year, quarter, month, day, hour, minute, and
+second lower to the existing typed `DATE_TRUNC` path and have exact
+local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); custom origins and
 unsupported dateparts remain explicitly rejected. Row-local BIGINT widths are
 guarded at runtime: zero, negative, or NULL widths return typed NULL, while
 dynamic origins remain rejected.
@@ -126,8 +126,12 @@ dynamic origins remain rejected.
 
 - [x] Qualify bounded typed-row DML for KaveonDB-owned tables. The
   `kaveon.product.typed_rows` facade supports revisioned create/update/delete
-  with owner isolation and replay-safe `ON CONFLICT DO NOTHING`; arbitrary
-  typed-table schemas and conflict updates remain outside this contract. Evidence:
+  with owner isolation and replay-safe `ON CONFLICT DO NOTHING`, plus the
+  bounded `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`
+  form with table-identity preservation. The same upsert is exercised through
+  `/v1/transaction/sql` with `RETURNING id, revision` and a committed
+  revision/CAS follow-up. Arbitrary typed-table schemas and conflict updates
+  remain outside this contract. Evidence:
   `docs/qualification/track2-native-dml-typed-row-conflict-ignore-2026-10-28.md`.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
   copies `id` and `document_json` from one same-kind `kaveon.product` table
