@@ -6,7 +6,7 @@ Implementation history lives in Git; reproducible measurements live under
 `docs/qualification/`. A row is **Qualified** only when its stated acceptance
 evidence passes against exact-result references.
 
-The authoritative T-SQL read corpus currently contains 110 unique cases; the
+The authoritative T-SQL read corpus currently contains 111 unique cases; the
 validator checks this count against the corpus and its engine commit pin.
 
 The latest source/build gate record is retained in
@@ -41,7 +41,7 @@ child upper bound. Joins and set operations expose safe product/sum/minimum/
 left-input caps without estimating predicate selectivity. Evidence:
 `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 
-The latest SQL compatibility increments are literal `CONVERT(DATE, ..., style)`
+The latest SQL compatibility increments are weekly `DATE_BUCKET` units and literal `CONVERT(DATE, ..., style)`
 styles `0`, `101`, and `112`, plus `CONCAT`, all qualified in the current
 three-worker differential gates. `DATETIME2FROMPARTS` precision 4–6 remains
 qualified in `0e8441d0` with microsecond arithmetic (precision 7 remains an
@@ -55,11 +55,11 @@ the versioned 110-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
-The versioned T-SQL corpus pins the latest implementation commit; later
+The versioned T-SQL corpus pins the latest implementation commit `394e042d`; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 110 bounded T-SQL read cases, including the
+The corpus currently contains 111 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice and its remaining
 ordered-state boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
 the SQL Server `DATETRUNC` alias qualified through `DATE_TRUNC`, and the JSON
@@ -100,7 +100,7 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 110 cases (the implementation pin is updated after
+The current T-SQL corpus is 111 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -209,7 +209,7 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 ## Track 2 — SQL compatibility and types
 
 The large capability row below contains historical evidence pointers from
-earlier corpus revisions; the authoritative current corpus is 110 cases as
+earlier corpus revisions; the authoritative current corpus is 111 cases as
 stated above and enforced by the tracker validator.
 
 | Capability | State | Current contract | Acceptance evidence still required |
@@ -244,8 +244,8 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 110-case corpus pinned at
-`56c73965` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+The T-SQL row above is backed by the versioned 111-case corpus pinned at
+`394e042d` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
 `NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
@@ -254,7 +254,7 @@ locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
 supersedes the older case-count wording embedded in the capability table.
-The capability row's historical corpus pointer is superseded by the 110-case
+The capability row's historical corpus pointer is superseded by the 111-case
 corpus and pin above; do not use its older count as current evidence.
 
 Run from `engine/`:
