@@ -263,6 +263,34 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           <rect x="22" y="17" width="3.5" height="7"  rx="1" fill={color} fillOpacity="0.45" />
         </svg>
       );
+    case "network_graph":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <path d="M14,14 L6,7"   stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M14,14 L23,9"  stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M14,14 L7,21"  stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M14,14 L22,22" stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M6,7 L23,9"    stroke={color} strokeWidth="1.2" strokeOpacity="0.3" />
+          <circle cx="14" cy="14" r="4"   fill={color} />
+          <circle cx="6"  cy="7"  r="2.4" fill={color} fillOpacity="0.75" />
+          <circle cx="23" cy="9"  r="2.1" fill={color} fillOpacity="0.65" />
+          <circle cx="7"  cy="21" r="2.1" fill={color} fillOpacity="0.65" />
+          <circle cx="22" cy="22" r="1.8" fill={color} fillOpacity="0.55" />
+        </svg>
+      );
+    case "tree":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <path d="M5,14 H11 M11,14 V7  H17" stroke={color} strokeWidth="1.6" strokeOpacity="0.55" fill="none" />
+          <path d="M11,14 V21 H17"           stroke={color} strokeWidth="1.6" strokeOpacity="0.55" fill="none" />
+          <path d="M17,7 H22 M17,21 H22"     stroke={color} strokeWidth="1.6" strokeOpacity="0.4"  fill="none" />
+          <circle cx="4"  cy="14" r="2.6" fill={color} />
+          <circle cx="17" cy="7"  r="2"   fill={color} fillOpacity="0.75" />
+          <circle cx="17" cy="21" r="2"   fill={color} fillOpacity="0.75" />
+          <circle cx="23" cy="7"  r="1.6" fill={color} fillOpacity="0.5" />
+          <circle cx="23" cy="21" r="1.6" fill={color} fillOpacity="0.5" />
+        </svg>
+      );
     case "sankey":
       return (
         <svg viewBox="0 0 28 28" style={s}>
