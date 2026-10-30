@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 79-case corpus has planner coverage and focused exact
+  The current 80-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -92,6 +92,10 @@ Bracket-quoted identifiers remain identifiers in `DISTINCT` projections and
 ordered pagination shapes; the local/three-worker evidence across Parquet
 encodings is retained in
 `docs/qualification/track2-tsql-bracket-identifiers-2026-10-29.md`.
+`QUOTENAME` now supports the bounded SQL Server identifier quoting surface
+(square brackets and double quotes, 128-Unicode-character limit) with local
+and three-worker evidence in
+`docs/qualification/track2-tsql-quotename-2026-10-29.md`.
 `LEFT` and `RIGHT` preserve SQL Server's Unicode scalar character semantics
 for bounded text lengths and are covered by the distributed differential
 regression.

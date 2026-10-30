@@ -8434,6 +8434,58 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
+        "QUOTENAME" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(KaveonError::Execution(
+                    "QUOTENAME requires one or two arguments".into(),
+                ));
+            }
+            if num_rows == 0 {
+                return Ok(Arc::new(StringBuilder::new().finish()));
+            }
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows * 8);
+            for row in 0..num_rows {
+                let Some(value) = text_value(&args[0], row)? else {
+                    result.append_null();
+                    continue;
+                };
+                if value.chars().count() > 128 {
+                    result.append_null();
+                    continue;
+                }
+                let quote = if args.len() == 1 {
+                    '['
+                } else {
+                    let Some(mode) = text_value(&args[1], row)? else {
+                        result.append_null();
+                        continue;
+                    };
+                    let mut chars = mode.chars();
+                    let Some(quote) = chars.next() else {
+                        result.append_null();
+                        continue;
+                    };
+                    if chars.next().is_some() {
+                        return Err(KaveonError::Execution(
+                            "QUOTENAME quote character must be one character".into(),
+                        ));
+                    }
+                    quote
+                };
+                let (open, close) = match quote {
+                    '[' | ']' => ('[', ']'),
+                    '"' => ('"', '"'),
+                    _ => {
+                        return Err(KaveonError::Execution(
+                            "QUOTENAME supports only bracket or double-quote delimiters".into(),
+                        ));
+                    }
+                };
+                let escaped = value.replace(close, &format!("{close}{close}"));
+                result.append_value(format!("{open}{escaped}{close}"));
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "TRIM" => {
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, |value| value.trim().to_owned())
@@ -29273,6 +29325,57 @@ mod tests {
         )
         .expect_err("unsupported escape modes must fail closed");
         assert!(error.to_string().contains("only the 'json' escape mode"));
+    }
+
+    #[test]
+    fn evaluates_quotename_brackets_and_double_quotes() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("orders"), Some("a]b"), None])) as ArrayRef,
+            ),
+            (
+                "mode",
+                Arc::new(StringArray::from(vec![Some("["), Some("]"), Some("\"")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "QUOTENAME".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("mode".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "[orders]");
+        assert_eq!(values.value(1), "[a]]b]");
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn quotename_rejects_unsupported_delimiter() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("orders")])) as ArrayRef,
+            ),
+            (
+                "mode",
+                Arc::new(StringArray::from(vec![Some("'")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let error = evaluate(
+            &Expr::Function {
+                name: "QUOTENAME".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("mode".into())],
+            },
+            &batch,
+        )
+        .expect_err("unsupported delimiters must fail closed");
+        assert!(error.to_string().contains("bracket or double-quote"));
     }
 
     #[test]
