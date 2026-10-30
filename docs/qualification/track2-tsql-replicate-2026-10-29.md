@@ -4,10 +4,11 @@
 
 Kaveon accepts SQL Server's `REPLICATE(text, count)` spelling through the
 existing bounded Unicode `REPEAT` evaluator. The qualified contract covers
-UTF-8 text, non-negative counts, NULL propagation, and the shared bounded
-string-expansion memory guard. Negative counts follow the existing bounded
-operator's empty-result behavior; SQL Server's binary-type and 8,000-byte
-truncation rules are not claimed.
+UTF-8 text, a non-negative integer-literal count, NULL propagation, and the
+shared bounded string-expansion memory guard. Dynamic counts and negative
+counts fail closed until SQL Server's exact row-local semantics have a
+dedicated evaluator. Binary-type and 8,000-byte truncation rules are not
+claimed.
 
 ## Evidence
 
@@ -24,5 +25,6 @@ shared `REPEAT` evaluator and memory accounting.
 
 ## Boundary
 
-Only the bounded text form is qualified. Binary inputs, SQL Server's legacy
-byte truncation behavior, and unbounded expansion remain outside the contract.
+Only the bounded text form with a non-negative integer-literal count is
+qualified. Dynamic or negative counts, binary inputs, SQL Server's legacy byte
+truncation behavior, and unbounded expansion remain outside the contract.

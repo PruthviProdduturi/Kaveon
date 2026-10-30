@@ -4828,6 +4828,7 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 }
 
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
+    let written_name = func.name.to_string().to_uppercase();
     let mut name = canonical_function_name(func);
     let is_count_if = name == "COUNT_IF";
     let is_json_object = name == "JSON_OBJECT";
@@ -4897,6 +4898,29 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         name = "JSON_OBJECT_ABSENT_ON_NULL".into();
     } else if is_json_array && json_object_absent_on_null {
         name = "JSON_ARRAY_ABSENT_ON_NULL".into();
+    }
+
+    // REPLICATE has SQL Server-specific negative-count and binary truncation
+    // rules. Keep the qualified surface fail-closed until those semantics
+    // have a dedicated evaluator rather than silently treating it as Trino's
+    // more permissive REPEAT for arbitrary row-local counts.
+    if written_name == "REPLICATE" {
+        if args.len() != 2 {
+            return Err(sql_err("REPLICATE requires a text value and count"));
+        }
+        match args.get(1) {
+            Some(Expr::Literal(ScalarValue::Int64(count))) if *count >= 0 => {}
+            Some(Expr::Literal(ScalarValue::Int64(_))) => {
+                return Err(sql_err(
+                    "REPLICATE count must be a non-negative integer literal",
+                ));
+            }
+            _ => {
+                return Err(sql_err(
+                    "REPLICATE currently requires a non-negative integer literal count",
+                ));
+            }
+        }
     }
 
     // SQL Server's CHOOSE(index, value1, ...) is a bounded one-based
@@ -9201,6 +9225,8 @@ mod tests {
             .expect("REPLICATE should lower through the bounded repeat operator");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("REPEAT"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT REPLICATE(name, -1) FROM t").is_err());
+        assert!(sql_to_logical_plan("SELECT REPLICATE(name, actions) FROM t").is_err());
     }
 
     #[test]
