@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "70374ba8",
+  "engine_commit": "9333762e",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -13,6 +13,8 @@
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "concat", "sql": "SELECT CONCAT(region, '-', industry, '-', platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "trim_characters", "sql": "SELECT TRIM(BOTH 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_both_mode_character_set"},
+    {"id": "trim_leading_characters", "sql": "SELECT TRIM(LEADING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_leading_character_set"},
+    {"id": "trim_trailing_characters", "sql": "SELECT TRIM(TRAILING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_trailing_character_set"},
     {"id": "choose", "sql": "SELECT CHOOSE(2, region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "count_big", "sql": "SELECT COUNT_BIG(*) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "len", "sql": "SELECT LEN(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
