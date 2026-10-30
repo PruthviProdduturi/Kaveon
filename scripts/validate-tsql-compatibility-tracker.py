@@ -86,6 +86,11 @@ def main() -> int:
         fail("tracker contains stale 60-case corpus wording")
     if "tsql-read-compatibility-corpus-2026-10-28.json" not in tracker:
         fail("tracker does not link the authoritative corpus")
+    pin_matches = re.findall(r"corpus pinned at\s*`([0-9a-f]{7,40})`", tracker)
+    if not pin_matches:
+        fail("tracker is missing its authoritative engine commit pin")
+    if any(pin != engine_commit for pin in pin_matches):
+        fail(f"tracker engine pin {pin_matches!r} does not match corpus pin {engine_commit}")
 
     print(
         f"PASS: {len(cases)} unique T-SQL compatibility cases, "
