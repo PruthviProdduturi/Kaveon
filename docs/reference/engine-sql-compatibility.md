@@ -199,6 +199,8 @@ with NULL preservation.
 `TRANSLATE` is qualified for Unicode scalar position mapping, SQL Server's
 first-match behavior, unmapped-character preservation, source-only removal,
 and NULL propagation.
+`STRING_ESCAPE(value, 'json')` is qualified for UTF-8 text with SQL Server
+NULL propagation; escape modes other than `json` are rejected explicitly.
 
 `PIVOT` and `UNPIVOT` have bounded lowerings for derived sources with simple
 columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
