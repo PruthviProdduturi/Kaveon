@@ -215,6 +215,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_bracket_identifier",
+        "SELECT [region] FROM {T} ORDER BY [region], user_id LIMIT 20",
+        true,
+    ),
+    (
         "tsql_character_code_helpers",
         "SELECT user_id, ASCII(country), UNICODE(country), CHAR(actions) FROM {T} ORDER BY user_id, country, actions LIMIT 12",
         true,
