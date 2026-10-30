@@ -76,9 +76,11 @@ for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only style `101`.
 Styles `20`, `21`, `120`, `121`, `126`, and `101` are now included in
 `distributed_tsql_runtime_timestamp_styles_match_local`, which compares exact
 local and three-worker results.
-`DATE_BUCKET` is qualified for literal width-one year/quarter/month/day/hour/
-minute/second buckets and lowers to typed `DATE_TRUNC`; wider widths and
-custom origins are rejected rather than approximated.
+`DATE_BUCKET` is qualified for literal and bounded row-local BIGINT widths over
+year/quarter/month/day/hour/minute/second buckets. Widths are checked at
+runtime: zero, negative, and NULL values produce typed NULL rather than a
+divide-by-zero or approximation. Literal DATE/TIMESTAMP origins are qualified;
+dynamic origins remain rejected rather than approximated.
 
 ## Contract
 
