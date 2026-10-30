@@ -384,6 +384,15 @@ fn logical_agg_to_exec(
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
         AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
+        // The local CLI planner intentionally does not execute STRING_AGG.
+        // The server planner owns its bounded distributed implementation;
+        // reject it explicitly here instead of silently lowering it to a
+        // different aggregate or leaving this match non-exhaustive.
+        AggregateExpr::StringAgg { .. } => {
+            return Err(KaveonError::Execution(
+                "STRING_AGG is available through the server execution path; local mode does not support it".into(),
+            ));
+        }
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
