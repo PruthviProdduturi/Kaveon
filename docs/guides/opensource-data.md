@@ -119,8 +119,9 @@ FROM covid.country_latest LIMIT 10;
 ```
 
 The [product catalog assessment](../engineering/product-catalog-migration.md)
-documents the separate transactional migration required before PostgreSQL can
-be replaced.
+is historical migration evidence. Native deployments use KaveonDB for
+transactional product state; PostgreSQL is not required for this catalog or
+for the OpenSource query path.
 
 ## ADLS is authoritative
 
