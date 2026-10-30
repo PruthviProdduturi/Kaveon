@@ -9774,13 +9774,20 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_try_parse_numeric() {
+        let plan = sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT) FROM t")
+            .expect("TRY_PARSE numeric should lower");
+        assert!(format!("{plan:?}").contains("TRY_CAST_INT64"));
+    }
+
+    #[test]
     fn versioned_tsql_corpus_matches_declared_boundaries() {
         let corpus: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json"
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 98);
+        assert_eq!(cases.len(), 99);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
