@@ -7919,6 +7919,30 @@ fn distributed_tsql_trim_characters_matches_local() {
 }
 
 #[test]
+fn distributed_tsql_trim_leading_and_trailing_characters_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-trim-leading-trailing-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, TRIM(LEADING 'x' FROM CONCAT('xxx', region)) AS leading_trimmed, TRIM(TRAILING 'x' FROM CONCAT(region, 'xxx')) AS trailing_trimmed FROM events ORDER BY user_id, region LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-trim-leading-trailing-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_tsql_runtime_timestamp_styles_match_local() {
     let directory = std::env::temp_dir().join(format!(
         "kaveon-tsql-timestamp-style-{}",

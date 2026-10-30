@@ -1527,6 +1527,58 @@ fn text_value(arr: &ArrayRef, row: usize) -> Result<Option<&str>> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TrimCharacterMode {
+    Leading,
+    Trailing,
+    Both,
+}
+
+fn trim_character_set_array(
+    values: &ArrayRef,
+    characters: &ArrayRef,
+    num_rows: usize,
+    mode: TrimCharacterMode,
+) -> Result<ArrayRef> {
+    if values.data_type() == &DataType::LargeUtf8 {
+        let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+        for row in 0..num_rows {
+            let (Some(value), Some(chars)) =
+                (text_value(values, row)?, text_value(characters, row)?)
+            else {
+                result.append_null();
+                continue;
+            };
+            result.append_value(trim_character_set(value, chars, mode));
+        }
+        Ok(Arc::new(result.finish()))
+    } else {
+        let mut result = StringBuilder::with_capacity(num_rows, 0);
+        for row in 0..num_rows {
+            let (Some(value), Some(chars)) =
+                (text_value(values, row)?, text_value(characters, row)?)
+            else {
+                result.append_null();
+                continue;
+            };
+            result.append_value(trim_character_set(value, chars, mode));
+        }
+        Ok(Arc::new(result.finish()))
+    }
+}
+
+fn trim_character_set<'a>(value: &'a str, chars: &str, mode: TrimCharacterMode) -> &'a str {
+    match mode {
+        TrimCharacterMode::Leading => {
+            value.trim_start_matches(|character| chars.contains(character))
+        }
+        TrimCharacterMode::Trailing => {
+            value.trim_end_matches(|character| chars.contains(character))
+        }
+        TrimCharacterMode::Both => value.trim_matches(|character| chars.contains(character)),
+    }
+}
+
 fn map_text_array(
     arr: &ArrayRef,
     num_rows: usize,
@@ -8359,35 +8411,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "TRIM_CHARS" => {
             check_arity(name, args, 2)?;
-            if args[0].data_type() == &DataType::LargeUtf8 {
-                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
-                for row in 0..num_rows {
-                    let (Some(value), Some(characters)) =
-                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
-                    else {
-                        result.append_null();
-                        continue;
-                    };
-                    result.append_value(
-                        value.trim_matches(|character| characters.contains(character)),
-                    );
-                }
-                Ok(Arc::new(result.finish()))
-            } else {
-                let mut result = StringBuilder::with_capacity(num_rows, 0);
-                for row in 0..num_rows {
-                    let (Some(value), Some(characters)) =
-                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
-                    else {
-                        result.append_null();
-                        continue;
-                    };
-                    result.append_value(
-                        value.trim_matches(|character| characters.contains(character)),
-                    );
-                }
-                Ok(Arc::new(result.finish()))
-            }
+            trim_character_set_array(&args[0], &args[1], num_rows, TrimCharacterMode::Both)
+        }
+        "TRIM_LEADING_CHARS" => {
+            check_arity(name, args, 2)?;
+            trim_character_set_array(&args[0], &args[1], num_rows, TrimCharacterMode::Leading)
+        }
+        "TRIM_TRAILING_CHARS" => {
+            check_arity(name, args, 2)?;
+            trim_character_set_array(&args[0], &args[1], num_rows, TrimCharacterMode::Trailing)
         }
         "CHR" => {
             check_arity(name, args, 1)?;
