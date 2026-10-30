@@ -270,14 +270,12 @@ forms, and table-valued APPLY are recognized and rejected with rewrite
 guidance rather than being treated as generic syntax failures.
 The unordered `STRING_AGG(value, literal_separator)` form is qualified: NULL
 values are omitted, empty groups return NULL, and partial workers carry a
-mergeable string state bounded to 16 MiB per group. A predicate
-`FILTER (WHERE ...)` is also qualified by lowering the predicate to a
-NULL-preserving aggregate input before the same mergeable state path. Merge
-order is unspecified, matching SQL Server's unordered form. Ordered
-`WITHIN GROUP`, dynamic separators, and `DISTINCT` remain explicitly
-rejected until their ordered state and bounded memory/spill contract are
-qualified. The focused planner and three-worker differential evidence is
-recorded in the compatibility corpus gate for 2026-10-30.
+mergeable string state bounded to 16 MiB per group. Merge order is
+unspecified, matching SQL Server's unordered form. Ordered `WITHIN GROUP`,
+dynamic separators, `DISTINCT`, and `FILTER` remain explicitly rejected until
+their ordered state and bounded memory/spill contract are qualified. Evidence
+is recorded in
+`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`.
 The embedded/local CLI planner uses the same bounded aggregate state and
 separator validation, so local and server execution share this declared
 surface; ordered forms remain rejected in both paths. Local evidence is
