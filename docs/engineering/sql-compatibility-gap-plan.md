@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 90-case corpus has planner coverage and focused exact
+  The current 91-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -134,6 +134,9 @@ the leading Unicode scalar, and CHAR accepts only integer byte values 0..255,
 returning NULL outside that range. This is an explicit invariant UTF-8/byte
 contract, not locale/code-page emulation; local and three-worker evidence is
 recorded in `docs/qualification/track2-tsql-character-code-2026-10-29.md`.
+`NCHAR` now accepts valid Unicode scalar values with NULL propagation and
+rejects NULL, surrogate, negative, and out-of-range code points; it has the
+same local and three-worker qualification boundary.
 
 ### Phase 2 — Transactional SQL surface
 

@@ -165,11 +165,13 @@ or double-quote delimiters, with the 128-character limit) and
 fail closed.
 
 `LEN`, `IIF`, and `CHARINDEX` are also qualified on the distributed path.
-SQL Server `ASCII`, `UNICODE`, and bounded `CHAR` are qualified as an
+SQL Server `ASCII`, `UNICODE`, bounded `CHAR`, and bounded `NCHAR` are qualified as an
 invariant UTF-8/byte contract: `ASCII` returns the leading ASCII scalar and
 NULL for a non-ASCII leading scalar, `UNICODE` returns the leading Unicode
 scalar, and `CHAR` accepts integer values 0 through 255, returning NULL outside
-that range. Locale/code-page conversion is not claimed.
+that range. `NCHAR` accepts valid Unicode scalar values and returns NULL for
+NULL, surrogate, negative, or out-of-range values. Locale/code-page conversion
+is not claimed.
 `EOMONTH` is translated to the typed calendar operators and returns a `DATE`
 for date or timestamp inputs, including a row-local month offset. Its
 qualification is limited to those input types; it does not imply support for

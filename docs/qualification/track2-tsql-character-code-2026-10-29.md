@@ -3,7 +3,7 @@
 ## Scope
 
 This qualification covers the bounded SQL Server spellings `ASCII`, `UNICODE`,
-and `CHAR` on nullable UTF-8 text and integer columns. It does not claim SQL
+`CHAR`, and `NCHAR` on nullable UTF-8 text and integer columns. It does not claim SQL
 Server locale or code-page conversion behavior.
 
 - `ASCII(text)` returns the leading Unicode scalar when it is in the ASCII
@@ -13,6 +13,9 @@ Server locale or code-page conversion behavior.
   values return NULL.
 - `CHAR(integer)` accepts the bounded byte range 0–255 and returns a one-byte
   text value. NULL and out-of-range values return NULL.
+- `NCHAR(integer)` accepts valid Unicode scalar values and returns the
+  corresponding text value. NULL, negative, surrogate, and out-of-range values
+  return NULL.
 
 ## Evidence
 
@@ -23,10 +26,10 @@ Server locale or code-page conversion behavior.
 - Full Parquet-layout and execution-path differential sweep:
   `differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`.
 
-The focused test compares local and three-worker results for deterministic
+The focused tests compare local and three-worker results for deterministic
 ordering, NULL propagation, ASCII and non-ASCII text, Unicode scalar values,
-and an in-range/out-of-range `CHAR` input. The full sweep passed 642 cases in
-614.39 seconds after adding deterministic tie-breakers to this case.
+and bounded `CHAR`/`NCHAR` inputs. The full Parquet-layout and execution-path
+sweep passed in 624.69 seconds.
 
 ## Release boundary
 
