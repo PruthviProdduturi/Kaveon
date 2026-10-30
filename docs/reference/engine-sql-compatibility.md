@@ -172,6 +172,10 @@ scalar, and `CHAR` accepts integer values 0 through 255, returning NULL outside
 that range. `NCHAR` accepts valid Unicode scalar values and returns NULL for
 NULL, surrogate, negative, or out-of-range values. Locale/code-page conversion
 is not claimed.
+The bounded SQL Server table-valued `STRING_SPLIT` form is also qualified for
+literal value/separator inputs and literal ordinal mode `0`/`1`, lowering to
+`SPLIT` plus `UNNEST`; arbitrary table-valued functions and dynamic ordinal
+modes remain rejected.
 `EOMONTH` is translated to the typed calendar operators and returns a `DATE`
 for date or timestamp inputs, including a row-local month offset. Its
 qualification is limited to those input types; it does not imply support for
