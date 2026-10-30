@@ -689,6 +689,47 @@ impl TransactionRegistry {
         Ok(documents)
     }
 
+    async fn conflict_ignore_existing(
+        &self,
+        owner: &str,
+        id: &str,
+        commands: &[kaveon_sql::parser::ProductDmlCommand],
+    ) -> Result<Vec<bool>, RegistryError> {
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        let snapshot = session.transaction.snapshot();
+        commands
+            .iter()
+            .map(|command| {
+                let kaveon_sql::parser::ProductDmlCommand::CreateIgnore { kind, id, .. } = command
+                else {
+                    return Ok(false);
+                };
+                if kind == "typed_row" {
+                    return match find_typed_row(snapshot, id, owner) {
+                        Ok(_) => Ok(true),
+                        Err(RegistryError::Invalid(message))
+                            if message == "typed row does not exist" =>
+                        {
+                            Ok(false)
+                        }
+                        Err(error) => Err(error),
+                    };
+                }
+                let product_kind = record_kind(kind)?;
+                let Some(record) = snapshot
+                    .product_record(product_kind, id)
+                    .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                else {
+                    return Ok(false);
+                };
+                require_product_owner(record, owner)?;
+                Ok(true)
+            })
+            .collect()
+    }
+
     async fn read_product(
         &self,
         identity: &Identity,
@@ -2710,6 +2751,17 @@ async fn execute_sql_request(
                 Ok(command) => command,
                 Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
             };
+            let ignored_conflicts = if dml.on_conflict_do_nothing && !returning.is_empty() {
+                match registry
+                    .conflict_ignore_existing(owner, &id, &commands)
+                    .await
+                {
+                    Ok(existing) => existing,
+                    Err(error) => return error_response(error),
+                }
+            } else {
+                Vec::new()
+            };
             let deleted_documents = if returning
                 .iter()
                 .any(|column| column.eq_ignore_ascii_case("document_json"))
@@ -2770,6 +2822,7 @@ async fn execute_sql_request(
                             &returning,
                             &commands,
                             &deleted_documents,
+                            &ignored_conflicts,
                         ),
                     };
                     match result {
@@ -2834,10 +2887,17 @@ fn product_returning_response(
     columns: &[String],
     commands: &[kaveon_sql::parser::ProductDmlCommand],
     deleted_documents: &[Option<String>],
+    ignored_conflicts: &[bool],
 ) -> Result<serde_json::Value, String> {
     let rows = commands
         .iter()
         .enumerate()
+        .filter(|(command_index, _)| {
+            !ignored_conflicts
+                .get(*command_index)
+                .copied()
+                .unwrap_or(false)
+        })
         .map(|(command_index, command)| {
             let (id, revision) = match command {
                 kaveon_sql::parser::ProductDmlCommand::Create { id, .. }
@@ -4120,7 +4180,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Changed"}') ON CONFLICT DO NOTHING"#.into(),
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Changed"}') ON CONFLICT DO NOTHING RETURNING id, revision, document_json"#.into(),
                 transaction_id: Some(retry.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4128,6 +4188,11 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"], serde_json::json!([]));
         assert_eq!(
             execute_sql_request(
                 &registry,

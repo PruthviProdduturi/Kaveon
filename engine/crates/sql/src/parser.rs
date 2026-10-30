@@ -2551,11 +2551,6 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 }
             };
             let returning = parse_product_returning(insert.returning.as_ref())?;
-            if on_conflict_do_nothing && !returning.is_empty() {
-                return Err(sql_error(
-                    "ON CONFLICT DO NOTHING cannot be combined with product RETURNING",
-                ));
-            }
             if !returning.is_empty()
                 && !table.to_ascii_lowercase().starts_with("product.")
                 && !table.to_ascii_lowercase().starts_with("kaveon.product.")
@@ -3644,10 +3639,14 @@ mod tests {
                 document_json: "{}".into(),
             }
         );
-        assert!(parse_native_transactional(
-            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT DO NOTHING RETURNING id"
+        let NativeTransactionalStatement::Dml(returning) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT DO NOTHING RETURNING id, revision, document_json"
         )
-        .is_err());
+        .expect("bounded conflict-ignore returning should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(returning.returning, ["id", "revision", "document_json"]);
         assert!(parse_native_transactional(
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO NOTHING"
         )
