@@ -139,6 +139,9 @@ rejects NULL, surrogate, negative, and out-of-range code points; it has the
 same local and three-worker qualification boundary.
 `NULLIF` is qualified for row-local scalar expressions through the existing
 vectorized null-preserving conditional path.
+SQL Server `ROUND` now accepts the bounded third `operation` argument (`0` for
+rounding and `1` for truncation toward zero), including row-local integer
+expressions; other operation values fail closed.
 Bounded SQL Server `STRING_SPLIT` now lowers to the existing typed `SPLIT` and
 `UNNEST` path for scalar inputs; optional literal ordinal mode `0`/`1`, alias
 columns, row-local lateral inputs, and the lateral boundary are qualified in
