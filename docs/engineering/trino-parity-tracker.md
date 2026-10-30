@@ -57,7 +57,8 @@ evidence pass.
 
 The corpus currently contains 105 bounded T-SQL read cases, including the
 explicit `STRING_AGG` rejection that records its ordered distributed-state
-boundary; the JSON corpus remains the authoritative case list.
+boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
+the JSON corpus remains the authoritative case list.
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
