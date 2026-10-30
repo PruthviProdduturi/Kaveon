@@ -15,7 +15,10 @@ expose a conservative bounded output cap derived from the child estimate and
 the operator's literal bound. Row-preserving `Filter`, `Project`, `Sort`, and
 `Window` nodes propagate the same conservative child upper bound so a bounded
 operator above them can remain safely capped; the filter predicate itself is
-not estimated.
+not estimated. Join nodes use the saturating product of child bounds; semi/anti
+joins use the left bound; `UNION`, `INTERSECT`, and `EXCEPT` use their
+mathematically safe sum/minimum/left-input bounds. None of these values claim
+join selectivity or aggregate cardinality.
 
 ## Evidence
 

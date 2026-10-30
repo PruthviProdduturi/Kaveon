@@ -10576,10 +10576,9 @@ fn planning_estimate_map(planning: &PlanningStatistics) -> BTreeMap<String, Plan
 }
 
 /// Attach bounded estimate metadata to displayable plan nodes. Scan rows are
-/// source facts; row-preserving nodes receive only conservative upper bounds
-/// derived from their child. We intentionally do not manufacture output
-/// cardinalities after filters' predicates, joins, aggregation, or duplicate
-/// elimination.
+/// source facts; row-preserving and set/join nodes receive only conservative
+/// upper bounds derived from their children. We intentionally do not
+/// manufacture selectivity after filters' predicates or aggregation.
 fn annotate_plan_estimates(
     node: &mut kaveon_core::PlanNode,
     estimates: &BTreeMap<String, PlanEstimate>,
@@ -10613,23 +10612,66 @@ fn annotate_plan_estimates(
     }
     let operator = node.operator.to_ascii_lowercase();
     match operator.as_str() {
-        "join" | "semijoin" | "antijoin" if known.len() >= 2 => {
+        "join" if known.len() >= 2 => {
+            node.attributes
+                .insert("estimated_left_input_rows".into(), known[0].to_string());
+            node.attributes
+                .insert("estimated_right_input_rows".into(), known[1].to_string());
+            node.attributes.insert(
+                "estimated_output_rows".into(),
+                known[0].saturating_mul(known[1]).to_string(),
+            );
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(known[0].saturating_mul(known[1]))
+        }
+        "semijoin" | "antijoin" if known.len() >= 2 => {
             node.attributes
                 .insert("estimated_left_input_rows".into(), known[0].to_string());
             node.attributes
                 .insert("estimated_right_input_rows".into(), known[1].to_string());
             node.attributes
-                .insert("estimate_scope".into(), "child_inputs_only".into());
-            None
+                .insert("estimated_output_rows".into(), known[0].to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(known[0])
         }
-        "union" | "intersect" | "except" => {
+        "union" => {
+            node.attributes.insert(
+                "estimated_input_rows".into(),
+                known.iter().sum::<u64>().to_string(),
+            );
+            node.attributes.insert(
+                "estimated_output_rows".into(),
+                known.iter().sum::<u64>().to_string(),
+            );
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(known.iter().sum())
+        }
+        "intersect" => {
+            let output = known.iter().copied().min().unwrap_or(0);
             node.attributes.insert(
                 "estimated_input_rows".into(),
                 known.iter().sum::<u64>().to_string(),
             );
             node.attributes
-                .insert("estimate_scope".into(), "child_inputs_only".into());
-            None
+                .insert("estimated_output_rows".into(), output.to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(output)
+        }
+        "except" => {
+            let output = known[0];
+            node.attributes.insert(
+                "estimated_input_rows".into(),
+                known.iter().sum::<u64>().to_string(),
+            );
+            node.attributes
+                .insert("estimated_output_rows".into(), output.to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(output)
         }
         "topn" | "limit" => {
             let child = known[0];
@@ -15864,7 +15906,8 @@ mod tests {
         super::annotate_plan_estimates(&mut join, &estimates);
         assert_eq!(join.attributes["estimated_left_input_rows"], "120");
         assert_eq!(join.attributes["estimated_right_input_rows"], "45");
-        assert_eq!(join.attributes["estimate_scope"], "child_inputs_only");
+        assert_eq!(join.attributes["estimated_output_rows"], "5400");
+        assert_eq!(join.attributes["estimate_scope"], "bounded_upper_bound");
     }
 
     #[test]
