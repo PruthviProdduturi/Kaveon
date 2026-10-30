@@ -1,6 +1,6 @@
 # Kaveon Engine and Microsoft Fabric SQL Analytics Endpoint
 
-> Verified September 4, 2026. This compares product architecture and current capabilities; it is not a price or performance benchmark. Kaveon is a personal independent project and must use resources in its own account/subscription, never an employer-owned environment.
+> Verified October 29, 2026. This compares product architecture and current capabilities; it is not a price or performance benchmark. Kaveon is a personal independent project and must use resources in its own account/subscription, never an employer-owned environment.
 
 ## Executive position
 
@@ -12,10 +12,10 @@ Kaveon should not position the Engine as a complete Fabric replacement. Its cred
 
 | Dimension | Kaveon Engine `dev` | Fabric Lakehouse SQL analytics endpoint |
 |---|---|---|
-| Delivery | Self-hostable Rust coordinator/workers; hosted Engine pending | Microsoft-managed endpoint created with each Lakehouse |
+| Delivery | Self-hostable Rust coordinator/workers; private-cloud deployment is operator-managed | Microsoft-managed endpoint created with each Lakehouse |
 | Storage center | Registered customer-controlled Parquet/Delta locations | Lakehouse Delta tables in OneLake plus supported shortcuts |
 | SQL dialect | Focused analytical SQL surface | Read-oriented T-SQL surface with DQL and limited DDL |
-| Write/transaction model | Read path today; optimized ingest target | Endpoint is read-only for table data; Fabric Warehouse is the transactional SQL offering |
+| Write/transaction model | KaveonDB owns transactional product state; lake-table mutation remains bounded and explicitly qualified | Endpoint is read-only for table data; Fabric Warehouse is the transactional SQL offering |
 | Distributed runtime | Alpha stage/task/split/exchange execution | Managed implementation, not customer-operated |
 | BI integration | Kaveon Studio target integration | Power BI semantic models and Direct Lake ecosystem |
 | Natural language | DLM sits above Engine as a separate deterministic layer | Copilot belongs to the surrounding Fabric experiences |
@@ -38,8 +38,8 @@ Kaveon Engine does not currently provide broad T-SQL compatibility, managed Lake
 |---|---|---|
 | Infrastructure operation | User/operator owns deployment | Microsoft-managed SaaS |
 | Capacity management | Early worker topology; admission control target | Fabric capacity model and managed workloads |
-| Catalog durability | SQLite/WAL for one coordinator | Managed Fabric/OneLake item metadata |
-| Multi-coordinator metadata | PostgreSQL-backed service target | Managed by Fabric |
+| Catalog durability | Native KaveonDB catalog over the durable local/object-store transaction protocol; cloud recovery qualification is separate | Managed Fabric/OneLake item metadata |
+| Multi-coordinator metadata | KaveonDB native authority; PostgreSQL is a legacy external connector only | Managed by Fabric |
 | Observability | Query, stage/task, scan, node-memory telemetry; operator metrics incomplete | Integrated monitoring and capacity experiences |
 | Availability/DR | Deployment responsibility; not production-qualified | Service-defined availability and regional capabilities |
 
