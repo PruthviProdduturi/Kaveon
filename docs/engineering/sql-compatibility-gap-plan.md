@@ -50,7 +50,10 @@ The authoritative capability details remain in:
   `TOP PERCENT` and `TOP WITH
   TIES` are qualified only when their `ORDER BY` keys define a deterministic
   order.
-- [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
+- [x] Add Fabric/Azure SQL passthrough routing tests without implying Engine
+  execution. Native Engine catalog resolution and Fabric/Azure SQL passthrough
+  separation are qualified in
+  `docs/qualification/track1-fabric-passthrough-routing-2026-10-29.md`.
 
 Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, character-set `TRIM` in BOTH/LEADING/TRAILING modes, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
