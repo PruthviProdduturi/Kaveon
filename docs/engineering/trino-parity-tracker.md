@@ -42,7 +42,7 @@ The versioned T-SQL corpus pins the latest implementation commit; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The corpus currently contains 96 bounded T-SQL read cases, including the
+The corpus currently contains 97 bounded T-SQL read cases, including the
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
 `DATEPART` week/quarter aliases (`WK`, `WW`, `QQ`, and `Q`) plus timestamp
 subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
@@ -72,7 +72,7 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 96 cases (the implementation pin is updated after
+The current T-SQL corpus is 97 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -204,16 +204,18 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 96-case corpus pinned at
-`36b9783f` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
+The T-SQL row above is backed by the versioned 97-case corpus pinned at
+`bf76bea0` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
-The latest nine cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
-`NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral
-`STRING_SPLIT` forms, with
+The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
+`NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
+`CROSS APPLY` `STRING_SPLIT` forms, with
 locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
 supersedes the older case-count wording embedded in the capability table.
+The capability row's historical corpus pointer is superseded by the 97-case
+corpus and pin above; do not use its older count as current evidence.
 
 Run from `engine/`:
 

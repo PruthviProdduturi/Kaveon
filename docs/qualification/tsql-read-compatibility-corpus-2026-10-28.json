@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "36b9783f",
+  "engine_commit": "bf76bea0",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [year] FROM t", "status": "planner_qualified"},
@@ -17,6 +17,7 @@
     {"id": "string_split", "sql": "SELECT value FROM STRING_SPLIT('a,b', ',') AS parts(value)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_scalar_inputs"},
     {"id": "string_split_ordinal", "sql": "SELECT value, ordinal FROM STRING_SPLIT('a,b', ',', 1) AS parts(value, ordinal)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_ordinal_mode"},
     {"id": "string_split_row_local_lateral", "sql": "SELECT value FROM t CROSS JOIN LATERAL STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value)", "status": "planner_qualified", "distributed_status": "qualified_for_row_local_lateral_inputs"},
+    {"id": "string_split_cross_apply", "sql": "SELECT value FROM t CROSS APPLY STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_string_split_apply"},
     {"id": "nullif", "sql": "SELECT NULLIF(actions, 0) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_row_local_inputs"},
     {"id": "round_operation", "sql": "SELECT ROUND(CAST(actions AS DOUBLE), 1, 1) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_or_row_local_operation_0_or_1"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},

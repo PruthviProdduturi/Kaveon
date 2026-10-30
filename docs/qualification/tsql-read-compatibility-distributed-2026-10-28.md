@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 96 cases, including exact local/three-worker qualification for
+- Corpus: 97 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -19,7 +19,7 @@ parity or external-client parity.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
-  with exact local-vs-distributed results for the 96-case corpus, including
+  with exact local-vs-distributed results for the 97-case corpus, including
   row-local `STRING_SPLIT` and `ROUND` operation mode, without worker failures
   or retained exchange/spill files.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
@@ -60,7 +60,7 @@ text accepted by the safe numeric cast are qualified; locale-specific currency
 and SQL Server type-coercion extensions remain outside the contract.
 
 `STRING_SPLIT` also accepts scalar row-local string and separator expressions
-through `CROSS JOIN LATERAL`; literal ordinal mode and the value/ordinal alias
+through `CROSS JOIN LATERAL` or bounded `CROSS APPLY`; literal ordinal mode and the value/ordinal alias
 contract remain bounded. The focused regression is
 `distributed_tsql_string_split_matches_local`.
 
