@@ -300,6 +300,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_replicate",
+        "SELECT TOP 5 REPLICATE(country, 2) AS repeated FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_string_escape_json",
         "SELECT TOP 5 STRING_ESCAPE(country, 'json') AS escaped FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
@@ -7871,6 +7876,28 @@ fn distributed_tsql_quotename_delimiters_match_local() {
     let statement = "SELECT user_id, QUOTENAME(country) AS bracketed, QUOTENAME(country, '\"') AS quoted FROM events ORDER BY user_id, country LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-quotename-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_replicate_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-replicate-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, REPLICATE(country, 2) AS repeated FROM events ORDER BY user_id, country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-replicate-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);

@@ -63,6 +63,7 @@
     {"id": "string_escape_json", "sql": "SELECT STRING_ESCAPE(value, 'json') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "quotename_default_brackets", "sql": "SELECT QUOTENAME(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "quotename_double_quote", "sql": "SELECT QUOTENAME(name, '\"') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
+    {"id": "replicate", "sql": "SELECT REPLICATE(name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns_and_nonnegative_counts"},
     {"id": "try_cast", "sql": "SELECT TRY_CAST(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "convert_date_style_us", "sql": "SELECT CONVERT(DATE, '12/31/2024', 101)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
     {"id": "convert_date_style_text", "sql": "SELECT CONVERT(DATE, 'Dec 31 2024', 0)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
