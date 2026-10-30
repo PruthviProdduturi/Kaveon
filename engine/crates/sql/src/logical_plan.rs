@@ -1576,10 +1576,10 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     .and_then(|alias| alias.columns.get(1))
                     .map(|column| column.name.value.clone())
                     .unwrap_or_else(|| "ordinal".to_owned());
-                if alias
-                    .as_ref()
-                    .is_some_and(|alias| alias.columns.len() != usize::from(with_ordinality) + 1)
-                {
+                if alias.as_ref().is_some_and(|alias| {
+                    !alias.columns.is_empty()
+                        && alias.columns.len() != usize::from(with_ordinality) + 1
+                }) {
                     return Err(sql_err(
                         "STRING_SPLIT alias must expose value and optional ordinal columns",
                     ));
@@ -1914,8 +1914,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .map(|column| column.name.value.clone())
                 .unwrap_or_else(|| "ordinal".to_owned());
             if alias.as_ref().is_some_and(|alias| {
-                alias.columns.len() > usize::from(with_ordinality) + 1
-                    || alias.columns.len() < usize::from(with_ordinality) + 1
+                !alias.columns.is_empty() && alias.columns.len() != usize::from(with_ordinality) + 1
             }) {
                 return Err(sql_err(
                     "STRING_SPLIT alias must expose value and optional ordinal columns",
@@ -9799,6 +9798,14 @@ mod tests {
                 other => panic!("unknown T-SQL corpus status: {other}"),
             }
         }
+    }
+
+    #[test]
+    fn string_split_allows_default_alias_columns() {
+        let plan = sql_to_logical_plan("SELECT value FROM STRING_SPLIT('a,b', ',') AS parts")
+            .expect("STRING_SPLIT should provide its default value output");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("SPLIT"), "{rendered}");
     }
 
     #[test]
