@@ -3478,6 +3478,21 @@ mod tests {
     }
 
     #[test]
+    fn string_split_outer_apply_lowers_to_left_lateral_join() {
+        let statements = parse_sql(
+            "SELECT t.id, parts.value FROM t OUTER APPLY STRING_SPLIT(t.csv, ',') AS parts(value)",
+        )
+        .expect("STRING_SPLIT OUTER APPLY should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("LEFT JOIN LATERAL"), "{rendered}");
+        assert!(rendered.contains("STRING_SPLIT"), "{rendered}");
+        assert!(
+            rendered.to_ascii_uppercase().contains("ON TRUE"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn apply_function_keeps_fail_closed_boundary() {
         let error = parse_sql("SELECT * FROM t CROSS APPLY f(t.id)")
             .expect_err("table-valued APPLY functions remain unsupported");
