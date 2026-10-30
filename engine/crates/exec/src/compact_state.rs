@@ -31,6 +31,7 @@ pub(crate) const TAG_APPROX_PERCENTILE: u8 = 18;
 pub(crate) const TAG_DISTINCT_SKETCH: u8 = 19;
 /// A column profile (`COLUMN_STATISTICS`): its JSON as one payload.
 pub(crate) const TAG_COLUMN_PROFILE: u8 = 20;
+pub(crate) const TAG_STRING_AGG: u8 = 21;
 
 /// The payload of a sketch state, the same under both state encodings.
 pub(crate) fn sketch_payload(state: &AggregateState) -> Result<Vec<u8>> {
@@ -139,6 +140,21 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                         &encode_aggregate_value(&AggregateValue::Utf8(value.clone()))?,
                     )?;
                 }
+            }
+            AggregateState::StringAgg { value, delimiter } => {
+                out.push(TAG_STRING_AGG);
+                payload(
+                    out,
+                    &encode_aggregate_value(&AggregateValue::Utf8(delimiter.clone()))?,
+                )?;
+                payload(
+                    out,
+                    &encode_aggregate_value(
+                        &value.as_ref().map_or(AggregateValue::Null, |value| {
+                            AggregateValue::Utf8(value.clone())
+                        }),
+                    )?,
+                )?;
             }
             AggregateState::CountDistinct(values)
             | AggregateState::SumDistinct(values)
@@ -269,6 +285,28 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
                 } else {
                     AggregateState::Utf8Max(value)
                 }
+            }
+            TAG_STRING_AGG => {
+                let delimiter = match decode_aggregate_value(input.payload()?)? {
+                    AggregateValue::Utf8(value) => value,
+                    _ => return Err(exec_err("invalid STRING_AGG separator payload")),
+                };
+                if delimiter.len() > 64 * 1024 {
+                    return Err(exec_err("STRING_AGG separator exceeds the 64 KiB limit"));
+                }
+                let value = match decode_aggregate_value(input.payload()?)? {
+                    AggregateValue::Null => None,
+                    AggregateValue::Utf8(value) if value.len() <= MAX_STRING_AGG_BYTES => {
+                        Some(value)
+                    }
+                    AggregateValue::Utf8(_) => {
+                        return Err(exec_err(
+                            "STRING_AGG result exceeds the 16 MiB per-group limit",
+                        ));
+                    }
+                    _ => return Err(exec_err("invalid STRING_AGG value payload")),
+                };
+                AggregateState::StringAgg { value, delimiter }
             }
             TAG_COUNT_DISTINCT | TAG_SUM_DISTINCT | TAG_AVG_DISTINCT | TAG_INTEGER_SUM_DISTINCT => {
                 let values = decode_distinct_values(input.payload()?)?;

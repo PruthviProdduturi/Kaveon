@@ -14858,6 +14858,7 @@ fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOpera
             | AggregateExpr::ApproxDistinct { .. }
             | AggregateExpr::ApproxPercentile { .. }
             | AggregateExpr::ApproxDistinctState(_)
+            | AggregateExpr::StringAgg { .. }
             | AggregateExpr::ColumnStatistics(_) => None,
         })
         .collect::<Option<Vec<_>>>()?;

@@ -56,8 +56,8 @@ changes must update the pin only after the declared tests and qualification
 evidence pass.
 
 The corpus currently contains 106 bounded T-SQL read cases, including the
-explicit `STRING_AGG` rejection that records its ordered distributed-state
-boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
+qualified unordered literal-separator `STRING_AGG` slice and its remaining
+ordered-state boundary (`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`);
 the SQL Server `DATETRUNC` alias qualified through `DATE_TRUNC`, and the JSON
 corpus remains the authoritative case list. `DATETRUNC` evidence is retained
 in `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.

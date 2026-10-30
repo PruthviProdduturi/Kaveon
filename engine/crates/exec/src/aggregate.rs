@@ -96,6 +96,12 @@ pub(crate) mod compact_state;
 const GROUPED_KEY_TYPES: &str = "kaveon.grouped_aggregate_state.key_types";
 const GROUPED_OUTPUT_TYPES: &str = "kaveon.grouped_aggregate_state.output_types";
 const AGGREGATE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
+/// Maximum materialized value for one unordered `STRING_AGG` group.
+///
+/// This keeps distributed partial states bounded even when a source contains
+/// an unexpectedly large number of values.  Ordered and spill-aware string
+/// aggregation remains a separate qualification item.
+const MAX_STRING_AGG_BYTES: usize = 16 * 1024 * 1024;
 const STATE_SUM: u8 = 1;
 const STATE_COUNT: u8 = 2;
 const STATE_MIN: u8 = 3;
@@ -113,6 +119,7 @@ const STATE_APPROX_DISTINCT: u8 = 17;
 const STATE_APPROX_PERCENTILE: u8 = 18;
 const STATE_DISTINCT_SKETCH: u8 = 19;
 const STATE_COLUMN_PROFILE: u8 = 20;
+const STATE_STRING_AGG: u8 = 21;
 pub(crate) const VALUE_BOOL: u8 = 1;
 pub(crate) const VALUE_INT32: u8 = 2;
 pub(crate) const VALUE_INT64: u8 = 3;
@@ -129,6 +136,7 @@ pub enum AggFunc {
     Min,
     Max,
     Avg,
+    StringAgg,
     /// `APPROX_COUNT_DISTINCT`: a HyperLogLog sketch over the column at the
     /// statistics precision; the result is its estimate, within
     /// [`HllSketch::standard_error`] of the exact count.
@@ -176,6 +184,8 @@ pub struct AggExpr {
     /// For `ApproxPercentile`: the fractions and whether they answer as
     /// one list.
     pub percentiles: Option<Percentiles>,
+    /// Literal separator for bounded unordered STRING_AGG.
+    pub delimiter: Option<String>,
 }
 
 impl AggExpr {
@@ -186,6 +196,7 @@ impl AggExpr {
             alias: None,
             distinct: false,
             percentiles: None,
+            delimiter: None,
         }
     }
 
@@ -224,6 +235,7 @@ impl AggExpr {
             AggFunc::Min => "min",
             AggFunc::Max => "max",
             AggFunc::Avg => "avg",
+            AggFunc::StringAgg => "string_agg",
             AggFunc::ApproxDistinct => "approx_count_distinct",
             AggFunc::ApproxPercentile => "approx_percentile",
             AggFunc::ApproxDistinctState => "approx_count_distinct_state",
@@ -238,6 +250,7 @@ impl AggExpr {
     pub fn output_type(&self) -> DataType {
         match self.func {
             AggFunc::Count | AggFunc::ApproxDistinct => DataType::UInt64,
+            AggFunc::StringAgg => DataType::Utf8,
             AggFunc::ApproxDistinctState | AggFunc::ColumnStatistics => DataType::Utf8,
             AggFunc::ApproxPercentile if self.percentiles.as_ref().is_some_and(|p| p.list) => {
                 percentile_list_type()
@@ -304,6 +317,10 @@ pub enum AggregateState {
     Max(Option<f64>),
     Utf8Min(Option<String>),
     Utf8Max(Option<String>),
+    StringAgg {
+        value: Option<String>,
+        delimiter: String,
+    },
     Avg {
         sum: f64,
         count: u64,
@@ -358,6 +375,11 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
             }
             if let Ok(field) = input.field_with_name(&agg.column) {
                 let data_type = logical_data_type(field.data_type());
+                if matches!(agg.func, AggFunc::StringAgg)
+                    && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+                {
+                    return Ok(DataType::Utf8);
+                }
                 if matches!(agg.func, AggFunc::Min | AggFunc::Max)
                     && matches!(
                         data_type,
@@ -445,6 +467,10 @@ impl AggregateState {
             return match expression.func {
                 AggFunc::Min => Self::Utf8Min(None),
                 AggFunc::Max => Self::Utf8Max(None),
+                AggFunc::StringAgg => Self::StringAgg {
+                    value: None,
+                    delimiter: expression.delimiter.clone().unwrap_or_default(),
+                },
                 _ => Self::new(expression),
             };
         }
@@ -574,6 +600,10 @@ impl AggregateState {
             (AggFunc::Min, false) => Self::Min(None),
             (AggFunc::Max, false) => Self::Max(None),
             (AggFunc::Avg, false) => Self::Avg { sum: 0.0, count: 0 },
+            (AggFunc::StringAgg, _) => Self::StringAgg {
+                value: None,
+                delimiter: expression.delimiter.clone().unwrap_or_default(),
+            },
             (AggFunc::Count, true) => Self::CountDistinct(DistinctSet::new()),
             (AggFunc::Sum, true) => Self::SumDistinct(DistinctSet::new()),
             (AggFunc::Avg, true) => Self::AvgDistinct(DistinctSet::new()),
@@ -813,6 +843,34 @@ impl AggregateState {
                     *current = Some(value.to_owned());
                 }
             }
+            Self::StringAgg {
+                value: current,
+                delimiter,
+            } => {
+                if let Some(existing) = current {
+                    let required = existing
+                        .len()
+                        .checked_add(delimiter.len())
+                        .and_then(|size| size.checked_add(value.len()))
+                        .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
+                    if required > MAX_STRING_AGG_BYTES {
+                        return Err(exec_err(format!(
+                            "STRING_AGG result exceeds the {} MiB per-group limit",
+                            MAX_STRING_AGG_BYTES / (1024 * 1024)
+                        )));
+                    }
+                    existing.push_str(delimiter);
+                    existing.push_str(value);
+                } else {
+                    if value.len() > MAX_STRING_AGG_BYTES {
+                        return Err(exec_err(format!(
+                            "STRING_AGG result exceeds the {} MiB per-group limit",
+                            MAX_STRING_AGG_BYTES / (1024 * 1024)
+                        )));
+                    }
+                    *current = Some(value.to_owned());
+                }
+            }
             _ => {
                 return Err(exec_err(
                     "UTF-8 update applied to an incompatible aggregate state",
@@ -984,6 +1042,44 @@ impl AggregateState {
                     *value = Some(other.clone());
                 }
             }
+            (
+                Self::StringAgg { value, delimiter },
+                Self::StringAgg {
+                    value: other,
+                    delimiter: other_delimiter,
+                },
+            ) => {
+                if delimiter != other_delimiter {
+                    return Err(exec_err(
+                        "cannot merge STRING_AGG states with different separators",
+                    ));
+                }
+                if let Some(other) = other {
+                    if let Some(existing) = value {
+                        let required = existing
+                            .len()
+                            .checked_add(delimiter.len())
+                            .and_then(|size| size.checked_add(other.len()))
+                            .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
+                        if required > MAX_STRING_AGG_BYTES {
+                            return Err(exec_err(format!(
+                                "STRING_AGG result exceeds the {} MiB per-group limit",
+                                MAX_STRING_AGG_BYTES / (1024 * 1024)
+                            )));
+                        }
+                        existing.push_str(delimiter);
+                        existing.push_str(other);
+                    } else {
+                        if other.len() > MAX_STRING_AGG_BYTES {
+                            return Err(exec_err(format!(
+                                "STRING_AGG result exceeds the {} MiB per-group limit",
+                                MAX_STRING_AGG_BYTES / (1024 * 1024)
+                            )));
+                        }
+                        *value = Some(other.clone());
+                    }
+                }
+            }
             (Self::CountDistinct(values), Self::CountDistinct(other))
             | (Self::IntegerSumDistinct(values), Self::IntegerSumDistinct(other))
             | (Self::SumDistinct(values), Self::SumDistinct(other))
@@ -1069,6 +1165,7 @@ impl AggregateState {
     pub fn utf8_result(&self) -> Result<Option<String>> {
         match self {
             Self::Utf8Min(value) | Self::Utf8Max(value) => Ok(value.clone()),
+            Self::StringAgg { value, .. } => Ok(value.clone()),
             Self::DistinctSketch(sketch) => {
                 Ok(Some(kaveon_core::sketch::base64_encode(&sketch.to_bytes())))
             }
@@ -1326,6 +1423,11 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                     if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8) =>
                 {
                     data_type.clone()
+                }
+                AggregateState::StringAgg { .. }
+                    if matches!(data_type, DataType::Utf8 | DataType::LargeUtf8) =>
+                {
+                    DataType::Utf8
                 }
                 _ => DataType::Float64,
             };
@@ -1623,6 +1725,7 @@ fn state_layout(states: &[AggregateState]) -> Result<Vec<(u8, Option<i8>)>> {
                     AggregateState::Max(_) => STATE_MAX,
                     AggregateState::Utf8Min(_) => STATE_UTF8_MIN,
                     AggregateState::Utf8Max(_) => STATE_UTF8_MAX,
+                    AggregateState::StringAgg { .. } => STATE_STRING_AGG,
                     AggregateState::Avg { .. } => STATE_AVG,
                     AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
                     AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
@@ -1680,6 +1783,7 @@ pub fn finalize_grouped_aggregate_states(
                         .map(FinalAggregateValue::NumericList),
                     AggregateState::Utf8Min(_)
                     | AggregateState::Utf8Max(_)
+                    | AggregateState::StringAgg { .. }
                     | AggregateState::DistinctSketch(_)
                     | AggregateState::ColumnReadProfile(_) => {
                         state.utf8_result().map(FinalAggregateValue::Utf8)
@@ -2067,6 +2171,19 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                         .transpose()?,
                 );
             }
+            AggregateState::StringAgg { value, delimiter } => {
+                kinds.push(STATE_STRING_AGG);
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                let payload = [
+                    AggregateValue::Utf8(delimiter.clone()),
+                    value
+                        .clone()
+                        .map_or(AggregateValue::Null, AggregateValue::Utf8),
+                ];
+                distinct_payloads.push(Some(encode_group_keys(&payload)?));
+            }
             AggregateState::Avg { sum, count } => {
                 kinds.push(STATE_AVG);
                 sums.push(Some(*sum));
@@ -2224,6 +2341,24 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                         AggregateState::Utf8Min(value)
                     } else {
                         AggregateState::Utf8Max(value)
+                    }
+                }
+                STATE_STRING_AGG => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("STRING_AGG state payload cannot be null"));
+                    }
+                    let values = decode_group_keys(distinct.value(row))?;
+                    let [AggregateValue::Utf8(delimiter), value] = values.as_slice() else {
+                        return Err(exec_err("invalid STRING_AGG state payload"));
+                    };
+                    let value = match value {
+                        AggregateValue::Null => None,
+                        AggregateValue::Utf8(value) => Some(value.clone()),
+                        _ => return Err(exec_err("invalid STRING_AGG value payload")),
+                    };
+                    AggregateState::StringAgg {
+                        value,
+                        delimiter: delimiter.clone(),
                     }
                 }
                 STATE_AVG => AggregateState::Avg {
@@ -2599,7 +2734,17 @@ impl HashAggregate {
                     exec_err(format!("aggregate column '{}' not in input", agg.column))
                 })?;
                 let data_type = logical_data_type(source_schema.field(index).data_type());
-                if !is_numeric_type(data_type)
+                if matches!(agg.func, AggFunc::StringAgg)
+                    && !matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+                {
+                    return Err(exec_err(format!(
+                        "{} requires a text column, got {}",
+                        agg.output_name(),
+                        source_schema.field(index).data_type()
+                    )));
+                }
+                if !matches!(agg.func, AggFunc::StringAgg)
+                    && !is_numeric_type(data_type)
                     && !(matches!(agg.func, AggFunc::Min | AggFunc::Max)
                         && matches!(
                             data_type,
@@ -3152,7 +3297,9 @@ impl HashAggregate {
                             state.update_exact(extract_key(array, row).into())?;
                         } else if matches!(
                             state,
-                            AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+                            AggregateState::Utf8Min(_)
+                                | AggregateState::Utf8Max(_)
+                                | AggregateState::StringAgg { .. }
                         ) {
                             let value = extract_utf8_value(array, row)?;
                             state.update_utf8(&value)?;
@@ -5111,6 +5258,45 @@ pub(crate) fn exec_err(msg: impl Into<String>) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unordered_string_agg_omits_nulls_and_merges_literal_separator_state() {
+        let mut first = AggExpr::new(AggFunc::StringAgg, "name");
+        first.delimiter = Some(",".into());
+        let mut left = AggregateState::new(&first);
+        left.update_utf8("alpha").unwrap();
+        let mut right = AggregateState::new(&first);
+        right.update_utf8("beta").unwrap();
+        right.update_utf8("gamma").unwrap();
+        left.merge(&right).unwrap();
+        assert_eq!(
+            left.utf8_result().unwrap().as_deref(),
+            Some("alpha,beta,gamma")
+        );
+        let encoded = encode_aggregate_states(&[left.clone()]).unwrap();
+        let decoded = decode_aggregate_states(&encoded).unwrap();
+        assert_eq!(decoded, vec![left]);
+        let groups = vec![GroupedAggregateState {
+            group_keys: vec![],
+            states: decoded,
+        }];
+        let finalized = finalize_grouped_aggregate_states(&groups).unwrap();
+        assert_eq!(
+            finalized[0].values,
+            vec![FinalAggregateValue::Utf8(Some("alpha,beta,gamma".into()))]
+        );
+    }
+
+    #[test]
+    fn string_agg_rejects_unbounded_group_state() {
+        let mut expr = AggExpr::new(AggFunc::StringAgg, "name");
+        expr.delimiter = Some(",".into());
+        let mut state = AggregateState::new(&expr);
+        let oversized = "x".repeat(MAX_STRING_AGG_BYTES);
+        state.update_utf8(&oversized).unwrap();
+        let error = state.update_utf8("y").unwrap_err().to_string();
+        assert!(error.contains("16 MiB per-group limit"), "{error}");
+    }
 
     #[test]
     fn exact_unsigned_and_decimal_aggregates_survive_typed_partial_merges() {

@@ -1597,6 +1597,10 @@ impl Binder<'_> {
                 expr: self.bind_expr(expr, scope, None)?,
                 distinct,
             },
+            AggregateExpr::StringAgg { expr, delimiter } => AggregateExpr::StringAgg {
+                expr: self.bind_expr(expr, scope, None)?,
+                delimiter,
+            },
             AggregateExpr::Min(expr) => AggregateExpr::Min(self.bind_expr(expr, scope, None)?),
             AggregateExpr::Max(expr) => AggregateExpr::Max(self.bind_expr(expr, scope, None)?),
             AggregateExpr::ApproxDistinct { expr, as_count } => AggregateExpr::ApproxDistinct {
