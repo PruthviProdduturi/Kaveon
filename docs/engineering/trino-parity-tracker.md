@@ -84,6 +84,9 @@ The latest three cases qualify bounded SQL Server scalar math (`ABS`,
 `REPLACE`) through the same vectorized local/three-worker path.
 `SUBSTRING` now also lowers from its dedicated SQL AST form and is covered by
 the exact distributed corpus with Unicode-safe character offsets.
+`POSITION(needle IN haystack)` now lowers from its dedicated AST form with the
+SQL argument order and one-based Unicode semantics; evidence is recorded in
+`docs/qualification/track2-position-2026-10-29.md`.
 The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
 `QUOTENAME` identifier quoting (square brackets or double quotes, with the
 128-character SQL Server limit); evidence is retained in
