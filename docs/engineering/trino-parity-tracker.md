@@ -79,8 +79,8 @@ arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to 
 null-preserving one-based CASE, each with
 a focused three-worker differential. The `CONCAT` evidence is retained in
 `docs/qualification/track2-tsql-concat-2026-10-29.md`.
-The latest three cases qualify bounded SQL Server scalar math (`ABS`, `SIGN`,
-`SQRT`, and `POWER`) plus Unicode text transforms (`UPPER`, `LOWER`, and
+The latest three cases qualify bounded SQL Server scalar math (`ABS`,
+`CEILING`, `FLOOR`, `SIGN`, `SQRT`, and `POWER`) plus Unicode text transforms (`UPPER`, `LOWER`, and
 `REPLACE`) through the same vectorized local/three-worker path.
 `SUBSTRING` now also lowers from its dedicated SQL AST form and is covered by
 the exact distributed corpus with Unicode-safe character offsets.

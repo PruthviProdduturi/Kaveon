@@ -251,7 +251,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_math_scalar_compatibility",
-        "SELECT user_id, ABS(actions - 10), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM {T} ORDER BY user_id, actions LIMIT 20",
+        "SELECT user_id, ABS(actions - 10), CEILING(CAST(actions AS DOUBLE) / 3), FLOOR(CAST(actions AS DOUBLE) / 3), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM {T} ORDER BY user_id, actions LIMIT 20",
         true,
     ),
     (

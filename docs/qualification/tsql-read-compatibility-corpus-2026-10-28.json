@@ -21,7 +21,7 @@
     {"id": "string_split_outer_apply", "sql": "SELECT value FROM t OUTER APPLY STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_string_split_outer_apply"},
     {"id": "nullif", "sql": "SELECT NULLIF(actions, 0) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_row_local_inputs"},
     {"id": "round_operation", "sql": "SELECT ROUND(CAST(actions AS DOUBLE), 1, 1) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_or_row_local_operation_0_or_1"},
-    {"id": "math_scalar_compatibility", "sql": "SELECT ABS(actions - 10), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
+    {"id": "math_scalar_compatibility", "sql": "SELECT ABS(actions - 10), CEILING(CAST(actions AS DOUBLE) / 3), FLOOR(CAST(actions AS DOUBLE) / 3), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "power_scalar_compatibility", "sql": "SELECT POWER(CAST(actions AS DOUBLE), 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "string_scalar_compatibility", "sql": "SELECT UPPER(name), LOWER(name), REPLACE(name, 'a', 'A') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "substring_scalar_compatibility", "sql": "SELECT SUBSTRING(name, 1, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},

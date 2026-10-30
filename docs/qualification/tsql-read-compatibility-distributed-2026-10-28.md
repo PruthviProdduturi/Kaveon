@@ -40,7 +40,7 @@ parity or external-client parity.
   weekday/day-of-year aliases, `LEFT`,
   `RIGHT`, `REVERSE`, `TRIM`, `LTRIM`, and `RTRIM`.
   The current revision also qualifies bounded SQL Server-compatible scalar
-  math (`ABS`, `SIGN`, `SQRT`, and `POWER`) and text (`UPPER`, `LOWER`, and
+  math (`ABS`, `CEILING`, `FLOOR`, `SIGN`, `SQRT`, and `POWER`) and text (`UPPER`, `LOWER`, and
   `REPLACE`) expressions through the existing vectorized evaluator.
   `SUBSTRING` now lowers from the SQL parser's dedicated AST form to the same
   Unicode-safe vectorized substring evaluator.
