@@ -64,6 +64,9 @@ for object, array, or wildcard-array results. `JSON_EXISTS` reports whether a
 supported path resolves, including a path that resolves to JSON null. Full
 SQL/JSON coercion, error/empty clauses, recursive descent, and the broader
 Trino path grammar remain outside the qualified surface.
+SQL Server `ISJSON(text)` is qualified: it returns integer `1` for valid JSON,
+`0` for invalid text or non-text input, and NULL for NULL text. The optional
+SQL Server type-constraint argument remains explicitly rejected.
 
 ## Approximate aggregates
 

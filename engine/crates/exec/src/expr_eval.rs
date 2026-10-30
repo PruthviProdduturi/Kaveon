@@ -9121,6 +9121,35 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(numeric))
         }
+        // Bounded SQL Server ISJSON: return 1/0 for text JSON validity and
+        // NULL for NULL text. The optional type-constraint overload remains
+        // outside the compatibility contract.
+        "IS_JSON" | "ISJSON" => {
+            check_arity(name, args, 1)?;
+            let input = &args[0];
+            match input.data_type() {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Dictionary(_, _) => {
+                    let values: Int32Array = (0..num_rows)
+                        .map(|row| {
+                            text_value(input, row).map(|value| {
+                                value.map(|document| {
+                                    if serde_json::from_str::<serde_json::Value>(document).is_ok() {
+                                        1
+                                    } else {
+                                        0
+                                    }
+                                })
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .into();
+                    Ok(Arc::new(values))
+                }
+                _ => Ok(Arc::new(
+                    (0..num_rows).map(|_| Some(0i32)).collect::<Int32Array>(),
+                )),
+            }
+        }
         "SUBSTR" | "SUBSTRING" => {
             if args.len() < 2 || args.len() > 3 {
                 return Err(KaveonError::Execution(format!(
@@ -28528,6 +28557,28 @@ mod tests {
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), r#"{"x":1}"#);
         assert!(values.is_null(1));
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn isjson_returns_sql_server_style_validity() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"{"x":1}"#),
+                Some("not-json"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "IS_JSON".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_primitive::<Int32Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 0);
         assert!(values.is_null(2));
     }
 
