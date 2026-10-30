@@ -235,6 +235,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_string_split_row_local_lateral",
+        "SELECT value FROM {T} CROSS JOIN LATERAL STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value) ORDER BY value LIMIT 20",
+        true,
+    ),
+    (
         "order_by_dict_desc",
         "SELECT country, region FROM {T} WHERE surface = 'Export' AND event_date = '2026-07-20' ORDER BY country DESC, region LIMIT 5",
         true,
@@ -7925,6 +7930,7 @@ fn distributed_tsql_string_split_matches_local() {
     for statement in [
         "SELECT value FROM STRING_SPLIT('alpha,beta,gamma', ',') AS parts(value) ORDER BY value",
         "SELECT value, ordinal FROM STRING_SPLIT('alpha,beta,gamma', ',', 1) AS parts(value, ordinal) ORDER BY ordinal",
+        "SELECT value FROM events CROSS JOIN LATERAL STRING_SPLIT(CONCAT(country, ',', region), ',') AS parts(value) ORDER BY value LIMIT 20",
     ] {
         let plan = bound_plan(statement, &manager);
         let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
