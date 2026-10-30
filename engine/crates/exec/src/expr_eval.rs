@@ -8410,16 +8410,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             if num_rows == 0 {
                 return Ok(Arc::new(StringBuilder::new().finish()));
             }
-            let mode = text_value(&args[1], 0)?.ok_or_else(|| {
-                KaveonError::Execution("STRING_ESCAPE mode must be the literal 'json'".into())
-            })?;
-            if !mode.eq_ignore_ascii_case("json") {
-                return Err(KaveonError::Execution(
-                    "STRING_ESCAPE supports only the 'json' escape mode".into(),
-                ));
-            }
             let mut result = StringBuilder::with_capacity(num_rows, num_rows * 8);
             for row in 0..num_rows {
+                let mode = text_value(&args[1], row)?.ok_or_else(|| {
+                    KaveonError::Execution("STRING_ESCAPE mode must be the literal 'json'".into())
+                })?;
+                if !mode.eq_ignore_ascii_case("json") {
+                    return Err(KaveonError::Execution(
+                        "STRING_ESCAPE supports only the 'json' escape mode".into(),
+                    ));
+                }
                 match text_value(&args[0], row)? {
                     Some(value) => {
                         let escaped = serde_json::to_string(value).map_err(|error| {
@@ -29249,6 +29249,30 @@ mod tests {
         let values = result.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(values.value(0), r#"quote \" and newline\n"#);
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn string_escape_rejects_unsupported_mode() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("value")])) as ArrayRef,
+            ),
+            (
+                "mode",
+                Arc::new(StringArray::from(vec![Some("xml")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let error = evaluate(
+            &Expr::Function {
+                name: "STRING_ESCAPE".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("mode".into())],
+            },
+            &batch,
+        )
+        .expect_err("unsupported escape modes must fail closed");
+        assert!(error.to_string().contains("only the 'json' escape mode"));
     }
 
     #[test]
