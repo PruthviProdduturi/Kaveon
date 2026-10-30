@@ -270,6 +270,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "trino_position_scalar_compatibility",
+        "SELECT user_id, POSITION('a' IN country) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
+        true,
+    ),
+    (
         "order_by_dict_desc",
         "SELECT country, region FROM {T} WHERE surface = 'Export' AND event_date = '2026-07-20' ORDER BY country DESC, region LIMIT 5",
         true,

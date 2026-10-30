@@ -4545,6 +4545,13 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             })
         }
 
+        ast::Expr::Position { expr, r#in } => Ok(Expr::Function {
+            // SQL syntax is POSITION(needle IN haystack), while the
+            // vectorized evaluator receives haystack first.
+            name: "POSITION".into(),
+            args: vec![ast_expr_to_expr(r#in)?, ast_expr_to_expr(expr)?],
+        }),
+
         ast::Expr::Ceil { expr, field } => lower_ceil_floor("CEILING", expr, field),
 
         ast::Expr::Floor { expr, field } => lower_ceil_floor("FLOOR", expr, field),
@@ -9870,6 +9877,15 @@ mod tests {
         let error = sql_to_logical_plan("SELECT FLOOR(event_date TO DAY) FROM t")
             .expect_err("datetime floor must remain outside numeric contract");
         assert!(error.to_string().contains("datetime units"), "{error}");
+    }
+
+    #[test]
+    fn lowers_position_with_haystack_before_needle() {
+        let plan = sql_to_logical_plan("SELECT POSITION('a' IN country) FROM t")
+            .expect("POSITION should lower through the scalar evaluator");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("POSITION"), "{rendered}");
+        assert!(rendered.contains("country"), "{rendered}");
     }
 
     #[test]
