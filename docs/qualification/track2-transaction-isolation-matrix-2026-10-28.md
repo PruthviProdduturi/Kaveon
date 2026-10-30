@@ -21,6 +21,12 @@ row-store MVCC, or WAL-equivalent recovery.
 
 ## Evidence
 
+SQL Server transaction-control spellings are normalized only when the entire
+request is a control statement: `BEGIN|COMMIT|ROLLBACK TRAN` and
+`... TRANSACTION` are equivalent to their canonical forms. The parser
+regression `accepts_sql_server_transaction_control_aliases` covers all six
+aliases; multi-statement requests remain rejected.
+
 The contract is covered by:
 
 - `kaveon_catalog::product_transaction::tests::metadata_pins_identity_and_base_snapshot`
