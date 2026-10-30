@@ -244,6 +244,8 @@ columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
 conditional aggregation and `UNPIVOT` to `UNION ALL`; both have exact local
 and three-worker differential evidence in
 `docs/qualification/track2-tsql-pivot-unpivot-distributed-2026-10-28.md`.
+The bounded `PIVOT(COUNT(*))` form is also accepted; direct-table, join-backed,
+dynamic-column, and unbounded forms remain explicitly rejected.
 Bounded `CROSS APPLY` over a parenthesized `SELECT` or `VALUES` derived
 relation lowers to the existing lateral-join path, including scalar correlated
 `VALUES` expressions, with exact local and

@@ -5,8 +5,9 @@
 Kaveon qualifies two bounded SQL Server/Fabric relational shapes:
 
 - `PIVOT` over a derived source with simple projected columns, one supported
-  mergeable aggregate (`SUM`, `AVG`, `MIN`, `MAX`, or `COUNT`), and a static
-  `IN` list of at most 128 values. It lowers to conditional aggregation.
+  mergeable aggregate (`SUM`, `AVG`, `MIN`, `MAX`, or `COUNT`, including
+  `COUNT(*)`), and a static `IN` list of at most 128 values. It lowers to
+  conditional aggregation.
 - `UNPIVOT` over a derived source with simple projected columns and a static
   `IN` list of at most 128 source columns. It lowers to `UNION ALL` branches.
 
