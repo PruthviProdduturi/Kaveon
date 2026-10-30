@@ -18,6 +18,11 @@ The current cloud start precondition is recorded in
 The latest subscription-state check is in
 `docs/qualification/cloud-precondition-current-2026-10-20.md`.
 
+Cloud/AKS wording in older matrix rows is historical qualification evidence,
+not a statement about the current deployment. Re-run the linked wire or fault
+gate before describing an AKS image as current; local qualification remains
+the active baseline when no cloud evidence is available.
+
 The local optimizer contract was re-run on 2026-10-29: 86/86 planner tests
 passed, including bounded four-to-eight-way join reordering, broadcast
 admission, filter propagation, decorrelation, and fail-closed unsupported
