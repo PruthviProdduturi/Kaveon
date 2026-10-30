@@ -16002,6 +16002,36 @@ mod tests {
             .with_child(make_scan(42, "right"));
         super::annotate_plan_estimates(&mut except, &estimates);
         assert_eq!(except.attributes["estimated_output_rows"], "120");
+
+        let overflow_estimates = std::collections::BTreeMap::from([
+            (
+                "huge_left".to_owned(),
+                super::PlanEstimate {
+                    rows: u64::MAX,
+                    bytes: None,
+                    source: "source_metadata",
+                    source_version: "huge-left-v1".to_owned(),
+                },
+            ),
+            (
+                "huge_right".to_owned(),
+                super::PlanEstimate {
+                    rows: 2,
+                    bytes: None,
+                    source: "source_metadata",
+                    source_version: "huge-right-v1".to_owned(),
+                },
+            ),
+        ]);
+        let mut overflow_join =
+            kaveon_core::PlanNode::new(50, kaveon_core::PlanPhase::Physical, "Join")
+                .with_child(make_scan(51, "huge_left"))
+                .with_child(make_scan(52, "huge_right"));
+        super::annotate_plan_estimates(&mut overflow_join, &overflow_estimates);
+        assert_eq!(
+            overflow_join.attributes["estimated_output_rows"],
+            u64::MAX.to_string()
+        );
     }
 
     #[test]
