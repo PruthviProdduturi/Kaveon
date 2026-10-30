@@ -24,4 +24,4 @@ semantics for every locale or calendar setting.
   ```
   Result: 1/1 case passed with exact grouped rows and counts.
 
-The case is recorded in the authoritative 111-case corpus.
+The case is recorded in the authoritative 112-case corpus.
