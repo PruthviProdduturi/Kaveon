@@ -64,6 +64,9 @@ SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, and `CHOOSE` lowered to a null-preserving one-based CASE, each with
 a focused three-worker differential. The `CONCAT` evidence is retained in
 `docs/qualification/track2-tsql-concat-2026-10-29.md`.
+Literal `CONVERT(DATE, ..., style)` styles `0`, `101`, and `112` also have
+exact three-worker evidence in
+`docs/qualification/track2-tsql-convert-date-literals-2026-10-29.md`.
 The `CHOOSE` evidence is retained in
 `docs/qualification/track2-tsql-choose-2026-10-29.md`.
 
