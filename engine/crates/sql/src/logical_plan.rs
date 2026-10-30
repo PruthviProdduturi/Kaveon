@@ -6555,9 +6555,9 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                                 "ordered STRING_AGG WITHIN GROUP is not implemented; use ARRAY_AGG with an explicit bounded order",
                             ));
                         }
-                        if args.args.len() != 2 || distinct || func.filter.is_some() {
+                        if args.args.len() != 2 || distinct {
                             return Err(sql_err(
-                                "STRING_AGG requires exactly two arguments and does not support DISTINCT or FILTER",
+                                "STRING_AGG requires exactly two arguments and does not support DISTINCT",
                             ));
                         }
                         let delimiter = match &args.args[1] {
@@ -9646,14 +9646,10 @@ mod tests {
         assert!(rendered.contains("Utf8(\",\")"), "{rendered}");
         assert!(sql_to_logical_plan("SELECT STRING_AGG(name, separator) FROM t").is_err());
         assert!(sql_to_logical_plan("SELECT STRING_AGG(DISTINCT name, ',') FROM t").is_err());
-        let filter_error =
+        let filter_plan =
             sql_to_logical_plan("SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10) FROM t")
-                .expect_err("STRING_AGG FILTER remains outside the aggregate transport contract");
-        assert!(
-            filter_error
-                .to_string()
-                .contains("does not support DISTINCT or FILTER")
-        );
+                .expect("STRING_AGG FILTER should lower through the null-preserving argument path");
+        assert!(format!("{filter_plan:?}").contains("StringAgg"));
     }
 
     #[test]
