@@ -4901,9 +4901,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     }
 
     // REPLICATE has SQL Server-specific negative-count and binary truncation
-    // rules. Keep the qualified surface fail-closed until those semantics
-    // have a dedicated evaluator rather than silently treating it as Trino's
-    // more permissive REPEAT for arbitrary row-local counts.
+    // rules. The text path can preserve the negative-count contract for
+    // row-local BIGINT counts; binary inputs remain outside the contract.
+    let mut replicate_dynamic_count = None;
     if written_name == "REPLICATE" {
         if args.len() != 2 {
             return Err(sql_err("REPLICATE requires a text value and count"));
@@ -4916,11 +4916,16 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 ));
             }
             _ => {
-                return Err(sql_err(
-                    "REPLICATE currently requires a non-negative integer literal count",
-                ));
+                let count = args[1].clone();
+                if !matches!(count, Expr::Column(_) | Expr::Function { .. }) {
+                    return Err(sql_err(
+                        "REPLICATE count must be a BIGINT expression or non-negative integer literal",
+                    ));
+                }
+                replicate_dynamic_count = Some(count);
             }
         }
+        name = "REPEAT".into();
     }
 
     // SQL Server's CHOOSE(index, value1, ...) is a bounded one-based
@@ -5716,6 +5721,24 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     } else {
         args
     };
+    if let Some(count) = replicate_dynamic_count {
+        let repeat = Expr::Function { name, args };
+        return Ok(Expr::Case {
+            operand: None,
+            when_then: vec![(
+                Expr::BinaryOp {
+                    left: Box::new(count),
+                    op: BinaryOp::Lt,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(0))),
+                },
+                Expr::Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Null)),
+                    data_type: CastTarget::Utf8,
+                },
+            )],
+            else_expr: Some(Box::new(repeat)),
+        });
+    }
     Ok(Expr::Function { name, args })
 }
 
@@ -9226,7 +9249,11 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("REPEAT"), "{rendered}");
         assert!(sql_to_logical_plan("SELECT REPLICATE(name, -1) FROM t").is_err());
-        assert!(sql_to_logical_plan("SELECT REPLICATE(name, actions) FROM t").is_err());
+        let dynamic = sql_to_logical_plan("SELECT REPLICATE(name, actions) FROM t")
+            .expect("row-local BIGINT REPLICATE counts should lower");
+        let dynamic = format!("{dynamic:?}");
+        assert!(dynamic.contains("REPEAT"), "{dynamic}");
+        assert!(dynamic.contains("Case"), "{dynamic}");
     }
 
     #[test]
