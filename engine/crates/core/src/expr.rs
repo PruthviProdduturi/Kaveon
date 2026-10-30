@@ -353,6 +353,7 @@ pub const AGGREGATE_FUNCTION_NAMES: &[&str] = &[
     "AVG",
     "MIN",
     "MAX",
+    "STRING_AGG",
     "APPROX_COUNT_DISTINCT",
     "APPROX_PERCENTILE",
     "APPROX_COUNT_DISTINCT_STATE",

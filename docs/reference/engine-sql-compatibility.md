@@ -255,10 +255,13 @@ three-worker execution; scalar correlated `VALUES` expressions are qualified
 on the same path. Unbounded forms, arbitrary correlated derived `SELECT`
 forms, and table-valued APPLY are recognized and rejected with rewrite
 guidance rather than being treated as generic syntax failures.
-`STRING_AGG` remains explicitly rejected until Kaveon has an ordered,
-mergeable distributed string-aggregate state; clients should use a bounded
-`ARRAY_AGG`/`ARRAY_JOIN` rewrite only where that contract is acceptable. The
-boundary and its qualification evidence are recorded in
+The unordered `STRING_AGG(value, literal_separator)` form is qualified: NULL
+values are omitted, empty groups return NULL, and partial workers carry a
+mergeable string state bounded to 16 MiB per group. Merge order is
+unspecified, matching SQL Server's unordered form. Ordered `WITHIN GROUP`,
+dynamic separators, `DISTINCT`, and `FILTER` remain explicitly rejected until
+their ordered state and bounded memory/spill contract are qualified. Evidence
+is recorded in
 `docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`.
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality

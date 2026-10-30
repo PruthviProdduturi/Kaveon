@@ -16,7 +16,7 @@ fn is_false(value: &bool) -> bool {
 /// `LateralUnnest` operator; version 6 added the directory listing to a scan
 /// (`ScanSpec::listing`), and version 5 carried the location alone. A worker
 /// accepts older fragments with those fields absent.
-pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 8;
+pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 9;
 /// The oldest wire format a worker still executes.
 pub const OLDEST_EXECUTABLE_FRAGMENT_VERSION: u16 = 5;
 
@@ -210,6 +210,8 @@ pub enum AggregateFunction {
     Min,
     Max,
     Avg,
+    /// Unordered, mergeable string concatenation with a literal separator.
+    StringAgg,
     CountDistinct,
     /// `APPROX_COUNT_DISTINCT`: a HyperLogLog sketch of the argument, the
     /// estimate as the result.

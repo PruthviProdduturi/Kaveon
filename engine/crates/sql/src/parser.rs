@@ -191,11 +191,6 @@ fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
             return Err(sql_error(guidance));
         }
     }
-    if contains_sql_word(bytes, b"STRING_AGG") {
-        return Err(sql_error(
-            "STRING_AGG is not implemented; use ARRAY_AGG plus ARRAY_JOIN after a bounded rewrite",
-        ));
-    }
     Ok(())
 }
 
@@ -3677,14 +3672,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_string_agg_with_a_bounded_rewrite_hint() {
-        let error = parse_sql("SELECT STRING_AGG(name, ',') FROM events")
-            .expect_err("STRING_AGG must remain explicitly bounded");
-        assert!(
-            error
-                .to_string()
-                .contains("STRING_AGG is not implemented; use ARRAY_AGG plus ARRAY_JOIN")
-        );
+    fn accepts_string_agg_syntax_for_planner_validation() {
+        assert!(parse_sql("SELECT STRING_AGG(name, ',') FROM events").is_ok());
     }
 
     #[test]

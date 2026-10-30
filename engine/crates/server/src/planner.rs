@@ -1415,6 +1415,7 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                 AggregateExpr::Min(_) => AggregateFunction::Min,
                 AggregateExpr::Max(_) => AggregateFunction::Max,
                 AggregateExpr::Avg { .. } => AggregateFunction::Avg,
+                AggregateExpr::StringAgg { .. } => AggregateFunction::StringAgg,
                 AggregateExpr::ApproxDistinct { .. } => AggregateFunction::ApproxDistinct,
                 AggregateExpr::ApproxPercentile { .. } => AggregateFunction::ApproxPercentile,
                 AggregateExpr::ApproxDistinctState(_) => AggregateFunction::ApproxDistinctState,
@@ -1427,6 +1428,13 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
             let percentiles = match aggregate {
                 AggregateExpr::ApproxPercentile { percentiles, .. } => Some(percentiles.clone()),
                 _ => None,
+            };
+            let argument = match aggregate {
+                AggregateExpr::StringAgg { expr, delimiter } => Some(Expr::Function {
+                    name: "STRING_AGG".into(),
+                    args: vec![expr.clone(), delimiter.clone()],
+                }),
+                _ => argument,
             };
             let distinct = match aggregate {
                 AggregateExpr::Count { distinct, .. }
@@ -2787,6 +2795,7 @@ fn logical_agg_to_exec(
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
         AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
+        AggregateExpr::StringAgg { expr, .. } => (AggFunc::StringAgg, expr, false),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
@@ -2806,6 +2815,19 @@ fn logical_agg_to_exec(
     };
 
     let mut expression = AggExpr::new(func, column);
+    if let AggregateExpr::StringAgg { delimiter, .. } = agg {
+        let Expr::Literal(ScalarValue::Utf8(value)) = delimiter else {
+            return Err(KaveonError::Execution(
+                "STRING_AGG separator must be a text literal".into(),
+            ));
+        };
+        if value.len() > 64 * 1024 {
+            return Err(KaveonError::Execution(
+                "STRING_AGG separator exceeds the 64 KiB limit".into(),
+            ));
+        }
+        expression.delimiter = Some(value.clone());
+    }
     if let AggregateExpr::ApproxPercentile { percentiles, .. } = agg {
         expression.percentiles = Some(percentiles.clone());
     }

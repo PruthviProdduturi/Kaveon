@@ -10,7 +10,8 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     AggregateFunction, AggregateMode, BatchOperator, BatchSource, CatalogManager, DataFormat,
     ExchangeId, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
-    KaveonError, Partitioning, QueryMemoryPool, Result, ScanFile, ScanListing, SplitDescriptor,
+    KaveonError, Partitioning, QueryMemoryPool, Result, ScalarValue, ScanFile, ScanListing,
+    SplitDescriptor,
 };
 use kaveon_exec::aggregate::{
     AggExpr, AggFunc, AggregateState, FinalAggregateValue, GroupedAggregateState, HashAggregate,
@@ -1306,14 +1307,42 @@ fn aggregate_bindings(
                 AggregateFunction::Min => (AggFunc::Min, false),
                 AggregateFunction::Max => (AggFunc::Max, false),
                 AggregateFunction::Avg => (AggFunc::Avg, false),
+                AggregateFunction::StringAgg => (AggFunc::StringAgg, false),
                 AggregateFunction::ApproxDistinct => (AggFunc::ApproxDistinct, false),
                 AggregateFunction::ApproxPercentile => (AggFunc::ApproxPercentile, false),
                 AggregateFunction::ApproxDistinctState => (AggFunc::ApproxDistinctState, false),
                 AggregateFunction::ColumnStatistics => (AggFunc::ColumnStatistics, false),
             };
-            let column = aggregate
-                .argument
-                .as_ref()
+            let (argument, delimiter) =
+                if matches!(aggregate.function, AggregateFunction::StringAgg) {
+                    let Some(Expr::Function { name, args }) = aggregate.argument.as_ref() else {
+                        return Err(KaveonError::Execution(
+                            "STRING_AGG fragment argument is malformed".into(),
+                        ));
+                    };
+                    if !name.eq_ignore_ascii_case("STRING_AGG") || args.len() != 2 {
+                        return Err(KaveonError::Execution(
+                            "STRING_AGG fragment argument is malformed".into(),
+                        ));
+                    }
+                    let delimiter = match &args[1] {
+                        Expr::Literal(ScalarValue::Utf8(value)) => value.clone(),
+                        _ => {
+                            return Err(KaveonError::Execution(
+                                "STRING_AGG separator must be a text literal".into(),
+                            ));
+                        }
+                    };
+                    if delimiter.len() > 64 * 1024 {
+                        return Err(KaveonError::Execution(
+                            "STRING_AGG separator exceeds the 64 KiB limit".into(),
+                        ));
+                    }
+                    (Some(&args[0]), Some(delimiter))
+                } else {
+                    (aggregate.argument.as_ref(), None)
+                };
+            let column = argument
                 .map(expression_column)
                 .transpose()?
                 .map(&resolve)
@@ -1321,6 +1350,7 @@ fn aggregate_bindings(
                 .unwrap_or_else(|| "*".into());
             let mut expression = AggExpr::new(function, column).with_alias(&aggregate.output);
             expression.percentiles = aggregate.percentiles.clone();
+            expression.delimiter = delimiter;
             Ok(if aggregate.distinct || function_distinct {
                 expression.distinct()
             } else {
@@ -2748,6 +2778,95 @@ mod tests {
             3
         );
         assert!((0..result.num_rows()).any(|row| key.is_null(row)));
+    }
+
+    #[test]
+    fn partial_and_final_string_agg_merge_literal_separator_states() {
+        use arrow::array::StringArray;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let first = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![Some("alpha"), None]))],
+        )
+        .unwrap();
+        let second = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("beta"),
+                Some("gamma"),
+            ]))],
+        )
+        .unwrap();
+        let aggregate = AggregateSpec {
+            function: AggregateFunction::StringAgg,
+            argument: Some(Expr::Function {
+                name: "STRING_AGG".into(),
+                args: vec![
+                    Expr::Column("name".into()),
+                    Expr::Literal(ScalarValue::Utf8(",".into())),
+                ],
+            }),
+            output: "joined".into(),
+            percentiles: None,
+            distinct: false,
+        };
+        let fragment = |mode, exchange: &str| ExecutableFragment {
+            version: EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(22),
+            root: FragmentNodeId(2),
+            nodes: vec![
+                node(
+                    1,
+                    vec![],
+                    FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: ExchangeId(exchange.into()),
+                    }),
+                ),
+                node(
+                    2,
+                    vec![1],
+                    FragmentOperator::Aggregate {
+                        mode,
+                        group_by: vec![],
+                        aggregates: vec![aggregate.clone()],
+                    },
+                ),
+            ],
+        };
+        let partials = [first, second]
+            .into_iter()
+            .map(|batch| {
+                execute_fragment(
+                    &fragment(AggregateMode::Partial, "raw"),
+                    &CatalogManager::new("test", "default"),
+                    &BatchInputs {
+                        values: HashMap::from([(ExchangeId("raw".into()), vec![batch])]),
+                    },
+                    first_partition(),
+                )
+                .unwrap()
+                .result_batches
+                .remove(0)
+            })
+            .collect::<Vec<_>>();
+        let result = execute_fragment(
+            &fragment(AggregateMode::Final, "states"),
+            &CatalogManager::new("test", "default"),
+            &BatchInputs {
+                values: HashMap::from([(ExchangeId("states".into()), partials)]),
+            },
+            first_partition(),
+        )
+        .unwrap()
+        .result_batches
+        .remove(0);
+        let values = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "alpha,beta,gamma");
     }
 
     #[test]

@@ -1,34 +1,40 @@
-# T-SQL `STRING_AGG` boundary — 2026-10-30
+# T-SQL `STRING_AGG` qualification — 2026-10-30
 
 ## Status
 
-`STRING_AGG` is **explicitly rejected** in the bounded T-SQL read contract.
-This is a deliberate fail-closed boundary, not an unsupported-function leak.
+The bounded unordered form `STRING_AGG(value, literal_separator)` is planner
+and executor qualified. It omits NULL values, returns NULL for an empty group,
+and carries a mergeable string state through the distributed aggregate
+exchange. Partial merge order is intentionally unspecified, matching SQL
+Server's unordered form. Each group is bounded to a 16 MiB materialized
+result; over-limit values fail closed instead of allocating without bound.
 
 ## Why it remains open
 
-Correct distributed execution requires a mergeable string state with defined
-ordering, NULL handling, separator semantics, memory limits, spill behavior,
-and cancellation. Kaveon's current aggregate exchange has no ordered string
-state, so accepting the syntax would either produce non-deterministic output or
-silently execute only a coordinator-local fragment.
+Ordered `WITHIN GROUP` forms, dynamic separators, `DISTINCT`, and `FILTER`
+remain fail-closed. Correct support for those forms needs an ordered merge
+state and additional bounded-memory/spill semantics; this qualification does
+not claim them.
 
 ## Evidence
 
 - The versioned corpus contains the `string_agg` case with
-  `status: explicit_rejection` and
-  `distributed_status: requires_mergeable_ordered_string_state`.
-- `cargo test -p kaveon-sql --lib rejects_string_agg_with_a_bounded_rewrite_hint`
-  passes.
-- The parser rejects the function by a lexical word-boundary match that skips
-  quoted literals, quoted identifiers, and comments, so identifiers such as
-  `STRING_AGG_value` and text such as `'STRING_AGG'` are not misclassified.
-- The diagnostic names the missing contract and suggests
-  `ARRAY_AGG` plus `ARRAY_JOIN` only where that bounded rewrite is semantically
-  acceptable.
+  `status: planner_qualified` and
+  `distributed_status: qualified_for_unordered_literal_separator`.
+- `cargo test -p kaveon-sql --lib` passes the planner acceptance and explicit
+  rejection cases.
+- `cargo test -p kaveon-exec --lib` passes the merge and Arrow-state round trip
+  regression for NULL omission, literal separator validation, and partial
+  concatenation.
+- `cargo test -p kaveon-server --bin kaveon-server
+  partial_and_final_string_agg_merge_literal_separator_states` passes the
+  partial/final fragment path, including compact state serialization.
+- `cargo clippy -p kaveon-sql -p kaveon-core -p kaveon-exec -p kaveon-server
+  --all-targets -- -D warnings` passes.
 
 ## Exit criteria
 
-Move this case to qualified only after a mergeable distributed state is added,
-with exact local/three-worker results, bounded-memory and spill tests,
-cancellation coverage, and an explicit ordering contract for `WITHIN GROUP`.
+The next qualification step is an exact local/three-worker query differential,
+bounded-memory/spill and cancellation evidence for string state, followed by a
+separate ordered `WITHIN GROUP` contract. Until then, only the unordered literal
+separator form is advertised.

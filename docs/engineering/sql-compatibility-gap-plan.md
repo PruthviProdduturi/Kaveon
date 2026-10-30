@@ -79,6 +79,10 @@ qualified for date/timestamp inputs with an optional row-local month offset.
 `DATETRUNC` now canonicalizes to the same typed `DATE_TRUNC` path for the
 qualified SQL Server datepart/input boundary; evidence is retained in
 `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
+Unordered SQL Server `STRING_AGG(value, literal_separator)` now carries a
+mergeable distributed string state with NULL omission and explicit rejection of
+ordered/dynamic forms; evidence is retained in
+`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`.
 `DATEFROMPARTS` now builds validated `DATE` values from integer parts with
 NULL propagation and distributed differential coverage.
 `DATENAME` now returns deterministic English calendar names or textual numeric

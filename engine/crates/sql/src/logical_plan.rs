@@ -30,6 +30,12 @@ pub enum AggregateExpr {
         expr: Expr,
         distinct: bool,
     },
+    /// `STRING_AGG(expr, literal_separator)`. Ordered `WITHIN GROUP` forms
+    /// remain outside this bounded contract.
+    StringAgg {
+        expr: Expr,
+        delimiter: Expr,
+    },
     Min(Expr),
     Max(Expr),
     /// `APPROX_COUNT_DISTINCT(expr)` (`APPROX_DISTINCT` in Trino's name):
@@ -63,6 +69,7 @@ impl AggregateExpr {
             Self::Count { .. } => "COUNT",
             Self::Sum { .. } => "SUM",
             Self::Avg { .. } => "AVG",
+            Self::StringAgg { .. } => "STRING_AGG",
             Self::Min(_) => "MIN",
             Self::Max(_) => "MAX",
             Self::ApproxDistinct { .. } => "APPROX_COUNT_DISTINCT",
@@ -78,6 +85,7 @@ impl AggregateExpr {
             Self::Count { expr, .. }
             | Self::Sum { expr, .. }
             | Self::Avg { expr, .. }
+            | Self::StringAgg { expr, .. }
             | Self::Min(expr)
             | Self::Max(expr)
             | Self::ApproxDistinct { expr, .. }
@@ -92,6 +100,7 @@ impl AggregateExpr {
             Self::Count { expr, .. }
             | Self::Sum { expr, .. }
             | Self::Avg { expr, .. }
+            | Self::StringAgg { expr, .. }
             | Self::Min(expr)
             | Self::Max(expr)
             | Self::ApproxDistinct { expr, .. }
@@ -116,7 +125,9 @@ impl AggregateExpr {
     /// carries, so both name the output alike.
     pub fn arguments(&self) -> Vec<Expr> {
         let mut args = vec![self.argument().clone()];
-        if let Self::ApproxPercentile { percentiles, .. } = self {
+        if let Self::StringAgg { delimiter, .. } = self {
+            args.push(delimiter.clone());
+        } else if let Self::ApproxPercentile { percentiles, .. } = self {
             let literals = percentiles
                 .fractions
                 .iter()
@@ -6519,6 +6530,39 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                         expr: arg,
                         distinct,
                     },
+                    "STRING_AGG" => {
+                        let ast::FunctionArguments::List(args) = &func.args else {
+                            return Err(sql_err("STRING_AGG requires a value and separator"));
+                        };
+                        if !func.within_group.is_empty() {
+                            return Err(sql_err(
+                                "ordered STRING_AGG WITHIN GROUP is not implemented; use ARRAY_AGG with an explicit bounded order",
+                            ));
+                        }
+                        if args.args.len() != 2 || distinct || func.filter.is_some() {
+                            return Err(sql_err(
+                                "STRING_AGG requires exactly two arguments and does not support DISTINCT or FILTER",
+                            ));
+                        }
+                        let delimiter = match &args.args[1] {
+                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
+                                ast::Expr::Value(value),
+                            )) => ast_value_to_expr(value)?,
+                            _ => {
+                                return Err(sql_err("STRING_AGG separator must be a literal"));
+                            }
+                        };
+                        let Expr::Literal(ScalarValue::Utf8(separator)) = &delimiter else {
+                            return Err(sql_err("STRING_AGG separator must be a text literal"));
+                        };
+                        if separator.len() > 64 * 1024 {
+                            return Err(sql_err("STRING_AGG separator exceeds the 64 KiB limit"));
+                        }
+                        AggregateExpr::StringAgg {
+                            expr: arg,
+                            delimiter,
+                        }
+                    }
                     "MIN" => AggregateExpr::Min(arg),
                     "MAX" => AggregateExpr::Max(arg),
                     "APPROX_COUNT_DISTINCT" => AggregateExpr::ApproxDistinct {
@@ -9573,6 +9617,17 @@ mod tests {
         sql_to_logical_plan("SELECT REPLICATE(name, actions - 1) FROM t")
             .expect("row-local arithmetic REPLICATE counts should lower");
         assert!(sql_to_logical_plan("SELECT REPLICATE(name, COUNT(*)) FROM t").is_err());
+    }
+
+    #[test]
+    fn lowers_bounded_string_agg_to_mergeable_aggregate() {
+        let plan = sql_to_logical_plan("SELECT STRING_AGG(name, ',') FROM t")
+            .expect("literal-separator STRING_AGG should be planner-qualified");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("StringAgg"), "{rendered}");
+        assert!(rendered.contains("Utf8(\",\")"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT STRING_AGG(name, separator) FROM t").is_err());
+        assert!(sql_to_logical_plan("SELECT STRING_AGG(DISTINCT name, ',') FROM t").is_err());
     }
 
     #[test]
