@@ -4331,15 +4331,30 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             trim_what,
             trim_characters,
         } => {
-            if trim_where.is_some() || trim_what.is_some() || trim_characters.is_some() {
+            if trim_characters.is_some() {
                 return Err(sql_err(
-                    "TRIM currently supports the one-argument form only",
+                    "TRIM comma-separated character lists are unsupported",
                 ));
             }
-            Ok(Expr::Function {
-                name: "TRIM".into(),
-                args: vec![ast_expr_to_expr(expr)?],
-            })
+            let value = ast_expr_to_expr(expr)?;
+            match (trim_where, trim_what) {
+                (None, None) => Ok(Expr::Function {
+                    name: "TRIM".into(),
+                    args: vec![value],
+                }),
+                (Some(ast::TrimWhereField::Both), Some(characters)) => Ok(Expr::Function {
+                    name: "TRIM_CHARS".into(),
+                    args: vec![value, ast_expr_to_expr(characters)?],
+                }),
+                (Some(_), Some(_)) => Err(sql_err(
+                    "TRIM LEADING and TRAILING character forms are unsupported",
+                )),
+                (None, Some(characters)) => Ok(Expr::Function {
+                    name: "TRIM_CHARS".into(),
+                    args: vec![value, ast_expr_to_expr(characters)?],
+                }),
+                (Some(_), None) => Err(sql_err("TRIM LEADING and TRAILING forms are unsupported")),
+            }
         }
 
         ast::Expr::Interval(_) => Err(sql_err(
@@ -9161,6 +9176,15 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_trim_both_character_set() {
+        let plan = sql_to_logical_plan("SELECT TRIM(BOTH 'x' FROM name) FROM t")
+            .expect("TRIM BOTH character set should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("TRIM_CHARS"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT TRIM(LEADING 'x' FROM name) FROM t").is_err());
+    }
+
+    #[test]
     fn lowers_tsql_eomonth_to_typed_date_operators() {
         let plan =
             sql_to_logical_plan("SELECT EOMONTH(event_date), EOMONTH(event_timestamp, 2) FROM t")
@@ -9415,7 +9439,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 75);
+        assert_eq!(cases.len(), 76);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");

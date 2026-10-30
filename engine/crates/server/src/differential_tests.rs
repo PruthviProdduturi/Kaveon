@@ -425,6 +425,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_trim_characters",
+        "SELECT user_id, TRIM(BOTH 'x' FROM CONCAT('x', region, 'x')) AS trimmed FROM {T} ORDER BY user_id, region LIMIT 12",
+        true,
+    ),
+    (
         "tsql_bounded_pivot",
         "SELECT * FROM (SELECT region, surface, actions FROM {T}) src PIVOT (SUM(actions) FOR surface IN ([Chat], [Export])) p",
         false,
@@ -7883,6 +7888,30 @@ fn distributed_tsql_convert_date_literals_match_local() {
         &execute_distributed(statement, &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
         true,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_trim_characters_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-trim-characters-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, TRIM(BOTH 'x' FROM CONCAT('x', region, 'x')) AS trimmed FROM events ORDER BY user_id, region LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-trim-characters-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
     );
     assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);

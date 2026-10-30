@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 75-case corpus has planner coverage and focused exact
+  The current 76-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -52,7 +52,7 @@ The authoritative capability details remain in:
   order.
 - [ ] Add Fabric/Azure SQL passthrough tests without implying Engine execution.
 
-Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
+Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, character-set `TRIM` in BOTH mode, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
 datepart abbreviations. Runtime DATE and timestamp styles have qualified local
 and three-worker coverage for the declared style set. Literal DATE styles `0`, `1`, `101`, and `112` now
