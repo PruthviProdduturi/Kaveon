@@ -4346,14 +4346,30 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                     name: "TRIM_CHARS".into(),
                     args: vec![value, ast_expr_to_expr(characters)?],
                 }),
-                (Some(_), Some(_)) => Err(sql_err(
-                    "TRIM LEADING and TRAILING character forms are unsupported",
-                )),
+                (Some(ast::TrimWhereField::Leading), Some(characters)) => Ok(Expr::Function {
+                    name: "TRIM_LEADING_CHARS".into(),
+                    args: vec![value, ast_expr_to_expr(characters)?],
+                }),
+                (Some(ast::TrimWhereField::Trailing), Some(characters)) => Ok(Expr::Function {
+                    name: "TRIM_TRAILING_CHARS".into(),
+                    args: vec![value, ast_expr_to_expr(characters)?],
+                }),
                 (None, Some(characters)) => Ok(Expr::Function {
                     name: "TRIM_CHARS".into(),
                     args: vec![value, ast_expr_to_expr(characters)?],
                 }),
-                (Some(_), None) => Err(sql_err("TRIM LEADING and TRAILING forms are unsupported")),
+                (Some(ast::TrimWhereField::Leading), None) => Ok(Expr::Function {
+                    name: "LTRIM".into(),
+                    args: vec![value],
+                }),
+                (Some(ast::TrimWhereField::Trailing), None) => Ok(Expr::Function {
+                    name: "RTRIM".into(),
+                    args: vec![value],
+                }),
+                (Some(ast::TrimWhereField::Both), None) => Ok(Expr::Function {
+                    name: "TRIM".into(),
+                    args: vec![value],
+                }),
             }
         }
 
@@ -9181,7 +9197,12 @@ mod tests {
             .expect("TRIM BOTH character set should lower");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("TRIM_CHARS"), "{rendered}");
-        assert!(sql_to_logical_plan("SELECT TRIM(LEADING 'x' FROM name) FROM t").is_err());
+        let leading = sql_to_logical_plan("SELECT TRIM(LEADING 'x' FROM name) FROM t")
+            .expect("TRIM LEADING character set should lower");
+        assert!(format!("{leading:?}").contains("TRIM_LEADING_CHARS"));
+        let trailing = sql_to_logical_plan("SELECT TRIM(TRAILING 'x' FROM name) FROM t")
+            .expect("TRIM TRAILING character set should lower");
+        assert!(format!("{trailing:?}").contains("TRIM_TRAILING_CHARS"));
     }
 
     #[test]
