@@ -263,6 +263,18 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           <rect x="22" y="17" width="3.5" height="7"  rx="1" fill={color} fillOpacity="0.45" />
         </svg>
       );
+    case "bubble_map":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Land as a backdrop, value in the bubbles -- the chart itself. */}
+          <path d="M3,9 Q7,6 11,9 T19,8 Q23,7 25,10 L25,19 Q20,21 15,19 T6,20 Q3,19 3,16 Z"
+                fill={color} fillOpacity="0.14" stroke={color} strokeOpacity="0.3" strokeWidth="0.8" />
+          <circle cx="8"  cy="13" r="3.4" fill={color} fillOpacity="0.7" />
+          <circle cx="17" cy="11" r="2.2" fill={color} fillOpacity="0.8" />
+          <circle cx="21" cy="17" r="1.5" fill={color} fillOpacity="0.65" />
+          <circle cx="12" cy="18" r="1.1" fill={color} fillOpacity="0.55" />
+        </svg>
+      );
     case "network_graph":
       return (
         <svg viewBox="0 0 28 28" style={s}>

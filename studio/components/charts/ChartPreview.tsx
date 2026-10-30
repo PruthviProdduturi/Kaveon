@@ -529,7 +529,9 @@ const WorldMapRenderer: React.FC<{
   onCrossFilter?: (value: string) => void;
   /** The server returned fewer rows than the query matched. */
   truncated?: boolean;
-}> = ({ rows, columns, advancedOptions, onCrossFilter, truncated }) => {
+  /** `bubble` plots points over the land instead of colouring regions. */
+  plot?: "choropleth" | "bubble";
+}> = ({ rows, columns, advancedOptions, onCrossFilter, truncated, plot = "choropleth" }) => {
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = React.useState(0);
@@ -667,6 +669,46 @@ const WorldMapRenderer: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, region, loadAttempt]);
 
+  /**
+   * The centre of each map feature, by lower-cased name.
+   *
+   * A bubble map needs a point, and the common result has a place name rather
+   * than coordinates. The bounding-box centre of the matching feature is close
+   * enough to put a dot on a country or a state, and it costs nothing: the
+   * GeoJSON is already loaded for the land underneath.
+   */
+  const featureCentres = React.useMemo(() => {
+    const centres = new Map<string, [number, number]>();
+    for (const feature of (geoCache[region]?.features || [])) {
+      const name = String(feature?.properties?.name ?? "").trim();
+      if (!name) continue;
+      const box = featureBbox(feature);
+      if (!box) continue;
+      centres.set(name.toLowerCase(), [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]);
+    }
+    return centres;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, region, loadAttempt]);
+
+  /**
+   * Which columns, if any, carry coordinates.
+   *
+   * Explicit latitude and longitude beat a centroid every time -- a centroid
+   * can only ever be the middle of a country -- so they are looked for first,
+   * by name, and only numeric columns qualify so a column called "latitude_band"
+   * holding text cannot be mistaken for one.
+   */
+  const coordColumns = React.useMemo(() => {
+    const index = (patterns: RegExp) => columns.findIndex((name, i) => {
+      const leaf = String(name).split(".").pop() || "";
+      return patterns.test(leaf.toLowerCase())
+        && rows.some((row) => row[i] !== null && row[i] !== "" && !isNaN(Number(row[i])));
+    });
+    const lat = index(/^(lat|latitude|y)$/);
+    const lng = index(/^(lng|lon|long|longitude|x)$/);
+    return lat >= 0 && lng >= 0 ? { lat, lng } : null;
+  }, [columns, rows]);
+
   const joinKey = React.useCallback((raw: unknown): string => {
     const aliased = REGION.normalize(String(raw ?? "").trim());
     return featureNames.get(aliased.toLowerCase()) ?? aliased;
@@ -752,7 +794,17 @@ const WorldMapRenderer: React.FC<{
     if (!ready || !rows.length || columns.length < 2) return null;
     const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
     if (nameIdx < 0) {
+      // A bubble map with latitude and longitude needs no place name, so
+      // demanding one would refuse a result that draws perfectly.
+      if (plot === "bubble" && coordColumns) {
+        return { kind: "ok", matched: rows.length, unmatched: 0, sample: [] };
+      }
       return { kind: "no-geographic-column", matched: 0, unmatched: 0, sample: [] };
+    }
+    if (plot === "bubble" && coordColumns) {
+      // Coordinates are the join; a name that matches no feature is still a
+      // point, so there is nothing unmatched to report.
+      return { kind: "ok", matched: rows.length, unmatched: 0, sample: [] };
     }
 
     const present = rows
@@ -777,7 +829,7 @@ const WorldMapRenderer: React.FC<{
     // did not match are simply absent from the map, so a result that matched
     // a fifth of its rows looks complete.
     return { kind: "ok", matched, unmatched: missed, sample: unmatched };
-  }, [ready, rows, columns, featureNames, joinKey]);
+  }, [ready, rows, columns, featureNames, joinKey, plot, coordColumns]);
 
   const option = React.useMemo(() => {
     if (!ready || !rows.length || columns.length < 2) return null;
@@ -1006,6 +1058,79 @@ const WorldMapRenderer: React.FC<{
           ?? ctOpts.mapCenter
           ?? [(regionBounds[0] + regionBounds[2]) / 2, (regionBounds[1] + regionBounds[3]) / 2]);
 
+    if (plot === "bubble") {
+      // Points need coordinates. Explicit columns win; otherwise the centre of
+      // the feature the name resolves to, which lets the choropleth's own
+      // `name, value` result draw as bubbles with no extra columns.
+      const points = rows
+        .map((row) => {
+          const value = Number(row[valIdx] ?? 0);
+          if (isNaN(value)) return null;
+          if (coordColumns) {
+            const lng = Number(row[coordColumns.lng]);
+            const lat = Number(row[coordColumns.lat]);
+            if (!isFinite(lng) || !isFinite(lat)) return null;
+            // Out-of-range coordinates are a column mix-up, not a place.
+            if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+            const label = nameIdx >= 0 ? String(row[nameIdx] ?? "") : "";
+            return { name: label, value: [lng, lat, value] };
+          }
+          const name = joinKey(row[nameIdx]);
+          const centre = name ? featureCentres.get(name.toLowerCase()) : undefined;
+          if (!centre) return null;
+          return { name, value: [centre[0], centre[1], value] };
+        })
+        .filter(Boolean) as { name: string; value: number[] }[];
+
+      const magnitudes = points.map((p) => Math.abs(p.value[2]));
+      const biggest = Math.max(1, ...magnitudes);
+      return {
+        ...titleOpt,
+        tooltip: {
+          ...tooltipStyle,
+          formatter: (p: any) => {
+            const value = Array.isArray(p.value) ? Number(p.value[2]) : Number(p.value);
+            const label = p.name || `${Number(p.value?.[1]).toFixed(3)}, ${Number(p.value?.[0]).toFixed(3)}`;
+            return `<b>${label}</b><br/>${isNaN(value) ? "—" : fmtVal(value)}`;
+          },
+        },
+        geo: {
+          map: useProjection ? GLOBE_MAP_NAME : REGION.mapName,
+          projection: useProjection ? projection : null,
+          aspectScale: useProjection ? 1 : 0.9,
+          roam: showRoam,
+          zoom,
+          center: centre,
+          scaleLimit: { min: 1, max: useProjection ? 8 : 12 },
+          layoutCenter: fit.layoutCenter,
+          layoutSize: fit.layoutSize,
+          // The land is a backdrop here, not an encoding: the value is in the
+          // bubbles, and colouring the regions too would say the same number
+          // twice.
+          itemStyle: { areaColor: tones.noData, borderColor: tones.border, borderWidth: 0.5 },
+          emphasis: { disabled: true },
+        },
+        series: [{
+          type: "scatter",
+          coordinateSystem: "geo",
+          data: points,
+          // Area carries the value. Radius would make a value ten times larger
+          // a hundred times the ink.
+          symbolSize: (value: number[]) =>
+            6 + Math.sqrt(Math.abs(Number(value?.[2]) || 0) / biggest) * 34,
+          itemStyle: {
+            color: colorScheme[colorScheme.length - 1],
+            opacity: 0.72,
+            borderColor: "#ffffff",
+            borderWidth: 1,
+          },
+          emphasis: { itemStyle: { opacity: 0.95, borderWidth: 2 }, scale: 1.1 },
+          // Largest last, so a big bubble never hides a small one behind it.
+          z: 5,
+        }],
+      };
+    }
+
     return {
       ...titleOpt,
       tooltip: tooltipStyle,
@@ -1046,7 +1171,7 @@ const WorldMapRenderer: React.FC<{
       }],
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark, joinKey]);
+  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark, joinKey, plot, coordColumns, featureCentres]);
 
   // The host box stays mounted through every state so it can be measured before
   // the chart that depends on that measurement exists. The parent
@@ -1802,13 +1927,14 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           />
         ) : hasOption && !sqlPreview.isRunning && (chartType === "big_number" || chartType === "big_number_trend") ? (
           <BigNumberKpiCard options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} chartType={chartType} />
-        ) : hasOption && !sqlPreview.isRunning && chartType === "world_map" ? (
+        ) : hasOption && !sqlPreview.isRunning && (chartType === "world_map" || chartType === "bubble_map") ? (
           <WorldMapRenderer
             rows={(previewOptions as any)?._rows ?? sqlPreview.dataRows}
             columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
             advancedOptions={advancedOptions}
             onCrossFilter={onCrossFilter}
             truncated={sqlPreview.resultTruncated === true}
+            plot={chartType === "bubble_map" ? "bubble" : "choropleth"}
           />
         ) : hasOption && !sqlPreview.isRunning && chartType && getPlugin(chartType)?.Renderer ? (
           (() => {
