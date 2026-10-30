@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 75 cases, including exact local/three-worker qualification for
+- Corpus: 94 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -19,8 +19,9 @@ parity or external-client parity.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
-  with exact local-vs-distributed results after the `DATENAME` implementation;
-  the run completed without worker failures or retained exchange/spill files.
+  with exact local-vs-distributed results for the previously qualified corpus;
+  the latest row-local `STRING_SPLIT` addition has a focused exact
+  local-vs-three-worker regression and is tracked separately below.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
   completed 1/1 with exact results in 729.75 seconds; the full differential
   workload completed without worker or spill failures.
@@ -57,6 +58,11 @@ interpreted as epoch offsets.
 `ISNUMERIC` returns a non-null boolean 0/1 result. Native numeric values and
 text accepted by the safe numeric cast are qualified; locale-specific currency
 and SQL Server type-coercion extensions remain outside the contract.
+
+`STRING_SPLIT` also accepts scalar row-local string and separator expressions
+through `CROSS JOIN LATERAL`; literal ordinal mode and the value/ordinal alias
+contract remain bounded. The focused regression is
+`distributed_tsql_string_split_matches_local`.
 
 `LEFT` and `RIGHT` return bounded Unicode scalar prefixes/suffixes, preserve
 NULLs, and use the Engine's width-aware text path for narrow and large UTF-8
