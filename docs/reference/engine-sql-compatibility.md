@@ -179,7 +179,7 @@ bounded third `operation` argument (`0` round, `1` truncate toward zero), with
 NULL propagation and explicit rejection of other operation values.
 The bounded SQL Server table-valued `STRING_SPLIT` form is also qualified for
 scalar value/separator inputs (including row-local expressions through
-`CROSS JOIN LATERAL`) and literal ordinal mode `0`/`1`, lowering to `SPLIT`
+`CROSS JOIN LATERAL` or bounded `CROSS APPLY`) and literal ordinal mode `0`/`1`, lowering to `SPLIT`
 plus `UNNEST`; arbitrary table-valued functions and dynamic ordinal modes
 remain rejected.
 `EOMONTH` is translated to the typed calendar operators and returns a `DATE`

@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 96-case corpus has planner coverage and focused exact
+  The current 97-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -144,7 +144,7 @@ rounding and `1` for truncation toward zero), including row-local integer
 expressions; other operation values fail closed.
 Bounded SQL Server `STRING_SPLIT` now lowers to the existing typed `SPLIT` and
 `UNNEST` path for scalar inputs; optional literal ordinal mode `0`/`1`, alias
-columns, row-local lateral inputs, and the lateral boundary are qualified in
+columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the lateral boundary are qualified in
 `docs/qualification/track2-tsql-string-split-2026-10-29.md`.
 
 ### Phase 2 — Transactional SQL surface
