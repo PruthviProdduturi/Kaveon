@@ -6643,6 +6643,8 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "SMALLDATETIMEFROMPARTS" => "SMALLDATETIME_FROM_PARTS".to_owned(),
         "ISDATE" => "IS_DATE".to_owned(),
         "ISNUMERIC" => "IS_NUMERIC".to_owned(),
+        // SQL Server's bounded text-validation predicate.
+        "ISJSON" => "IS_JSON".to_owned(),
         // SQL Server's REPLICATE has the same bounded string semantics as
         // the Engine's UTF-8 REPEAT path; canonicalize it before expression
         // planning so local and distributed evaluation share one operator.
@@ -9826,6 +9828,13 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_isjson_to_normalized_is_json() {
+        let plan = sql_to_logical_plan("SELECT ISJSON(payload) FROM t")
+            .expect("ISJSON should lower through the bounded JSON predicate");
+        assert!(format!("{plan:?}").contains("IS_JSON"));
+    }
+
+    #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
         let plan =
             sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
@@ -9971,7 +9980,7 @@ mod tests {
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
-        assert_eq!(cases.len(), 111);
+        assert_eq!(cases.len(), 112);
         for case in cases {
             let sql = case["sql"].as_str().expect("corpus SQL");
             let status = case["status"].as_str().expect("corpus status");
