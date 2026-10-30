@@ -310,6 +310,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_quotename_double_quote",
+        "SELECT TOP 5 QUOTENAME(country, '\"') AS quoted FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_eomonth",
         "SELECT TOP 5 EOMONTH(event_date) AS month_end FROM {T} ORDER BY event_date",
         true,
@@ -2238,13 +2243,13 @@ fn distributed_multi_array_unnest_typed_null_array_pads_rows() {
     let pool = QueryMemoryPool::new("distributed-unnest-null-array", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
-    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
     drop(local);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let actual = canonical_rows(
         &execute_distributed(statement, &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
-        true,
+        false,
     );
     assert_eq!(actual, expected);
     assert_eq!(actual, vec!["1\u{1f}NULL\u{1f}1", "2\u{1f}NULL\u{1f}2"]);
@@ -7844,6 +7849,28 @@ fn distributed_tsql_concat_matches_local_with_null_fields() {
     let statement = "SELECT user_id, CONCAT(region, '-', industry, '-', platform) AS label FROM events ORDER BY user_id, region, industry, platform LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-concat-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_quotename_delimiters_match_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-quotename-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, QUOTENAME(country) AS bracketed, QUOTENAME(country, '\"') AS quoted FROM events ORDER BY user_id, country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-quotename-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);
