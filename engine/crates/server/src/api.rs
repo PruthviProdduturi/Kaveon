@@ -10714,6 +10714,18 @@ fn annotate_plan_estimates(
                 .insert("estimate_scope".into(), "bounded_upper_bound".into());
             Some(output)
         }
+        "aggregate" | "hashaggregate" | "finalaggregate" | "distinct" => {
+            // Grouping and duplicate elimination cannot emit more rows than
+            // their input, but statistics do not yet provide group
+            // cardinality. Preserve that fact as an explicit safe bound
+            // rather than inventing a selectivity estimate.
+            let output = known[0];
+            node.attributes
+                .insert("estimated_output_rows".into(), output.to_string());
+            node.attributes
+                .insert("estimate_scope".into(), "bounded_upper_bound".into());
+            Some(output)
+        }
         _ => {
             node.attributes
                 .insert("estimated_input_rows".into(), known[0].to_string());
@@ -15950,6 +15962,30 @@ mod tests {
         assert_eq!(limit.attributes["estimated_output_rows"], "120");
         assert_eq!(limit.attributes["estimate_scope"], "bounded_upper_bound");
         assert_eq!(limit.children[0].attributes["estimated_output_rows"], "120");
+    }
+
+    #[test]
+    fn plan_estimates_bound_aggregate_outputs_without_inventing_selectivity() {
+        let scan = kaveon_core::PlanNode::new(8, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("table", "events");
+        let mut aggregate =
+            kaveon_core::PlanNode::new(9, kaveon_core::PlanPhase::Physical, "Aggregate")
+                .with_child(scan);
+        let estimates = std::collections::BTreeMap::from([(
+            "events".to_owned(),
+            super::PlanEstimate {
+                rows: 120,
+                bytes: None,
+                source: "source_metadata",
+                source_version: "v1".to_owned(),
+            },
+        )]);
+        super::annotate_plan_estimates(&mut aggregate, &estimates);
+        assert_eq!(aggregate.attributes["estimated_output_rows"], "120");
+        assert_eq!(
+            aggregate.attributes["estimate_scope"],
+            "bounded_upper_bound"
+        );
     }
 
     #[test]

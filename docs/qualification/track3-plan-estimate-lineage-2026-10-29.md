@@ -17,8 +17,10 @@ the operator's literal bound. Row-preserving `Filter`, `Project`, `Sort`, and
 operator above them can remain safely capped; the filter predicate itself is
 not estimated. Join nodes use the saturating product of child bounds; semi/anti
 joins use the left bound; `UNION`, `INTERSECT`, and `EXCEPT` use their
-mathematically safe sum/minimum/left-input bounds. None of these values claim
-join selectivity or aggregate cardinality.
+mathematically safe sum/minimum/left-input bounds. Aggregate, hash-aggregate,
+final-aggregate, and distinct nodes now expose the same safe child-row upper
+bound; this is still a bound, not a group-cardinality estimate. None of these
+values claim join selectivity.
 
 ## Evidence
 
@@ -27,6 +29,6 @@ cargo test -p kaveon-server --bin kaveon-server plan_estimates_expose_conservati
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The focused test and workspace clippy gate pass on 2026-10-29. Exact
+The focused test and workspace clippy gate pass on 2026-10-30. Exact
 operator-output estimates for filters, joins, and aggregates, plus selectivity
 attribution, remain a separate open qualification boundary.
