@@ -186,7 +186,9 @@ The bounded product-table `INSERT ... SELECT` path now also qualifies
 `RETURNING id, revision, document_json` when the source is narrowed by a literal
 `id IN (...)` list. Unbounded source-copy returning and
 general lake-table DML remain outside the contract; evidence is recorded in
-`docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md`.
+`docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md` and
+the owner-isolation regression is recorded in
+`docs/qualification/track2-native-dml-source-owner-isolation-2026-10-29.md`.
 
 This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
