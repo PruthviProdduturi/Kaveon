@@ -194,18 +194,19 @@ restart cleanup remains open. The credential-free machine-readable report is
 retained in `docs/engineering/engine-aks-fault-pressure-validation-2026-09-10.json`;
 its SHA-256 is `90d74c9eff118804942c881fdff4de931dcdd164f2730c25de00284d8596184c`.
 
-## Stop and resume
+## Stop and resume (historical deployment)
 
-PostgreSQL is still the authoritative Studio metadata store. Follow
-`docs/engineering/postgresql-retirement.md`; do not remove its StatefulSet or
-PVC until every migration, cutover, restart, and rollback gate there passes.
-The API pod has a fail-closed init check for the non-null
-`product_migration_outbox.owner_principal` schema contract. During an upgrade,
-the API cannot accept product writes until the additive schema job has applied
-that contract. On initial install the schema Job runs alongside the waiting API;
-on upgrades it is a fail-fast `pre-upgrade` hook, removed after success so its
-immutable Job spec cannot block the next release. This ordering barrier does
-not enable migration or replace the retirement gates.
+This September qualification run used a PostgreSQL-backed API baseline. That
+baseline is retained here only as historical evidence and is not the current
+deployment contract. Current Kaveon deployments use KaveonDB for product
+metadata and must not provision PostgreSQL as an application authority. The
+native deployment runbook is [Azure deployment guide](azure-deployment-guide.md)
+and the current product-store boundary is documented in
+`docs/reference/engine-sql-compatibility.md`.
+
+The API pod's historical fail-closed schema-init check and migration outbox
+details below describe that old rehearsal and must not be copied into a native
+KaveonDB deployment.
 
 The latest qualified rollout has all four Engine pods Ready on
 `kvtestegmf6oweugsno.azurecr.io/kaveon-engine@sha256:bd5a6ef6cdb00a121f215947c98a948f5e3fbd9d2c4b094a7d946d07a71d2bc6`.
