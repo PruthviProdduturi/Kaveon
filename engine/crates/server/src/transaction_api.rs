@@ -538,6 +538,28 @@ impl TransactionRegistry {
                         continue;
                     }
                 }
+                kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent {
+                    kind,
+                    id: row_id,
+                    document_json,
+                } => {
+                    let product_kind = record_kind(&kind)?;
+                    if session
+                        .transaction
+                        .snapshot()
+                        .product_record(product_kind, &row_id)
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                        .is_some()
+                    {
+                        session.transaction.mark_noop();
+                        continue;
+                    }
+                    kaveon_sql::parser::ProductDmlCommand::Create {
+                        kind,
+                        id: row_id,
+                        document_json,
+                    }
+                }
                 other => other,
             };
             // Migration batches are replayable.  A typed-row create that is
@@ -1240,6 +1262,9 @@ fn product_change(
         }
         ProductDmlCommand::MergeDelete { .. } => Err(RegistryError::Invalid(
             "MERGE matched-delete must be resolved before staging".into(),
+        )),
+        ProductDmlCommand::MergeCreateIfAbsent { .. } => Err(RegistryError::Invalid(
+            "MERGE unmatched-insert must be resolved before staging".into(),
         )),
         ProductDmlCommand::Update {
             kind,
@@ -2973,6 +2998,11 @@ fn product_returning_response(
                 kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. } => {
                     return Err("MERGE matched-delete must be resolved before RETURNING".to_owned());
                 }
+                kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent { .. } => {
+                    return Err(
+                        "MERGE unmatched-insert must be resolved before RETURNING".to_owned()
+                    );
+                }
             };
             let mut row = serde_json::Map::new();
             for column in columns {
@@ -3007,6 +3037,14 @@ fn product_returning_response(
                                 );
                             }
                             kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. } => {
+                                return Err(
+                                    "document_json RETURNING is unavailable for this command"
+                                        .to_owned(),
+                                );
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent {
+                                ..
+                            } => {
                                 return Err(
                                     "document_json RETURNING is unavailable for this command"
                                         .to_owned(),
@@ -4601,6 +4639,92 @@ mod tests {
                 .product_record(ProductRecordKind::Dataset, "missing")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_unmatched_insert_is_idempotent() {
+        let (registry, catalog) = registry().await;
+        let first = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql:
+                        "INSERT INTO product.datasets (id, document_json) VALUES ('existing', '{}')"
+                            .into(),
+                    transaction_id: Some(first.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(first.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let merge = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "MERGE INTO product.datasets AS target USING (VALUES ('existing', '{\"changed\":true}'), ('new', '{\"n\":1}')) AS source (id, document_json) ON target.id = source.id WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)".into(),
+                    transaction_id: Some(merge.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(merge.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        assert_eq!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "existing")
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
+        );
+        assert_eq!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "new")
+                .unwrap()
+                .unwrap()
+                .revision,
+            1
         );
     }
 

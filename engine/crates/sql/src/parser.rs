@@ -1997,6 +1997,13 @@ pub enum ProductDmlCommand {
     /// Bounded MERGE semantics: delete a matched product row.  An unmatched
     /// source row is a transactional no-op, matching SQL MERGE semantics.
     MergeDelete { kind: String, id: String },
+    /// Bounded MERGE semantics: create a source product row when unmatched;
+    /// an already-present key is a transactional no-op.
+    MergeCreateIfAbsent {
+        kind: String,
+        id: String,
+        document_json: String,
+    },
     /// Copy product records from another product table in the pinned
     /// transactional snapshot.  The server expands this bounded form into
     /// ordinary create/update commands; it is deliberately not a lake-table
@@ -2364,6 +2371,42 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 Ok(ProductDmlCommand::MergeDelete {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
+                })
+            })
+            .collect();
+    }
+    let not_matched_only_insert =
+        clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::NotMatched);
+    if not_matched_only_insert {
+        let MergeAction::Insert(insert) = &clauses[0].action else {
+            return Err(sql_error(
+                "MERGE WHEN NOT MATCHED must insert id and document_json",
+            ));
+        };
+        let MergeInsertKind::Values(values) = &insert.kind else {
+            return Err(sql_error("MERGE WHEN NOT MATCHED must use VALUES"));
+        };
+        if insert.columns.len() != 2
+            || !insert.columns[0].value.eq_ignore_ascii_case("id")
+            || !insert.columns[1]
+                .value
+                .eq_ignore_ascii_case("document_json")
+            || values.rows.len() != 1
+            || values.rows[0].len() != 2
+            || !merge_source_ref(&values.rows[0][0], &source_alias, "id")
+            || !merge_source_ref(&values.rows[0][1], &source_alias, "document_json")
+        {
+            return Err(sql_error(
+                "MERGE WHEN NOT MATCHED must insert source id and document_json",
+            ));
+        }
+        return source_values
+            .iter()
+            .map(|row| {
+                Ok(ProductDmlCommand::MergeCreateIfAbsent {
+                    kind: kind.clone(),
+                    id: string_literal(&row[0], "MERGE source id")?,
+                    document_json: string_literal(&row[1], "MERGE source document_json")?,
                 })
             })
             .collect();
@@ -4085,6 +4128,25 @@ mod tests {
                     id: "ds-2".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_unmatched_insert() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("bounded unmatched-insert MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::MergeCreateIfAbsent {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
         );
     }
 
