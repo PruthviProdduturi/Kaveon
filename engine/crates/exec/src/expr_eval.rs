@@ -2065,6 +2065,38 @@ fn zip_arrays(
                 .collect();
             Ok(Arc::new(result))
         }
+        DataType::Date32 => {
+            let t = true_vals.as_primitive::<Date32Type>();
+            let f = false_vals.as_primitive::<Date32Type>();
+            let result: Date32Array = (0..len)
+                .map(|i| {
+                    if !mask.is_null(i) && mask.value(i) {
+                        if t.is_null(i) { None } else { Some(t.value(i)) }
+                    } else if f.is_null(i) {
+                        None
+                    } else {
+                        Some(f.value(i))
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            let t = true_vals.as_primitive::<TimestampMicrosecondType>();
+            let f = false_vals.as_primitive::<TimestampMicrosecondType>();
+            let result: TimestampMicrosecondArray = (0..len)
+                .map(|i| {
+                    if !mask.is_null(i) && mask.value(i) {
+                        if t.is_null(i) { None } else { Some(t.value(i)) }
+                    } else if f.is_null(i) {
+                        None
+                    } else {
+                        Some(f.value(i))
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         DataType::Boolean => {
             let t = as_boolean(true_vals)?;
             let f = as_boolean(false_vals)?;

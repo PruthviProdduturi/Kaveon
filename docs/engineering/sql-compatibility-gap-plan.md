@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 83-case corpus has planner coverage and focused exact
+  The current 84-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -118,7 +118,9 @@ and is covered by the versioned planner corpus and three-worker differential
 gate. Bounded `DATE_BUCKET` width-one buckets for year, quarter, month, day,
 hour, minute, and second lower to the existing typed `DATE_TRUNC` path and
 have exact local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-2026-10-29.md`); wider buckets, custom origins, and
-unsupported dateparts remain explicitly rejected.
+unsupported dateparts remain explicitly rejected. Row-local BIGINT widths are
+guarded at runtime: zero, negative, or NULL widths return typed NULL, while
+dynamic origins remain rejected.
 
 ### Phase 2 — Transactional SQL surface
 

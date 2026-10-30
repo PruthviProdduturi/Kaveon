@@ -55,6 +55,7 @@
     {"id": "datename_dayofyear_alias", "sql": "SELECT DATENAME(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},
     {"id": "date_bucket_width_one", "sql": "SELECT DATE_BUCKET(month, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "date_bucket_wider_width", "sql": "SELECT DATE_BUCKET(month, 3, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "date_bucket_row_local_width", "sql": "SELECT DATE_BUCKET(month, actions - 20, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_row_local_widths_and_invalid_width_nulls"},
     {"id": "date_bucket_custom_origin", "sql": "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_typed_literals"},
     {"id": "getdate", "sql": "SELECT GETDATE() FROM t", "status": "planner_qualified"},
     {"id": "sysdatetime", "sql": "SELECT SYSDATETIME() FROM t", "status": "planner_qualified"},

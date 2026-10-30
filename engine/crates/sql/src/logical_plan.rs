@@ -5062,8 +5062,9 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     // (1900-01-01) when no origin is supplied. Width one is exactly the
     // existing DATE_TRUNC boundary. Wider literal widths use DATE_DIFF plus
     // a normalized remainder and the typed date-add operators. Custom origins
-    // are accepted only when they are typed date/timestamp literals; dynamic
-    // origins and widths remain fail-closed until separately qualified.
+    // are accepted only when they are typed date/timestamp literals. Widths
+    // may also be bounded row-local BIGINT expressions; invalid runtime
+    // widths return a typed NULL instead of dividing by zero.
     if name == "DATE_BUCKET" {
         if !(args.len() == 3 || args.len() == 4) {
             return Err(sql_err(
@@ -5088,14 +5089,19 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 "DATE_BUCKET does not support datepart '{unit}' in the bounded Engine contract"
             )));
         }
-        let width = match &args[1] {
-            Expr::Literal(ScalarValue::Int64(width)) if *width > 0 => *width,
+        let (width, dynamic_width) = match &args[1] {
+            Expr::Literal(ScalarValue::Int64(width)) if *width > 0 => (*width, None),
             Expr::Literal(ScalarValue::Int64(width)) => {
                 return Err(sql_err(format!(
                     "DATE_BUCKET width {width} must be a positive literal"
                 )));
             }
-            _ => return Err(sql_err("DATE_BUCKET width must be a positive literal")),
+            expression if is_row_local_replicate_count(expression) => (1, Some(expression.clone())),
+            _ => {
+                return Err(sql_err(
+                    "DATE_BUCKET width must be a positive BIGINT expression",
+                ));
+            }
         };
         let bucket_value = match &args[2] {
             // Typed DATE literals are represented as epoch-day integers by
@@ -5111,7 +5117,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             name: "DATE_TRUNC".into(),
             args: vec![Expr::Literal(ScalarValue::Utf8(unit.clone())), bucket_value],
         };
-        if width == 1 && args.len() == 3 {
+        if dynamic_width.is_none() && width == 1 && args.len() == 3 {
             return Ok(truncated);
         }
         let origin_type = if matches!(unit.as_str(), "hour" | "minute" | "second") {
@@ -5144,7 +5150,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         } else {
             Expr::Cast {
                 expr: Box::new(Expr::Literal(ScalarValue::Utf8("1900-01-01".into()))),
-                data_type: origin_type,
+                data_type: origin_type.clone(),
             }
         };
         let difference = Expr::Function {
@@ -5155,9 +5161,34 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 truncated.clone(),
             ],
         };
+        let width_expr = dynamic_width
+            .clone()
+            .unwrap_or(Expr::Literal(ScalarValue::Int64(width)));
+        let invalid_width = Expr::Or(
+            Box::new(Expr::IsNull(Box::new(width_expr.clone()))),
+            Box::new(Expr::BinaryOp {
+                left: Box::new(width_expr.clone()),
+                op: BinaryOp::Le,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(0))),
+            }),
+        );
+        // IF is eager in the vector evaluator, so use a safe divisor for the
+        // arithmetic and mask invalid widths to NULL at the result boundary.
+        let safe_width = if dynamic_width.is_some() {
+            Expr::Function {
+                name: "IF".into(),
+                args: vec![
+                    invalid_width.clone(),
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    width_expr.clone(),
+                ],
+            }
+        } else {
+            width_expr.clone()
+        };
         let remainder = Expr::Function {
             name: "MOD".into(),
-            args: vec![difference, Expr::Literal(ScalarValue::Int64(width))],
+            args: vec![difference, safe_width.clone()],
         };
         let normalized_remainder = Expr::Function {
             name: "IF".into(),
@@ -5170,7 +5201,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 Expr::BinaryOp {
                     left: Box::new(remainder.clone()),
                     op: BinaryOp::Plus,
-                    right: Box::new(Expr::Literal(ScalarValue::Int64(width))),
+                    right: Box::new(safe_width),
                 },
                 remainder,
             ],
@@ -5193,10 +5224,24 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         } else {
             "DATE_ADD_SECONDS"
         };
-        return Ok(Expr::Function {
+        let bucket = Expr::Function {
             name: operator.into(),
             args: vec![truncated, amount],
-        });
+        };
+        if let Some(_width_expr) = dynamic_width {
+            return Ok(Expr::Function {
+                name: "IF".into(),
+                args: vec![
+                    invalid_width,
+                    Expr::Cast {
+                        expr: Box::new(Expr::Literal(ScalarValue::Null)),
+                        data_type: origin_type,
+                    },
+                    bucket,
+                ],
+            });
+        }
+        return Ok(bucket);
     }
 
     // SQL Server's EOMONTH returns the last day of the month containing the
@@ -9420,7 +9465,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_date_bucket_lowers_literal_widths_and_rejects_unqualified_forms() {
+    fn bounded_date_bucket_lowers_literal_widths_and_row_local_widths() {
         let plan = sql_to_logical_plan("SELECT DATE_BUCKET(month, 1, event_date) FROM t")
             .expect("width-one DATE_BUCKET should lower");
         let rendered = format!("{plan:?}");
@@ -9434,9 +9479,11 @@ mod tests {
         let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, 0, event_date) FROM t")
             .expect_err("non-positive buckets must remain unqualified");
         assert!(error.to_string().contains("positive literal"));
-        let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date) FROM t")
-            .expect_err("dynamic widths must remain unqualified");
-        assert!(error.to_string().contains("positive literal"));
+        let plan = sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date) FROM t")
+            .expect("row-local widths should lower with a runtime guard");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("IsNull"), "{rendered}");
+        assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         let plan = sql_to_logical_plan(
             "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t",
         )
