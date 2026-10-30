@@ -265,8 +265,9 @@ guidance rather than being treated as generic syntax failures.
   tables that already exist in storage. The separate product transaction API
   accepts a bounded, revisioned metadata-record DML subset, including
   `RETURNING id, revision, document_json` on product creates, updates, upserts,
-  and revision-checked deletes; source-copy
-  `INSERT ... SELECT` document projections remain rejected. Its typed-row facade validates declared primary/unique
+  and revision-checked deletes; bounded source-copy `INSERT ... SELECT`
+  document projections are qualified only with a literal `id IN (...)` filter
+  of at most 1,000 source IDs. Its typed-row facade validates declared primary/unique
   keys and product references, but it is not arbitrary OLTP SQL or general
   constraint DDL.
 - Universal cost-based optimization. Native `ANALYZE` persists an immutable

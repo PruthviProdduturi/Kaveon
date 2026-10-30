@@ -186,6 +186,10 @@ The bounded product-table `INSERT ... SELECT` path now also qualifies
 general lake-table DML remain outside the contract; evidence is recorded in
 `docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md`.
 
+This note supersedes the older Native DML matrix wording that listed all
+source-copy document projections as open; only the bounded ID-filtered form is
+qualified.
+
 The T-SQL row above is backed by the versioned 86-case corpus pinned at
 `4a60d214` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
