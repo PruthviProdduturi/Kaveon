@@ -1054,7 +1054,8 @@ export type ChartKind =
   | "histogram"
   | "parallel_coordinates"
   | "world_map"
-  | "bubble_map";
+  | "bubble_map"
+  | "flow_map";
 
 export type TimeRangePreset =
   | "all_time"
@@ -1483,6 +1484,12 @@ export const TEMPLATES: ChartTemplate[] = [
     name: "Parallel coordinates",
     description: "Compare multi-dimensional numeric data across parallel axes.",
     category: "Custom",
+  },
+  {
+    id: "flow_map",
+    name: "Flow map",
+    description: "Draw movement between places. Query needs an origin and a destination, or origin and destination coordinate pairs.",
+    category: "Map",
   },
   {
     id: "bubble_map",
