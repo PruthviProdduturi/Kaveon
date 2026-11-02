@@ -263,6 +263,19 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           <rect x="22" y="17" width="3.5" height="7"  rx="1" fill={color} fillOpacity="0.45" />
         </svg>
       );
+    case "flow_map":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Land behind, movement in front: the chart itself. */}
+          <path d="M3,9 Q7,6 11,9 T19,8 Q23,7 25,10 L25,19 Q20,21 15,19 T6,20 Q3,19 3,16 Z"
+                fill={color} fillOpacity="0.12" stroke={color} strokeOpacity="0.25" strokeWidth="0.8" />
+          <path d="M7,17 Q13,8 20,12"  fill="none" stroke={color} strokeWidth="2.4" strokeOpacity="0.8" />
+          <path d="M7,17 Q11,20 18,19" fill="none" stroke={color} strokeWidth="1.5" strokeOpacity="0.5" />
+          <circle cx="7"  cy="17" r="2.6" fill={color} />
+          <circle cx="20" cy="12" r="1.9" fill={color} fillOpacity="0.8" />
+          <circle cx="18" cy="19" r="1.4" fill={color} fillOpacity="0.6" />
+        </svg>
+      );
     case "bubble_map":
       return (
         <svg viewBox="0 0 28 28" style={s}>
