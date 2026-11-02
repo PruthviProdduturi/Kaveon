@@ -546,8 +546,8 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_bounded_pivot",
-        "SELECT * FROM (SELECT region, surface, actions FROM {T}) src PIVOT (SUM(actions) FOR surface IN ([Chat], [Export])) p",
-        false,
+        "SELECT * FROM (SELECT region, surface, actions FROM {T}) src PIVOT (SUM(actions) FOR surface IN ([Chat], [Export])) p ORDER BY region",
+        true,
     ),
     (
         "tsql_bounded_unpivot",

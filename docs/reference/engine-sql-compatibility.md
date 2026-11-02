@@ -255,6 +255,9 @@ columns and static `IN` lists of at most 128 values. `PIVOT` lowers to
 conditional aggregation and `UNPIVOT` to `UNION ALL`; both have exact local
 and three-worker differential evidence in
 `docs/qualification/track2-tsql-pivot-unpivot-distributed-2026-10-28.md`.
+An outer `ORDER BY` is preserved by both lowerings. Ordered PIVOT is currently
+qualified across layouts and workers; UNPIVOT remains qualified only for
+unordered row equivalence until its distributed ordering contract is proven.
 The bounded `PIVOT(COUNT(*))` form is also accepted; direct-table, join-backed,
 dynamic-column, and unbounded forms remain explicitly rejected.
 Bounded `CROSS APPLY` over a parenthesized `SELECT` or `VALUES` derived
