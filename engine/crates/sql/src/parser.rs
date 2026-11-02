@@ -230,6 +230,16 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
     let pivot_close = matching_delimiter(trimmed, pivot_open, b'(', b')')
         .ok_or_else(|| sql_error("bounded PIVOT has an unbalanced specification"))?;
     let body = trimmed[pivot_open + 1..pivot_close].trim();
+    let pivot_tail = trimmed[pivot_close + 1..].trim();
+    let mut pivot_tail_parts = pivot_tail.splitn(2, char::is_whitespace);
+    let pivot_alias = pivot_tail_parts.next().unwrap_or("");
+    if !is_simple_identifier(pivot_alias) {
+        return Ok(None);
+    }
+    let pivot_order = pivot_tail_parts.next().unwrap_or("").trim();
+    if !pivot_order.is_empty() && !pivot_order.to_ascii_uppercase().starts_with("ORDER BY ") {
+        return Ok(None);
+    }
 
     let source_upper = source_sql.to_ascii_uppercase();
     if !source_upper.starts_with("SELECT ") {
@@ -379,6 +389,10 @@ fn normalize_bounded_pivot(sql: &str) -> Result<Option<String>> {
                 .join(", "),
         );
     }
+    if !pivot_order.is_empty() {
+        rewritten.push(' ');
+        rewritten.push_str(pivot_order);
+    }
     Ok(Some(rewritten))
 }
 
@@ -440,6 +454,16 @@ fn normalize_bounded_unpivot(sql: &str) -> Result<Option<String>> {
     let body_close = matching_delimiter(trimmed, body_start, b'(', b')')
         .ok_or_else(|| sql_error("bounded UNPIVOT has an unbalanced specification"))?;
     let body = trimmed[body_start + 1..body_close].trim();
+    let unpivot_tail = trimmed[body_close + 1..].trim();
+    let mut unpivot_tail_parts = unpivot_tail.splitn(2, char::is_whitespace);
+    let unpivot_alias = unpivot_tail_parts.next().unwrap_or("");
+    if !is_simple_identifier(unpivot_alias) {
+        return Ok(None);
+    }
+    let unpivot_order = unpivot_tail_parts.next().unwrap_or("").trim();
+    if !unpivot_order.is_empty() && !unpivot_order.to_ascii_uppercase().starts_with("ORDER BY ") {
+        return Ok(None);
+    }
     let body_upper = body.to_ascii_uppercase();
     let Some(for_pos) = find_top_level_keyword(&body_upper, "FOR") else {
         return Err(sql_error("bounded UNPIVOT requires FOR name_column"));
@@ -519,7 +543,12 @@ fn normalize_bounded_unpivot(sql: &str) -> Result<Option<String>> {
             projection.join(", ")
         ));
     }
-    Ok(Some(branches.join(" UNION ALL ")))
+    let mut rewritten = branches.join(" UNION ALL ");
+    if !unpivot_order.is_empty() {
+        rewritten.push(' ');
+        rewritten.push_str(unpivot_order);
+    }
+    Ok(Some(rewritten))
 }
 
 /// Map the bounded derived-relation forms of SQL Server APPLY onto the
@@ -3633,6 +3662,14 @@ mod tests {
     }
 
     #[test]
+    fn bounded_pivot_preserves_outer_ordering() {
+        let sql = "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p ORDER BY region";
+        let statements = parse_sql(sql).expect("ordered bounded PIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.ends_with("ORDER BY region"), "{rendered}");
+    }
+
+    #[test]
     fn bounded_pivot_count_star_lowers_to_conditional_aggregation() {
         let sql = "SELECT * FROM (SELECT region, month FROM sales) src PIVOT (COUNT(*) FOR month IN ([Jan], [Feb])) p";
         let statements = parse_sql(sql).expect("COUNT(*) PIVOT should lower");
@@ -3683,6 +3720,14 @@ mod tests {
         assert!(rendered.contains("'Jan' AS \"month\""), "{rendered}");
         assert!(rendered.contains("'Feb' AS \"month\""), "{rendered}");
         assert!(rendered.contains("UNION ALL"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_unpivot_preserves_outer_ordering() {
+        let sql = "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p ORDER BY region, month";
+        let statements = parse_sql(sql).expect("ordered bounded UNPIVOT should lower");
+        let rendered = statements[0].to_string();
+        assert!(rendered.ends_with("ORDER BY region, month"), "{rendered}");
     }
 
     #[test]
