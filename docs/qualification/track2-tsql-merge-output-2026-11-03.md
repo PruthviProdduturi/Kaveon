@@ -50,7 +50,7 @@ for earlier staged updates. Broader by-source combinations remain rejected.
 
 - `parser::tests::sql_server_merge_output_lowers_to_inserted_product_returning`
 - `parser::tests::sql_server_matched_update_output_lowers_to_inserted_product_returning`
-- `parser::tests::sql_server_merge_output_rejects_delete_actions`
+- `parser::tests::sql_server_merge_output_rejects_unsupported_projections`
 - `transaction_api::tests::sql_endpoint_bounded_merge_accepts_inserted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_update_accepts_inserted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_accepts_deleted_output`
