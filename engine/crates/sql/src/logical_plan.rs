@@ -9949,7 +9949,9 @@ mod tests {
         assert!(
             sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT USING 'en-US') FROM t").is_err()
         );
-        assert!(sql_to_logical_plan("SELECT TRY_PARSE(value AS DATE) FROM t").is_err());
+        let temporal = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATE) FROM t")
+            .expect("invariant TRY_PARSE date should lower");
+        assert!(format!("{temporal:?}").contains("TRY_CAST_DATE32"));
     }
 
     #[test]
