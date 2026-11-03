@@ -15257,7 +15257,7 @@ fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
 pub(crate) fn batches_to_json(
     batches: &[arrow::record_batch::RecordBatch],
 ) -> Vec<Vec<serde_json::Value>> {
-    use arrow::array::{Array, AsArray};
+    use arrow::array::{Array, AsArray, StringViewArray};
     use arrow::datatypes::*;
 
     let mut rows = Vec::new();
@@ -15331,6 +15331,13 @@ pub(crate) fn batches_to_json(
                     }
                     DataType::LargeUtf8 => {
                         serde_json::Value::String(arr.as_string::<i64>().value(row).to_owned())
+                    }
+                    DataType::Utf8View => {
+                        let values = arr
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .expect("Utf8View array must be a StringViewArray");
+                        serde_json::Value::String(values.value(row).to_owned())
                     }
                     // Complex values must remain JSON-native at the API boundary. Falling
                     // through to Arrow's Debug representation makes arrays, maps and rows
@@ -15456,7 +15463,7 @@ pub(crate) fn batches_to_json(
 
 /// Convert one Arrow value to the JSON shape exposed by HTTP and CLI results.
 fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
-    use arrow::array::{Array, AsArray};
+    use arrow::array::{Array, AsArray, StringViewArray};
     use arrow::datatypes::*;
     if array.is_null(0) {
         return serde_json::Value::Null;
@@ -15539,6 +15546,13 @@ fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
         DataType::Float64 => serde_json::json!(array.as_primitive::<Float64Type>().value(0)),
         DataType::Utf8 => serde_json::json!(array.as_string::<i32>().value(0)),
         DataType::LargeUtf8 => serde_json::json!(array.as_string::<i64>().value(0)),
+        DataType::Utf8View => serde_json::json!(
+            array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array must be a StringViewArray")
+                .value(0)
+        ),
         _ => serde_json::Value::String(format!("{:?}", array.slice(0, 1))),
     }
 }
@@ -25598,6 +25612,32 @@ mod streamed_root_tests {
                 serde_json::json!({"a": 3})
             ]]
         );
+    }
+
+    #[test]
+    fn result_rows_encode_utf8_view_values_as_text() {
+        use arrow::array::{ArrayRef, StringViewArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec!["east", "west"]));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "region",
+                DataType::Utf8View,
+                false,
+            )])),
+            vec![values],
+        )
+        .unwrap();
+        assert_eq!(
+            batches_to_json(&[batch]),
+            vec![
+                vec![serde_json::json!("east")],
+                vec![serde_json::json!("west")]
+            ]
+        );
+        let nested: ArrayRef = Arc::new(StringViewArray::from(vec!["north"]));
+        assert_eq!(array_value_to_json(nested), serde_json::json!("north"));
     }
 
     #[test]
