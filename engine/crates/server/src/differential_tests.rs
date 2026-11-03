@@ -8178,17 +8178,46 @@ fn events_catalog(directory: &std::path::Path) -> CatalogManager {
     let users_meta = write(directory, "users.parquet", &batch(&users(), true));
     catalog.register_table("events", users_meta).unwrap();
     let timestamp_values = Columns {
-        names: vec!["user_id", "value"],
-        text: BTreeMap::from([(
+        names: vec![
+            "user_id",
             "value",
-            vec![
-                Some("2024-12-31T23:59:59.123".into()),
-                Some("12/31/2024".into()),
-                Some("2024-12-30 12:00:00.123".into()),
-                Some("not-a-timestamp".into()),
-                None,
-            ],
-        )]),
+            "style_0",
+            "style_1",
+            "style_23",
+            "style_102",
+            "style_103",
+            "style_104",
+            "style_105",
+            "style_106",
+            "style_107",
+            "style_110",
+            "style_111",
+            "style_112",
+        ],
+        text: BTreeMap::from([
+            (
+                "value",
+                vec![
+                    Some("2024-12-31T23:59:59.123".into()),
+                    Some("12/31/2024".into()),
+                    Some("2024-12-30 12:00:00.123".into()),
+                    Some("not-a-timestamp".into()),
+                    None,
+                ],
+            ),
+            ("style_0", vec![Some("Dec 31, 2024".into()); 5]),
+            ("style_1", vec![Some("12/31/2024".into()); 5]),
+            ("style_23", vec![Some("2024-12-30".into()); 5]),
+            ("style_102", vec![Some("2024.12.30".into()); 5]),
+            ("style_103", vec![Some("31/12/2024".into()); 5]),
+            ("style_104", vec![Some("30.12.2024".into()); 5]),
+            ("style_105", vec![Some("30-12-2024".into()); 5]),
+            ("style_106", vec![Some("30 Dec 2024".into()); 5]),
+            ("style_107", vec![Some("Dec 30, 2024".into()); 5]),
+            ("style_110", vec![Some("12-30-2024".into()); 5]),
+            ("style_111", vec![Some("2024/12/30".into()); 5]),
+            ("style_112", vec![Some("20241230".into()); 5]),
+        ]),
         ints: BTreeMap::from([("user_id", vec![1, 2, 3, 4, 5])]),
         dates: Vec::new(),
     };
@@ -8783,7 +8812,7 @@ fn distributed_tsql_runtime_timestamp_styles_match_local() {
         uuid::Uuid::new_v4()
     ));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, TRY_CONVERT(DATETIME2, value, 20) AS ts_20, TRY_CONVERT(DATETIME2, value, 21) AS ts_21, TRY_CONVERT(DATETIME2, value, 120) AS ts_120, TRY_CONVERT(DATETIME2, value, 121) AS ts_121, TRY_CONVERT(DATETIME2, value, 126) AS ts_126, TRY_CONVERT(DATETIME2, value, 101) AS us_date FROM timestamp_events ORDER BY user_id";
+    let statement = "SELECT user_id, TRY_CONVERT(DATETIME2, value, 20) AS ts_20, TRY_CONVERT(DATETIME2, value, 21) AS ts_21, TRY_CONVERT(DATETIME2, value, 120) AS ts_120, TRY_CONVERT(DATETIME2, value, 121) AS ts_121, TRY_CONVERT(DATETIME2, value, 126) AS ts_126, TRY_CONVERT(DATETIME2, style_0, 0) AS ts_0, TRY_CONVERT(DATETIME2, style_1, 1) AS ts_1, TRY_CONVERT(DATETIME2, style_23, 23) AS ts_23, TRY_CONVERT(DATETIME2, style_102, 102) AS ts_102, TRY_CONVERT(DATETIME2, style_103, 103) AS ts_103, TRY_CONVERT(DATETIME2, style_104, 104) AS ts_104, TRY_CONVERT(DATETIME2, style_105, 105) AS ts_105, TRY_CONVERT(DATETIME2, style_106, 106) AS ts_106, TRY_CONVERT(DATETIME2, style_107, 107) AS ts_107, TRY_CONVERT(DATETIME2, style_110, 110) AS ts_110, TRY_CONVERT(DATETIME2, style_111, 111) AS ts_111, TRY_CONVERT(DATETIME2, style_112, 112) AS ts_112 FROM timestamp_events ORDER BY user_id";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-timestamp-style-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)

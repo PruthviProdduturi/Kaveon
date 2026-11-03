@@ -155,7 +155,11 @@ with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
 unstyled `TRY_CONVERT`. Literal DATE conversion styles `0`, `1`, `23`, `101`,
 `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`,
 `120`, `121`, and `126` are normalized to ISO dates;
-runtime column style evaluation remains bounded. Datepart abbreviations such
+runtime column style evaluation remains bounded. Runtime timestamp conversion
+also accepts the implemented date-only styles `0`, `1`, `23`, `102`, `103`,
+`104`, `105`, `106`, `107`, `110`, `111`, and `112`, returning midnight for
+valid values and NULL under `TRY_CONVERT` for malformed values. Datepart
+abbreviations such
 as `dd`, `mm`, `yyyy`, `wk`, `mi`, and `ss` are normalized to the canonical
 vectorized date operators. `DATEADD` also accepts `weekday`/`dw`/`w` and
 `dayofyear`/`dy`/`y` as day-equivalent offsets, while `DATEPART` accepts those
