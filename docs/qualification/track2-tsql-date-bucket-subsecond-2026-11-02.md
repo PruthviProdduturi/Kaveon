@@ -3,7 +3,8 @@
 ## Scope
 
 The bounded T-SQL `DATE_BUCKET` lowering now accepts `millisecond` and
-`microsecond` dateparts for timestamp inputs. It reuses the typed `DATE_DIFF`
+`microsecond` dateparts, together with SQL Server's `ms`, `mcs`, and `us`
+aliases, for timestamp inputs. It reuses the typed `DATE_DIFF`
 and timestamp add operators, so the bucket width remains a positive literal or
 bounded row-local BIGINT expression and the origin remains the SQL Server
 default, a typed timestamp/date literal, or a bounded row-local temporal
@@ -28,7 +29,7 @@ Results:
 - planner lowering passed for millisecond and microsecond buckets;
 - nanosecond input was rejected with the bounded-contract diagnostic;
 - the exact local result matched the three-worker distributed result for both
-  subsecond units;
+  subsecond units and all three SQL Server aliases;
 - the differential query used deterministic ordering and the memory pool
   returned to zero after execution.
 
