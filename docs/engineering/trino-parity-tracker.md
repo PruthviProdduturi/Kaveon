@@ -55,6 +55,9 @@ Finished query rows are now also attributed through directly connected
 scope; propagation stops at filters, limits, aggregates, joins, and set
 operations. This is bounded diagnostic evidence, not full operator telemetry:
 `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
+Live distributed stage publication also preserves the planner's operator and
+estimate metadata for the running estimate endpoint, without inferring row
+counts (`docs/qualification/track3-live-stage-estimate-metadata-2026-11-03.md`).
 
 The latest SQL compatibility increments are corrected calendar-width and
 custom-origin `DATE_BUCKET` semantics, including typed timestamp origins for

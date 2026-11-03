@@ -14304,6 +14304,15 @@ async fn execute_distributed_fragments(
                         stage_started
                             .get(&task_id.stage_id)
                             .map_or(0, |started| self::elapsed_us(*started)),
+                        stage_metadata
+                            .get(&task_id.stage_id.0)
+                            .map(|(operator, estimated_rows)| {
+                                (
+                                    (!operator.is_empty()).then(|| operator.clone()),
+                                    *estimated_rows,
+                                )
+                            })
+                            .unwrap_or((None, None)),
                         task.clone(),
                     )
                     .await;
@@ -14760,6 +14769,7 @@ async fn execute_distributed_top_n(
                     0,
                     partition_count,
                     elapsed_us(started),
+                    stage_metadata.clone(),
                     telemetry.clone(),
                 )
                 .await;
@@ -15042,6 +15052,7 @@ async fn execute_distributed_aggregate(
                     0,
                     partition_count,
                     elapsed_us(started),
+                    stage_metadata.clone(),
                     telemetry.clone(),
                 )
                 .await;
@@ -15880,7 +15891,7 @@ fn record_stage_task(
                     elapsed_us,
                     tasks: Vec::new(),
                     final_output_rows: None,
-                    operator,
+                    operator: operator.clone(),
                     estimated_rows,
                 },
             );
@@ -15888,6 +15899,12 @@ fn record_stage_task(
         }
     };
     let stage = &mut stages[index];
+    if operator.is_some() {
+        stage.operator = operator;
+    }
+    if estimated_rows.is_some() {
+        stage.estimated_rows = estimated_rows;
+    }
     // A partition can report more than one completion while a query is
     // running (for example, a retry can finish after an earlier attempt was
     // already published). Keep one telemetry row per partition so the live
@@ -15918,11 +15935,12 @@ fn record_stage_task(
 /// stage's counters, its telemetry, and the scan totals over every task
 /// finished so far by the aggregation the final record uses.
 /// `scan_metrics_complete` stays false until the statement finishes.
-fn merge_task_into_record(
+fn merge_task_into_record_with_metadata(
     record: &mut QueryRecord,
     stage_id: u32,
     task_count: usize,
     stage_elapsed_us: u64,
+    stage_metadata: (Option<String>, Option<u64>),
     task: TaskTelemetry,
 ) {
     record_stage_task(
@@ -15930,8 +15948,8 @@ fn merge_task_into_record(
         stage_id,
         task_count,
         stage_elapsed_us,
-        None,
-        None,
+        stage_metadata.0,
+        stage_metadata.1,
         task,
     );
     record.scans = distributed_scan_telemetry(&record.stages).0;
@@ -15944,12 +15962,20 @@ async fn publish_task_completion(
     stage_id: u32,
     task_count: usize,
     stage_elapsed_us: u64,
+    stage_metadata: (Option<String>, Option<u64>),
     task: TaskTelemetry,
 ) {
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id)
         && matches!(record.state, QueryState::Running)
     {
-        merge_task_into_record(record, stage_id, task_count, stage_elapsed_us, task);
+        merge_task_into_record_with_metadata(
+            record,
+            stage_id,
+            task_count,
+            stage_elapsed_us,
+            stage_metadata,
+            task,
+        );
     }
 }
 
@@ -23560,7 +23586,14 @@ mod tests {
         );
         assert!(record.stages.is_empty() && record.scans.is_empty());
 
-        super::merge_task_into_record(&mut record, 1, 2, 5, task(1, 30));
+        super::merge_task_into_record_with_metadata(
+            &mut record,
+            1,
+            2,
+            5,
+            (None, None),
+            task(1, 30),
+        );
         assert_eq!(record.stages.len(), 1);
         assert_eq!(
             (
@@ -23574,7 +23607,22 @@ mod tests {
         assert_eq!(record.scans[0].rows_emitted, 30);
         assert!(!record.scan_metrics_complete);
 
-        super::merge_task_into_record(&mut record, 0, 1, 7, task(0, 5));
+        // Live task publication may create the stage before the planner
+        // metadata is available to that publication path. A later completion
+        // must attach the exact operator estimate rather than leaving the
+        // running diagnostics unavailable until finalization.
+        super::merge_task_into_record_with_metadata(
+            &mut record,
+            1,
+            2,
+            6,
+            (Some("Filter".into()), Some(100)),
+            task(1, 30),
+        );
+        assert_eq!(record.stages[0].operator.as_deref(), Some("Filter"));
+        assert_eq!(record.stages[0].estimated_rows, Some(100));
+
+        super::merge_task_into_record_with_metadata(&mut record, 0, 1, 7, (None, None), task(0, 5));
         assert_eq!(
             record
                 .stages
@@ -23585,7 +23633,14 @@ mod tests {
         );
         assert_eq!(record.scans[0].rows_emitted, 35);
 
-        super::merge_task_into_record(&mut record, 1, 2, 9, task(0, 40));
+        super::merge_task_into_record_with_metadata(
+            &mut record,
+            1,
+            2,
+            9,
+            (None, None),
+            task(0, 40),
+        );
         assert_eq!(
             (
                 record.stages[1].state,

@@ -456,6 +456,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   `derived_row_preserving` scope; the propagation stops at cardinality-changing
   operators. Evidence:
   `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
+- [x] Preserve stage operator and planner-estimate metadata during live
+  distributed task publication. A later completion fills metadata on an
+  already-running stage without inferring any row counts. Evidence:
+  `docs/qualification/track3-live-stage-estimate-metadata-2026-11-03.md`.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
   pinned source versions, and time zone; it reports cache execution mode,
