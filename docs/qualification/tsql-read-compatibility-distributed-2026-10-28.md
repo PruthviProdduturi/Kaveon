@@ -12,10 +12,10 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-119-case count in the scope and tracker, enforced by
+134-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
-- Current corpus: 119 cases. The prior full sweep qualified bounded
+- Historical corpus at this qualification: 119 cases. The prior full sweep qualified bounded
   derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated derived
   `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded `PIVOT`,
   `UNPIVOT`, table-valued/unsupported correlated `APPLY`, `TOP WITH TIES`
