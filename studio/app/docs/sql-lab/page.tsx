@@ -33,7 +33,7 @@ export default function SqlLabDocs() {
       <h3>Autocomplete &amp; the schema browser</h3>
       <p>
         Monaco autocompletes SQL keywords out of the box. Table and column names come from the{" "}
-        <strong>schema browser</strong> on the left: select a database to load its tables, then expand a table to
+        <strong>schema browser</strong> on the left: select a catalog to load its schemas and tables, then expand a table to
         pull in its columns. Once loaded, those names feed autocomplete as you type.
       </p>
 
@@ -44,15 +44,15 @@ export default function SqlLabDocs() {
       </p>
       <Callout type="warn">
         Tabs are <strong>not</strong> persisted across page reloads. Use <strong>Save Query</strong> to keep a query
-        across sessions — saved queries live in your history with their source database attached.
+        across sessions — saved queries live in your history with their source catalog attached.
       </Callout>
 
-      <h2>Selecting a database</h2>
+      <h2>Selecting a catalog</h2>
       <p>
-        The database selector in the toolbar lists every active data source. Pick one before running a query and the
+        The catalog selector in the toolbar lists every active catalog. Pick one before running a query and the
         schema browser updates to match. If nothing is selected, the editor falls back to the{" "}
-        <strong>metadata database</strong> (where the demo datasets live) — so you can always explore the platform&rsquo;s
-        own metadata without wiring up a source first.
+        <strong>KaveonDB system catalog</strong> (where product metadata and transactional records live) — so you can
+        explore the platform&rsquo;s own state without wiring up an external source first.
       </p>
 
       <h2>Running queries</h2>
@@ -109,7 +109,7 @@ export default function SqlLabDocs() {
 
       <h2>Saving &amp; history</h2>
       <p>
-        <strong>Save Query</strong> stores the SQL plus its source database so you can reopen it later. Every executed
+        <strong>Save Query</strong> stores the SQL plus its source catalog so you can reopen it later. Every executed
         query is also written to <strong>Query History</strong> — a per-user audit trail you can search, re-run, or
         promote into a saved query. Both live under <code>/lab/queries</code>.
       </p>
