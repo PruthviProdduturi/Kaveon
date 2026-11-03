@@ -375,6 +375,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_listagg",
+        "SELECT LISTAGG(country, ',') WITHIN GROUP (ORDER BY country) AS countries FROM {T}",
+        true,
+    ),
+    (
+        "tsql_listagg_default_separator",
+        "SELECT LISTAGG(country) WITHIN GROUP (ORDER BY country) AS countries FROM {T}",
+        true,
+    ),
+    (
         "tsql_pivot_count_big",
         "SELECT * FROM (SELECT region, surface FROM {T}) src PIVOT (COUNT_BIG(*) FOR surface IN ([Chat], [Export])) p",
         false,

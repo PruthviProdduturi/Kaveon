@@ -285,7 +285,12 @@ order is unspecified, matching SQL Server's unordered form. The bounded
 retain value strings, merge them under a 1,000,000-value/16 MiB per-group
 bound, and sort once during finalization. Independent or multiple order keys,
 explicit NULL placement, and dynamic separators remain explicitly rejected.
-`STRING_AGG(DISTINCT value, literal_separator)` is qualified through an exact
+SQL-standard/Trino `LISTAGG(value[, literal_separator]) WITHIN GROUP (ORDER BY
+value [ASC|DESC])` is also qualified when the separator is a literal (or
+omitted, which defaults to the empty string) and there is one value-order key.
+It reuses the same bounded mergeable state. `ON OVERFLOW`, dynamic separators,
+multiple order keys, explicit NULL-placement clauses, and other unbounded
+forms fail closed until separately qualified. `STRING_AGG(DISTINCT value, literal_separator)` is qualified through an exact
 distinct projection over grouping keys and the value before the existing
 mergeable state; mixed aggregate lists and expression-valued forms remain
 rejected. Focused planner, state round-trip, and three-worker differential

@@ -35,6 +35,8 @@
     {"id": "string_agg_filter", "sql": "SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10 AND name = 'Japan') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "string_agg_within_group", "sql": "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_value_ordered_ascending"},
     {"id": "string_agg_within_group_desc", "sql": "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name DESC) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_value_ordered_descending"},
+    {"id": "listagg", "sql": "SELECT LISTAGG(name, ',') WITHIN GROUP (ORDER BY name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_string_agg_state"},
+    {"id": "listagg_default_separator", "sql": "SELECT LISTAGG(name) WITHIN GROUP (ORDER BY name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_empty_default_separator"},
     {"id": "trim_characters", "sql": "SELECT TRIM(BOTH 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_both_mode_character_set"},
     {"id": "trim_leading_characters", "sql": "SELECT TRIM(LEADING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_leading_character_set"},
     {"id": "trim_trailing_characters", "sql": "SELECT TRIM(TRAILING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_trailing_character_set"},
