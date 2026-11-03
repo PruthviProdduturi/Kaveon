@@ -146,7 +146,7 @@ this is not general lake-table DML.
 The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, bounded `TOP n PERCENT`, `TOP n PERCENT WITH TIES`, and `TOP n WITH TIES`
 with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
-`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `TRANSLATE`, `LEFT`, `RIGHT`, `REVERSE`, `TRIM` (including qualified BOTH, LEADING, and TRAILING character sets), `LTRIM`, `RTRIM`, unstyled `CONVERT`, and
+`GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `TRANSLATE`, `LEFT`, `RIGHT`, `REVERSE`, `STUFF`, `SPACE`, `TRIM` (including qualified BOTH, LEADING, and TRAILING character sets), `LTRIM`, `RTRIM`, unstyled `CONVERT`, and
 unstyled `TRY_CONVERT`. Literal DATE conversion styles `0`, `1`, `23`, `101`,
 `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`,
 `120`, `121`, and `126` are normalized to ISO dates;
@@ -172,7 +172,10 @@ or double-quote delimiters, with the 128-character limit) and
 `STRING_ESCAPE(value, 'json')`; unsupported delimiter and escape-mode forms
 fail closed.
 
-`LEN`, `IIF`, and `CHARINDEX` are also qualified on the distributed path.
+`LEN`, `IIF`, `CHARINDEX`, `STUFF`, and `SPACE` are also qualified on the
+distributed path. `STUFF` uses one-based Unicode scalar positions and returns
+NULL for invalid start/length values; `SPACE` accepts bounded row-local counts,
+preserving NULL and returning NULL for negative counts.
 `ISJSON(text[, VALUE|ARRAY|OBJECT|SCALAR])` is qualified on the same bounded
 distributed path, with SQL Server's integer validity result and NULL input
 semantics; other type constraints fail closed.
