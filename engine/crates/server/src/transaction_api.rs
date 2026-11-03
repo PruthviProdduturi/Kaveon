@@ -321,155 +321,236 @@ impl TransactionRegistry {
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
-        let mut expanded = Vec::new();
-        let catalog = self.catalog.clone();
-        let snapshot = session.transaction.snapshot().clone();
-        for command in commands {
-            if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
-                kind,
-                source_kind,
-                source_ids,
-                on_conflict_do_nothing,
-                on_conflict_do_update,
-                ..
-            } = command
-            {
-                let catalog = catalog.as_ref().ok_or(RegistryError::Disabled)?;
-                let source = record_kind(&source_kind)?;
-                let mut cursor = None;
-                loop {
-                    let page = snapshot
-                        .product_records_page(source, 100, cursor.as_deref())
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-                    for record in page.records {
-                        if let Some(ids) = &source_ids
-                            && !ids.iter().any(|id| id == &record.id)
-                        {
-                            continue;
-                        }
-                        if record
-                            .unique_values
-                            .get("owner_principal")
-                            .map(String::as_str)
-                            != Some(owner)
-                        {
-                            return Err(RegistryError::OwnershipForbidden);
-                        }
-                        if expanded.len() >= MAX_PRODUCT_INSERT_SELECT_ROWS {
-                            return Err(RegistryError::Capacity);
-                        }
-                        let bytes = catalog
-                            .fetch_product_document_at(&snapshot, source, &record.id)
-                            .await
-                            .map_err(|error| match error {
-                                kaveon_storage::CommitErrorKind::Missing
-                                | kaveon_storage::CommitErrorKind::Invalid => {
-                                    RegistryError::Corrupt
-                                }
-                                _ => RegistryError::Unavailable,
-                            })?
-                            .ok_or(RegistryError::Corrupt)?;
-                        let document_json =
-                            String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?;
-                        expanded.push(if on_conflict_do_update {
-                            kaveon_sql::parser::ProductDmlCommand::Upsert {
-                                kind: kind.clone(),
-                                id: record.id,
-                                document_json,
-                            }
-                        } else if on_conflict_do_nothing {
-                            kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
-                                kind: kind.clone(),
-                                id: record.id,
-                                document_json,
-                            }
-                        } else {
-                            kaveon_sql::parser::ProductDmlCommand::Create {
-                                kind: kind.clone(),
-                                id: record.id,
-                                document_json,
-                            }
-                        });
-                    }
-                    cursor = page.next_cursor;
-                    if cursor.is_none() {
-                        break;
-                    }
-                }
-            } else {
-                expanded.push(command);
-            }
-        }
-        for command in expanded {
-            let command = match command {
-                kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
+        // A multi-statement batch is one SQL statement from the caller's
+        // perspective.  Preserve the prior staged view so a validation or
+        // storage error cannot leave an earlier command in the batch staged
+        // while the caller still has a live transaction it could commit.
+        let transaction_before = session.transaction.clone();
+        let document_bytes_before = session.document_bytes;
+        let result = async {
+            let mut expanded = Vec::new();
+            let catalog = self.catalog.clone();
+            let snapshot = session.transaction.snapshot().clone();
+            for command in commands {
+                if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
                     kind,
-                    id: row_id,
-                    document_json,
-                } => {
-                    if kind == "typed_row" {
-                        let (table, row) = typed_row_document(&row_id, &document_json, owner, 1)?;
-                        if let Some(existing) = session
-                            .transaction
-                            .snapshot()
-                            .typed_rows
-                            .get(&table)
-                            .and_then(|rows| rows.get(&row_id))
-                        {
-                            if existing == &row {
-                                session.transaction.mark_noop();
+                    source_kind,
+                    source_ids,
+                    on_conflict_do_nothing,
+                    on_conflict_do_update,
+                    ..
+                } = command
+                {
+                    let catalog = catalog.as_ref().ok_or(RegistryError::Disabled)?;
+                    let source = record_kind(&source_kind)?;
+                    let mut cursor = None;
+                    loop {
+                        let page = snapshot
+                            .product_records_page(source, 100, cursor.as_deref())
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                        for record in page.records {
+                            if let Some(ids) = &source_ids
+                                && !ids.iter().any(|id| id == &record.id)
+                            {
                                 continue;
                             }
-                            return Err(RegistryError::Invalid(
-                                "typed row already exists with different content".into(),
-                            ));
+                            if record
+                                .unique_values
+                                .get("owner_principal")
+                                .map(String::as_str)
+                                != Some(owner)
+                            {
+                                return Err(RegistryError::OwnershipForbidden);
+                            }
+                            if expanded.len() >= MAX_PRODUCT_INSERT_SELECT_ROWS {
+                                return Err(RegistryError::Capacity);
+                            }
+                            let bytes = catalog
+                                .fetch_product_document_at(&snapshot, source, &record.id)
+                                .await
+                                .map_err(|error| match error {
+                                    kaveon_storage::CommitErrorKind::Missing
+                                    | kaveon_storage::CommitErrorKind::Invalid => {
+                                        RegistryError::Corrupt
+                                    }
+                                    _ => RegistryError::Unavailable,
+                                })?
+                                .ok_or(RegistryError::Corrupt)?;
+                            let document_json =
+                                String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?;
+                            expanded.push(if on_conflict_do_update {
+                                kaveon_sql::parser::ProductDmlCommand::Upsert {
+                                    kind: kind.clone(),
+                                    id: record.id,
+                                    document_json,
+                                }
+                            } else if on_conflict_do_nothing {
+                                kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
+                                    kind: kind.clone(),
+                                    id: record.id,
+                                    document_json,
+                                }
+                            } else {
+                                kaveon_sql::parser::ProductDmlCommand::Create {
+                                    kind: kind.clone(),
+                                    id: record.id,
+                                    document_json,
+                                }
+                            });
                         }
-                    } else {
-                        let product_kind = record_kind(&kind)?;
-                        if session
-                            .transaction
-                            .snapshot()
-                            .product_record(product_kind, &row_id)
-                            .map_err(|error| RegistryError::Invalid(error.to_string()))?
-                            .is_some()
-                        {
-                            session.transaction.mark_noop();
-                            continue;
+                        cursor = page.next_cursor;
+                        if cursor.is_none() {
+                            break;
                         }
                     }
-                    kaveon_sql::parser::ProductDmlCommand::Create {
+                } else {
+                    expanded.push(command);
+                }
+            }
+            for command in expanded {
+                let command = match command {
+                    kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
                         kind,
                         id: row_id,
                         document_json,
+                    } => {
+                        if kind == "typed_row" {
+                            let (table, row) =
+                                typed_row_document(&row_id, &document_json, owner, 1)?;
+                            if let Some(existing) = session
+                                .transaction
+                                .snapshot()
+                                .typed_rows
+                                .get(&table)
+                                .and_then(|rows| rows.get(&row_id))
+                            {
+                                if existing == &row {
+                                    session.transaction.mark_noop();
+                                    continue;
+                                }
+                                return Err(RegistryError::Invalid(
+                                    "typed row already exists with different content".into(),
+                                ));
+                            }
+                        } else {
+                            let product_kind = record_kind(&kind)?;
+                            if session
+                                .transaction
+                                .snapshot()
+                                .product_record(product_kind, &row_id)
+                                .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                                .is_some()
+                            {
+                                session.transaction.mark_noop();
+                                continue;
+                            }
+                        }
+                        kaveon_sql::parser::ProductDmlCommand::Create {
+                            kind,
+                            id: row_id,
+                            document_json,
+                        }
                     }
-                }
-                kaveon_sql::parser::ProductDmlCommand::Upsert {
-                    kind,
-                    id: row_id,
-                    document_json,
-                } => {
-                    if kind == "typed_row" {
-                        match find_typed_row(session.transaction.snapshot(), &row_id, owner) {
-                            Ok((_table, current)) => {
+                    kaveon_sql::parser::ProductDmlCommand::Upsert {
+                        kind,
+                        id: row_id,
+                        document_json,
+                    } => {
+                        if kind == "typed_row" {
+                            match find_typed_row(session.transaction.snapshot(), &row_id, owner) {
+                                Ok((_table, current)) => {
+                                    kaveon_sql::parser::ProductDmlCommand::Update {
+                                        kind,
+                                        id: row_id,
+                                        expected_revision: current.revision,
+                                        document_json,
+                                    }
+                                }
+                                Err(RegistryError::Invalid(message))
+                                    if message == "typed row does not exist" =>
+                                {
+                                    kaveon_sql::parser::ProductDmlCommand::Create {
+                                        kind,
+                                        id: row_id,
+                                        document_json,
+                                    }
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        } else {
+                            let product_kind = record_kind(&kind)?;
+                            let current = session
+                                .transaction
+                                .snapshot()
+                                .product_record(product_kind, &row_id)
+                                .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                            if let Some(current) = current {
+                                require_product_owner(current, owner)?;
                                 kaveon_sql::parser::ProductDmlCommand::Update {
                                     kind,
                                     id: row_id,
                                     expected_revision: current.revision,
                                     document_json,
                                 }
-                            }
-                            Err(RegistryError::Invalid(message))
-                                if message == "typed row does not exist" =>
-                            {
+                            } else {
                                 kaveon_sql::parser::ProductDmlCommand::Create {
                                     kind,
                                     id: row_id,
                                     document_json,
                                 }
                             }
-                            Err(error) => return Err(error),
                         }
-                    } else {
+                    }
+                    kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
+                        kind,
+                        id: row_id,
+                        document_json,
+                    } => {
+                        let product_kind = record_kind(&kind)?;
+                        let current = session
+                            .transaction
+                            .snapshot()
+                            .product_record(product_kind, &row_id)
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                        if let Some(current) = current {
+                            require_product_owner(current, owner)?;
+                            kaveon_sql::parser::ProductDmlCommand::Delete {
+                                kind,
+                                id: row_id,
+                                expected_revision: current.revision,
+                            }
+                        } else {
+                            kaveon_sql::parser::ProductDmlCommand::Create {
+                                kind,
+                                id: row_id,
+                                document_json,
+                            }
+                        }
+                    }
+                    kaveon_sql::parser::ProductDmlCommand::MergeDelete { kind, id: row_id } => {
+                        let product_kind = record_kind(&kind)?;
+                        let current = session
+                            .transaction
+                            .snapshot()
+                            .product_record(product_kind, &row_id)
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                        if let Some(current) = current {
+                            require_product_owner(current, owner)?;
+                            kaveon_sql::parser::ProductDmlCommand::Delete {
+                                kind,
+                                id: row_id,
+                                expected_revision: current.revision,
+                            }
+                        } else {
+                            session.transaction.mark_noop();
+                            continue;
+                        }
+                    }
+                    kaveon_sql::parser::ProductDmlCommand::MergeUpdate {
+                        kind,
+                        id: row_id,
+                        document_json,
+                    } => {
                         let product_kind = record_kind(&kind)?;
                         let current = session
                             .transaction
@@ -485,156 +566,93 @@ impl TransactionRegistry {
                                 document_json,
                             }
                         } else {
-                            kaveon_sql::parser::ProductDmlCommand::Create {
-                                kind,
-                                id: row_id,
-                                document_json,
-                            }
+                            session.transaction.mark_noop();
+                            continue;
                         }
                     }
-                }
-                kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
-                    kind,
-                    id: row_id,
-                    document_json,
-                } => {
-                    let product_kind = record_kind(&kind)?;
-                    let current = session
-                        .transaction
-                        .snapshot()
-                        .product_record(product_kind, &row_id)
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-                    if let Some(current) = current {
-                        require_product_owner(current, owner)?;
-                        kaveon_sql::parser::ProductDmlCommand::Delete {
-                            kind,
-                            id: row_id,
-                            expected_revision: current.revision,
+                    kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent {
+                        kind,
+                        id: row_id,
+                        document_json,
+                    } => {
+                        let product_kind = record_kind(&kind)?;
+                        if session
+                            .transaction
+                            .snapshot()
+                            .product_record(product_kind, &row_id)
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                            .is_some()
+                        {
+                            session.transaction.mark_noop();
+                            continue;
                         }
-                    } else {
                         kaveon_sql::parser::ProductDmlCommand::Create {
                             kind,
                             id: row_id,
                             document_json,
                         }
                     }
-                }
-                kaveon_sql::parser::ProductDmlCommand::MergeDelete { kind, id: row_id } => {
-                    let product_kind = record_kind(&kind)?;
-                    let current = session
-                        .transaction
-                        .snapshot()
-                        .product_record(product_kind, &row_id)
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-                    if let Some(current) = current {
-                        require_product_owner(current, owner)?;
-                        kaveon_sql::parser::ProductDmlCommand::Delete {
-                            kind,
-                            id: row_id,
-                            expected_revision: current.revision,
-                        }
-                    } else {
-                        session.transaction.mark_noop();
-                        continue;
-                    }
-                }
-                kaveon_sql::parser::ProductDmlCommand::MergeUpdate {
+                    other => other,
+                };
+                // Migration batches are replayable.  A typed-row create that is
+                // already present with the same immutable payload is an idempotent
+                // no-op; this avoids turning a resumed batch into 1,000 point-read
+                // reconciliations while still rejecting mismatched rows below.
+                if let kaveon_sql::parser::ProductDmlCommand::Create {
                     kind,
                     id: row_id,
                     document_json,
-                } => {
-                    let product_kind = record_kind(&kind)?;
-                    let current = session
-                        .transaction
-                        .snapshot()
-                        .product_record(product_kind, &row_id)
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-                    if let Some(current) = current {
-                        require_product_owner(current, owner)?;
-                        kaveon_sql::parser::ProductDmlCommand::Update {
-                            kind,
-                            id: row_id,
-                            expected_revision: current.revision,
-                            document_json,
-                        }
-                    } else {
-                        session.transaction.mark_noop();
-                        continue;
-                    }
-                }
-                kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent {
-                    kind,
-                    id: row_id,
-                    document_json,
-                } => {
-                    let product_kind = record_kind(&kind)?;
-                    if session
-                        .transaction
-                        .snapshot()
-                        .product_record(product_kind, &row_id)
-                        .map_err(|error| RegistryError::Invalid(error.to_string()))?
-                        .is_some()
-                    {
-                        session.transaction.mark_noop();
-                        continue;
-                    }
-                    kaveon_sql::parser::ProductDmlCommand::Create {
-                        kind,
-                        id: row_id,
-                        document_json,
-                    }
-                }
-                other => other,
-            };
-            // Migration batches are replayable.  A typed-row create that is
-            // already present with the same immutable payload is an idempotent
-            // no-op; this avoids turning a resumed batch into 1,000 point-read
-            // reconciliations while still rejecting mismatched rows below.
-            if let kaveon_sql::parser::ProductDmlCommand::Create {
-                kind,
-                id: row_id,
-                document_json,
-            } = &command
-                && kind == "typed_row"
-            {
-                let (table, row) = typed_row_document(row_id, document_json, owner, 1)?;
-                if let Some(existing) = session
-                    .transaction
-                    .snapshot()
-                    .typed_rows
-                    .get(&table)
-                    .and_then(|rows| rows.get(row_id))
-                    && existing == &row
+                } = &command
+                    && kind == "typed_row"
                 {
-                    continue;
+                    let (table, row) = typed_row_document(row_id, document_json, owner, 1)?;
+                    if let Some(existing) = session
+                        .transaction
+                        .snapshot()
+                        .typed_rows
+                        .get(&table)
+                        .and_then(|rows| rows.get(row_id))
+                        && existing == &row
+                    {
+                        continue;
+                    }
+                }
+                let (change, document) =
+                    product_change(session.transaction.snapshot(), owner, command)?;
+                reject_grant_changes(&change)?;
+                let document_total =
+                    document
+                        .as_ref()
+                        .map_or(Ok(session.document_bytes), |(_, bytes)| {
+                            session
+                                .document_bytes
+                                .checked_add(bytes.len())
+                                .ok_or(RegistryError::Capacity)
+                        })?;
+                if document_total > MAX_SESSION_DOCUMENT_BYTES {
+                    return Err(RegistryError::Capacity);
+                }
+                session
+                    .transaction
+                    .stage(change)
+                    .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                if let Some((path, bytes)) = document {
+                    session.transaction.stage_document(path, bytes);
+                    session.document_bytes = document_total;
                 }
             }
-            let (change, document) =
-                product_change(session.transaction.snapshot(), owner, command)?;
-            reject_grant_changes(&change)?;
-            let document_total =
-                document
-                    .as_ref()
-                    .map_or(Ok(session.document_bytes), |(_, bytes)| {
-                        session
-                            .document_bytes
-                            .checked_add(bytes.len())
-                            .ok_or(RegistryError::Capacity)
-                    })?;
-            if document_total > MAX_SESSION_DOCUMENT_BYTES {
-                return Err(RegistryError::Capacity);
-            }
-            session
-                .transaction
-                .stage(change)
-                .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-            if let Some((path, bytes)) = document {
-                session.transaction.stage_document(path, bytes);
-                session.document_bytes = document_total;
+            session.expires_at = Instant::now() + self.ttl;
+            Ok(session.transaction.snapshot().clone())
+        }
+        .await;
+        match result {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                session.transaction = transaction_before;
+                session.document_bytes = document_bytes_before;
+                Err(error)
             }
         }
-        session.expires_at = Instant::now() + self.ttl;
-        Ok(session.transaction.snapshot().clone())
     }
 
     /// Capture deleted documents for `RETURNING document_json` from the same
@@ -4281,6 +4299,71 @@ mod tests {
             assert_eq!(record.revision, 2);
             assert_eq!(record.document["updated"], true);
         }
+    }
+
+    #[tokio::test]
+    async fn failed_product_id_list_dml_does_not_leave_a_partial_write_staged() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        for sql in [
+            r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('one', '{"name":"One"}')"#,
+            "COMMIT",
+        ] {
+            let response = execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: sql.into(),
+                    transaction_id: Some(begun.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{sql}");
+        }
+
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "UPDATE kaveon.product.datasets SET document_json = '{\"updated\":true}' WHERE id IN ('one', 'missing') AND revision = 1".into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // A failed batch must not leave its first command staged in a still
+        // live session that can publish it with COMMIT.
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let snapshot = catalog.read_current().await.unwrap();
+        let record = snapshot
+            .product_record(ProductRecordKind::Dataset, "one")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.revision, 1);
+        let document = catalog
+            .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, "one")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(document, br#"{"name":"One"}"#);
     }
 
     #[tokio::test]

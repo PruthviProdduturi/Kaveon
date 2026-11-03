@@ -53,6 +53,7 @@ impl std::error::Error for TransactionError {}
 
 /// One optimistic transaction. `commit` and `rollback` consume the session so
 /// a caller cannot accidentally reuse it after completion.
+#[derive(Clone)]
 pub struct ProductTransaction {
     catalog: ProductCatalogCommit,
     base: CatalogSnapshot,
