@@ -415,7 +415,7 @@ mod tests {
             result.rows,
             vec![
                 vec![json!(1), json!("click")],
-                vec![json!(2), serde_json::Value::Null],
+                vec![json!(2), json!("click")],
                 vec![json!(3), json!("view")],
             ]
         );
