@@ -40,6 +40,12 @@ by the selected database and Kaveon's API guardrails.
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 | `APPROX_COUNT_DISTINCT` (`APPROX_DISTINCT`), `APPROX_PERCENTILE` | Alpha | Sketch-answered estimates with the error stated on the query record; from the table's statistics without a scan when they carry sketches at the pinned version, else computed over the rows. See [Approximate aggregates](#approximate-aggregates) |
 
+Result values preserve logical text at the client boundary: Arrow `Utf8View`
+values serialize as ordinary strings in direct rows and nested values, and
+`Utf8View` map keys retain their string keys. This is qualified separately from
+SQL planning and execution in
+[`track5-utf8view-result-serialization-2026-11-02.md`](../qualification/track5-utf8view-result-serialization-2026-11-02.md).
+
 The bounded `DATE_BUCKET` surface also accepts `week` as a seven-day unit and
 normalizes wider calendar widths before arithmetic (for example, two weeks is
 fourteen days and two years is twenty-four months). Typed custom origins are
