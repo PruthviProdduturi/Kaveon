@@ -4978,6 +4978,7 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::Float8 => Ok(CastTarget::Float64),
         ast::DataType::Real => Ok(CastTarget::Float32),
         ast::DataType::Varchar(_)
+        | ast::DataType::Nvarchar(_)
         | ast::DataType::Text
         | ast::DataType::String(_)
         | ast::DataType::Char(_)
@@ -5068,7 +5069,9 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
 /// this boundary explicit for CAST, CONVERT, and their TRY variants.
 fn reject_unsupported_text_cast_length(dt: &ast::DataType) -> Result<()> {
     let sized = match dt {
-        ast::DataType::Varchar(length) | ast::DataType::CharVarying(length) => length.is_some(),
+        ast::DataType::Varchar(length)
+        | ast::DataType::Nvarchar(length)
+        | ast::DataType::CharVarying(length) => length.is_some(),
         ast::DataType::String(length) => length.is_some(),
         ast::DataType::Char(length) => length.is_some(),
         _ => false,
@@ -10571,6 +10574,8 @@ mod tests {
             "SELECT TRY_CAST(value AS CHAR(4)) FROM t",
             "SELECT CONVERT(VARCHAR(8), value) FROM t",
             "SELECT TRY_CONVERT(CHAR(2), value) FROM t",
+            "SELECT CAST(value AS NVARCHAR(12)) FROM t",
+            "SELECT TRY_CONVERT(NVARCHAR(8), value) FROM t",
         ] {
             let error = sql_to_logical_plan(sql)
                 .expect_err("sized text casts must fail closed until length semantics exist");
@@ -10579,6 +10584,22 @@ mod tests {
                     .to_string()
                     .contains("sized text casts are not supported"),
                 "{sql}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn lowers_unbounded_tsql_nvarchar_to_utf8_text() {
+        for sql in [
+            "SELECT CAST(value AS NVARCHAR) FROM t",
+            "SELECT TRY_CONVERT(NVARCHAR, value) FROM t",
+        ] {
+            let plan = sql_to_logical_plan(sql)
+                .expect("unbounded NVARCHAR should use the Engine UTF-8 text contract");
+            let rendered = format!("{plan:?}");
+            assert!(
+                rendered.contains("data_type: Utf8") || rendered.contains("TRY_CAST_UTF8"),
+                "{sql}: {rendered}"
             );
         }
     }

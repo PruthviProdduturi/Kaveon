@@ -253,7 +253,9 @@ is qualified across local and three-worker Parquet execution; malformed and
 NULL inputs remain NULL. See
 [`track2-tsql-convert-runtime-styles-2026-10-29.md`](../qualification/track2-tsql-convert-runtime-styles-2026-10-29.md).
 `CONVERT(VARCHAR, expression)` and `TRY_CONVERT(VARCHAR, expression)` are
-also qualified, as is `TRY_CAST(expression AS VARCHAR)`, for the Engine's UTF-8 text representation. Sized
+also qualified, as is `TRY_CAST(expression AS VARCHAR)`; unbounded
+`NVARCHAR` uses the same Engine UTF-8 text representation at the planner
+boundary. Sized
 `VARCHAR(n)`, `CHAR(n)`, and equivalent text casts are explicitly rejected
 until truncation/padding and code-page semantics are implemented; the Engine
 does not silently discard the requested length. Length, code-page,

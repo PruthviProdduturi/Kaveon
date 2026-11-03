@@ -182,7 +182,9 @@ a focused three-worker differential. The `CONCAT` evidence is retained in
 `docs/qualification/track2-tsql-concat-2026-10-29.md`.
 The current revision also qualifies `CONVERT(VARCHAR, expression)` and
 `TRY_CONVERT(VARCHAR, expression)` for Engine UTF-8 text output, together with
-`TRY_CAST(expression AS VARCHAR)`. Sized `VARCHAR(n)`, `CHAR(n)`, and equivalent
+`TRY_CAST(expression AS VARCHAR)`. Unbounded `NVARCHAR` now maps to the same
+UTF-8 planner target; distributed corpus coverage remains pending. Sized
+`VARCHAR(n)`, `CHAR(n)`, and equivalent
 text casts are explicitly rejected until truncation/padding and code-page
 semantics exist; their length is never silently discarded. Length,
 code-page, binary-style, and locale-specific formatting remain outside the
