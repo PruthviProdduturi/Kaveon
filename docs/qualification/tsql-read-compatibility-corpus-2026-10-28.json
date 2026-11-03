@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "784463a9",
+  "engine_commit": "08ad0c52",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -105,6 +105,8 @@
     {"id": "sysdatetime", "sql": "SELECT SYSDATETIME() FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_statement_stable_timestamp"},
     {"id": "convert_unstyled", "sql": "SELECT CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "try_convert_unstyled", "sql": "SELECT TRY_CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
+    {"id": "convert_varchar", "sql": "SELECT CONVERT(VARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
+    {"id": "try_convert_varchar", "sql": "SELECT TRY_CONVERT(VARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
     {"id": "string_escape_json", "sql": "SELECT STRING_ESCAPE(value, 'json') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "formatmessage_bounded_template", "sql": "SELECT FORMATMESSAGE('country=%s signed=%i unsigned=%u %%', country, actions, actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_templates_and_positional_text_or_numeric_arguments"},
     {"id": "parsename", "sql": "SELECT PARSENAME('server.database.schema.object', 1), PARSENAME('server.database.schema.object', 4)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_plain_dotted_names"},
