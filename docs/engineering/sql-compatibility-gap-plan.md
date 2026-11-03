@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 129-case corpus has planner coverage and focused exact
+  The current 130-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -192,6 +192,13 @@ Bounded SQL Server `STRING_SPLIT` now lowers to the existing typed `SPLIT` and
 `UNNEST` path for scalar inputs; optional literal ordinal mode `0`/`1`, alias
 columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the lateral boundary are qualified in
 `docs/qualification/track2-tsql-string-split-2026-10-29.md`.
+Native SQL Server/Fabric `JSON_VALUE` and `JSON_QUERY` text forms are also
+qualified, including scalar-versus-container NULL behavior and canonical
+container rendering (`docs/qualification/track2-tsql-json-text-functions-2026-11-02.md`).
+The bounded `PERCENTILE_CONT` window form now qualifies one literal fraction,
+one numeric order key, partition-wide interpolation, and NULL omission; dynamic
+or ambiguous ordered-set forms remain rejected
+(`docs/qualification/track2-tsql-percentile-cont-2026-11-02.md`).
 
 ### Phase 2 — Transactional SQL surface
 
