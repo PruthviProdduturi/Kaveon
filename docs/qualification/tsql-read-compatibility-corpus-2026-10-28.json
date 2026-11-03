@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "9fd76b65",
+  "engine_commit": "274b459a",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -25,6 +25,7 @@
     {"id": "round_operation", "sql": "SELECT ROUND(CAST(actions AS DOUBLE), 1, 1) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_or_row_local_operation_0_or_1"},
     {"id": "math_scalar_compatibility", "sql": "SELECT ABS(actions - 10), CEILING(CAST(actions AS DOUBLE) / 3), FLOOR(CAST(actions AS DOUBLE) / 3), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "power_scalar_compatibility", "sql": "SELECT POWER(CAST(actions AS DOUBLE), 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
+    {"id": "log_exp_scalar_compatibility", "sql": "SELECT LOG(CAST(actions AS DOUBLE) + 1), LOG(CAST(actions AS DOUBLE) + 1, 10), LOG10(CAST(actions AS DOUBLE) + 1), EXP(CAST(actions AS DOUBLE) / 10) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "greatest_numeric", "sql": "SELECT GREATEST(actions, sessions, duration_sec) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "least_numeric", "sql": "SELECT LEAST(actions, sessions, errors) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "string_scalar_compatibility", "sql": "SELECT UPPER(name), LOWER(name), REPLACE(name, 'a', 'A') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
