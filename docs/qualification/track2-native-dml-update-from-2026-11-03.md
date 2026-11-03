@@ -1,10 +1,12 @@
-# Bounded product `UPDATE ... FROM` qualification — 2026-11-03
+# Bounded product `UPDATE ... FROM` / `DELETE ... USING` qualification — 2026-11-03
 
 KaveonDB now qualifies a narrow source-backed SQL Server-style `UPDATE ... FROM`
 form for product records. It copies a source product document from the pinned
 transaction snapshot into one or more target records and commits each
 replacement through the existing owner-checked revision/CAS path in one atomic
-transaction.
+transaction. The same bounded source predicate is available to
+`DELETE ... USING`, which stages revision-checked deletes after validating the
+source owner.
 
 ## Qualified shape
 
@@ -37,6 +39,8 @@ commit remains atomic and replay-safe.
   `transaction_api::tests::sql_endpoint_bounded_update_from_copies_source_document_and_revises_target`.
 - Batch transaction/API qualification:
   `transaction_api::tests::sql_endpoint_bounded_update_from_batch_is_atomic_and_returns_each_target`.
+- Delete transaction/API qualification:
+  `transaction_api::tests::sql_endpoint_bounded_delete_using_batch_is_atomic_and_returns_each_target`.
 - The API test verifies `RETURNING id, revision, document_json`, the committed
   revision, and the persisted source document copied into the target. The batch
   test verifies two target revisions, both returned rows, and atomic publication
@@ -50,3 +54,18 @@ assignments, source predicates other than one literal id or the identity join,
 per-row revision expressions, lake-table mutation, and unbounded scans remain
 rejected. General typed-table DML and broader SQL Server/Fabric/PostgreSQL
 parity remain open in the compatibility tracker.
+
+The delete form uses the same limits and snapshot rules:
+
+```sql
+DELETE FROM product.datasets AS target
+USING product.datasets AS source
+WHERE target.id IN ('target-1', 'target-2')
+  AND target.revision = 1
+  AND source.id = 'source-1'
+RETURNING id, revision;
+```
+
+The source is an owner-checked same-kind base table. Arbitrary `USING` joins,
+cross-kind sources, unbounded target scans, and per-row revision expressions
+remain rejected.

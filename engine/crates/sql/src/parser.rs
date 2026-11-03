@@ -2110,6 +2110,15 @@ pub enum ProductDmlCommand {
         id: String,
         expected_revision: u64,
     },
+    /// Bounded same-kind source-backed DELETE ... USING semantics. The source
+    /// is owner-checked before each revision/CAS delete is staged.
+    DeleteFrom {
+        kind: String,
+        id: String,
+        expected_revision: u64,
+        source_id: String,
+        source_kind: String,
+    },
 }
 
 /// Adapt only Kaveon's typed product-record SQL facade. Arbitrary row DML has
@@ -2384,6 +2393,41 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                 .collect())
         }
         Statement::Delete(delete) => {
+            let using = delete.using.as_ref();
+            if let Some(using) = using {
+                let tables = match &delete.from {
+                    FromTable::WithFromKeyword(tables) if tables.len() == 1 => tables,
+                    _ => {
+                        return Err(sql_error(
+                            "product DELETE USING supports one same-kind source table",
+                        ));
+                    }
+                };
+                if using.len() != 1 || !delete.tables.is_empty() {
+                    return Err(sql_error(
+                        "product DELETE USING supports one same-kind source table",
+                    ));
+                }
+                let (target_alias, source_kind, source_alias) =
+                    product_update_from_tables(&tables[0], &using[0], &kind)?;
+                let ids = product_update_from_predicate(
+                    delete.selection.as_ref(),
+                    &target_alias,
+                    &source_alias,
+                )?;
+                return Ok(ids
+                    .into_iter()
+                    .map(
+                        |(id, expected_revision, source_id)| ProductDmlCommand::DeleteFrom {
+                            kind: kind.clone(),
+                            id,
+                            expected_revision,
+                            source_id,
+                            source_kind: source_kind.clone(),
+                        },
+                    )
+                    .collect());
+            }
             let (ids, expected_revision) = product_key_predicate(delete.selection.as_ref())?;
             Ok(ids
                 .into_iter()
@@ -3272,9 +3316,16 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     return Err(sql_error("DELETE requires the FROM keyword"));
                 }
             };
+            let bounded_using = delete.using.as_ref().is_some_and(|using| {
+                using.len() == 1
+                    && tables.len() == 1
+                    && delete.tables.is_empty()
+                    && delete.order_by.is_empty()
+                    && delete.limit.is_none()
+            });
             if tables.len() != 1
                 || !delete.tables.is_empty()
-                || delete.using.is_some()
+                || (!bounded_using && delete.using.is_some())
                 || !delete.order_by.is_empty()
                 || delete.limit.is_some()
             {
@@ -4437,7 +4488,6 @@ mod tests {
             "UPDATE users SET name = 'Ada'",
             "UPDATE users SET name = old.name FROM old_users old WHERE users.id = old.id",
             "DELETE FROM users",
-            "DELETE FROM users USING old_users WHERE users.id = old_users.id",
             "COMMIT AND CHAIN",
             "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
         ];
@@ -4863,6 +4913,50 @@ mod tests {
             assert!(
                 adapt_product_dml(&dml).is_err(),
                 "unsupported UPDATE FROM shape was accepted: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_bounded_product_delete_using_and_rejects_wider_shapes() {
+        let sql = "DELETE FROM product.datasets AS target USING product.datasets AS source WHERE target.id IN ('target-1', 'target-2') AND target.revision = 3 AND source.id = 'source-1' RETURNING id, revision";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("bounded DELETE USING should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::DeleteFrom {
+                    kind: "dataset".into(),
+                    id: "target-1".into(),
+                    expected_revision: 3,
+                    source_id: "source-1".into(),
+                    source_kind: "dataset".into(),
+                },
+                ProductDmlCommand::DeleteFrom {
+                    kind: "dataset".into(),
+                    id: "target-2".into(),
+                    expected_revision: 3,
+                    source_id: "source-1".into(),
+                    source_kind: "dataset".into(),
+                },
+            ]
+        );
+        for sql in [
+            "DELETE FROM product.datasets AS target USING product.charts AS source WHERE target.id = 'target-1' AND target.revision = 3 AND source.id = 'source-1'",
+            "DELETE FROM product.datasets AS target USING product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 3",
+            "DELETE FROM product.datasets AS target USING product.datasets AS source WHERE target.id IN ('target-1', 'target-1') AND target.revision = 3 AND source.id = 'source-1'",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("shape should parse before adaptation")
+            else {
+                panic!("expected product DML");
+            };
+            assert!(
+                adapt_product_dml(&dml).is_err(),
+                "unsupported DELETE USING shape was accepted: {sql}"
             );
         }
     }

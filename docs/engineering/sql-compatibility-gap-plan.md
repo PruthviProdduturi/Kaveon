@@ -291,6 +291,11 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
   arbitrary assignments, and general lake-table mutation remain rejected.
   Evidence:
   `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
+- [x] Add bounded same-kind product `DELETE ... USING`. The source is
+  owner-checked under the pinned snapshot before up to 1,000 target IDs are
+  expanded into revision/CAS deletes; arbitrary `USING` joins, cross-kind
+  sources, and unbounded scans remain rejected. Evidence:
+  `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
 - [x] Add bounded `MERGE` with explicit revision/CAS semantics. `MERGE`
   accepts one `VALUES` batch with an optional simple target alias, up to 1,000 rows containing `id` and
   `document_json`, an equality `target.id = source.id` predicate, and exactly

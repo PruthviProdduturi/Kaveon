@@ -383,6 +383,25 @@ impl TransactionRegistry {
                         expected_revision,
                         document_json,
                     });
+                } else if let kaveon_sql::parser::ProductDmlCommand::DeleteFrom {
+                    kind,
+                    id,
+                    expected_revision,
+                    source_id,
+                    source_kind,
+                } = command
+                {
+                    let source = record_kind(&source_kind)?;
+                    let source_record = snapshot
+                        .product_record(source, &source_id)
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                        .ok_or(RegistryError::ProductMissing)?;
+                    require_product_owner(source_record, owner)?;
+                    expanded.push(kaveon_sql::parser::ProductDmlCommand::Delete {
+                        kind,
+                        id,
+                        expected_revision,
+                    });
                 } else if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
                     kind,
                     source_kind,
@@ -1580,6 +1599,9 @@ fn product_change(
         )),
         ProductDmlCommand::UpdateFrom { .. } => Err(RegistryError::Invalid(
             "product UPDATE FROM must be expanded before staging".into(),
+        )),
+        ProductDmlCommand::DeleteFrom { .. } => Err(RegistryError::Invalid(
+            "product DELETE USING must be expanded before staging".into(),
         )),
     }
 }
@@ -3120,6 +3142,7 @@ async fn execute_sql_request(
                                         command,
                                         kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. }
                                             | kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. }
+                                            | kaveon_sql::parser::ProductDmlCommand::DeleteFrom { .. }
                                     )
                                 })
                             {
@@ -3285,6 +3308,9 @@ fn product_returning_response(
                 kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. } => {
                     return Err("product UPDATE FROM must be resolved before RETURNING".to_owned());
                 }
+                kaveon_sql::parser::ProductDmlCommand::DeleteFrom { .. } => {
+                    return Err("product DELETE USING must be resolved before RETURNING".to_owned());
+                }
                 kaveon_sql::parser::ProductDmlCommand::Delete {
                     id,
                     expected_revision,
@@ -3372,6 +3398,11 @@ fn product_returning_response(
                             | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched {
                                 ..
                             } => "DELETE",
+                            kaveon_sql::parser::ProductDmlCommand::DeleteFrom { .. } => {
+                                return Err(
+                                    "product DELETE USING must be resolved before $action".into()
+                                );
+                            }
                             kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
                                 ..
                             }
@@ -3405,6 +3436,12 @@ fn product_returning_response(
                             kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. } => {
                                 return Err(
                                     "product UPDATE FROM must be resolved before RETURNING"
+                                        .to_owned(),
+                                );
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::DeleteFrom { .. } => {
+                                return Err(
+                                    "product DELETE USING must be resolved before RETURNING"
                                         .to_owned(),
                                 );
                             }
@@ -5170,6 +5207,97 @@ mod tests {
                 b"{\"name\":\"after\"}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_delete_using_batch_is_atomic_and_returns_each_target() {
+        let (registry, catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('target-1', '{"name":"one"}'), ('target-2', '{"name":"two"}'), ('source', '{"name":"source"}')"#.into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let delete = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "DELETE FROM product.datasets AS target USING product.datasets AS source WHERE target.id IN ('target-1', 'target-2') AND target.revision = 1 AND source.id = 'source' RETURNING id, revision".into(),
+                transaction_id: Some(delete.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["returning"],
+            serde_json::json!([
+                {"id": "target-1", "revision": 1},
+                {"id": "target-2", "revision": 1}
+            ])
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(delete.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        for id in ["target-1", "target-2"] {
+            assert!(
+                snapshot
+                    .product_record(ProductRecordKind::Dataset, id)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "source")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
