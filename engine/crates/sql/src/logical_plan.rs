@@ -9865,6 +9865,16 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_parsename_as_a_bounded_scalar_function() {
+        let plan = sql_to_logical_plan(
+            "SELECT PARSENAME('server.database.schema.object', 1), PARSENAME(name, part) FROM t",
+        )
+        .expect("PARSENAME should remain a bounded scalar function");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("PARSENAME"), "{rendered}");
+    }
+
+    #[test]
     fn lowers_tsql_datalength_as_bounded_scalar_function() {
         let plan = sql_to_logical_plan("SELECT DATALENGTH(name) FROM t")
             .expect("DATALENGTH should lower as a scalar function");
