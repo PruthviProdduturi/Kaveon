@@ -450,6 +450,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_formatmessage",
+        "SELECT TOP 5 FORMATMESSAGE('country=%s actions=%d %%', country, actions) AS message FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_quotename",
         "SELECT TOP 5 QUOTENAME(country) AS quoted FROM {T} ORDER BY user_id, event_date, actions, country",
         true,

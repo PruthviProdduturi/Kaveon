@@ -8607,6 +8607,40 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
+        "FORMATMESSAGE" => {
+            if !(1..=21).contains(&args.len()) {
+                return Err(KaveonError::Execution(
+                    "FORMATMESSAGE requires one template and at most 20 arguments".into(),
+                ));
+            }
+            let formatted_args = args[1..]
+                .iter()
+                .map(|argument| compute::cast(argument, &DataType::Utf8))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows * 16);
+            for row in 0..num_rows {
+                let Some(template) = text_value(&args[0], row)? else {
+                    result.append_null();
+                    continue;
+                };
+                let mut values = Vec::with_capacity(formatted_args.len());
+                let mut null_argument = false;
+                for argument in &formatted_args {
+                    let value = text_value(argument, row)?.map(str::to_owned);
+                    if value.is_none() {
+                        null_argument = true;
+                        break;
+                    }
+                    values.push(value);
+                }
+                if null_argument {
+                    result.append_null();
+                    continue;
+                }
+                result.append_value(format_message_template(template, &values)?);
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "QUOTENAME" => {
             if args.is_empty() || args.len() > 2 {
                 return Err(KaveonError::Execution(
@@ -16977,6 +17011,60 @@ fn check_arity(name: &str, args: &[ArrayRef], expected: usize) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Render the bounded literal-template form of SQL Server FORMATMESSAGE.
+///
+/// Kaveon intentionally supports only positional `%s`, `%d`, `%i`, `%u`, and
+/// escaped `%%` tokens. Width, precision, numbered arguments, message IDs and
+/// locale-aware formatting remain rejected rather than silently changing the
+/// resulting text.
+fn format_message_template(template: &str, values: &[Option<String>]) -> Result<String> {
+    let mut output = String::with_capacity(template.len());
+    let mut chars = template.chars();
+    let mut argument = 0usize;
+    while let Some(character) = chars.next() {
+        if character != '%' {
+            output.push(character);
+            continue;
+        }
+        let token = chars.next().ok_or_else(|| {
+            KaveonError::Execution(
+                "FORMATMESSAGE template ends with an incomplete '%' token".into(),
+            )
+        })?;
+        match token {
+            '%' => output.push('%'),
+            's' | 'd' | 'i' | 'u' => {
+                let value = values
+                    .get(argument)
+                    .and_then(Option::as_deref)
+                    .ok_or_else(|| {
+                        KaveonError::Execution(
+                            "FORMATMESSAGE has more substitution tokens than arguments".into(),
+                        )
+                    })?;
+                output.push_str(value);
+                argument = argument.saturating_add(1);
+            }
+            other => {
+                return Err(KaveonError::Execution(format!(
+                    "FORMATMESSAGE does not support the '%{other}' token"
+                )));
+            }
+        }
+        if output.len() > 2048 {
+            return Err(KaveonError::Execution(
+                "FORMATMESSAGE output exceeds the 2048-byte bound".into(),
+            ));
+        }
+    }
+    if argument != values.len() {
+        return Err(KaveonError::Execution(
+            "FORMATMESSAGE has unused substitution arguments".into(),
+        ));
+    }
+    Ok(output)
 }
 
 fn unary_float_fn(arr: &ArrayRef, f: fn(f64) -> f64) -> Result<ArrayRef> {
@@ -30559,5 +30647,30 @@ mod tests {
                     .contains("unsupported numeric FORMAT pattern")
             );
         }
+    }
+
+    #[test]
+    fn formatmessage_renders_bounded_positional_templates() {
+        let template = Arc::new(StringArray::from(vec![
+            Some("country=%s actions=%d %%"),
+            Some("country=%s actions=%d %%"),
+            None,
+        ])) as ArrayRef;
+        let country = Arc::new(StringArray::from(vec![
+            Some("Japan"),
+            Some("Brazil"),
+            Some("Kenya"),
+        ])) as ArrayRef;
+        let actions = Arc::new(Int64Array::from(vec![Some(12), Some(7), Some(3)])) as ArrayRef;
+        let result =
+            eval_scalar_function("FORMATMESSAGE", &[template, country, actions], 3).unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "country=Japan actions=12 %");
+        assert_eq!(values.value(1), "country=Brazil actions=7 %");
+        assert!(values.is_null(2));
+        let error = format_message_template("%s", &[]).unwrap_err();
+        assert!(error.to_string().contains("more substitution tokens"));
+        let error = format_message_template("%q", &[Some("x".into())]).unwrap_err();
+        assert!(error.to_string().contains("does not support"));
     }
 }
