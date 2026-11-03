@@ -403,6 +403,42 @@ impl TransactionRegistry {
                             break;
                         }
                     }
+                } else if let kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched {
+                    kind,
+                    source_ids,
+                } = command
+                {
+                    let target = record_kind(&kind)?;
+                    let mut cursor = None;
+                    loop {
+                        let page = snapshot
+                            .product_records_page(target, 100, cursor.as_deref())
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                        for record in page.records {
+                            if source_ids.iter().any(|id| id == &record.id) {
+                                continue;
+                            }
+                            if record
+                                .unique_values
+                                .get("owner_principal")
+                                .map(String::as_str)
+                                != Some(owner)
+                            {
+                                return Err(RegistryError::OwnershipForbidden);
+                            }
+                            if expanded.len() >= MAX_PRODUCT_INSERT_SELECT_ROWS {
+                                return Err(RegistryError::Capacity);
+                            }
+                            expanded.push(kaveon_sql::parser::ProductDmlCommand::MergeDelete {
+                                kind: kind.clone(),
+                                id: record.id,
+                            });
+                        }
+                        cursor = page.next_cursor;
+                        if cursor.is_none() {
+                            break;
+                        }
+                    }
                 } else {
                     expanded.push(command);
                 }
@@ -1310,6 +1346,9 @@ fn product_change(
         )),
         ProductDmlCommand::MergeCreateIfAbsent { .. } => Err(RegistryError::Invalid(
             "MERGE unmatched-insert must be resolved before staging".into(),
+        )),
+        ProductDmlCommand::MergeDeleteNotMatched { .. } => Err(RegistryError::Invalid(
+            "MERGE not-matched-by-source deletes must be resolved before staging".into(),
         )),
         ProductDmlCommand::Update {
             kind,
@@ -3051,6 +3090,12 @@ fn product_returning_response(
                         "MERGE unmatched-insert must be resolved before RETURNING".to_owned()
                     );
                 }
+                kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched { .. } => {
+                    return Err(
+                        "MERGE not-matched-by-source deletes must be resolved before RETURNING"
+                            .to_owned(),
+                    );
+                }
             };
             let mut row = serde_json::Map::new();
             for column in columns {
@@ -3097,6 +3142,14 @@ fn product_returning_response(
                                 );
                             }
                             kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent {
+                                ..
+                            } => {
+                                return Err(
+                                    "document_json RETURNING is unavailable for this command"
+                                        .to_owned(),
+                                );
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched {
                                 ..
                             } => {
                                 return Err(
@@ -4868,6 +4921,88 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_not_matched_by_source_deletes_owned_rows() {
+        let (registry, catalog) = registry().await;
+        let first = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('keep-me', '{}'), ('remove-me', '{}'), ('also-remove', '{}')".into(),
+                    transaction_id: Some(first.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(first.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE"#.into(),
+                    transaction_id: Some(merge.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(merge.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        let keep = snapshot
+            .product_record(ProductRecordKind::Dataset, "keep-me")
+            .unwrap()
+            .unwrap();
+        assert_eq!(keep.revision, 2);
+        for id in ["remove-me", "also-remove"] {
+            assert!(
+                snapshot
+                    .product_record(ProductRecordKind::Dataset, id)
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[tokio::test]
