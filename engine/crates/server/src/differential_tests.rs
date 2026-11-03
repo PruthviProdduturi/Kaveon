@@ -280,6 +280,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_year_month_day_aliases",
+        "SELECT user_id, YEAR(event_date), MONTH(event_date), DAY(event_date) FROM {T} ORDER BY user_id, event_date, actions LIMIT 20",
+        true,
+    ),
+    (
         "trino_position_scalar_compatibility",
         "SELECT user_id, POSITION('a' IN country) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
         true,
