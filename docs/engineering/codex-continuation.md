@@ -47,6 +47,11 @@ Local evidence on `dev`:
 - `python -m unittest scripts.test_local_kavedb -v`: 4 passed.
 - `node scripts/validate-docs.mjs` and `git diff --check` passed.
 
+> **Historical cloud-state snapshot.** The following values were captured when
+> this continuation record was written. They are provenance, not a live status
+> assertion; verify the current subscription and deployment before any cloud
+> operation.
+
 The personal Azure environment remains intentionally preserved. In subscription
 `4ed07f02-b111-4eea-98ce-1c177d573a51`, resource group `kaveon-rg` (West US 2),
 PostgreSQL Flexible Server `kaveon-db` is Ready (Standard_B1ms, 64 GiB), and

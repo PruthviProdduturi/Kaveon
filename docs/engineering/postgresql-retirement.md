@@ -84,7 +84,12 @@ match, writes are fenced, deletion counts match the pre-deletion inventory, and
 zero rows remain. This report is one family input; it does not bypass the other
 authority-family or global retirement gates.
 
-Current status on October 5, 2026: the PostgreSQL-free runtime is verified on
+> **Historical status snapshot — October 5, 2026.** This paragraph records the
+> evidence and cloud state observed on that date. It is retained for
+> provenance; it is not a current deployment claim. Verify live resources and
+> receipts before taking any retirement action.
+
+The PostgreSQL-free runtime was verified on
 the local native profile (`verify-local-postgresql-retirement.ps1` passed with
 16 healthy authority families, the PostgreSQL service stopped, and no 5432/5433
 listeners). The personal Azure deployment remains PostgreSQL-authoritative;
@@ -112,7 +117,8 @@ immutable in ADLS and definition/run metadata is revisioned in KaveonDB. Setup
 and metadata-administration routes are fenced in retirement mode so Studio does
 not probe an external metadata database.
 
-Those implementation facts are not live retirement evidence. The active AKS
+Those implementation facts are not live retirement evidence. At the time of
+this snapshot, the active AKS
 attempt must still produce fresh 16-family reconciliation, shadow parity across
 roles and visibility states, a fixed final watermark with zero outbox lag, live
 write-fence probes, PostgreSQL-unavailable restart, KaveonDB backup/restore, and
