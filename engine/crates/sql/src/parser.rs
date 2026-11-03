@@ -2321,19 +2321,28 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     let (target_name, target_alias) = match table {
         TableFactor::Table {
             name,
-            alias: Some(alias),
+            alias,
             args: None,
             with_hints,
             version: None,
             with_ordinality: false,
             partitions,
             json_path: None,
-        } if with_hints.is_empty() && partitions.is_empty() => {
-            (validated_table_name(name)?, alias.name.value.clone())
+        } if with_hints.is_empty()
+            && partitions.is_empty()
+            && alias.as_ref().is_none_or(|alias| alias.columns.is_empty()) =>
+        {
+            let target_name = validated_table_name(name)?;
+            let target_alias = alias
+                .as_ref()
+                .map(|alias| alias.name.value.clone())
+                .or_else(|| target_name.rsplit('.').next().map(str::to_owned))
+                .ok_or_else(|| sql_error("MERGE target must have a table name"))?;
+            (target_name, target_alias)
         }
         _ => {
             return Err(sql_error(
-                "MERGE target must be one aliased base product table",
+                "MERGE target must be one base product table with an optional simple alias",
             ));
         }
     };
@@ -3031,16 +3040,21 @@ fn merge_target_table(table: &TableFactor) -> Result<String> {
     match table {
         TableFactor::Table {
             name,
-            alias: Some(_),
+            alias,
             args: None,
             with_hints,
             version: None,
             with_ordinality: false,
             partitions,
             json_path: None,
-        } if with_hints.is_empty() && partitions.is_empty() => validated_table_name(name),
+        } if with_hints.is_empty()
+            && partitions.is_empty()
+            && alias.as_ref().is_none_or(|alias| alias.columns.is_empty()) =>
+        {
+            validated_table_name(name)
+        }
         _ => Err(sql_error(
-            "MERGE target must be one aliased base product table",
+            "MERGE target must be one base product table with an optional simple alias",
         )),
     }
 }
@@ -4149,6 +4163,25 @@ mod tests {
             panic!("expected product MERGE");
         };
         assert_eq!(dml.kind, NativeDmlKind::Merge);
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn product_merge_accepts_an_unaliased_target_with_derived_qualifier() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON datasets.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("an unaliased bounded MERGE target should parse")
+        else {
+            panic!("expected product MERGE");
+        };
         assert_eq!(
             adapt_product_dml(&dml).unwrap(),
             ProductDmlCommand::Upsert {
