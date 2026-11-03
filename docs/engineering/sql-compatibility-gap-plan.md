@@ -61,6 +61,10 @@ The authoritative capability details remain in:
   metadata, client-facing type labels, and JSON result serialization so chart
   dimensions and text-key consumers receive logical strings. Evidence:
   `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md`.
+- [x] Enforce the versioned corpus as a release gate. The Engine workflow
+  validates the corpus count, case IDs, status fields, repository commit pin,
+  and tracker synchronization before Rust compilation; changes to the tracker
+  or corpus also trigger that workflow.
 
 Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, `STUFF`, `SPACE`, character-set `TRIM` in BOTH/LEADING/TRAILING modes, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
