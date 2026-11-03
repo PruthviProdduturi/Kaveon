@@ -2550,8 +2550,13 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         } else {
             None
         };
+    let single_matched_clause =
+        clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::Matched);
     if clauses.iter().enumerate().any(|(index, clause)| {
         clause.predicate.as_ref().is_some_and(|predicate| {
+            if single_matched_clause && index == 0 {
+                return false;
+            }
             !(index == 0
                 && matches!(clause.clause_kind, MergeClauseKind::Matched)
                 && merge_id_predicate(predicate, &target_alias, &source_alias))
