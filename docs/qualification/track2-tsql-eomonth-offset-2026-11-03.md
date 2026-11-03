@@ -21,5 +21,6 @@ cargo test -p kaveon-server --bin kaveon-server distributed_tsql_eomonth_offsets
 
 The shared differential sweep also carries the same deterministic query across
 single-file, multi-file, partitioned, clustered, local, and three-worker
-execution paths. External Fabric/Azure SQL passthrough is outside this Engine
-qualification.
+execution paths. The full sweep passed after the deterministic tie-breaker was
+added to the case (`643.59s`, one test, zero failures). External Fabric/Azure
+SQL passthrough is outside this Engine qualification.
