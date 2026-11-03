@@ -8,7 +8,7 @@ not an AKS, object-store fault-injection, or external-client qualification.
 
 ## Commands and results
 
-From `engine/` at commit `b8d69cb4`:
+From `engine/` at commit `4991739f`:
 
 ```text
 cargo test -p kaveon-sql --lib
@@ -17,13 +17,30 @@ cargo test -p kaveon-sql --lib
 cargo test -p kaveon-server --bin kaveon-server
 696 passed; 0 failed; 0 ignored
 finished in 685.40s
+
+cargo test -p kaveon-exec --lib
+626 passed; 0 failed; 4 ignored
+finished in 37.85s
+
+cargo test -p kaveon-optim --lib
+86 passed; 0 failed; 0 ignored
+
+cargo test -p kaveon-storage --lib
+158 passed; 0 failed; 3 ignored
+
+cargo test -p kaveon-catalog --lib
+93 passed; 0 failed; 4 ignored
+
+cargo clippy -p kaveon-optim --all-targets -- -D warnings
+passed
 ```
 
-The server suite includes the versioned T-SQL corpus, distributed differential
-execution across Parquet encodings, joins, windows, aggregates, JSON and
-bounded product DML/MERGE, catalog access, cancellation, retry/recovery,
-result-cache, and `Utf8View` result serialization. The SQL suite covers parser
-and planner boundaries, including explicit rejection of unsupported shapes.
+Together these suites cover the versioned T-SQL corpus, distributed
+differential execution across Parquet encodings, joins, windows, aggregates,
+JSON, bounded product DML/MERGE, catalog access, cancellation, retry/recovery,
+result-cache, storage/catalog behavior, optimizer planning, and `Utf8View`
+result serialization. The SQL suite covers parser and planner boundaries,
+including explicit rejection of unsupported shapes.
 
 The focused `Utf8View` regression also covers nullable text values and map keys;
 those values are emitted as logical JSON strings or `null`, never Arrow debug
