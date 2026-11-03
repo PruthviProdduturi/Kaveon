@@ -39,7 +39,7 @@ are planned rather than executable.
 - [Natural-language query flow](guides/nl-to-sql.md)
 - [Deploy Studio to Vercel](guides/vercel-deployment.md)
 - [Restore the hosted demo cluster](guides/demo-cluster-restart.md) — why it is offline, what a restart costs, and the shape decision to make first
-- [Deploy Vercel and Azure services](guides/vercel-deployment.md)
+- [Deploy the production Engine/API plane on AKS](engineering/azure-deployment-guide.md) — Vercel is an optional Studio hosting path, not the Engine deployment
 
 ## References
 
