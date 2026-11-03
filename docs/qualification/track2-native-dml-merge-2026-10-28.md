@@ -89,7 +89,9 @@ remain rejected.
 The parser fails closed for source-query inputs, joins, batches over 1,000 rows,
 predicates on `WHEN` clauses, non-`id` match keys, arbitrary assignments,
 other clause orderings, and non-product targets. General typed lake-table DML,
-constraints, named conflict targets, and full `MERGE` semantics remain open.
+arbitrary constraints, non-primary-key conflict targets, and full `MERGE`
+semantics remain open. The conventional `<product_table>_pkey` named conflict
+target is accepted as the same bounded `id` identity target.
 
 ## Evidence
 
@@ -103,6 +105,8 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_supports_bounded_unmatched_insert`
 - `parser::tests::product_merge_supports_bounded_not_matched_by_source_delete`
 - `parser::tests::product_merge_accepts_a_typed_source_document_assignment`
+- `parser::tests::product_insert_supports_bounded_on_conflict_do_nothing`
+- `parser::tests::product_insert_supports_bounded_on_conflict_do_update`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
 - `parser::tests::rejects_duplicate_merge_source_ids`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
@@ -120,6 +124,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_bounded_merge_not_matched_by_source_deletes_owned_rows` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-sql product_merge_accepts_a_typed_source_document_assignment` — 1 passed, 0 failed on 2026-11-03
 - `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically` — 1 passed, 0 failed on 2026-11-03
+- `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_on_conflict_do_nothing_preserves_existing_product` — 1 passed, 0 failed with `datasets_pkey`
 
 The transaction API matched-update test first commits the source-expression
 form, then commits a literal-assignment form through a second transaction. It
