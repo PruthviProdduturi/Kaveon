@@ -455,7 +455,7 @@ fn evaluate_window_with_context(
     } else {
         1
     };
-    let percentile_fraction = if name == "PERCENTILE_CONT" {
+    let percentile_fraction = if matches!(name.as_str(), "PERCENTILE_CONT" | "PERCENTILE_DISC") {
         literal_fraction(args.get(1))?
     } else {
         0.0
@@ -472,6 +472,7 @@ fn evaluate_window_with_context(
             | "MIN"
             | "MAX"
             | "PERCENTILE_CONT"
+            | "PERCENTILE_DISC"
     ) && col.is_none()
     {
         return Err(error(format!("{name} requires a value argument")));
@@ -533,6 +534,25 @@ fn evaluate_window_with_context(
                         percentile_values[row] =
                             Some(non_null[lower] + (non_null[upper] - non_null[lower]) * weight);
                     }
+                }
+                "PERCENTILE_DISC" => {
+                    let column = col
+                        .as_ref()
+                        .ok_or_else(|| error("PERCENTILE_DISC requires a value argument"))?;
+                    let non_null = rows
+                        .iter()
+                        .filter(|&&index| !column.is_null(index))
+                        .copied()
+                        .collect::<Vec<_>>();
+                    let target = if percentile_fraction <= 0.0 {
+                        0
+                    } else {
+                        (percentile_fraction * non_null.len() as f64)
+                            .ceil()
+                            .max(1.0) as usize
+                            - 1
+                    };
+                    indices[row] = non_null.get(target).map(|&index| index as u32);
                 }
                 "NTILE" => {
                     let large = rows.len() % tiles;
@@ -638,6 +658,12 @@ fn evaluate_window_with_context(
         }
         "PERCENT_RANK" | "CUME_DIST" => Ok(Arc::new(Float64Array::from(floats))),
         "PERCENTILE_CONT" => Ok(Arc::new(Float64Array::from(percentile_values))),
+        "PERCENTILE_DISC" => {
+            let col = col
+                .as_ref()
+                .ok_or_else(|| error("PERCENTILE_DISC requires a value argument"))?;
+            Ok(take(col.as_ref(), &UInt32Array::from(indices), None)?)
+        }
         "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" => {
             let col = col.as_ref().unwrap();
             let output = take(col.as_ref(), &UInt32Array::from(indices.clone()), None)?;

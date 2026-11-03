@@ -5992,13 +5992,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     // Keep the first release deliberately bounded: one literal fraction and
     // one order key. The executor evaluates the partition-wide continuous
     // interpolation over that key and rejects ambiguous dynamic forms.
-    let percentile_order = if name == "PERCENTILE_CONT" {
+    let percentile_order = if matches!(name.as_str(), "PERCENTILE_CONT" | "PERCENTILE_DISC") {
         if func.over.is_none() {
-            return Err(sql_err("PERCENTILE_CONT requires an OVER clause"));
+            return Err(sql_err("ordered percentile requires an OVER clause"));
         }
         if args.len() != 1 {
             return Err(sql_err(
-                "PERCENTILE_CONT requires exactly one literal fraction",
+                "ordered percentile requires exactly one literal fraction",
             ));
         }
         let fraction = match &args[0] {
@@ -6009,20 +6009,22 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             }
             _ => {
                 return Err(sql_err(
-                    "PERCENTILE_CONT fraction must be a numeric literal",
+                    "ordered percentile fraction must be a numeric literal",
                 ));
             }
         };
         if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
-            return Err(sql_err("PERCENTILE_CONT fraction must be between 0 and 1"));
+            return Err(sql_err(
+                "ordered percentile fraction must be between 0 and 1",
+            ));
         }
         let order = func
             .within_group
             .first()
-            .ok_or_else(|| sql_err("PERCENTILE_CONT requires one WITHIN GROUP order key"))?;
+            .ok_or_else(|| sql_err("ordered percentile requires one WITHIN GROUP order key"))?;
         if func.within_group.len() != 1 || order.nulls_first.is_some() {
             return Err(sql_err(
-                "PERCENTILE_CONT supports exactly one order key without explicit NULLS placement",
+                "ordered percentile supports exactly one order key without explicit NULLS placement",
             ));
         }
         let value = ast_expr_to_expr(&order.expr)?;
@@ -6107,7 +6109,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         if let Some((expr, asc, nulls_first)) = percentile_order {
             if !order_by.is_empty() {
                 return Err(sql_err(
-                    "PERCENTILE_CONT cannot combine WITHIN GROUP with window ORDER BY",
+                    "ordered percentile cannot combine WITHIN GROUP with window ORDER BY",
                 ));
             }
             order_by.push((expr, asc, nulls_first));
@@ -10057,6 +10059,15 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("PERCENTILE_CONT"), "{rendered}");
         assert!(rendered.contains("region"), "{rendered}");
+    }
+
+    #[test]
+    fn lowers_bounded_tsql_percentile_disc_window() {
+        let plan = sql_to_logical_plan(
+            "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY region) FROM t",
+        )
+        .expect("bounded PERCENTILE_DISC should lower through the window path");
+        assert!(format!("{plan:?}").contains("PERCENTILE_DISC"));
     }
 
     #[test]
