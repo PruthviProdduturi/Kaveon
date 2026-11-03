@@ -11551,19 +11551,38 @@ fn annotate_actual_root(plan: &mut Option<kaveon_core::PlanNode>, row_count: Opt
         .insert("actual_rows_scope".to_owned(), "query_result".to_owned());
 }
 
-/// Propagate the query-result cardinality through operators whose SQL
-/// Filter is attributed as the output boundary, but its child is never
-/// labeled with the post-filter cardinality.
+/// Return whether a plan node is a safe output-cardinality boundary when it
+/// is directly reached through a row-preserving chain.
+fn is_cardinality_boundary(operator: &str) -> bool {
+    matches!(
+        operator.to_ascii_lowercase().as_str(),
+        "filter"
+            | "limit"
+            | "offset"
+            | "topn"
+            | "aggregate"
+            | "hashaggregate"
+            | "finalaggregate"
+            | "distinct"
+            | "join"
+            | "unnest"
+            | "union"
+            | "intersect"
+            | "except"
+    )
+}
+
+/// Propagate the query-result cardinality through row-preserving operators.
+/// A directly reached cardinality-changing operator is attributed as the
+/// output boundary, but its child is never labeled with post-operation rows.
 fn annotate_row_preserving_actuals(node: &mut kaveon_core::PlanNode, actual_rows: Option<u64>) {
     let Some(actual_rows) = actual_rows else {
         return;
     };
-    // Once a row-preserving chain reaches a Filter whose input is also
-    // row-preserving, the filter's output is the query result represented by
-    // this chain. Attach the measured count to the filter itself, but never
-    // descend into its input: that would incorrectly label pre-filter rows
-    // with the post-filter cardinality.
-    if node.operator.eq_ignore_ascii_case("Filter") {
+    if is_cardinality_boundary(&node.operator) {
+        if node.attributes.contains_key("actual_output_rows") {
+            return;
+        }
         node.attributes
             .insert("actual_output_rows".to_owned(), actual_rows.to_string());
         node.attributes.insert(
@@ -11583,8 +11602,8 @@ fn annotate_row_preserving_actuals(node: &mut kaveon_core::PlanNode, actual_rows
     };
     let child_is_row_preserving = matches!(
         child.operator.to_ascii_lowercase().as_str(),
-        "project" | "sort" | "window" | "filter"
-    );
+        "project" | "sort" | "window"
+    ) || is_cardinality_boundary(&child.operator);
     if !child_is_row_preserving {
         return;
     }
@@ -16440,6 +16459,28 @@ mod tests {
                 .attributes
                 .get("actual_output_rows"),
             None
+        );
+    }
+
+    #[test]
+    fn direct_limit_boundary_receives_actual_rows_without_labeling_input() {
+        let scan = kaveon_core::PlanNode::new(49, kaveon_core::PlanPhase::Physical, "Scan");
+        let limit = kaveon_core::PlanNode::new(50, kaveon_core::PlanPhase::Physical, "Limit")
+            .with_child(scan);
+        let mut root = kaveon_core::PlanNode::new(51, kaveon_core::PlanPhase::Physical, "Project")
+            .with_child(limit);
+
+        super::annotate_row_preserving_actuals(&mut root, Some(2));
+
+        assert_eq!(root.children[0].attributes["actual_output_rows"], "2");
+        assert_eq!(
+            root.children[0].attributes["actual_rows_scope"],
+            "derived_row_preserving"
+        );
+        assert!(
+            !root.children[0].children[0]
+                .attributes
+                .contains_key("actual_output_rows")
         );
     }
 
