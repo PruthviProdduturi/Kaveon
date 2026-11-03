@@ -3253,11 +3253,13 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                 || (Vec::new(), None),
                 |(columns, pseudo)| (columns, Some(pseudo)),
             );
-            if returning.iter().any(|column| {
-                !column.eq_ignore_ascii_case("id")
-                    && !column.eq_ignore_ascii_case("revision")
-                    && !column.eq_ignore_ascii_case("document_json")
-            }) {
+            if output_pseudo.as_deref() != Some("action")
+                && returning.iter().any(|column| {
+                    !column.eq_ignore_ascii_case("id")
+                        && !column.eq_ignore_ascii_case("revision")
+                        && !column.eq_ignore_ascii_case("document_json")
+                })
+            {
                 return Err(sql_error(
                     "MERGE OUTPUT supports only id, revision, or document_json columns",
                 ));
@@ -3344,6 +3346,15 @@ fn normalize_product_output_with_merge(sql: &str) -> Result<(String, MergeOutput
         if projection.is_empty() {
             return Err(sql_error(
                 "MERGE OUTPUT requires a bounded column projection",
+            ));
+        }
+        if projection.eq_ignore_ascii_case("$action") {
+            let mut rewritten = String::with_capacity(body.len());
+            rewritten.push_str(body[..output_position].trim_end());
+            rewritten.push_str(terminator);
+            return Ok((
+                rewritten,
+                Some((vec!["action".to_owned()], "action".to_owned())),
             ));
         }
         let pseudo = projection
@@ -4599,15 +4610,22 @@ mod tests {
         };
         assert_eq!(dml.output_pseudo.as_deref(), Some("deleted"));
         assert_eq!(dml.returning, ["id", "revision"]);
-        for projection in ["$action", "inserted.id INTO audit.rows"] {
-            let sql = format!(
-                "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{{}}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT {projection}"
-            );
-            assert!(
-                parse_native_transactional(&sql).is_err(),
-                "unsafe MERGE OUTPUT shape was accepted: {projection}"
-            );
-        }
+        let action_sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT $action";
+        let NativeTransactionalStatement::Dml(action) =
+            parse_native_transactional(action_sql).expect("bounded $action output should parse")
+        else {
+            panic!("expected MERGE DML");
+        };
+        assert_eq!(action.output_pseudo.as_deref(), Some("action"));
+        assert_eq!(action.returning, ["action"]);
+        let projection = "inserted.id INTO audit.rows";
+        let sql = format!(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{{}}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT {projection}"
+        );
+        assert!(
+            parse_native_transactional(&sql).is_err(),
+            "unsafe MERGE OUTPUT shape was accepted: {projection}"
+        );
     }
 
     #[test]

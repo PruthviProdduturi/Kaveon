@@ -421,7 +421,8 @@ Source scans, predicates, arbitrary assignments, and other `MERGE` clause
 orderings remain rejected. `OUTPUT inserted.id`, `OUTPUT inserted.revision`,
 `OUTPUT inserted.document_json`, and `OUTPUT inserted.*` are accepted on the
 update-or-insert, delete-or-insert, matched-update-only, and unmatched-insert-only
-forms. Matched-delete-only and delete-or-insert forms accept `OUTPUT deleted.id`,
+forms. Bounded `OUTPUT $action` is also accepted for a resolved action label.
+Matched-delete-only and delete-or-insert forms accept `OUTPUT deleted.id`,
 `OUTPUT deleted.revision`, and `OUTPUT deleted.document_json`; bounded
 not-matched-by-source deletes accept the same deleted projection, while mixed
 by-source action batches accept the corresponding inserted projection. Deleted
