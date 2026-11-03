@@ -1,5 +1,12 @@
 # Where KaveonDB stands: a rated comparison with Trino and PostgreSQL
 
+> **Historical assessment.** This paper is a dated comparison, not the current
+> deployment or authority record. The current compatibility contract and
+> qualification evidence live in `docs/engineering/trino-parity-tracker.md`;
+> local runtime authority is KaveonDB, and any hosted cutover claim requires a
+> fresh deployment evidence report. Historical PostgreSQL/Fabric wording below
+> is retained to explain the score at the stated assessment date.
+
 > Assessed September 12, 2026 against `dev` at `432a05d`, Engine digest `4a165e94…` on `kaveon-test-aks`, Trino 483 and PostgreSQL 18 documentation, with a 2026-09-15 update in sections 1.1 and 1.2. Every number in this paper is either a measurement recorded in `HANDSHAKE.md` or `docs/qualification/` with a query ID or a run record, or a documented behaviour of the compared system. Nothing here is a marketing claim; the last section says what may be claimed.
 >
 > **Since this assessment (2026-09-16/17, not re-scored here):** the scale
