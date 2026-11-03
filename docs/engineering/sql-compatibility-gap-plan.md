@@ -276,10 +276,10 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
   copies `id` and `document_json` from one same-kind `kaveon.product` table
   under the pinned transaction snapshot, optionally narrowed by a literal
   `id IN (...)` list, and is capped at 1,000 source records,
-  enforces owner isolation, and reuses the existing conflict/CAS path. With an
-  explicit ID filter, `RETURNING id, revision, document_json` is also qualified
-  from the staged snapshot. General lake-table source DML and unbounded
-  source-copy returning remain open.
+  enforces owner isolation, and reuses the existing conflict/CAS path.
+  `RETURNING id, revision, document_json` is qualified from the staged snapshot
+  with or without the literal ID filter; the unfiltered form keeps the same
+  1,000-row expansion cap. General lake-table source DML remains open.
 - [x] Add bounded `MERGE` with explicit revision/CAS semantics. `MERGE`
   accepts one `VALUES` batch with an optional simple target alias, up to 1,000 rows containing `id` and
   `document_json`, an equality `target.id = source.id` predicate, and exactly

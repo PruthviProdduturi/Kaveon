@@ -2238,15 +2238,14 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                     if !select.from.is_empty() {
                         let (source_kind, source_ids) = bounded_product_source_kind(select, &kind)?;
                         if !dml.returning.is_empty()
-                            && (source_ids.is_none()
-                                || dml.returning.iter().any(|column| {
-                                    !column.eq_ignore_ascii_case("id")
-                                        && !column.eq_ignore_ascii_case("revision")
-                                        && !column.eq_ignore_ascii_case("document_json")
-                                }))
+                            && dml.returning.iter().any(|column| {
+                                !column.eq_ignore_ascii_case("id")
+                                    && !column.eq_ignore_ascii_case("revision")
+                                    && !column.eq_ignore_ascii_case("document_json")
+                            })
                         {
                             return Err(sql_error(
-                                "source-backed product INSERT SELECT RETURNING requires an id filter and supports only id, revision, or document_json",
+                                "source-backed product INSERT SELECT RETURNING supports only id, revision, or document_json",
                             ));
                         }
                         return Ok(vec![ProductDmlCommand::InsertSelect {
@@ -2835,6 +2834,7 @@ fn bounded_product_source_kind(
     }
     let source_ids = match select.selection.as_ref() {
         None => None,
+        Some(Expr::Value(Value::Boolean(true))) => None,
         Some(Expr::InList {
             expr,
             list,
@@ -3043,6 +3043,7 @@ fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
 pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatement> {
     let normalized = normalize_transaction_control_aliases(sql);
     let (normalized, merge_returning) = normalize_product_output_with_merge(&normalized)?;
+    let normalized = normalize_unfiltered_product_source_returning(&normalized);
     let mut statements = parse_sql(&normalized)?;
     if statements.len() != 1 {
         return Err(sql_error(
@@ -3286,6 +3287,47 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             "native transaction parser accepts INSERT, UPDATE, DELETE, MERGE, BEGIN, COMMIT, or ROLLBACK only",
         )),
     }
+}
+
+/// sqlparser requires a SELECT query's optional WHERE boundary before an
+/// INSERT ... SELECT RETURNING clause in the source-backed shape. Preserve
+/// the user's unfiltered product copy semantics by inserting a tautological
+/// predicate only for that narrow form; the product adapter treats `WHERE
+/// TRUE` as no source filter and still applies its 1,000-row expansion cap.
+fn normalize_unfiltered_product_source_returning(sql: &str) -> String {
+    let trimmed = sql.trim();
+    let (body, terminator) = match trimmed.strip_suffix(';') {
+        Some(body) => (body.trim_end(), ";"),
+        None => (trimmed, ""),
+    };
+    let upper = body.to_ascii_uppercase();
+    if !upper.starts_with("INSERT") {
+        return sql.to_owned();
+    }
+    let Some(returning_position) = find_top_level_keyword(&upper, "RETURNING") else {
+        return sql.to_owned();
+    };
+    let before_returning = &upper[..returning_position];
+    let Some(select_position) = find_top_level_keyword(before_returning, "SELECT") else {
+        return sql.to_owned();
+    };
+    if find_top_level_keyword(
+        &before_returning[select_position + "SELECT".len()..],
+        "FROM",
+    )
+    .is_none()
+        || find_top_level_keyword(before_returning, "WHERE").is_some()
+    {
+        return sql.to_owned();
+    }
+    let insertion_position =
+        find_top_level_keyword(before_returning, "ON").unwrap_or(returning_position);
+    let mut rewritten = String::with_capacity(body.len() + 12);
+    rewritten.push_str(body[..insertion_position].trim_end());
+    rewritten.push_str(" WHERE TRUE ");
+    rewritten.push_str(body[insertion_position..].trim_start());
+    rewritten.push_str(terminator);
+    rewritten
 }
 
 /// Normalize the bounded SQL Server `OUTPUT` projection into the existing
@@ -5240,16 +5282,33 @@ mod tests {
     }
 
     #[test]
-    fn product_insert_select_rejects_joins_and_unbounded_returning() {
-        for sql in [
-            "INSERT INTO product.datasets (id, document_json) SELECT a.id, a.document_json FROM product.datasets a JOIN product.datasets b ON a.id = b.id",
-            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets RETURNING id",
-        ] {
-            let parsed = parse_native_transactional(sql);
-            if let Ok(NativeTransactionalStatement::Dml(dml)) = parsed {
-                assert!(adapt_product_dml(&dml).is_err(), "{sql}");
-            }
+    fn product_insert_select_rejects_joins() {
+        let sql = "INSERT INTO product.datasets (id, document_json) SELECT a.id, a.document_json FROM product.datasets a JOIN product.datasets b ON a.id = b.id";
+        let parsed = parse_native_transactional(sql);
+        if let Ok(NativeTransactionalStatement::Dml(dml)) = parsed {
+            assert!(adapt_product_dml(&dml).is_err(), "{sql}");
         }
+    }
+
+    #[test]
+    fn product_insert_select_accepts_bounded_unfiltered_returning() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets RETURNING id, revision, document_json",
+        )
+        .expect("bounded source RETURNING should parse without an id filter")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(dml.returning, ["id", "revision", "document_json"]);
+        let commands = adapt_product_dml_batch(&dml).expect("source RETURNING should adapt");
+        assert!(matches!(
+            &commands[0],
+            ProductDmlCommand::InsertSelect {
+                source_ids: None,
+                returning,
+                ..
+            } if returning == &["id".to_owned(), "revision".to_owned(), "document_json".to_owned()]
+        ));
     }
 
     #[test]

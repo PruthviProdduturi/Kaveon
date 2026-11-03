@@ -145,10 +145,11 @@ KaveonDB supports a bounded product-record source copy: one same-kind
 snapshot, owner isolation, and a 1,000-row cap. A literal `id IN (...)`
 predicate may narrow the source. It reuses product conflict and revision-CAS
 semantics. Joins, other filters, CTEs, arbitrary expressions,
-cross-kind copies, lake/external sources, and unbounded source-copy `RETURNING`
-remain rejected. A literal `id IN (...)` source filter qualifies
-`RETURNING id, revision, document_json` from the staged snapshot;
-this is not general lake-table DML.
+cross-kind copies, lake/external sources, and arbitrary unbounded source scans
+remain rejected. `RETURNING id, revision, document_json` is qualified from the
+staged snapshot with or without the literal `id IN (...)` filter; the unfiltered
+form still expands at most 1,000 source records. This is not general lake-table
+DML.
 
 ## Bounded compatibility aliases
 
@@ -360,8 +361,8 @@ surface; the same ordered boundary is enforced in both paths.
   accepts a bounded, revisioned metadata-record DML subset, including
   `RETURNING id, revision, document_json` on product creates, updates, upserts,
   and revision-checked deletes; bounded source-copy `INSERT ... SELECT`
-  document projections are qualified only with a literal `id IN (...)` filter
-  of at most 1,000 source IDs. Its typed-row facade validates declared primary/unique
+  document projections are qualified with or without a literal `id IN (...)`
+  filter, with the unfiltered form capped at 1,000 source IDs. Its typed-row facade validates declared primary/unique
   keys and product references, but it is not arbitrary OLTP SQL or general
   constraint DDL.
 - Universal cost-based optimization. Native `ANALYZE` persists an immutable
@@ -407,8 +408,7 @@ replay-safe `ON CONFLICT DO NOTHING`, and bounded
 that preserve the declared table identity; arbitrary typed schemas and
 assignments remain outside this contract. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. Unbounded or cross-kind source-backed
-`INSERT ... SELECT`, unbounded source-copy `RETURNING`,
-general `ON CONFLICT` actions, transaction
+`INSERT ... SELECT`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
 The qualified `MERGE` form is intentionally narrow: one target product table
 with an optional simple alias, one source `VALUES` batch of at most 1,000 rows aliased as
