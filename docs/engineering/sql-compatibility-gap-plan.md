@@ -261,7 +261,8 @@ unsupported tokens, and unbounded output remain explicitly rejected.
   `kaveon.product.typed_rows` facade supports revisioned create/update/delete
   with owner isolation and replay-safe `ON CONFLICT DO NOTHING`, plus the
   bounded `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json`
-  form with table-identity preservation. The same upsert is exercised through
+  form with table-identity preservation; the assignment may also use the
+  direct typed spelling `CAST(excluded.document_json AS JSON)`. The same upsert is exercised through
   `/v1/transaction/sql` with `RETURNING id, revision` and a committed
   revision/CAS follow-up. Bounded `ON CONFLICT DO NOTHING RETURNING id,
   revision, document_json` is also qualified: duplicates return no rows and
@@ -355,7 +356,8 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   not-matched-by-source-delete batches (up to 1,000 expanded affected rows),
   plus product
   `ON CONFLICT DO NOTHING` and the bounded `ON CONFLICT (id) DO UPDATE SET
-  document_json = excluded.document_json` upsert, with literal `WHERE TRUE`
+  document_json = excluded.document_json` upsert (or its direct typed
+  `CAST(excluded.document_json AS JSON)` spelling), with literal `WHERE TRUE`
   or the equivalent `WHERE id = excluded.id` identity predicate accepted as a
   semantic no-op. Named constraints, other conflict predicates, arbitrary
   assignments, and arbitrary conflict targets remain

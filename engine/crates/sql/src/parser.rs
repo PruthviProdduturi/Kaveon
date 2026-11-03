@@ -3206,6 +3206,25 @@ fn is_conflict_identity_predicate(expression: &Expr) -> bool {
     (is_target_id(left) && is_excluded_id(right)) || (is_excluded_id(left) && is_target_id(right))
 }
 
+fn is_conflict_document_assignment(expression: &Expr) -> bool {
+    let direct = matches!(
+        expression,
+        Expr::CompoundIdentifier(parts)
+            if parts.len() == 2
+                && parts[0].value.eq_ignore_ascii_case("excluded")
+                && parts[1].value.eq_ignore_ascii_case("document_json")
+    );
+    direct
+        || matches!(
+            expression,
+            Expr::Cast {
+                expr,
+                data_type: SqlDataType::JSON,
+                ..
+            } if is_conflict_document_assignment(expr)
+        )
+}
+
 fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
     match expression {
         Expr::Value(Value::Number(value, false)) => value
@@ -3308,10 +3327,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                                             if column.0.len() == 1
                                                 && column.0[0].value.eq_ignore_ascii_case("document_json")
                                     )
-                                    && update.assignments[0]
-                                        .value
-                                        .to_string()
-                                        .eq_ignore_ascii_case("excluded.document_json")
+                                    && is_conflict_document_assignment(&update.assignments[0].value)
                         ) =>
                 {
                     (false, true)
@@ -5467,6 +5483,18 @@ mod tests {
                 document_json: "{\"name\":\"new\"}".into(),
             }
         );
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"new\"}') ON CONFLICT (id) DO UPDATE SET document_json = CAST(excluded.document_json AS JSON)",
+        )
+        .expect("typed conflict upsert should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert!(dml.on_conflict_do_update);
+        assert!(matches!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert { .. }
+        ));
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"new\"}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE TRUE",
         )

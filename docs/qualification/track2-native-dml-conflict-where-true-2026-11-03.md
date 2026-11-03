@@ -12,6 +12,11 @@ DO UPDATE SET document_json = excluded.document_json
 WHERE TRUE
 ```
 
+The assignment may also use the direct typed spelling
+`CAST(excluded.document_json AS JSON)`; it is validated as the same document
+payload and does not introduce an expression evaluator into the transaction
+path.
+
 `WHERE TRUE` is a semantic no-op. The contract also accepts the equivalent
 identity predicate `WHERE id = excluded.id` (in either operand order): the
 `(id)` conflict target already guarantees that identity, so no row-dependent
@@ -27,6 +32,9 @@ conflict-predicate support.
   `product_insert_supports_bounded_on_conflict_do_update` proves the literal
   predicate parses, retains the bounded upsert flags, and lowers to the same
   `ProductDmlCommand::Upsert` as the predicate-free form.
+- The same parser test covers the direct typed `excluded.document_json` cast.
+- `transaction_api::tests::sql_endpoint_on_conflict_do_update_revises_owned_product`
+  exercises the typed assignment through the revisioned API path.
 - The transaction API upsert test exercises the identity predicate through the
   revisioned product commit path and verifies the resulting revision.
 - The parser test covers both operand orders and proves that the identity
