@@ -69,7 +69,8 @@ The weekly `DATE_BUCKET` evidence supersedes the earlier date-bucket note:
 qualification record for the added week unit.
 
 The corpus currently contains 132 bounded T-SQL read cases, including the
-qualified unordered literal-separator `STRING_AGG` slice, the NULL-preserving
+qualified unordered literal-separator `STRING_AGG` slice, exact
+`STRING_AGG(DISTINCT ...)` through a distinct projection, the NULL-preserving
 `FILTER (WHERE ...)` form, and ascending/descending value-ordered
 `WITHIN GROUP` forms (`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md`);
 the embedded/local CLI planner now uses the same qualified bounded
