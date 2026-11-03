@@ -12,8 +12,10 @@ it never derives an intermediate count from a parent, child, or final result.
 For distributed fragment execution, the endpoint also exposes
 `stage_boundaries` when a fragment root has an exact operator name and bounded
 estimate. The actual is the sum of completed task output rows for that stage,
-labelled `stage_output_rows`; coordinator-only aggregate/TopN shortcuts
-without a fragment-root estimate remain unavailable.
+labelled `stage_output_rows`. Coordinator aggregate and TopN shortcuts use the
+same field when their physical root estimate is available, but label the final
+merged response as `query_result`; shortcuts without a root estimate remain
+unavailable.
 
 ## Evidence
 
@@ -30,11 +32,15 @@ test result: ok. 1 passed; 0 failed
 
 The `stage_estimates_report_only_exact_fragment_root_boundaries` unit verifies
 that a measured fragment root reports `40 / 100` as `overestimated`, while the
-same stage without an exact operator identity produces no diagnostic.
+same stage without an exact operator identity produces no diagnostic. The
+specialized-stage regression verifies that a projection wrapper can retain an
+exact aggregate root estimate and that final merged rows use the
+`query_result` scope.
 
 ## Boundary
 
-Root, scan, and exact fragment-root stage output counters are qualified. Full
-intermediate operator CPU, memory, spill, blocked-time, and selectivity
-attribution remains open until those counters are emitted by the execution
-runtime and qualified across distributed stages.
+Root, scan, exact fragment-root stage output counters, and measured final rows
+from aggregate/TopN coordinator shortcuts are qualified. Full intermediate
+operator CPU, memory, spill, blocked-time, and selectivity attribution remains
+open until those counters are emitted by the execution runtime and qualified
+across distributed stages.
