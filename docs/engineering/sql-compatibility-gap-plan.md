@@ -258,8 +258,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
 - [ ] Expand `MERGE` and broader conflict handling beyond the qualified bounded
   product surface only with explicit revision/CAS semantics. The current
   contract covers update-or-insert, delete-or-insert, matched-update-only,
-  matched-delete-only, and unmatched-insert-only batches (up to 1,000 source
-  rows), plus product
+  matched-delete-only, unmatched-insert-only, and matched-update plus
+  not-matched-by-source-delete batches (up to 1,000 expanded affected rows),
+  plus product
   `ON CONFLICT DO NOTHING` and the bounded `ON CONFLICT (id) DO UPDATE SET
   document_json = excluded.document_json` upsert. Named constraints, conflict
   predicates, arbitrary assignments, and arbitrary conflict targets remain
