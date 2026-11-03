@@ -3041,7 +3041,7 @@ fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
 /// execute, isolate, commit, or recover the returned statement.
 pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatement> {
     let normalized = normalize_transaction_control_aliases(sql);
-    let normalized = normalize_product_output(&normalized)?;
+    let (normalized, merge_returning) = normalize_product_output_with_merge(&normalized)?;
     let mut statements = parse_sql(&normalized)?;
     if statements.len() != 1 {
         return Err(sql_error(
@@ -3244,12 +3244,22 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
         Statement::Merge { table, .. } => {
             let table = merge_target_table(table)?;
             product_kind(&table)?;
+            let returning = merge_returning.unwrap_or_default();
+            if returning.iter().any(|column| {
+                !column.eq_ignore_ascii_case("id")
+                    && !column.eq_ignore_ascii_case("revision")
+                    && !column.eq_ignore_ascii_case("document_json")
+            }) {
+                return Err(sql_error(
+                    "MERGE OUTPUT supports only inserted id, revision, or document_json",
+                ));
+            }
             Ok(NativeTransactionalStatement::Dml(Box::new(
                 NativeDmlStatement {
                     kind: NativeDmlKind::Merge,
                     table,
                     ast: statement,
-                    returning: Vec::new(),
+                    returning,
                     on_conflict_do_nothing: false,
                     on_conflict_do_update: false,
                 },
@@ -3262,9 +3272,37 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
 }
 
 /// Normalize the bounded SQL Server `OUTPUT` projection into the existing
-/// product-record `RETURNING` contract.  This intentionally handles only
-/// simple inserted/deleted column references; expressions, `OUTPUT INTO`,
-/// MERGE output, and arbitrary table DML stay fail-closed.
+/// product-record `RETURNING` contract. This handles simple
+/// inserted/deleted column references for INSERT/UPDATE/DELETE; the bounded
+/// update-or-insert MERGE projection is normalized separately so mixed-action
+/// batches remain fail-closed.
+fn normalize_product_output_with_merge(sql: &str) -> Result<(String, Option<Vec<String>>)> {
+    let trimmed = sql.trim();
+    let (body, terminator) = match trimmed.strip_suffix(';') {
+        Some(body) => (body.trim_end(), ";"),
+        None => (trimmed, ""),
+    };
+    let upper = body.to_ascii_uppercase();
+    if upper.starts_with("MERGE") {
+        let Some(output_position) = find_top_level_keyword(&upper, "OUTPUT") else {
+            return Ok((sql.to_owned(), None));
+        };
+        let expression_start = output_position + "OUTPUT".len();
+        let projection = body[expression_start..].trim();
+        if projection.is_empty() {
+            return Err(sql_error(
+                "MERGE OUTPUT requires a bounded column projection",
+            ));
+        }
+        let returning = parse_sql_server_output_projection(projection, "inserted")?;
+        let mut rewritten = String::with_capacity(body.len());
+        rewritten.push_str(body[..output_position].trim_end());
+        rewritten.push_str(terminator);
+        return Ok((rewritten, Some(returning)));
+    }
+    Ok((normalize_product_output(sql)?, None))
+}
+
 fn normalize_product_output(sql: &str) -> Result<String> {
     let trimmed = sql.trim();
     let (body, terminator) = match trimmed.strip_suffix(';') {
@@ -3302,34 +3340,48 @@ fn normalize_product_output(sql: &str) -> Result<String> {
     if projection.is_empty() {
         return Err(sql_error("OUTPUT requires a bounded column projection"));
     }
-    let mut returning = Vec::new();
-    let items = split_top_level_commas(projection)?;
     let expected_pseudo = if statement_kind == "DELETE" {
         "deleted"
     } else {
         "inserted"
     };
-    let wildcard_expanded = if items.len() == 1 {
-        let wildcard = items[0].trim().split('.').collect::<Vec<_>>();
-        if wildcard.len() == 2
-            && wildcard[1].trim() == "*"
-            && wildcard[0].trim().eq_ignore_ascii_case(expected_pseudo)
-        {
-            // Product records expose exactly these three stable fields. This
-            // keeps SQL Server's wildcard spelling bounded instead of
-            // exposing arbitrary internal columns or metadata.
-            returning.extend(["id", "revision", "document_json"].map(str::to_owned));
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    let returning = parse_sql_server_output_projection(projection, expected_pseudo)?;
+    let mut rewritten = String::with_capacity(body.len() + 16);
+    rewritten.push_str(body[..output_position].trim_end());
+    if tail_start < body.len() {
+        rewritten.push(' ');
+        rewritten.push_str(body[tail_start..].trim_start());
+    }
+    rewritten.push_str(" RETURNING ");
+    rewritten.push_str(&returning.join(", "));
+    rewritten.push_str(terminator);
+    Ok(rewritten)
+}
+
+fn parse_sql_server_output_projection(
+    projection: &str,
+    expected_pseudo: &str,
+) -> Result<Vec<String>> {
+    if projection.to_ascii_uppercase().contains(" INTO ") {
+        return Err(sql_error("OUTPUT INTO is not supported"));
+    }
+    let items = split_top_level_commas(projection)?;
+    let wildcard_parts = items
+        .first()
+        .map(|item| item.trim().split('.').collect::<Vec<_>>());
+    let wildcard = items.len() == 1
+        && wildcard_parts.as_ref().is_some_and(|parts| {
+            parts.len() == 2
+                && parts[1].trim() == "*"
+                && parts[0].trim().eq_ignore_ascii_case(expected_pseudo)
+        });
+    if wildcard {
+        return Ok(["id", "revision", "document_json"]
+            .map(str::to_owned)
+            .to_vec());
+    }
+    let mut returning = Vec::with_capacity(items.len());
     for item in items {
-        if wildcard_expanded {
-            break;
-        }
         let parts = item.trim().split('.').collect::<Vec<_>>();
         if parts.len() != 2 {
             return Err(sql_error(
@@ -3348,16 +3400,7 @@ fn normalize_product_output(sql: &str) -> Result<String> {
     if returning.is_empty() {
         return Err(sql_error("OUTPUT requires at least one column"));
     }
-    let mut rewritten = String::with_capacity(body.len() + 16);
-    rewritten.push_str(body[..output_position].trim_end());
-    if tail_start < body.len() {
-        rewritten.push(' ');
-        rewritten.push_str(body[tail_start..].trim_start());
-    }
-    rewritten.push_str(" RETURNING ");
-    rewritten.push_str(&returning.join(", "));
-    rewritten.push_str(terminator);
-    Ok(rewritten)
+    Ok(returning)
 }
 
 /// SQL Server clients commonly spell the transaction controls with an
@@ -4416,6 +4459,48 @@ mod tests {
             assert!(
                 parse_native_transactional(sql).is_err(),
                 "unsafe OUTPUT wildcard was accepted: {sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn sql_server_merge_output_lowers_to_inserted_product_returning() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) OUTPUT inserted.id, inserted.revision";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("bounded MERGE OUTPUT should parse")
+        else {
+            panic!("expected MERGE DML");
+        };
+        assert_eq!(dml.returning, ["id", "revision"]);
+        let commands = adapt_product_dml_batch(&dml).expect("MERGE should adapt");
+        assert!(
+            commands
+                .iter()
+                .all(|command| matches!(command, ProductDmlCommand::Upsert { .. }))
+        );
+    }
+
+    #[test]
+    fn sql_server_merge_output_rejects_delete_actions() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT inserted.id";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("MERGE should parse before action validation")
+        else {
+            panic!("expected MERGE DML");
+        };
+        let commands = adapt_product_dml_batch(&dml).expect("MERGE should adapt");
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, ProductDmlCommand::MergeDelete { .. }))
+        );
+        for projection in ["deleted.id", "$action", "inserted.id INTO audit.rows"] {
+            let sql = format!(
+                "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{{}}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT {projection}"
+            );
+            assert!(
+                parse_native_transactional(&sql).is_err(),
+                "unsafe MERGE OUTPUT shape was accepted: {projection}"
             );
         }
     }
