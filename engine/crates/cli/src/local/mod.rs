@@ -375,6 +375,18 @@ mod tests {
             .execute("SELECT STRING_AGG(DISTINCT kind, '|') AS joined FROM events")
             .expect("DISTINCT string aggregation should run locally");
         assert_eq!(distinct.rows, vec![vec![json!("click|view")]]);
+        let grouped = engine
+            .execute(
+                "SELECT kind, STRING_AGG(DISTINCT kind, '|') AS joined FROM events GROUP BY kind ORDER BY kind",
+            )
+            .expect("grouped DISTINCT string aggregation should run locally");
+        assert_eq!(
+            grouped.rows,
+            vec![
+                vec![json!("click"), json!("click")],
+                vec![json!("view"), json!("view")],
+            ]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

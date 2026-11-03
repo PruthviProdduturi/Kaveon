@@ -3974,7 +3974,9 @@ impl HashAggregate {
                             accumulators[index].update_exact(extract_key(array, row).into())?;
                         } else if matches!(
                             accumulators[index],
-                            AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)
+                            AggregateState::Utf8Min(_)
+                                | AggregateState::Utf8Max(_)
+                                | AggregateState::StringAgg { .. }
                         ) {
                             let value = extract_utf8_value(array, row)?;
                             accumulators[index].update_utf8(&value)?;
