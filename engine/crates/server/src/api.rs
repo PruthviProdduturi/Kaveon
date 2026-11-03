@@ -452,6 +452,10 @@ struct StageTelemetry {
     completed_tasks: usize,
     elapsed_us: u64,
     tasks: Vec<TaskTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    estimated_rows: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -11864,6 +11868,8 @@ struct QueryEstimateDiagnostics {
     per_scan: Option<Vec<ScanEstimateDiagnostic>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     per_operator: Option<Vec<OperatorEstimateDiagnostic>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    stage_boundaries: Vec<StageEstimateDiagnostic>,
 }
 
 #[derive(Serialize)]
@@ -11889,6 +11895,17 @@ struct OperatorEstimateDiagnostic {
     estimate_source: Option<String>,
 }
 
+#[derive(Serialize)]
+struct StageEstimateDiagnostic {
+    stage_id: u32,
+    operator: String,
+    estimated_rows: u64,
+    actual_rows: u64,
+    actual_rows_scope: &'static str,
+    ratio: f64,
+    classification: &'static str,
+}
+
 fn estimate_classification(estimated_rows: u64, actual_rows: u64) -> (&'static str, f64) {
     if estimated_rows == 0 {
         return ("unavailable", 0.0);
@@ -11902,6 +11919,35 @@ fn estimate_classification(estimated_rows: u64, actual_rows: u64) -> (&'static s
         "within_2x"
     };
     (classification, ratio)
+}
+
+/// Reports stage-root estimate versus task output rows only when the stage
+/// carries an exact fragment-root operator and estimate. This is a real
+/// execution boundary; it deliberately does not infer child/operator rows
+/// from a stage total.
+fn collect_stage_estimate_details(stages: &[StageTelemetry]) -> Vec<StageEstimateDiagnostic> {
+    stages
+        .iter()
+        .filter_map(|stage| {
+            let operator = stage.operator.as_ref()?;
+            let estimated_rows = stage.estimated_rows?;
+            let actual_rows = stage
+                .tasks
+                .iter()
+                .map(|task| task.output_rows as u64)
+                .reduce(u64::saturating_add)?;
+            let (classification, ratio) = estimate_classification(estimated_rows, actual_rows);
+            Some(StageEstimateDiagnostic {
+                stage_id: stage.stage_id,
+                operator: operator.clone(),
+                estimated_rows,
+                actual_rows,
+                actual_rows_scope: "stage_output_rows",
+                ratio,
+                classification,
+            })
+        })
+        .collect()
 }
 
 /// Collect only operator estimates for which the runtime attached a matching
@@ -12053,6 +12099,7 @@ async fn estimate_diagnostics(
         collect_operator_estimate_details(plan, &mut operator_estimates);
     }
     let per_operator = (!operator_estimates.is_empty()).then_some(operator_estimates);
+    let stage_boundaries = collect_stage_estimate_details(&record.stages);
     Json(QueryEstimateDiagnostics {
         query_id,
         available,
@@ -12063,6 +12110,7 @@ async fn estimate_diagnostics(
         estimate_sources,
         per_scan,
         per_operator,
+        stage_boundaries,
     })
     .into_response()
 }
@@ -13960,6 +14008,24 @@ async fn execute_distributed_fragments(
             return None;
         }
     };
+    let stage_metadata = graph
+        .stages
+        .iter()
+        .map(|stage| {
+            (
+                stage.id.0,
+                (
+                    stage.plan.operator.clone(),
+                    stage
+                        .plan
+                        .attributes
+                        .get("estimated_output_rows")
+                        .or_else(|| stage.plan.attributes.get("estimated_rows"))
+                        .and_then(|value| value.parse::<u64>().ok()),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let planning_us = elapsed_us(planning_start);
     let mut orchestrator = match CoordinatorOrchestrator::new(graph, fragments, workers.clone()) {
         Ok(orchestrator) => orchestrator,
@@ -14268,8 +14334,20 @@ async fn execute_distributed_fragments(
         let stage_elapsed_us = stage_started
             .get(&stage_id)
             .map_or(0, |started| elapsed_us(*started));
+        let (operator, estimated_rows) = stage_metadata
+            .get(&stage_id.0)
+            .cloned()
+            .unwrap_or_else(|| (String::new(), None));
         for task in tasks {
-            record_stage_task(&mut stages, stage_id.0, task_count, stage_elapsed_us, task);
+            record_stage_task(
+                &mut stages,
+                stage_id.0,
+                task_count,
+                stage_elapsed_us,
+                (!operator.is_empty()).then(|| operator.clone()),
+                estimated_rows,
+                task,
+            );
         }
     }
     let data = if let Some(sink) = &streamed_sink {
@@ -14654,6 +14732,8 @@ async fn execute_distributed_top_n(
             completed_tasks: task_metrics.len(),
             elapsed_us: total_elapsed_us,
             tasks: task_metrics,
+            operator: None,
+            estimated_rows: None,
         },
     )))
 }
@@ -14908,6 +14988,8 @@ async fn execute_distributed_aggregate(
                 completed_tasks: task_metrics.len(),
                 elapsed_us: total_elapsed_us,
                 tasks: task_metrics,
+                operator: None,
+                estimated_rows: None,
             },
         )
     }))
@@ -15697,6 +15779,8 @@ fn record_stage_task(
     stage_id: u32,
     task_count: usize,
     elapsed_us: u64,
+    operator: Option<String>,
+    estimated_rows: Option<u64>,
     task: TaskTelemetry,
 ) {
     let index = match stages.binary_search_by_key(&stage_id, |stage| stage.stage_id) {
@@ -15711,6 +15795,8 @@ fn record_stage_task(
                     completed_tasks: 0,
                     elapsed_us,
                     tasks: Vec::new(),
+                    operator,
+                    estimated_rows,
                 },
             );
             index
@@ -15759,6 +15845,8 @@ fn merge_task_into_record(
         stage_id,
         task_count,
         stage_elapsed_us,
+        None,
+        None,
         task,
     );
     record.scans = distributed_scan_telemetry(&record.stages).0;
@@ -16197,6 +16285,53 @@ mod tests {
         assert_eq!(details[0].actual_rows_scope, "scan_selected_rows");
         assert_eq!(details[0].classification, "overestimated");
         assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn stage_estimates_report_only_exact_fragment_root_boundaries() {
+        let stages = vec![super::StageTelemetry {
+            stage_id: 3,
+            state: "FINISHED",
+            task_count: 2,
+            completed_tasks: 2,
+            elapsed_us: 10,
+            tasks: vec![
+                super::TaskTelemetry {
+                    task_id: "task-1".into(),
+                    node_id: "worker-1".into(),
+                    partition_index: 0,
+                    elapsed_us: 1,
+                    output_rows: 25,
+                    output_batches: 1,
+                    output_bytes: 25,
+                    execution: None,
+                    scan: None,
+                },
+                super::TaskTelemetry {
+                    task_id: "task-2".into(),
+                    node_id: "worker-2".into(),
+                    partition_index: 1,
+                    elapsed_us: 1,
+                    output_rows: 15,
+                    output_batches: 1,
+                    output_bytes: 15,
+                    execution: None,
+                    scan: None,
+                },
+            ],
+            operator: Some("Filter".into()),
+            estimated_rows: Some(100),
+        }];
+        let details = super::collect_stage_estimate_details(&stages);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].actual_rows, 40);
+        assert_eq!(details[0].actual_rows_scope, "stage_output_rows");
+        assert_eq!(details[0].classification, "overestimated");
+        assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
+
+        let mut unavailable = stages;
+        unavailable[0].operator = None;
+        assert!(super::collect_stage_estimate_details(&unavailable).is_empty());
     }
 
     #[test]
@@ -16997,6 +17132,8 @@ mod tests {
                 execution: None,
                 scan: None,
             }],
+            operator: None,
+            estimated_rows: None,
         };
         let plan = kaveon_core::PlanNode::new(0, kaveon_core::PlanPhase::Physical, "Scan");
         super::render_explain_analyze_result(&mut result, &plan, 7, 8, Some(&[stage]));
@@ -23210,6 +23347,8 @@ mod tests {
             completed_tasks: 2,
             elapsed_us: 1,
             tasks: vec![task(Some(scan(40, 60, 3))), task(Some(scan(30, 50, 2)))],
+            operator: None,
+            estimated_rows: None,
         }];
         let (scans, complete) = super::distributed_scan_telemetry(&stages);
         assert!(complete);
@@ -23344,8 +23483,8 @@ mod tests {
         };
         let mut stages = Vec::new();
 
-        super::record_stage_task(&mut stages, 2, 1, 5, task(10));
-        super::record_stage_task(&mut stages, 2, 1, 8, task(7));
+        super::record_stage_task(&mut stages, 2, 1, 5, None, None, task(10));
+        super::record_stage_task(&mut stages, 2, 1, 8, None, None, task(7));
 
         assert_eq!(stages[0].completed_tasks, 1);
         assert_eq!(stages[0].tasks.len(), 1);

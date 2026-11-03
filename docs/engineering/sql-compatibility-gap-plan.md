@@ -313,6 +313,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   optimized and physical scan plans now expose versioned source estimates;
   evidence: `docs/qualification/track3-plan-estimate-visibility-2026-10-29.md`;
   estimate-vs-actual evidence: `docs/qualification/track3-estimate-vs-actual-query-diagnostic-2026-10-29.md`.
+  Distributed fragment roots with an exact operator/estimate now also expose
+  bounded `stage_boundaries` output-row diagnostics; the stage-level evidence
+  is recorded in `docs/qualification/track3-operator-estimate-diagnostics-2026-11-02.md`.
 - [ ] Extend estimate-vs-actual diagnostics to every physical operator and
   selectivity boundary; this remains open. Physical plan display now carries
   conservative child-input lineage for unary operators, joins, semi/anti
