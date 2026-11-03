@@ -12,16 +12,16 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-117-case count in the scope and tracker, enforced by
+118-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
-- Corpus: 117 cases, including exact local/three-worker qualification for
-  bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
-  derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
-  `PIVOT`, `UNPIVOT`,
-  table-valued/unsupported correlated `APPLY`, `TOP WITH TIES` without an order,
-  and runtime-column styled timestamp conversion across local and three-worker
-  execution.
+- Current corpus: 118 cases. The prior full sweep qualified bounded
+  derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated derived
+  `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded `PIVOT`,
+  `UNPIVOT`, table-valued/unsupported correlated `APPLY`, `TOP WITH TIES`
+  without an order, and runtime-column styled timestamp conversion across local
+  and three-worker execution. The newly added `format_numeric` case has its own
+  exact local/three-worker differential qualification below.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
@@ -88,6 +88,10 @@ sizes, not the current corpus total; the authoritative current total is the
   `REPLACE`) expressions through the existing vectorized evaluator.
   `SUBSTRING` now lowers from the SQL parser's dedicated AST form to the same
   Unicode-safe vectorized substring evaluator.
+  The new bounded numeric `FORMAT` case (`N2`/`F1`) also matches exactly
+  between local and three-worker execution; unsupported culture and arbitrary
+  .NET patterns remain fail-closed. See
+  [`track2-tsql-format-numeric-2026-11-02.md`](track2-tsql-format-numeric-2026-11-02.md).
 
 The bounded `PIVOT`/`UNPIVOT` evidence is retained in
 [`track2-tsql-pivot-unpivot-distributed-2026-10-28.md`](track2-tsql-pivot-unpivot-distributed-2026-10-28.md).

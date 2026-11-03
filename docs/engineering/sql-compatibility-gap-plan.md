@@ -134,10 +134,12 @@ and dateparts remain explicitly rejected. Row-local BIGINT widths are guarded
 at runtime: zero, negative, or NULL widths return typed NULL.
 SQL Server `FORMAT` now lowers to the bounded temporal formatter for typed
 DATE/TIMESTAMP values. Invariant patterns cover the common `yyyy`, `MM`, `dd`,
-`HH`, `mm`, `ss`, and fractional-second tokens; numeric and culture-specific
-overloads remain rejected. The same evaluator now honors the supplied pattern
-for `DATE_FORMAT`/`TO_CHAR`, with exact local and three-worker evidence in
-`docs/qualification/track2-tsql-format-temporal-2026-10-29.md`.
+`HH`, `mm`, `ss`, and fractional-second tokens. It also accepts bounded
+invariant numeric patterns (`N0`–`N6`, `F0`–`F6`, and fixed decimal patterns);
+culture-specific overloads remain rejected. The same evaluator now honors the
+supplied pattern for `DATE_FORMAT`/`TO_CHAR`, with exact local and three-worker
+evidence in `docs/qualification/track2-tsql-format-temporal-2026-10-29.md` and
+`docs/qualification/track2-tsql-format-numeric-2026-11-02.md`.
 
 `ASCII`, `UNICODE`, and bounded `CHAR` are also qualified: ASCII returns the
 leading ASCII scalar and NULL for a non-ASCII leading scalar, UNICODE returns
