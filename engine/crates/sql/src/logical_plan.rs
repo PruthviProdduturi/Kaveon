@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::parser::parse_sql;
 use kaveon_core::predicate::ScalarValue;
@@ -6227,6 +6228,33 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     } else {
         args
     };
+
+    // SQL Server's GETDATE/SYSDATETIME (and the equivalent Trino current
+    // timestamp functions) are stable for one statement. Materialize the
+    // coordinator's statement instant in the logical plan so every local and
+    // distributed fragment observes the same value instead of sampling its
+    // own worker clock. The value is represented as an integer microsecond
+    // timestamp and cast through the normal vectorized timestamp path.
+    if matches!(name.as_str(), "CURRENT_TIMESTAMP" | "CURRENT_DATE" | "NOW") && args.is_empty() {
+        let micros = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros()
+            .min(i64::MAX as u128) as i64;
+        if name == "CURRENT_DATE" {
+            let days = micros / 86_400_000_000;
+            return Ok(Expr::Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Int64(days))),
+                data_type: CastTarget::Date32,
+            });
+        }
+        return Ok(Expr::Cast {
+            expr: Box::new(Expr::Literal(ScalarValue::Int64(micros))),
+            data_type: CastTarget::TimestampMicros {
+                with_timezone: false,
+            },
+        });
+    }
     if let Some(count) = replicate_dynamic_count {
         let repeat = Expr::Function { name, args };
         return Ok(Expr::Case {
@@ -9861,7 +9889,7 @@ mod tests {
         assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("DATE_PART"), "{rendered}");
-        assert!(rendered.contains("CURRENT_TIMESTAMP"), "{rendered}");
+        assert_eq!(rendered.matches("TimestampMicros").count(), 2, "{rendered}");
     }
 
     #[test]
