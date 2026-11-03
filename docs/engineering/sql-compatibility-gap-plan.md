@@ -291,7 +291,13 @@ the contract.
 
 ### Phase 5 — Federation and client compatibility
 
-- [ ] Add a connector execution abstraction with one-source pushdown first.
+- [x] Add a connector execution abstraction with one-source pushdown first.
+  `api/database/connectors.py` now provides the explicit registered-source
+  execution seam: KaveonDB resolves the source and the complete bounded
+  statement is pushed to exactly one source through the pool. This does not
+  claim cross-source planning or joins. Evidence:
+  `api/database/test_connectors.py` and
+  `docs/qualification/track5-registered-source-executor-2026-11-02.md`.
 - [ ] Add cross-source joins only after snapshot, type, auth, and failure
   semantics are defined.
 - [ ] Qualify JDBC/ODBC and external Trino clients against the documented wire
