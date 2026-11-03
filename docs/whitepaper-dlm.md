@@ -79,18 +79,21 @@ The DLM replaces both with a single compiled artifact:
 
 ## 2. What a DLM Is
 
-A DLM is a **per-dataset compiled context artifact** stored in a metadata
-database, separate from the data warehouse. It contains:
+A DLM is a **per-dataset compiled context artifact** stored as a KaveonDB
+product record in the Engine's transactional catalog. Source data remains in
+the registered lake or external source; the compiled artifact and its bounded
+answer materializations are governed by KaveonDB revisions and source
+watermarks. Its logical contents are:
 
 | Component | Purpose | Storage |
 |---|---|---|
-| **Manifest** | Column types, join graph, metrics, dimensions, synonyms, context spec | `dlm_artifact.manifest` (JSON) |
-| **Value index** | Normalized value → column/key mapping for entity resolution | `dlm_value_index` |
-| **Router summary** | Cross-dataset keyword bag for multi-dataset question routing | `dlm_router` |
-| **Precomputed answers** | Grand totals, per-dimension breakdowns, 2-dim combos | `dlm_answers` |
-| **HLL sketch cuboids** | Sparse HyperLogLog registers for approximate COUNT DISTINCT | `dlm_sketch` |
-| **Stats rollup** | Row count, date range, cardinalities, watermark for incremental refresh | `dlm_artifact.stats_rollup` (JSON) |
-| **Curation overlay** | Human editorial overrides (aliases, hidden dims, default metrics) | `dlm_artifact.curation` (JSON) |
+| **Manifest** | Column types, join graph, metrics, dimensions, synonyms, context spec | DLM definition record payload |
+| **Value index** | Normalized value → column/key mapping for entity resolution | Compiled DLM artifact payload |
+| **Router summary** | Cross-dataset keyword bag for multi-dataset question routing | Compiled DLM artifact payload |
+| **Precomputed answers** | Grand totals, per-dimension breakdowns, 2-dim combos | DLM run/artifact records |
+| **HLL sketch cuboids** | Sparse HyperLogLog registers for approximate COUNT DISTINCT when the selected source adapter provides them | Optional adapter materialization |
+| **Stats rollup** | Row count, date range, cardinalities, watermark for incremental refresh | DLM definition/run record payload |
+| **Curation overlay** | Human editorial overrides (aliases, hidden dims, default metrics) | DLM definition record payload |
 
 The DLM is **compiled, not trained.** There is no model, no gradient, no training
 data. The compilation reads KaveonDB catalog metadata and the Engine's
@@ -253,11 +256,13 @@ pairs per dataset. Stored with `group_col = "d1|d2"` (pipe-delimited,
 lexicographic). Enables two-filter questions ("queries in Asia for Enterprise")
 to serve from context.
 
-**Tier 4 — HLL sketch cuboids.** For non-additive `COUNT(DISTINCT col)` metrics.
-HyperLogLog registers (p=11, 2,048 registers, ~2.3% standard error) are computed
-in one SQL scan using `hashtextextended()` — pure SQL, no extension required. At
-query time, register vectors merge in Python to produce approximate NDV at
-arbitrary dimension slices. Maximum 6 dimensions, 8,000 cells.
+**Tier 4 — HLL sketch cuboids.** For non-additive `COUNT(DISTINCT col)` metrics,
+an eligible source adapter may publish HyperLogLog registers (p=11, 2,048
+registers, ~2.3% standard error). At query time, register vectors merge in
+memory to produce approximate NDV at arbitrary dimension slices. Native
+KaveonDB answers use Engine statistics and qualified query paths; a
+PostgreSQL-specific hash expression is not a KaveonDB requirement. Maximum 6
+dimensions, 8,000 cells.
 
 Non-additive metrics (COUNT DISTINCT, AVG) are computed **independently per
 shape** at build time — never derived by summing a breakdown. "Active Users for
@@ -265,11 +270,12 @@ Enterprise" is exact, not an illegal roll-up.
 
 ### Storage
 
-All precomputed answers live in `dlm_answers`, keyed by `(dataset_id,
-metric_name, group_col)` with an ON CONFLICT upsert. The table sits in the
-metadata database (`kaveonmeta`), physically separate from the data warehouse.
-On first access, answers are loaded into an in-memory dict (`_ANSWER_CACHE`) and
-served as microsecond dict lookups until invalidated by a rebuild.
+Precomputed answers are persisted in DLM artifact/run records, keyed logically
+by `(dataset_id, metric_name, group_col)` and published through the same KaveonDB
+revision boundary as the definition. On first access, answers are loaded into
+an in-memory cache and served as microsecond lookups until a source watermark or
+rebuild invalidates them. External adapters may retain source-specific
+materialization, but they are not KaveonDB authority.
 
 ---
 
