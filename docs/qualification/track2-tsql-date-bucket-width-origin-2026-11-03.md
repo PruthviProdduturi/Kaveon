@@ -11,6 +11,8 @@ wrong when the requested bucket unit is not the engine's arithmetic unit:
 - hour and minute widths use seconds for the typed add operator;
 - a typed custom origin is advanced by the complete bucket offset, rather than
   being replaced by the input's truncated calendar boundary.
+- calendar buckets accept a typed TIMESTAMP origin by normalizing it to the
+  DATE arithmetic domain; time-of-day bucket units retain timestamp precision.
 
 The supported contract remains bounded: positive literal or row-local BIGINT
 widths, typed DATE/TIMESTAMP origins, and the dateparts listed in the engine
@@ -26,7 +28,8 @@ The test asserts the normalized fourteen-day width for a two-week bucket, the
 custom origin contributes the whole `DATE_DIFF` offset.
 
 The distributed differential suite covers the existing date-bucket cases,
-including week, custom-origin, and subsecond timestamp forms:
+including week, typed timestamp custom-origin, row-local custom-origin, and
+subsecond timestamp forms:
 
 ```text
 cargo test -p kaveon-server --bin kaveon-server distributed_tsql_date_bucket -- --nocapture

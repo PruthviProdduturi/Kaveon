@@ -5492,6 +5492,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 Expr::Cast {
                     data_type: CastTarget::TimestampMicros { .. },
                     ..
+                } if matches!(origin_type, CastTarget::Date32) => Expr::Cast {
+                    expr: Box::new(custom_origin.clone()),
+                    data_type: CastTarget::Date32,
+                },
+                Expr::Cast {
+                    data_type: CastTarget::TimestampMicros { .. },
+                    ..
                 } => custom_origin.clone(),
                 expression if is_row_local_replicate_count(expression) => Expr::Cast {
                     expr: Box::new(expression.clone()),
@@ -10152,6 +10159,15 @@ mod tests {
         assert!(
             custom_rendered.contains("BinaryOp { left: Function { name: \"DATE_DIFF\""),
             "custom origins must offset the origin by the whole bucket: {custom_rendered}"
+        );
+        let timestamp_origin_plan = sql_to_logical_plan(
+            "SELECT DATE_BUCKET(month, 1, event_date, TIMESTAMP '2020-02-15 12:34:56') FROM t",
+        )
+        .expect("calendar DATE_BUCKET should normalize a timestamp origin to DATE");
+        let timestamp_origin_rendered = format!("{timestamp_origin_plan:?}");
+        assert!(
+            timestamp_origin_rendered.contains("data_type: Date32"),
+            "calendar origins should use the date arithmetic domain: {timestamp_origin_rendered}"
         );
         let plan =
             sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date, origin_date) FROM t")
