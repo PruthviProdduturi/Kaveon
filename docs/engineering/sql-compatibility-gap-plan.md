@@ -196,7 +196,7 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   from the staged snapshot. General lake-table source DML and unbounded
   source-copy returning remain open.
 - [x] Add bounded `MERGE` with explicit revision/CAS semantics. `MERGE`
-  accepts one aliased `VALUES` batch of up to 1,000 rows containing `id` and
+  accepts one `VALUES` batch with an optional simple target alias, up to 1,000 rows containing `id` and
   `document_json`, an equality `target.id = source.id` predicate, and exactly
   `WHEN MATCHED THEN UPDATE SET document_json = source.document_json` followed
   by `WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id,
