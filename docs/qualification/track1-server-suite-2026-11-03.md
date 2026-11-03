@@ -19,8 +19,8 @@ cargo test -p kaveon-server --bin kaveon-server
 finished in 685.40s
 
 cargo test -p kaveon-exec --lib
-626 passed; 0 failed; 4 ignored
-finished in 37.85s
+627 passed; 0 failed; 4 ignored
+finished in 37.42s
 
 cargo test -p kaveon-optim --lib
 86 passed; 0 failed; 0 ignored
@@ -39,8 +39,10 @@ Together these suites cover the versioned T-SQL corpus, distributed
 differential execution across Parquet encodings, joins, windows, aggregates,
 JSON, bounded product DML/MERGE, catalog access, cancellation, retry/recovery,
 result-cache, storage/catalog behavior, optimizer planning, and `Utf8View`
-result serialization. The SQL suite covers parser and planner boundaries,
-including explicit rejection of unsupported shapes.
+result serialization. The executor regression suite now also proves
+`STRING_ESCAPE(value, 'json')` preserves logical text when the input and mode
+arrive as Arrow `Utf8View` arrays. The SQL suite covers parser and planner
+boundaries, including explicit rejection of unsupported shapes.
 
 The focused `Utf8View` regression also covers nullable text values and map keys;
 those values are emitted as logical JSON strings or `null`, never Arrow debug
