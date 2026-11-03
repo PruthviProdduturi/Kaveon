@@ -20,7 +20,11 @@ does not preserve a per-command returning projection.
 Evidence:
 
 - Parser regression: `accepts_identity_and_document_returning_for_product_dml`.
-- Transaction API regression: `sql_endpoint_returns_product_identity_metadata_from_staged_dml`.
+- Transaction API regressions: `sql_endpoint_returns_product_identity_metadata_from_staged_dml`
+  covers product INSERT `RETURNING *`, while
+  `sql_endpoint_update_and_delete_return_identity_and_revision` covers revision-CAS
+  UPDATE `RETURNING *` and verifies the staged document alongside the identity and
+  incremented revision.
 - Delete capture is read-before-stage and validates owner plus expected
   revision before returning the document.
 - The focused SQL parser and transaction API tests pass.
