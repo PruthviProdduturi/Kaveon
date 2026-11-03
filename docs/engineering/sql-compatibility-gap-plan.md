@@ -292,8 +292,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   `ON CONFLICT DO NOTHING` and the bounded `ON CONFLICT (id) DO UPDATE SET
   document_json = excluded.document_json` upsert. Named constraints, conflict
   predicates, arbitrary assignments, and arbitrary conflict targets remain
-  rejected. Product `RETURNING id, revision` is implemented from the staged
-  revision/CAS write set. Savepoints are implemented for the product
+  rejected. Product `RETURNING id, revision` and the qualified `RETURNING *`
+  expansion are implemented from the staged revision/CAS write set.
+  Savepoints are implemented for the product
   transaction session and covered by parser, catalog, and API tests. The
   update-only form is qualified in
   `docs/qualification/track2-native-dml-merge-2026-10-28.md`; matched updates
