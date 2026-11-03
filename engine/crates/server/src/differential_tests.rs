@@ -6333,6 +6333,66 @@ fn distributed_runtime_filter_crosses_probe_identity_projection() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Distributed outer joins must agree with the local executor on which rows are
+/// null-extended, in the shapes where partitioning can lose them.
+///
+/// Each statement is a hazard the rest of the sweep does not reach: a nested
+/// outer join whose intermediate null-extension has to survive a second
+/// repartition, an empty build side, anti-join semantics that depend on the
+/// filter running after extension rather than inside the join, a composite key
+/// with a NULL component, duplicate keys fanning out on both sides, and an
+/// outer join under a distributed TopN ordered by the nullable column.
+#[test]
+fn distributed_outer_join_null_extension_matches_local_across_partitioning() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-join-outer-null-extension-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    for statement in [
+        // A nested outer join: the inner RIGHT JOIN's null-extended rows have
+        // to survive the outer LEFT JOIN's repartition.
+        "SELECT o.user_id, o.locale, n.note FROM (SELECT e.user_id, u.locale FROM (SELECT user_id FROM events WHERE user_id < 3) e RIGHT JOIN (VALUES (1, 'en'), (2, 'fr'), (9001, 'zz')) AS u(user_id, locale) ON e.user_id = u.user_id) o LEFT JOIN (VALUES (1, 'first'), (9001, 'ninth')) AS n(user_id, note) ON o.user_id = n.user_id ORDER BY 1, 2, 3",
+        // An empty build side: every right row null-extends. The mirror of the
+        // sweep's existing empty-right LEFT JOIN, and not the same path.
+        "SELECT l.id, r.id AS right_id, r.label FROM (SELECT id FROM (VALUES (1)) AS seed(id) WHERE id < 0) AS l(id) RIGHT JOIN (VALUES (1, 'one'), (2, 'two')) AS r(id, label) ON l.id = r.id ORDER BY 1, 2, 3",
+        // Anti-join semantics: correct only if the filter runs after
+        // null-extension. Pushed into the join it returns nothing.
+        "SELECT l.id, l.label FROM (VALUES (1, 'keep'), (2, 'keep'), (3, 'keep')) AS l(id, label) LEFT JOIN (VALUES (2, 'match')) AS r(id, label) ON l.id = r.id WHERE r.id IS NULL ORDER BY 1, 2",
+        // A composite key with a NULL component: partitioned deterministically,
+        // still non-matching under SQL semantics.
+        "SELECT l.a, l.b, r.tag FROM (VALUES (1, 10), (1, CAST(NULL AS BIGINT)), (2, 20)) AS l(a, b) LEFT JOIN (VALUES (1, 10, 'both'), (1, CAST(NULL AS BIGINT), 'null-b'), (2, 99, 'other-b')) AS r(a, b, tag) ON l.a = r.a AND l.b = r.b ORDER BY 1, 2, 3",
+        // Duplicate keys on both sides: matches fan out, and the unmatched key
+        // null-extends exactly once rather than once per partition.
+        "SELECT l.id, l.tag, r.tag AS right_tag FROM (VALUES (1, 'l1'), (1, 'l2'), (3, 'l3')) AS l(id, tag) FULL JOIN (VALUES (1, 'r1'), (1, 'r2'), (4, 'r4')) AS r(id, tag) ON l.id = r.id ORDER BY 1, 2, 3",
+        // An outer join under a distributed TopN ordered by the nullable
+        // column: partial and final TopN must place the nulls as the local
+        // executor does.
+        "SELECT l.id, r.score FROM (VALUES (1), (2), (3), (4)) AS l(id) LEFT JOIN (VALUES (2, 50), (4, 10)) AS r(id, score) ON l.id = r.id ORDER BY r.score DESC NULLS LAST, l.id LIMIT 3",
+    ] {
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-outer-null-extension", 32 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} local pool");
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool)
+                .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+            true,
+        );
+        assert_eq!(actual, expected, "{statement}");
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{statement} distributed pool"
+        );
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// FULL JOIN USING must keep SQL NULL keys non-matching and preserve the
 /// merged key/coalescing shape across distributed fragments.
 #[test]
