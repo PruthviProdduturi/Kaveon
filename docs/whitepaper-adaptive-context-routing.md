@@ -450,7 +450,7 @@ fallback). Three additions turned the method into a product, all live in prod to
 
 ### A.1 Precomputed answer store (compute-once, answer-many)
 
-Rather than only synthesising answers from `pg_stats`, the DLM **precomputes** the
+Rather than only synthesising answers from an external statistics adapter, the DLM **precomputes** the
 answerable shapes at build time. `generate_dlm()` runs one scan for all metric grand
 totals and one scan per dimension for its breakdown, and persists them to a
 `dlm_answers` table (metric × group-column → columns/rows). At query time,
@@ -465,16 +465,29 @@ at build time — never derived by summing a breakdown.
 (a `SUM` across all rows) drops from **~15 s live to ~1.5 s from context**, the
 residual being routing/resolution rather than the eliminated scan.
 
+The `dlm_answers` table and the `pg_stats`-backed profiler referenced by the
+historical measurements belong to the legacy API adapter. Native KaveonDB deployments
+persist the equivalent DLM definition/run records in the Engine transaction catalog;
+the answer cache remains an optimization, never the authority. A connector may still
+use PostgreSQL statistics while it is explicitly registered, but that path must be
+labelled as external and cannot be presented as native KaveonDB storage.
+
 ### A.2 Physical separation of control/context from the warehouse
 
 The method distinguishes a metadata plane (the context representation + counters +
-caches) from the data plane (the rows). Production now separates them **physically**:
-a small **control+context database** (`kaveonmeta` — holds `dlm_*`, `context_*`, and
-the platform tables) is distinct from the **data warehouse** (`kaveon` — the actual
-rows), on the same server but reached over independent pools. This makes the
-economic claim literal: context answers are served from a tiny, fast store that
-never contends with a multi-million-row scan, so the common case is answered from a
-"$20/month box" while the warehouse scales on its own.
+caches) from the data plane (the rows). The original reference deployment used a
+small PostgreSQL control/context database (`kaveonmeta`) separate from the warehouse;
+that is a historical adapter architecture, retained here to explain the experiment
+and its measurements. The current native path stores product and DLM records in the
+KaveonDB transaction catalog and reads source-version watermarks and statistics from
+the Engine catalog. It does not require PostgreSQL as a KaveonDB authority. External
+PostgreSQL statistics remain an optional connector/migration input only, and are not
+interchangeable with native KaveonDB records.
+
+This separation still makes the economic claim precise: context answers are served
+from compact, versioned records and bounded caches without contending with a
+multi-million-row fact scan, while the warehouse data remains in customer-owned
+storage and scales independently.
 
 ### A.3 Honest source labelling
 
