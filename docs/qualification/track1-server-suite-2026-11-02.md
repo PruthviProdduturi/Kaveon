@@ -1,6 +1,6 @@
 # Server suite qualification — 2026-11-02
 
-Source commit: `e0872192`
+Source commit: `5c5a00ee`
 
 ## Result
 
@@ -23,14 +23,15 @@ The latest full server binary run, including the long-running differential
 module, also passed:
 
 ```text
-cargo test -p kaveon-server --bin kaveon-server --no-fail-fast --quiet
+cargo test -p kaveon-server --bin kaveon-server
 
-test result: ok. 670 passed; 0 failed; 0 ignored;
-finished in 676.23s
+test result: ok. 671 passed; 0 failed; 0 ignored; 0 measured;
+finished in 674.99s
 ```
 
-This supersedes the 470-test bounded-suite count as the latest total for the
-server binary; the bounded run remains useful as the fast pre-merge gate.
+This supersedes the earlier 670-test full-suite result and the 470-test
+bounded-suite count as the latest total for the server binary; the bounded run
+remains useful as the fast pre-merge gate.
 
 ## Boundary
 

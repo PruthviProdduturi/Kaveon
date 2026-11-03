@@ -16,7 +16,7 @@ The historical release-readiness snapshot is in
 `docs/qualification/release-readiness-2026-10-20.md`.
 The fast bounded server suite remains 470/470 with the long-running
 `differential_tests` module excluded. The latest full server binary suite is
-670/670 including that module; both results are recorded in
+671/671 including that module; both results are recorded in
 `docs/qualification/track1-server-suite-2026-11-02.md`. The earlier 611/611
 release-binary record remains historical
 (`docs/qualification/server-suite-release-2026-10-20.md`).
