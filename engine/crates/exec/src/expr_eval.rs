@@ -5,10 +5,10 @@ use arrow::array::{
     Int16Array, Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder,
     LargeListArray, LargeListBuilder, LargeStringArray, LargeStringBuilder, ListArray, ListBuilder,
     MapArray, NullBuilder, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder, StringArray,
-    StringBuilder, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    StringBuilder, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
 };
 #[cfg(test)]
 use arrow::array::{Time64NanosecondBuilder, TimestampMillisecondBuilder};
@@ -1522,6 +1522,13 @@ fn text_value(arr: &ArrayRef, row: usize) -> Result<Option<&str>> {
                 .as_any()
                 .downcast_ref::<LargeStringArray>()
                 .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+            Ok((!values.is_null(row)).then(|| values.value(row)))
+        }
+        DataType::Utf8View => {
+            let values = arr
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
             Ok((!values.is_null(row)).then(|| values.value(row)))
         }
         other => Err(KaveonError::Execution(format!(
@@ -16945,6 +16952,15 @@ fn fold_extreme(rest: &[ArrayRef], first: &ArrayRef, kind: CompareKind) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_value_reads_utf8_view_values() {
+        let values: ArrayRef =
+            Arc::new(StringViewArray::from(vec![Some("日本"), None, Some("EU")]));
+        assert_eq!(text_value(&values, 0).unwrap(), Some("日本"));
+        assert_eq!(text_value(&values, 1).unwrap(), None);
+        assert_eq!(text_value(&values, 2).unwrap(), Some("EU"));
+    }
 
     #[test]
     fn logarithm_functions_follow_trino_bases() {
