@@ -17,5 +17,16 @@ Evidence:
 - `logical_plan::tests::lowers_tsql_parsename_as_a_bounded_scalar_function`
   verifies the SQL planner preserves the function for vectorized execution.
 - Case `parsename` is included in the versioned T-SQL corpus as a
-  `planner_qualified` case. Distributed and external-client qualification are
-  intentionally still open.
+  `planner_qualified` case with distributed status
+  `qualified_for_bounded_plain_dotted_names`.
+- The focused distributed differential case
+  `tsql_parsename_scalar_compatibility` compares dictionary, plain, multi-file,
+  clustered, partitioned, and three-worker fragment results exactly. This is
+  local distributed evidence; deployed/cloud and external-client qualification
+  remain open.
+
+Focused command:
+
+```text
+KAVEON_DIFF_ONLY=tsql_parsename_scalar_compatibility cargo test -p kaveon-server --bin kaveon-server differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --exact --nocapture
+```

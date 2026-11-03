@@ -8720,7 +8720,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     result.append_null();
                     continue;
                 }
-                result.append_value(segments[segments.len() - part as usize]);
+                let Some(index) = segments.len().checked_sub(part as usize) else {
+                    result.append_null();
+                    continue;
+                };
+                result.append_value(segments[index]);
             }
             Ok(Arc::new(result.finish()))
         }
@@ -30268,13 +30272,20 @@ mod tests {
                 Arc::new(StringArray::from(vec![
                     Some("server.database.schema.object"),
                     Some("schema.object"),
+                    Some("schema.object"),
                     Some("server..object"),
                     None,
                 ])) as ArrayRef,
             ),
             (
                 "part",
-                Arc::new(Int64Array::from(vec![Some(4), Some(1), Some(1), Some(1)])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![
+                    Some(4),
+                    Some(1),
+                    Some(4),
+                    Some(1),
+                    Some(1),
+                ])) as ArrayRef,
             ),
         ])
         .unwrap();
@@ -30291,6 +30302,7 @@ mod tests {
         assert_eq!(values.value(1), "object");
         assert!(values.is_null(2));
         assert!(values.is_null(3));
+        assert!(values.is_null(4));
     }
 
     #[test]

@@ -275,6 +275,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_parsename_scalar_compatibility",
+        "SELECT user_id, PARSENAME(CONCAT(country, '.', region, '.', industry), 1), PARSENAME(CONCAT(country, '.', region, '.', industry), 2), PARSENAME(CONCAT(country, '.', region, '.', industry), 4), PARSENAME(CONCAT(country, '.', region, '.', industry), 5) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
+        true,
+    ),
+    (
         "trino_position_scalar_compatibility",
         "SELECT user_id, POSITION('a' IN country) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
         true,
