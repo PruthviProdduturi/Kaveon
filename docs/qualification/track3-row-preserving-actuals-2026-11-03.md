@@ -3,22 +3,26 @@
 ## Scope
 
 Query records now retain a bounded estimate-vs-actual chain through physical
-`Window`, `Project`, `Sort`, and the first directly reached `Filter` operator.
-When the finished query has an exact result row count, that count is attached
-to each directly connected row-preserving child and to that filter with
+`Window`, `Project`, and `Sort` nodes until the first directly reached
+cardinality boundary. Boundaries include `Filter`, `Limit`, `Offset`, `TopN`,
+aggregate variants, `Distinct`, joins, `Unnest`, and set operations
+(`Union`, `Intersect`, and `Except`). When the finished query has an exact
+result row count, that count is attached to the boundary with
 `actual_rows_scope=derived_row_preserving`.
 
-The propagation is intentionally fail-closed. It attributes the first `Filter`
-as the output boundary even when its input is an aggregate or join, but never
-labels the filter's input with post-filter rows. No selectivity, group
-cardinality, or join result is inferred from the final result.
+The propagation is intentionally fail-closed. It attributes only the first
+directly reached boundary and never labels that node's input with post-
+operation rows. No selectivity, group cardinality, or join result is inferred
+from the final result.
 
 ## Evidence
 
 The server unit `actual_rows_follow_only_row_preserving_operator_chains`
 verifies that a `Window → Project → Sort → Filter → Scan` plan receives the
 exact result count on the row-preserving chain and on the filter output, while
-the filter's input scan does not receive a fabricated count.
+the filter's input scan does not receive a fabricated count. The
+`direct_limit_boundary_receives_actual_rows_without_labeling_input` unit
+verifies the same fail-closed behavior for `Project → Limit → Scan`.
 
 ```text
 cargo test -p kaveon-server --bin kaveon-server \
@@ -27,6 +31,10 @@ test result: ok. 1 passed; 0 failed
 
 cargo test -p kaveon-server --bin kaveon-server \
   filter_actuals_stop_at_the_filter_output_boundary -- --nocapture
+test result: ok. 1 passed; 0 failed
+
+cargo test -p kaveon-server --bin kaveon-server \
+  direct_limit_boundary_receives_actual_rows_without_labeling_input -- --nocapture
 test result: ok. 1 passed; 0 failed
 ```
 
