@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 140-case corpus has planner coverage and focused exact
+  The current 141-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -209,6 +209,9 @@ expressions; other operation values fail closed.
 path for numeric and bounded temporal targets, with exact local/three-worker evidence in
 `docs/qualification/track2-tsql-try-parse-2026-10-29.md`; culture-aware `USING`
 forms remain explicitly rejected.
+Direct SQL Server `TRY_CAST` DATE and DATETIME2 targets now have exact
+local/three-worker evidence, including NULL-on-invalid-text behavior; the
+qualified read corpus records this as a separate temporal target boundary.
 `SQUARE(value)` lowers to the existing vectorized `POWER(value, 2)` path with
 exact local/three-worker evidence in
 `docs/qualification/track2-tsql-square-2026-10-29.md`.
