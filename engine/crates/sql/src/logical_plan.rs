@@ -13,6 +13,41 @@ use sqlparser::ast;
 use sqlparser::ast::visit_expressions_mut;
 use std::ops::ControlFlow;
 
+thread_local! {
+    static PLANNING_NOW_MICROS: Cell<Option<i64>> = const { Cell::new(None) };
+}
+
+struct PlanningClockGuard(Option<i64>);
+
+impl PlanningClockGuard {
+    fn enter() -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros()
+            .min(i64::MAX as u128) as i64;
+        Self(PLANNING_NOW_MICROS.with(|clock| clock.replace(Some(now))))
+    }
+}
+
+impl Drop for PlanningClockGuard {
+    fn drop(&mut self) {
+        PLANNING_NOW_MICROS.with(|clock| clock.set(self.0.take()));
+    }
+}
+
+fn planning_now_micros() -> i64 {
+    PLANNING_NOW_MICROS.with(|clock| {
+        clock.get().unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros()
+                .min(i64::MAX as u128) as i64
+        })
+    })
+}
+
 /// A top-level ordering key: expression, direction, and null placement.
 /// Window specifications keep their existing `(Expr, bool)` representation.
 pub type OrderKey = (Expr, bool, bool);
@@ -547,6 +582,7 @@ fn lower_statements(
     outer_references: bool,
     approximate: bool,
 ) -> Result<LogicalPlan> {
+    let _planning_clock = PlanningClockGuard::enter();
     if stmts.is_empty() {
         return Err(sql_err("empty query"));
     }
@@ -6236,11 +6272,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     // own worker clock. The value is represented as an integer microsecond
     // timestamp and cast through the normal vectorized timestamp path.
     if matches!(name.as_str(), "CURRENT_TIMESTAMP" | "CURRENT_DATE" | "NOW") && args.is_empty() {
-        let micros = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros()
-            .min(i64::MAX as u128) as i64;
+        let micros = planning_now_micros();
         if name == "CURRENT_DATE" {
             let days = micros / 86_400_000_000;
             return Ok(Expr::Cast {
@@ -9890,6 +9922,39 @@ mod tests {
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("DATE_PART"), "{rendered}");
         assert_eq!(rendered.matches("TimestampMicros").count(), 2, "{rendered}");
+    }
+
+    #[test]
+    fn current_timestamp_aliases_share_one_planned_literal() {
+        let plan = sql_to_logical_plan(
+            "SELECT GETDATE() AS local_now, SYSDATETIME() AS precise_now FROM t",
+        )
+        .expect("current timestamp aliases should lower");
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected projection");
+        };
+        let values = columns
+            .iter()
+            .map(|expr| match expr {
+                Expr::Alias { expr, .. } => expr.as_ref(),
+                other => other,
+            })
+            .map(|expr| match expr {
+                Expr::Cast {
+                    expr,
+                    data_type:
+                        CastTarget::TimestampMicros {
+                            with_timezone: false,
+                        },
+                } => match expr.as_ref() {
+                    Expr::Literal(ScalarValue::Int64(value)) => *value,
+                    other => panic!("expected timestamp literal, got {other:?}"),
+                },
+                other => panic!("expected timestamp cast, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], values[1]);
     }
 
     #[test]
