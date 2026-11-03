@@ -263,6 +263,31 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           <rect x="22" y="17" width="3.5" height="7"  rx="1" fill={color} fillOpacity="0.45" />
         </svg>
       );
+    case "bullet":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Bars with a target crossing each: the chart in miniature. */}
+          <rect x="2" y="5"  width="15" height="4" rx="1" fill={color} fillOpacity="0.8" />
+          <rect x="2" y="12" width="9"  height="4" rx="1" fill={color} fillOpacity="0.55" />
+          <rect x="2" y="19" width="19" height="4" rx="1" fill={color} fillOpacity="0.8" />
+          <rect x="13" y="3.5"  width="1.6" height="7" rx="0.6" fill={color} />
+          <rect x="14" y="10.5" width="1.6" height="7" rx="0.6" fill={color} />
+          <rect x="17" y="17.5" width="1.6" height="7" rx="0.6" fill={color} />
+        </svg>
+      );
+    case "ribbon":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Two series swapping rank, which is the whole point. */}
+          <path d="M3,7 C10,7 11,20 25,20"  fill="none" stroke={color} strokeWidth="2.6" strokeOpacity="0.85" />
+          <path d="M3,20 C10,20 11,7 25,7"  fill="none" stroke={color} strokeWidth="2.6" strokeOpacity="0.5" />
+          <path d="M3,13.5 C12,13.5 15,13.5 25,13.5" fill="none" stroke={color} strokeWidth="1.8" strokeOpacity="0.3" />
+          <circle cx="3"  cy="7"  r="1.8" fill={color} />
+          <circle cx="25" cy="7"  r="1.8" fill={color} fillOpacity="0.5" />
+          <circle cx="3"  cy="20" r="1.8" fill={color} fillOpacity="0.5" />
+          <circle cx="25" cy="20" r="1.8" fill={color} />
+        </svg>
+      );
     case "flow_map":
       return (
         <svg viewBox="0 0 28 28" style={s}>
