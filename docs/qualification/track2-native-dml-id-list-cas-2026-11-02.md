@@ -18,7 +18,9 @@ paired with one positive revision CAS value. The adapter expands the statement
 into one owner-isolated transactional command per ID. The existing revision,
 ownership, audit, commit, and rollback rules therefore apply independently to
 each record under the same transaction boundary. Arbitrary expressions,
-`NOT IN`, per-row revisions, joins, and `UPDATE ... FROM` remain rejected.
+`NOT IN`, per-row revisions, and joins remain rejected. A separate bounded
+same-kind source-backed `UPDATE ... FROM` form is qualified in
+`track2-native-dml-update-from-2026-11-03.md`.
 
 ## Evidence
 

@@ -2094,6 +2094,16 @@ pub enum ProductDmlCommand {
         expected_revision: u64,
         document_json: String,
     },
+    /// Bounded source-backed UPDATE ... FROM semantics. The parser admits one
+    /// same-kind product source row and the transaction layer resolves its
+    /// document from the pinned snapshot before staging the normal CAS update.
+    UpdateFrom {
+        kind: String,
+        id: String,
+        expected_revision: u64,
+        source_id: String,
+        source_kind: String,
+    },
     Delete {
         kind: String,
         id: String,
@@ -2307,10 +2317,45 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
             }
         }
         Statement::Update {
+            table,
             assignments,
+            from,
             selection,
             ..
         } => {
+            if let Some(source) = from {
+                let (target_alias, source_kind, source_alias) =
+                    product_update_from_tables(table, source, &kind)?;
+                if assignments.len() != 1 {
+                    return Err(sql_error("product UPDATE FROM may set document_json only"));
+                }
+                let AssignmentTarget::ColumnName(column) = &assignments[0].target else {
+                    return Err(sql_error("product UPDATE FROM may set document_json only"));
+                };
+                if !((column.0.len() == 1
+                    && column.0[0].value.eq_ignore_ascii_case("document_json"))
+                    || (column.0.len() == 2
+                        && column.0[0].value.eq_ignore_ascii_case(&target_alias)
+                        && column.0[1].value.eq_ignore_ascii_case("document_json")))
+                    || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+                {
+                    return Err(sql_error(
+                        "product UPDATE FROM must set target.document_json from source.document_json",
+                    ));
+                }
+                let (id, expected_revision, source_id) = product_update_from_predicate(
+                    selection.as_ref(),
+                    &target_alias,
+                    &source_alias,
+                )?;
+                return Ok(vec![ProductDmlCommand::UpdateFrom {
+                    kind,
+                    id,
+                    expected_revision,
+                    source_id,
+                    source_kind,
+                }]);
+            }
             if assignments.len() != 1 {
                 return Err(sql_error("product UPDATE may set document_json only"));
             }
@@ -3185,20 +3230,21 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
         } => {
             let table_name = simple_table(table)?;
             let returning = parse_product_returning(returning.as_ref())?;
-            if from.is_some() || or.is_some() {
-                return Err(sql_error(
-                    "UPDATE FROM and conflict clauses are not supported",
-                ));
+            if or.is_some() {
+                return Err(sql_error("UPDATE conflict clauses are not supported"));
             }
             if selection.is_none() {
                 return Err(sql_error("UPDATE requires a WHERE predicate"));
             }
             if assignments.is_empty()
                 || assignments.iter().any(|assignment| {
-                    !matches!(&assignment.target, AssignmentTarget::ColumnName(name) if name.0.len() == 1)
+                    !matches!(&assignment.target, AssignmentTarget::ColumnName(name)
+                        if name.0.len() == 1 || (from.is_some() && name.0.len() == 2))
                 })
             {
-                return Err(sql_error("UPDATE requires simple single-column assignments"));
+                return Err(sql_error(
+                    "UPDATE requires simple single-column assignments",
+                ));
             }
             Ok(NativeTransactionalStatement::Dml(Box::new(
                 NativeDmlStatement {
@@ -3558,6 +3604,173 @@ fn simple_table(table: &TableWithJoins) -> Result<String> {
         }
         _ => Err(sql_error("write target must be an unaliased base table")),
     }
+}
+
+fn product_update_from_tables(
+    target: &TableWithJoins,
+    source: &TableWithJoins,
+    target_kind: &str,
+) -> Result<(String, String, String)> {
+    if !target.joins.is_empty() || !source.joins.is_empty() {
+        return Err(sql_error(
+            "product UPDATE FROM supports one target and one source table without joins",
+        ));
+    }
+    let TableFactor::Table {
+        name,
+        alias,
+        args: None,
+        with_hints,
+        version: None,
+        with_ordinality: false,
+        partitions,
+        json_path: None,
+    } = &target.relation
+    else {
+        return Err(sql_error(
+            "product UPDATE FROM target must be a base product table",
+        ));
+    };
+    if !with_hints.is_empty()
+        || !partitions.is_empty()
+        || alias.as_ref().is_some_and(|a| !a.columns.is_empty())
+    {
+        return Err(sql_error(
+            "product UPDATE FROM target must use a simple alias",
+        ));
+    }
+    let target_name = validated_table_name(name)?;
+    let parsed_target_kind = product_kind(&target_name)?;
+    if parsed_target_kind != target_kind {
+        return Err(sql_error("product UPDATE FROM target kind is inconsistent"));
+    }
+    let target_alias = alias
+        .as_ref()
+        .map(|value| value.name.value.clone())
+        .or_else(|| target_name.rsplit('.').next().map(str::to_owned))
+        .ok_or_else(|| sql_error("product UPDATE FROM target must have a table name"))?;
+
+    let TableFactor::Table {
+        name: source_name,
+        alias: Some(source_alias),
+        args: None,
+        with_hints: source_hints,
+        version: None,
+        with_ordinality: false,
+        partitions: source_partitions,
+        json_path: None,
+    } = &source.relation
+    else {
+        return Err(sql_error(
+            "product UPDATE FROM source must be an aliased base product table",
+        ));
+    };
+    if !source_hints.is_empty() || !source_partitions.is_empty() || !source_alias.columns.is_empty()
+    {
+        return Err(sql_error(
+            "product UPDATE FROM source must use a simple alias",
+        ));
+    }
+    let source_kind = product_kind(&validated_table_name(source_name)?)?;
+    if source_kind != target_kind {
+        return Err(sql_error(
+            "product UPDATE FROM source and target kinds must match",
+        ));
+    }
+    Ok((target_alias, source_kind, source_alias.name.value.clone()))
+}
+
+fn product_update_from_predicate(
+    selection: Option<&Expr>,
+    target_alias: &str,
+    source_alias: &str,
+) -> Result<(String, u64, String)> {
+    let Some(selection) = selection else {
+        return Err(sql_error(
+            "product UPDATE FROM requires target id, revision, and source id predicates",
+        ));
+    };
+    let mut predicates = Vec::new();
+    fn flatten<'a>(expression: &'a Expr, predicates: &mut Vec<&'a Expr>) {
+        if let Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } = expression
+        {
+            flatten(left, predicates);
+            flatten(right, predicates);
+        } else {
+            predicates.push(expression);
+        }
+    }
+    flatten(selection, &mut predicates);
+    if predicates.len() != 3 {
+        return Err(sql_error(
+            "product UPDATE FROM requires exactly target.id, target.revision, and source.id predicates",
+        ));
+    }
+    let mut id = None;
+    let mut revision = None;
+    let mut source_id = None;
+    for expression in predicates {
+        let Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } = expression
+        else {
+            return Err(sql_error(
+                "product UPDATE FROM predicates must use equality with string or integer literals",
+            ));
+        };
+        let Expr::CompoundIdentifier(parts) = left.as_ref() else {
+            return Err(sql_error(
+                "product UPDATE FROM predicates must qualify target and source columns",
+            ));
+        };
+        if parts.len() != 2 {
+            return Err(sql_error(
+                "product UPDATE FROM predicates must qualify target and source columns",
+            ));
+        }
+        let qualifier = parts[0].value.as_str();
+        let column = parts[1].value.as_str();
+        if qualifier.eq_ignore_ascii_case(target_alias) && column.eq_ignore_ascii_case("id") {
+            if id.is_some() {
+                return Err(sql_error(
+                    "product UPDATE FROM may contain one target.id predicate",
+                ));
+            }
+            id = Some(string_literal(right, "product target ID")?);
+        } else if qualifier.eq_ignore_ascii_case(target_alias)
+            && column.eq_ignore_ascii_case("revision")
+        {
+            if revision.is_some() {
+                return Err(sql_error(
+                    "product UPDATE FROM may contain one target.revision predicate",
+                ));
+            }
+            revision = Some(integer_literal(right, "expected revision")?);
+        } else if qualifier.eq_ignore_ascii_case(source_alias) && column.eq_ignore_ascii_case("id")
+        {
+            if source_id.is_some() {
+                return Err(sql_error(
+                    "product UPDATE FROM may contain one source.id predicate",
+                ));
+            }
+            source_id = Some(string_literal(right, "product source ID")?);
+        } else {
+            return Err(sql_error(
+                "product UPDATE FROM predicates support target.id, target.revision, and source.id only",
+            ));
+        }
+    }
+    Ok((
+        id.ok_or_else(|| sql_error("product UPDATE FROM requires target.id"))?,
+        revision.ok_or_else(|| sql_error("product UPDATE FROM requires target.revision"))?,
+        source_id.ok_or_else(|| sql_error("product UPDATE FROM requires source.id"))?,
+    ))
 }
 
 fn merge_target_table(table: &TableFactor) -> Result<String> {
@@ -4487,6 +4700,41 @@ mod tests {
                 assert_eq!(dml.returning, ["id", "revision"]);
             }
             assert!(adapt_product_dml(&dml).is_ok());
+        }
+    }
+
+    #[test]
+    fn accepts_bounded_product_update_from_and_rejects_wider_shapes() {
+        let sql = "UPDATE product.datasets AS target SET target.document_json = source.document_json FROM product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 2 AND source.id = 'source-1' RETURNING id, revision, document_json";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("bounded UPDATE FROM should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::UpdateFrom {
+                kind: "dataset".into(),
+                id: "target-1".into(),
+                expected_revision: 2,
+                source_id: "source-1".into(),
+                source_kind: "dataset".into(),
+            }
+        );
+        for sql in [
+            "UPDATE product.datasets AS target SET document_json = source.document_json FROM product.charts AS source WHERE target.id = 'target-1' AND target.revision = 2 AND source.id = 'source-1'",
+            "UPDATE product.datasets AS target SET document_json = '{}' FROM product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 2 AND source.id = 'source-1'",
+            "UPDATE product.datasets AS target SET document_json = source.document_json FROM product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 2 AND target.id = source.id",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("shape should parse before adaptation")
+            else {
+                panic!("expected product DML");
+            };
+            assert!(
+                adapt_product_dml(&dml).is_err(),
+                "unsupported UPDATE FROM shape was accepted: {sql}"
+            );
         }
     }
 
