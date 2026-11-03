@@ -551,8 +551,8 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_bounded_unpivot",
-        "SELECT * FROM (SELECT region, actions, errors FROM {T}) src UNPIVOT (measure FOR metric IN ([actions], [errors])) p",
-        false,
+        "SELECT * FROM (SELECT region, actions, errors FROM {T}) src UNPIVOT (measure FOR metric IN ([actions], [errors])) p ORDER BY region, metric, measure",
+        true,
     ),
     (
         "tsql_bounded_cross_apply",
