@@ -9,16 +9,14 @@ evidence passes against exact-result references.
 The authoritative T-SQL read corpus currently contains 113 unique cases; the
 validator checks this count against the corpus and its engine commit pin.
 
-The latest source/build gate record is retained in
+The historical source/build gate record is retained in
 `docs/qualification/track1-track2-workspace-2026-10-19.md`; the earlier CI and
 release workflow record remains in `docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
-The current release-readiness snapshot is in
+The historical release-readiness snapshot is in
 `docs/qualification/release-readiness-2026-10-20.md`.
-The post-fix local server suite passes 658/658 ordinary tests with the broad
-differential sweep excluded; the focused ISJSON differential also passes across
-the registered layouts and three-worker path. The broad sweep remains a release
-gate because it is long-running and has not completed after the zero-row fix.
-The earlier 611/611 release-binary record remains historical
+Those dated suite counts and exclusions are historical evidence, not a current
+release result; rerun the workspace gate before making a release claim. The
+earlier 611/611 release-binary record remains historical
 (`docs/qualification/server-suite-release-2026-10-20.md`).
 The current cloud start precondition is recorded in
 `docs/qualification/track1-cloud-precondition-2026-10-19.md`.
