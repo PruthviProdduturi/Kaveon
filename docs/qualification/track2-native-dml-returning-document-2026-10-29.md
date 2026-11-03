@@ -8,6 +8,10 @@ bytes when an earlier write in the same transaction changed the record. The
 response is therefore tied to the same revision-checked snapshot as the CAS
 write.
 
+`RETURNING *` is also qualified for product records. It expands to the stable
+product contract (`id`, `revision`, `document_json`) rather than implying an
+arbitrary typed-row or lake-table schema.
+
 Typed-row DELETE now returns a canonical typed-row document with its table,
 owner, revision, columns, and unique-key metadata. Bounded source-copy
 `INSERT ... SELECT RETURNING document_json` remains rejected because expansion

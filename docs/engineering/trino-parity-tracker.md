@@ -296,6 +296,11 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
+Product-record `RETURNING *` is now qualified as the explicit stable
+`id`/`revision`/`document_json` projection; it does not widen the contract to
+arbitrary lake-table schemas. Evidence is recorded in
+`docs/qualification/track2-native-dml-returning-document-2026-10-29.md`.
+
 The T-SQL row above is backed by the versioned 135-case corpus pinned at
 `2a665435` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.

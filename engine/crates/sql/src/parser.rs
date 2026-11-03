@@ -3303,6 +3303,13 @@ fn parse_product_returning(returning: Option<&Vec<SelectItem>>) -> Result<Vec<St
     if items.is_empty() {
         return Err(sql_error("RETURNING requires id or revision"));
     }
+    if items.len() == 1 && matches!(items[0], SelectItem::Wildcard(_)) {
+        return Ok(vec![
+            "id".to_owned(),
+            "revision".to_owned(),
+            "document_json".to_owned(),
+        ]);
+    }
     items
         .iter()
         .map(|item| {
@@ -3528,6 +3535,13 @@ mod tests {
             panic!("expected product DML");
         };
         assert_eq!(dml.returning, ["document_json"]);
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') RETURNING *",
+        )
+        .unwrap() else {
+            panic!("expected product DML");
+        };
+        assert_eq!(dml.returning, ["id", "revision", "document_json"]);
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING document_json"
         )
