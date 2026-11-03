@@ -275,6 +275,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_trigonometric_scalar_compatibility",
+        "SELECT user_id, SIN(CAST(actions AS DOUBLE) / 10), COS(CAST(actions AS DOUBLE) / 10), TAN(CAST(actions AS DOUBLE) / 10), ASIN(SIN(CAST(actions AS DOUBLE) / 10)), ACOS(COS(CAST(actions AS DOUBLE) / 10)), ATAN(CAST(actions AS DOUBLE) / 10), DEGREES(PI()), RADIANS(180), PI() FROM {T} ORDER BY user_id, actions LIMIT 20",
+        true,
+    ),
+    (
         "tsql_string_scalar_compatibility",
         "SELECT user_id, UPPER(country), LOWER(country), REPLACE(country, 'a', 'A') FROM {T} ORDER BY user_id, country, actions LIMIT 20",
         true,
