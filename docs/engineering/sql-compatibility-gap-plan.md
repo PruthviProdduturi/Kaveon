@@ -154,7 +154,7 @@ SQL Server `ROUND` now accepts the bounded third `operation` argument (`0` for
 rounding and `1` for truncation toward zero), including row-local integer
 expressions; other operation values fail closed.
 `TRY_PARSE(value AS type)` now lowers to the existing invariant `TRY_CAST`
-path for numeric targets, with exact local/three-worker evidence in
+path for numeric and bounded temporal targets, with exact local/three-worker evidence in
 `docs/qualification/track2-tsql-try-parse-2026-10-29.md`; culture-aware `USING`
 forms remain explicitly rejected.
 `SQUARE(value)` lowers to the existing vectorized `POWER(value, 2)` path with

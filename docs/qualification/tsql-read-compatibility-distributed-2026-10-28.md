@@ -12,10 +12,10 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-116-case count in the scope and tracker, enforced by
+117-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
-- Corpus: 116 cases, including exact local/three-worker qualification for
+- Corpus: 117 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -61,6 +61,9 @@ sizes, not the current corpus total; the authoritative current total is the
   SQL Server `SPACE` with row-local counts and negative-count NULL semantics;
   it completed 1/1 with exact local/layout/three-worker results in 634.13
   seconds, with no worker failures or retained exchange/spill files.
+- Focused invariant temporal `TRY_PARSE` qualification covers DATE inputs and
+  mixed valid/invalid row-local values with exact local/three-worker results;
+  culture-aware `USING` forms remain explicitly rejected.
 - Focused `ISJSON` validity and `VALUE`/`ARRAY`/`OBJECT`/`SCALAR` constraint
   execution passed through the same differential layouts and three-worker
   path (`KAVEON_DIFF_ONLY=tsql_isjson_constraints`).
