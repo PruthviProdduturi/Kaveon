@@ -30,14 +30,19 @@ semantic-versioning compatibility across persisted metadata or APIs.
 
 1. Read [release notes](release-notes.md) and compare configuration with
    [the configuration reference](reference/configuration.md).
-2. Back up the metadata database and retain the currently deployed images/binaries.
+2. Back up the KaveonDB catalog/transaction store and its encryption or
+   credential references; retain the currently deployed images and binaries.
+   A PostgreSQL or Fabric source is backed up separately only when that
+   external connector is part of the deployment—it is not Kaveon's metadata
+   authority.
 3. Test the new revision against a non-production database copy and representative
    registered sources.
 4. Run platform and Engine checks appropriate to the changed components.
 5. Deploy API before or together with compatible Studio changes; verify health,
    authentication, SQL Lab, one DLM query, and representative dashboards.
-6. Treat rollback as an application/image rollback plus metadata restore when a
-   migration is not backward compatible.
+6. Treat rollback as an application/image rollback plus KaveonDB catalog restore
+   when a migration is not backward compatible. Restore external connector
+   sources independently; never restore them as KaveonDB metadata.
 
 ## Versioning target
 
