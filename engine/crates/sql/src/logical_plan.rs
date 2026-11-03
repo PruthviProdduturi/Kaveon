@@ -11350,6 +11350,16 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_format_to_bounded_numeric_formatter() {
+        let plan = sql_to_logical_plan(
+            "SELECT FORMAT(CAST(actions AS DOUBLE), 'N2'), FORMAT(actions, '#,##0.00') FROM t",
+        )
+        .expect("numeric FORMAT should lower through TO_CHAR");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("TO_CHAR"), "{debug}");
+    }
+
+    #[test]
     fn bounded_pivot_lowers_to_a_grouped_projection() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p",

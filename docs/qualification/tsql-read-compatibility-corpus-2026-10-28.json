@@ -110,6 +110,7 @@
     {"id": "convert_timestamp_styles_literal", "sql": "SELECT CONVERT(DATETIME2, '2024-12-31T23:59:59.123', 126), TRY_CONVERT(DATETIME2, '12/31/2024', 101)", "status": "planner_qualified"},
     {"id": "convert_timestamp_styles_runtime", "sql": "SELECT TRY_CONVERT(DATETIME2, value, 20), TRY_CONVERT(DATETIME2, value, 21), TRY_CONVERT(DATETIME2, value, 120), TRY_CONVERT(DATETIME2, value, 121), TRY_CONVERT(DATETIME2, value, 126), TRY_CONVERT(DATETIME2, value, 101) FROM t", "status": "planner_qualified", "distributed_status": "qualified_local_and_three_worker"},
     {"id": "format_temporal", "sql": "SELECT FORMAT(event_ts, 'yyyy-MM-dd HH:mm:ss') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_temporal_values_and_invariant_patterns"},
+    {"id": "format_numeric", "sql": "SELECT FORMAT(CAST(actions AS DOUBLE), 'N2') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_invariant_numeric_patterns"},
     {"id": "pivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "pivot_bounded_count_star", "sql": "SELECT * FROM (SELECT region, month FROM sales) src PIVOT (COUNT(*) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified"},
     {"id": "pivot", "sql": "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p", "status": "explicit_rejection"},

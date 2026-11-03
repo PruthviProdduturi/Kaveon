@@ -8027,6 +8027,30 @@ fn distributed_tsql_format_temporal_matches_local() {
 }
 
 #[test]
+fn distributed_tsql_format_numeric_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-format-numeric-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, FORMAT(CAST(actions AS DOUBLE), 'N2') AS grouped, FORMAT(CAST(actions AS DOUBLE), 'F1') AS fixed FROM events ORDER BY user_id, actions LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-format-numeric-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_tsql_character_code_helpers_match_local() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-tsql-char-codes-{}", uuid::Uuid::new_v4()));
