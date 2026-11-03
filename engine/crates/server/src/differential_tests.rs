@@ -4987,6 +4987,44 @@ fn distributed_rollup_preserves_subtotals_grand_total_and_null_dimensions() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// SQL Server/ClickHouse modifier syntax must produce the same distributed
+/// result as the explicit ROLLUP/CUBE expressions.
+#[test]
+fn distributed_group_by_rollup_and_cube_modifiers_match_explicit_forms() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-grouping-modifiers-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let pool = QueryMemoryPool::new("distributed-grouping-modifiers", 32 << 20).unwrap();
+    for (modifier, explicit) in [
+        ("WITH ROLLUP", "ROLLUP (region, industry)"),
+        ("WITH CUBE", "CUBE (region, industry)"),
+    ] {
+        let modifier_sql = format!(
+            "SELECT region, industry, COUNT(*) AS n FROM events GROUP BY region, industry {modifier}"
+        );
+        let explicit_sql =
+            format!("SELECT region, industry, COUNT(*) AS n FROM events GROUP BY {explicit}");
+        let modifier_plan = bound_plan(&modifier_sql, &manager);
+        let explicit_plan = bound_plan(&explicit_sql, &manager);
+        let modifier_rows = canonical_rows(
+            &execute_distributed(&modifier_sql, &modifier_plan, &manager, 3, &pool)
+                .unwrap_or_else(|error| panic!("{modifier_sql} distributed: {error}")),
+            false,
+        );
+        let explicit_rows = canonical_rows(
+            &execute_distributed(&explicit_sql, &explicit_plan, &manager, 3, &pool)
+                .unwrap_or_else(|error| panic!("{explicit_sql} distributed: {error}")),
+            false,
+        );
+        assert_eq!(modifier_rows, explicit_rows, "modifier {modifier}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// `GROUPING` distinguishes a real NULL dimension from the NULL introduced by
 /// a rolled-up grouping set.  `GROUPING_ID` combines those branch markers in
 /// Trino's left-to-right bit order.  Compare the complete CUBE through the
