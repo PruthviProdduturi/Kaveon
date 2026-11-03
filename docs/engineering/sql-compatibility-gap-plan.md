@@ -322,11 +322,12 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   also accept one bounded `document_json` string literal and reuse the same
   revision/CAS path. `MERGE OUTPUT` is qualified for update-or-insert and
   matched-update-only forms when the projection is `inserted.id`,
-  `inserted.revision`, `inserted.document_json`, or `inserted.*`; unmatched
-  source rows in matched-update-only batches produce no result row. Delete-
-  bearing, unmatched-insert, and by-source forms remain explicitly rejected
-  until the transaction API has a qualified ordered, action-aware batch-result
-  contract for mixed create/update/delete commands. Evidence:
+  `inserted.revision`, `inserted.document_json`, or `inserted.*`; matched-
+  delete-only forms also qualify `deleted.id` and `deleted.revision`. Unmatched
+  source rows produce no result row. Delete-or-insert, unmatched-insert, and
+  by-source forms remain explicitly rejected until the transaction API has a
+  qualified ordered, action-aware batch-result contract for mixed
+  create/update/delete commands. Evidence:
   `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.
 - [x] Qualify bounded snapshot isolation and transaction-session restart
   behavior for KaveonDB-owned product records; see
