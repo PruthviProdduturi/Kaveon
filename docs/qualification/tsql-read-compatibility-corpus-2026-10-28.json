@@ -32,6 +32,7 @@
     {"id": "try_parse_invariant_date", "sql": "SELECT TRY_PARSE(value AS DATE) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_temporal_inputs"},
     {"id": "square", "sql": "SELECT SQUARE(actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_power_lowering"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
+    {"id": "regexp_like_column_predicate", "sql": "SELECT REGEXP_LIKE(country, 'a') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_column_predicates_and_distributed_execution"},
     {"id": "concat", "sql": "SELECT CONCAT(region, '-', industry, '-', platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "string_agg", "sql": "SELECT STRING_AGG(name, ',') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unordered_literal_separator"},
     {"id": "string_agg_distinct", "sql": "SELECT STRING_AGG(DISTINCT name, ',') WITHIN GROUP (ORDER BY name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_distinct_projection_and_value_order"},
