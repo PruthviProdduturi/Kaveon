@@ -8400,6 +8400,30 @@ fn distributed_tsql_date_bucket_computed_row_local_origin_matches_local() {
 }
 
 #[test]
+fn distributed_tsql_date_bucket_subsecond_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-date-bucket-subsecond-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, DATE_BUCKET(millisecond, 250, CAST(event_date AS TIMESTAMP)) AS millis_bucket, DATE_BUCKET(microsecond, 250000, CAST(event_date AS TIMESTAMP)) AS micros_bucket FROM events ORDER BY user_id, event_date, actions LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-date-bucket-subsecond-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn distributed_tsql_choose_matches_local() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-tsql-choose-{}", uuid::Uuid::new_v4()));

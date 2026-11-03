@@ -5334,7 +5334,16 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         let unit = normalize_tsql_date_unit(&unit);
         if !matches!(
             unit.as_str(),
-            "year" | "quarter" | "month" | "week" | "day" | "hour" | "minute" | "second"
+            "year"
+                | "quarter"
+                | "month"
+                | "week"
+                | "day"
+                | "hour"
+                | "minute"
+                | "second"
+                | "millisecond"
+                | "microsecond"
         ) {
             return Err(sql_err(format!(
                 "DATE_BUCKET does not support datepart '{unit}' in the bounded Engine contract"
@@ -5375,7 +5384,10 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         if dynamic_width.is_none() && width == 1 && args.len() == 3 {
             return Ok(truncated);
         }
-        let origin_type = if matches!(unit.as_str(), "hour" | "minute" | "second") {
+        let origin_type = if matches!(
+            unit.as_str(),
+            "hour" | "minute" | "second" | "millisecond" | "microsecond"
+        ) {
             CastTarget::TimestampMicros {
                 with_timezone: false,
             }
@@ -5469,7 +5481,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         let multiplier = match unit.as_str() {
             "year" => 12,
             "quarter" => 3,
-            "month" | "day" | "hour" | "minute" | "second" => 1,
+            "month" | "day" | "hour" | "minute" | "second" | "millisecond" | "microsecond" => 1,
             "week" => 7,
             _ => unreachable!("DATE_BUCKET unit was validated above"),
         };
@@ -5482,6 +5494,10 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "DATE_ADD_MONTHS"
         } else if matches!(unit.as_str(), "week" | "day") {
             "DATE_ADD_DAYS"
+        } else if unit == "millisecond" {
+            "DATE_ADD_MILLISECONDS"
+        } else if unit == "microsecond" {
+            "DATE_ADD_MICROSECONDS"
         } else {
             "DATE_ADD_SECONDS"
         };
@@ -9825,6 +9841,24 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("origin_date"), "{rendered}");
+        for unit in ["millisecond", "microsecond"] {
+            let plan = sql_to_logical_plan(&format!(
+                "SELECT DATE_BUCKET({unit}, 250, CAST(event_date AS TIMESTAMP)) FROM t"
+            ))
+            .expect("subsecond DATE_BUCKET should lower for timestamp inputs");
+            let rendered = format!("{plan:?}");
+            assert!(rendered.contains("DATE_DIFF"), "{rendered}");
+            assert!(
+                rendered.contains("DATE_ADD_MILLISECONDS")
+                    || rendered.contains("DATE_ADD_MICROSECONDS"),
+                "{rendered}"
+            );
+        }
+        let error = sql_to_logical_plan(
+            "SELECT DATE_BUCKET(nanosecond, 1, CAST(event_date AS TIMESTAMP)) FROM t",
+        )
+        .expect_err("nanosecond DATE_BUCKET requires a nanosecond execution type");
+        assert!(error.to_string().contains("does not support datepart"));
     }
 
     #[test]

@@ -87,6 +87,7 @@
     {"id": "date_bucket_custom_origin", "sql": "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_typed_literals"},
     {"id": "date_bucket_row_local_origin", "sql": "SELECT DATE_BUCKET(month, 2, event_date, event_date) AS bucket FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_row_local_origins"},
     {"id": "date_bucket_computed_row_local_origin", "sql": "SELECT DATE_BUCKET(month, 2, event_date, DATE_ADD('day', 1, event_date)) AS bucket FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_computed_row_local_origins"},
+    {"id": "date_bucket_subsecond_timestamp", "sql": "SELECT DATE_BUCKET(millisecond, 250, CAST(event_date AS TIMESTAMP)), DATE_BUCKET(microsecond, 250000, CAST(event_date AS TIMESTAMP)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_timestamp_subsecond_units"},
     {"id": "getdate", "sql": "SELECT GETDATE() FROM t", "status": "planner_qualified"},
     {"id": "sysdatetime", "sql": "SELECT SYSDATETIME() FROM t", "status": "planner_qualified"},
     {"id": "convert_unstyled", "sql": "SELECT CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
