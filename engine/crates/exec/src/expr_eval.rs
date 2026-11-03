@@ -2146,6 +2146,28 @@ fn zip_arrays(
                 .collect();
             Ok(Arc::new(result))
         }
+        DataType::Utf8View => {
+            let t = true_vals
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
+            let f = false_vals
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
+            let result: StringViewArray = (0..len)
+                .map(|i| {
+                    if !mask.is_null(i) && mask.value(i) {
+                        if t.is_null(i) { None } else { Some(t.value(i)) }
+                    } else if f.is_null(i) {
+                        None
+                    } else {
+                        Some(f.value(i))
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         dt => Err(KaveonError::Execution(format!(
             "CASE not supported for type {dt}"
         ))),
@@ -16967,6 +16989,27 @@ mod tests {
         assert_eq!(text_value(&values, 0).unwrap(), Some("日本"));
         assert_eq!(text_value(&values, 1).unwrap(), None);
         assert_eq!(text_value(&values, 2).unwrap(), Some("EU"));
+    }
+
+    #[test]
+    fn case_zip_preserves_utf8_view_text_and_nulls() {
+        let mask = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let true_values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("yes"),
+            Some("yes"),
+            Some("yes"),
+        ]));
+        let false_values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("no"),
+            Some("no"),
+            Some("no"),
+        ]));
+        let result = zip_arrays(&mask, &true_values, &false_values).unwrap();
+        let result = result.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some("yes"), Some("no"), Some("no")]
+        );
     }
 
     #[test]
