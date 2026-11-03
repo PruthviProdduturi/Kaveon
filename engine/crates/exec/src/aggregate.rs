@@ -1,7 +1,7 @@
 use ahash::{AHashMap, AHashSet};
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BooleanArray, Float64Array, Int32Array,
-    Int32DictionaryArray, Int64Array, StringArray, UInt8Array, UInt64Array,
+    Int32DictionaryArray, Int64Array, StringArray, StringViewArray, UInt8Array, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef};
 use arrow::ipc::reader::StreamReader;
@@ -376,7 +376,10 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
             if let Ok(field) = input.field_with_name(&agg.column) {
                 let data_type = logical_data_type(field.data_type());
                 if matches!(agg.func, AggFunc::StringAgg)
-                    && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+                    && matches!(
+                        data_type,
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                    )
                 {
                     return Ok(DataType::Utf8);
                 }
@@ -385,11 +388,12 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
                         data_type,
                         DataType::Utf8
                             | DataType::LargeUtf8
+                            | DataType::Utf8View
                             | DataType::Date32
                             | DataType::Timestamp(_, _)
                     )
                 {
-                    return Ok(data_type.clone());
+                    return Ok(execution_data_type(data_type));
                 }
                 if matches!(agg.func, AggFunc::Sum | AggFunc::Min | AggFunc::Max)
                     && data_type == &DataType::UInt64
@@ -2735,7 +2739,10 @@ impl HashAggregate {
                 })?;
                 let data_type = logical_data_type(source_schema.field(index).data_type());
                 if matches!(agg.func, AggFunc::StringAgg)
-                    && !matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
+                    && !matches!(
+                        data_type,
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                    )
                 {
                     return Err(exec_err(format!(
                         "{} requires a text column, got {}",
@@ -2750,6 +2757,7 @@ impl HashAggregate {
                             data_type,
                             DataType::Utf8
                                 | DataType::LargeUtf8
+                                | DataType::Utf8View
                                 | DataType::Date32
                                 | DataType::Timestamp(_, _)
                         ))
@@ -4428,7 +4436,7 @@ fn fold_batch_into(state: &mut AggregateState, array: &ArrayRef) -> Result<bool>
         }
         (
             state @ (AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_)),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Dictionary(_, _),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(_, _),
         ) => {
             // The batch's extreme: over the dictionary's used values when the
             // column has one (a handful of comparisons), else over the rows.
@@ -4490,6 +4498,14 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
     match array.data_type() {
         DataType::Utf8 => extreme(array.as_string::<i32>().iter(), min),
         DataType::LargeUtf8 => extreme(array.as_string::<i64>().iter(), min),
+        DataType::Utf8View => extreme(
+            array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array must be a StringViewArray")
+                .iter(),
+            min,
+        ),
         DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
             let dictionary = array
                 .as_any()
@@ -4527,10 +4543,13 @@ fn batch_text_extreme(array: &ArrayRef, min: bool) -> Option<String> {
 
 fn is_string_key_type(data_type: &DataType) -> bool {
     match data_type {
-        DataType::Utf8 | DataType::LargeUtf8 => true,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
         DataType::Dictionary(key_type, value_type) => {
             key_type.as_ref() == &DataType::Int32
-                && matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8)
+                && matches!(
+                    value_type.as_ref(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                )
         }
         _ => false,
     }
@@ -4745,9 +4764,19 @@ fn prepare_keys(array: &ArrayRef) -> PreparedKeys<'_> {
     match array.data_type() {
         DataType::Utf8 => intern_strings(array.as_string::<i32>().iter()),
         DataType::LargeUtf8 => intern_strings(array.as_string::<i64>().iter()),
+        DataType::Utf8View => intern_strings(
+            array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array must be a StringViewArray")
+                .iter(),
+        ),
         DataType::Dictionary(key_type, value_type)
             if key_type.as_ref() == &DataType::Int32
-                && matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
+                && matches!(
+                    value_type.as_ref(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) =>
         {
             let dictionary = array
                 .as_any()
@@ -5040,6 +5069,12 @@ fn extract_key(arr: &ArrayRef, row: usize) -> GroupKey {
         }
         DataType::Utf8 => GroupKey::Utf8(Arc::from(arr.as_string::<i32>().value(row))),
         DataType::LargeUtf8 => GroupKey::Utf8(Arc::from(arr.as_string::<i64>().value(row))),
+        DataType::Utf8View => GroupKey::Utf8(Arc::from(
+            arr.as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array must be a StringViewArray")
+                .value(row),
+        )),
         DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
             let dictionary = arr
                 .as_any()
@@ -5064,6 +5099,12 @@ fn extract_utf8_value(arr: &ArrayRef, row: usize) -> Result<String> {
     match arr.data_type() {
         DataType::Utf8 => Ok(arr.as_string::<i32>().value(row).to_owned()),
         DataType::LargeUtf8 => Ok(arr.as_string::<i64>().value(row).to_owned()),
+        DataType::Utf8View => Ok(arr
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .ok_or_else(|| exec_err("Utf8View array must be a StringViewArray"))?
+            .value(row)
+            .to_owned()),
         DataType::Dictionary(key_type, _) if key_type.as_ref() == &DataType::Int32 => {
             let dictionary = arr
                 .as_any()
@@ -6924,6 +6965,38 @@ mod tests {
                 AggregateState::Utf8Max(Some("éclair".into())),
             ]
         );
+    }
+
+    #[test]
+    fn utf8_view_min_max_and_group_keys_use_logical_text_values() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8View,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringViewArray::from(vec![
+                "west", "east", "west",
+            ]))],
+        )
+        .unwrap();
+        let mut aggregate = HashAggregate::new(
+            Box::new(Input::new(batch)),
+            vec!["value".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+        )
+        .unwrap();
+        let output = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(output.schema().field(0).data_type(), &DataType::Utf8);
+        let mut keys = output
+            .column(0)
+            .as_string::<i32>()
+            .iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["east", "west"]);
     }
 
     #[test]
