@@ -256,8 +256,8 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
 - [x] Accept an unambiguous target alias on the bounded product `UPDATE` and
   `DELETE` contracts. The alias is syntactic only; revision/CAS predicates,
   owner isolation, assignments, and `RETURNING` semantics are unchanged.
-  Joins, `UPDATE ... FROM`, qualified assignments, and arbitrary lake-table
-  mutation remain rejected. Evidence is recorded in
+  Joins and arbitrary lake-table mutation remain rejected. A separate bounded
+  same-kind source-backed `UPDATE ... FROM` form is qualified below. Evidence is recorded in
   `docs/qualification/track2-native-dml-target-alias-2026-11-02.md`.
 - [x] Accept the bounded SQL Server `OUTPUT inserted/deleted.column` and
   statement-wildcard spellings
@@ -269,8 +269,9 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
 - [x] Qualify bounded product `UPDATE` and `DELETE` statements with an explicit
   `id IN (...)` list and one positive revision CAS predicate. The adapter
   expands at most 1,000 unique IDs into owner-isolated commands under one
-  transaction; joins, `NOT IN`, per-row revisions, and `UPDATE ... FROM`
-  remain rejected. Evidence:
+  transaction; joins, `NOT IN`, and per-row revisions remain rejected. The
+  separate bounded source-backed `UPDATE ... FROM` contract is documented
+  below. Evidence:
   `docs/qualification/track2-native-dml-id-list-cas-2026-11-02.md`.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
   copies `id` and `document_json` from one same-kind `kaveon.product` table
@@ -280,6 +281,14 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
   `RETURNING id, revision, document_json` is qualified from the staged snapshot
   with or without the literal ID filter; the unfiltered form keeps the same
   1,000-row expansion cap. General lake-table source DML remains open.
+- [x] Add bounded source-backed product `UPDATE ... FROM`. One same-kind,
+  aliased product source row can replace one target `document_json` under a
+  pinned snapshot when the statement supplies literal target id/revision and
+  source id predicates. The source is owner-checked, staged documents are
+  reused, and the target uses the existing revision/CAS and `RETURNING` path.
+  Joins, multiple source rows, cross-kind sources, arbitrary assignments, and
+  general lake-table mutation remain rejected. Evidence:
+  `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
 - [x] Add bounded `MERGE` with explicit revision/CAS semantics. `MERGE`
   accepts one `VALUES` batch with an optional simple target alias, up to 1,000 rows containing `id` and
   `document_json`, an equality `target.id = source.id` predicate, and exactly

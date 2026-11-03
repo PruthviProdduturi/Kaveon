@@ -342,7 +342,48 @@ impl TransactionRegistry {
             let catalog = self.catalog.clone();
             let snapshot = session.transaction.snapshot().clone();
             for command in commands {
-                if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
+                if let kaveon_sql::parser::ProductDmlCommand::UpdateFrom {
+                    kind,
+                    id,
+                    expected_revision,
+                    source_id,
+                    source_kind,
+                } = command
+                {
+                    let source = record_kind(&source_kind)?;
+                    let source_record = snapshot
+                        .product_record(source, &source_id)
+                        .map_err(|error| RegistryError::Invalid(error.to_string()))?
+                        .ok_or(RegistryError::ProductMissing)?;
+                    require_product_owner(source_record, owner)?;
+                    let bytes = if let Some(bytes) = session
+                        .transaction
+                        .staged_document(&source_record.document.path)
+                    {
+                        bytes.to_vec()
+                    } else {
+                        let catalog = catalog.as_ref().ok_or(RegistryError::Disabled)?;
+                        catalog
+                            .fetch_product_document_at(&snapshot, source, &source_id)
+                            .await
+                            .map_err(|error| match error {
+                                kaveon_storage::CommitErrorKind::Missing
+                                | kaveon_storage::CommitErrorKind::Invalid => {
+                                    RegistryError::Corrupt
+                                }
+                                _ => RegistryError::Unavailable,
+                            })?
+                            .ok_or(RegistryError::Corrupt)?
+                    };
+                    let document_json =
+                        String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?;
+                    expanded.push(kaveon_sql::parser::ProductDmlCommand::Update {
+                        kind,
+                        id,
+                        expected_revision,
+                        document_json,
+                    });
+                } else if let kaveon_sql::parser::ProductDmlCommand::InsertSelect {
                     kind,
                     source_kind,
                     source_ids,
@@ -1536,6 +1577,9 @@ fn product_change(
         }
         ProductDmlCommand::InsertSelect { .. } => Err(RegistryError::Invalid(
             "product INSERT SELECT must be expanded before staging".into(),
+        )),
+        ProductDmlCommand::UpdateFrom { .. } => Err(RegistryError::Invalid(
+            "product UPDATE FROM must be expanded before staging".into(),
         )),
     }
 }
@@ -3075,6 +3119,7 @@ async fn execute_sql_request(
                                     matches!(
                                         command,
                                         kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. }
+                                            | kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. }
                                     )
                                 })
                             {
@@ -3237,6 +3282,9 @@ fn product_returning_response(
                         .checked_add(1)
                         .ok_or_else(|| "product revision overflow".to_owned())?,
                 ),
+                kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. } => {
+                    return Err("product UPDATE FROM must be resolved before RETURNING".to_owned());
+                }
                 kaveon_sql::parser::ProductDmlCommand::Delete {
                     id,
                     expected_revision,
@@ -3314,6 +3362,7 @@ fn product_returning_response(
                                 ..
                             } => "INSERT",
                             kaveon_sql::parser::ProductDmlCommand::Update { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. }
                             | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
                             | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched {
                                 ..
@@ -3353,6 +3402,12 @@ fn product_returning_response(
                             | kaveon_sql::parser::ProductDmlCommand::Upsert {
                                 document_json, ..
                             } => document_json.clone(),
+                            kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. } => {
+                                return Err(
+                                    "product UPDATE FROM must be resolved before RETURNING"
+                                        .to_owned(),
+                                );
+                            }
                             kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
                                 ..
                             } => {
@@ -4930,6 +4985,97 @@ mod tests {
                 .product_record(ProductRecordKind::Dataset, "orders")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_update_from_copies_source_document_and_revises_target() {
+        let (registry, catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('target', '{"name":"before"}'), ('source', '{"name":"after"}')"#.into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let update = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "UPDATE product.datasets AS target SET target.document_json = source.document_json FROM product.datasets AS source WHERE target.id = 'target' AND target.revision = 1 AND source.id = 'source' RETURNING id, revision, document_json".into(),
+                transaction_id: Some(update.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["returning"],
+            serde_json::json!([{
+                "id": "target",
+                "revision": 2,
+                "document_json": "{\"name\":\"after\"}"
+            }])
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(update.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        let target = snapshot
+            .product_record(ProductRecordKind::Dataset, "target")
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.revision, 2);
+        assert_eq!(
+            catalog
+                .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, "target")
+                .await
+                .unwrap()
+                .unwrap(),
+            b"{\"name\":\"after\"}"
         );
     }
 

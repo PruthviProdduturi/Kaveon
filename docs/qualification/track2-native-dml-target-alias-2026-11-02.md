@@ -34,5 +34,7 @@ RETURNING id, revision, document_json
 
 ## Rejections
 
-Target aliases with column aliases, joins, `UPDATE ... FROM`, qualified
-assignments, and arbitrary lake-table DML remain fail-closed.
+Target aliases with column aliases, joins, and arbitrary lake-table DML remain
+fail-closed. Qualified assignments are accepted only by the separate bounded
+same-kind source-backed `UPDATE ... FROM` contract in
+`track2-native-dml-update-from-2026-11-03.md`.
