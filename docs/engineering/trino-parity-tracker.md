@@ -144,11 +144,12 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `docs/qualification/track2-native-dml-insert-select-source-2026-10-28.md` and
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
-The bounded SQL Server `MERGE` update-or-insert form also accepts
-`OUTPUT inserted.id|revision|document_json` and `OUTPUT inserted.*`, returning
-rows in source order from the staged CAS snapshot. Delete-bearing and
-not-matched-by-source forms reject `MERGE OUTPUT` until an action-aware ordered
-batch-result contract exists; evidence is in
+The bounded SQL Server `MERGE` update-or-insert and matched-update-only forms
+also accept `OUTPUT inserted.id|revision|document_json` and `OUTPUT inserted.*`,
+returning rows in source order from the staged CAS snapshot; unmatched source
+rows in matched-update-only batches are no-ops and produce no output row.
+Delete-bearing, unmatched-insert, and not-matched-by-source forms reject
+`MERGE OUTPUT` until an action-aware ordered batch-result contract exists; evidence is in
 `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.
 
 The current T-SQL corpus is 141 cases (the implementation pin is updated after
