@@ -10,6 +10,7 @@ use sqlparser::dialect::{
     MsSqlDialect,
 };
 use sqlparser::parser::Parser;
+use std::collections::HashSet;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     // DuckDB's grammar is close to the generic SQL surface while enabling
@@ -2079,7 +2080,7 @@ pub fn adapt_product_dml(dml: &NativeDmlStatement) -> Result<ProductDmlCommand> 
     let mut commands = adapt_product_dml_batch(dml)?;
     if commands.len() != 1 {
         return Err(sql_error(
-            "product INSERT accepts one record per statement; use the transaction batch API for multiple records",
+            "product DML statement expands to multiple records; use the transaction batch API",
         ));
     }
     Ok(commands.remove(0))
@@ -2294,21 +2295,27 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                 return Err(sql_error("product UPDATE may set document_json only"));
             }
             let document_json = string_literal(&assignments[0].value, "product document_json")?;
-            let (id, expected_revision) = product_key_predicate(selection.as_ref())?;
-            Ok(vec![ProductDmlCommand::Update {
-                kind,
-                id,
-                expected_revision,
-                document_json,
-            }])
+            let (ids, expected_revision) = product_key_predicate(selection.as_ref())?;
+            Ok(ids
+                .into_iter()
+                .map(|id| ProductDmlCommand::Update {
+                    kind: kind.clone(),
+                    id,
+                    expected_revision,
+                    document_json: document_json.clone(),
+                })
+                .collect())
         }
         Statement::Delete(delete) => {
-            let (id, expected_revision) = product_key_predicate(delete.selection.as_ref())?;
-            Ok(vec![ProductDmlCommand::Delete {
-                kind,
-                id,
-                expected_revision,
-            }])
+            let (ids, expected_revision) = product_key_predicate(delete.selection.as_ref())?;
+            Ok(ids
+                .into_iter()
+                .map(|id| ProductDmlCommand::Delete {
+                    kind: kind.clone(),
+                    id,
+                    expected_revision,
+                })
+                .collect())
         }
         Statement::Merge { .. } => adapt_product_merge(&dml.ast),
         _ => Err(sql_error("statement is not product DML")),
@@ -2678,7 +2685,7 @@ fn product_kind(table: &str) -> Result<String> {
     }
 }
 
-fn product_key_predicate(selection: Option<&Expr>) -> Result<(String, u64)> {
+fn product_key_predicate(selection: Option<&Expr>) -> Result<(Vec<String>, u64)> {
     let Some(Expr::BinaryOp {
         left,
         op: BinaryOperator::And,
@@ -2689,38 +2696,69 @@ fn product_key_predicate(selection: Option<&Expr>) -> Result<(String, u64)> {
             "product UPDATE/DELETE requires WHERE id = <string> AND revision = <integer>",
         ));
     };
-    let mut id = None;
+    let mut ids = None;
     let mut revision = None;
     for expression in [left.as_ref(), right.as_ref()] {
-        let Expr::BinaryOp {
-            left,
-            op: BinaryOperator::Eq,
-            right,
-        } = expression
-        else {
-            return Err(sql_error(
-                "product UPDATE/DELETE requires equality predicates",
-            ));
-        };
-        let Expr::Identifier(column) = left.as_ref() else {
-            return Err(sql_error(
-                "product key predicates require unqualified columns",
-            ));
-        };
-        if column.value.eq_ignore_ascii_case("id") {
-            id = Some(string_literal(right, "product ID")?);
-        } else if column.value.eq_ignore_ascii_case("revision") {
-            revision = Some(integer_literal(right, "expected revision")?);
-        } else {
-            return Err(sql_error(
-                "product key predicates support id and revision only",
-            ));
+        match expression {
+            Expr::BinaryOp {
+                left,
+                op: BinaryOperator::Eq,
+                right,
+            } => {
+                let Expr::Identifier(column) = left.as_ref() else {
+                    return Err(sql_error(
+                        "product key predicates require unqualified columns",
+                    ));
+                };
+                if column.value.eq_ignore_ascii_case("id") {
+                    ids = Some(vec![string_literal(right, "product ID")?]);
+                } else if column.value.eq_ignore_ascii_case("revision") {
+                    revision = Some(integer_literal(right, "expected revision")?);
+                } else {
+                    return Err(sql_error(
+                        "product key predicates support id and revision only",
+                    ));
+                }
+            }
+            Expr::InList {
+                expr,
+                list,
+                negated: false,
+            } => {
+                let Expr::Identifier(column) = expr.as_ref() else {
+                    return Err(sql_error(
+                        "product key predicates require unqualified columns",
+                    ));
+                };
+                if !column.value.eq_ignore_ascii_case("id") {
+                    return Err(sql_error("product key IN predicates support id only"));
+                }
+                if list.is_empty() || list.len() > 1_000 {
+                    return Err(sql_error("product key IN predicates require 1 to 1000 IDs"));
+                }
+                let values = list
+                    .iter()
+                    .map(|value| string_literal(value, "product ID"))
+                    .collect::<Result<Vec<_>>>()?;
+                let unique = values.iter().collect::<HashSet<_>>().len() == values.len();
+                if !unique {
+                    return Err(sql_error(
+                        "product key IN predicates cannot contain duplicate IDs",
+                    ));
+                }
+                ids = Some(values);
+            }
+            _ => {
+                return Err(sql_error(
+                    "product UPDATE/DELETE requires equality predicates or id IN (...) AND revision = <integer>",
+                ));
+            }
         }
     }
-    match (id, revision) {
-        (Some(id), Some(revision)) if revision > 0 => Ok((id, revision)),
+    match (ids, revision) {
+        (Some(ids), Some(revision)) if revision > 0 => Ok((ids, revision)),
         _ => Err(sql_error(
-            "product UPDATE/DELETE requires one id and one positive revision",
+            "product UPDATE/DELETE requires one or more IDs and one positive revision",
         )),
     }
 }
@@ -4091,6 +4129,47 @@ mod tests {
         };
         assert_eq!(dml.returning, ["id", "revision"]);
         assert!(adapt_product_dml(&dml).is_ok());
+    }
+
+    #[test]
+    fn product_update_and_delete_expand_bounded_id_lists_with_one_cas_revision() {
+        let cases = [
+            (
+                "UPDATE product.datasets SET document_json = '{}' WHERE id IN ('one', 'two') AND revision = 3",
+                2,
+            ),
+            (
+                "DELETE FROM product.datasets WHERE revision = 3 AND id IN ('one', 'two')",
+                2,
+            ),
+        ];
+        for (sql, expected) in cases {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("bounded id-list DML should parse")
+            else {
+                panic!("expected product DML");
+            };
+            assert_eq!(
+                adapt_product_dml_batch(&dml)
+                    .expect("bounded id-list DML should adapt")
+                    .len(),
+                expected
+            );
+        }
+        for sql in [
+            "UPDATE product.datasets SET document_json = '{}' WHERE id IN ('one', 'one') AND revision = 3",
+            "DELETE FROM product.datasets WHERE id IN ('one') AND revision IN (3)",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("DML should parse before adaptation")
+            else {
+                panic!("expected product DML");
+            };
+            assert!(
+                adapt_product_dml_batch(&dml).is_err(),
+                "unsafe shape accepted: {sql}"
+            );
+        }
     }
 
     #[test]
