@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "a11bbe1f",
+  "engine_commit": "49b12eb3",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -11,6 +11,7 @@
     {"id": "offset_fetch_rows", "sql": "SELECT * FROM t ORDER BY id OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
     {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "coalesce", "sql": "SELECT COALESCE(name, 'unknown'), COALESCE(CAST(NULL AS BIGINT), actions, 0) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_null_fallback_and_left_to_right_type_resolution"},
     {"id": "ascii", "sql": "SELECT ASCII(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_ascii_scalars"},
     {"id": "unicode", "sql": "SELECT UNICODE(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalars"},
     {"id": "char", "sql": "SELECT CHAR(code) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_byte_values"},
