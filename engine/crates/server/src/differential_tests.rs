@@ -8365,7 +8365,7 @@ fn distributed_tsql_datepart_weekday_uses_default_datefirst_numbering() {
         uuid::Uuid::new_v4()
     ));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, DATEPART(dw, event_date) AS weekday_number FROM events ORDER BY user_id, event_date LIMIT 20";
+    let statement = "SELECT user_id, DATEPART(dw, event_date) AS dw_number, DATEPART(weekday, event_date) AS weekday_number, DATEPART(w, event_date) AS w_number FROM events ORDER BY user_id, event_date LIMIT 20";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-datepart-weekday-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
