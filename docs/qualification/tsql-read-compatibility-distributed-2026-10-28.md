@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 113 cases, including exact local/three-worker qualification for
+- Corpus: 114 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -19,7 +19,7 @@ parity or external-client parity.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
-  with exact local-vs-distributed results for the 106-case corpus, including
+  with exact local-vs-distributed results for the full corpus, including
   row-local `STRING_SPLIT` and `ROUND` operation mode, without worker failures
   or retained exchange/spill files. The revision also includes bounded
   `PIVOT(COUNT(*))`, `PIVOT(COUNT_BIG(*))`, and expression-valued
@@ -43,6 +43,10 @@ parity or external-client parity.
   exact local/layout/three-worker results in 680.25 seconds, with no worker
   failures or retained exchange/spill files. Ordered cases use total ordering
   keys; tied rows remain governed by normal SQL ordering semantics.
+- The complete 114-case differential sweep was rerun after adding
+  `CHARINDEX(..., start_location)` and completed 1/1 with exact
+  local/layout/three-worker results in 670.03 seconds, with no worker
+  failures or retained exchange/spill files.
 - Focused `ISJSON` validity and `VALUE`/`ARRAY`/`OBJECT`/`SCALAR` constraint
   execution passed through the same differential layouts and three-worker
   path (`KAVEON_DIFF_ONLY=tsql_isjson_constraints`).
@@ -51,7 +55,7 @@ parity or external-client parity.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CONCAT` with NULL-as-empty arguments, `CONCAT_WS` with NULL-skipping arguments,
   `CHOOSE`, literal `CONVERT(DATE, …, style)` for styles `0`, `101`, and `112`,
-  `CHARINDEX`, bounded `PATINDEX`,
+  `CHARINDEX` including its optional one-based start location, bounded `PATINDEX`,
   `TRANSLATE`, bounded width-one
   `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `DATETIME2FROMPARTS` (precision 0–6), `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `TIMEFROMPARTS` (precision 0–6), bounded UTC-normalized
