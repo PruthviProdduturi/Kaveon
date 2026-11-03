@@ -5,11 +5,17 @@ on:
     branches: [dev]
     paths:
       - "engine/**"
+      - "docs/engineering/sql-compatibility-gap-plan.md"
+      - "docs/engineering/trino-parity-tracker.md"
+      - "docs/qualification/tsql-read-compatibility-corpus-*.json"
       - ".github/workflows/engine.yml"
   pull_request:
     branches: [dev]
     paths:
       - "engine/**"
+      - "docs/engineering/sql-compatibility-gap-plan.md"
+      - "docs/engineering/trino-parity-tracker.md"
+      - "docs/qualification/tsql-read-compatibility-corpus-*.json"
       - ".github/workflows/engine.yml"
   workflow_dispatch:
 
@@ -33,6 +39,14 @@ jobs:
         working-directory: engine
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate compatibility tracker
+        working-directory: ${{ github.workspace }}
+        run: python scripts/validate-tsql-compatibility-tracker.py
 
       - uses: dtolnay/rust-toolchain@stable
         with:
