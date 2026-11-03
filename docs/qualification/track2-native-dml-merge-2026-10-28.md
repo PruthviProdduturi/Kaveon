@@ -58,6 +58,13 @@ stage a compare-and-swap update; source keys with no match are transactional
 no-ops. This gives the common update-only `MERGE` shape explicit revision
 semantics without pretending to support arbitrary predicates or assignments.
 
+A sixth bounded form adds SQL Server's `WHEN NOT MATCHED BY SOURCE THEN
+DELETE` after the matched-update and not-matched-insert clauses. The source ids
+are evaluated against the same pinned snapshot; owned target rows absent from
+that source set are expanded into revision-checked deletes. The combined
+source-plus-delete expansion is capped at 1,000 affected rows, and rows owned
+by another principal fail closed rather than being silently removed.
+
 The SQL Server spelling `WHEN NOT MATCHED BY TARGET` is accepted as an alias
 for the same not-matched clause. Source ids must be unique within the bounded
 batch; duplicate keys fail closed before any write is staged, avoiding
@@ -78,6 +85,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_supports_bounded_matched_delete`
 - `parser::tests::product_merge_supports_bounded_matched_update`
 - `parser::tests::product_merge_supports_bounded_unmatched_insert`
+- `parser::tests::product_merge_supports_bounded_not_matched_by_source_delete`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
 - `parser::tests::rejects_duplicate_merge_source_ids`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
@@ -85,10 +93,13 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
 - `transaction_api::tests::sql_endpoint_bounded_merge_unmatched_insert_is_idempotent`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`
+- `transaction_api::tests::sql_endpoint_bounded_merge_not_matched_by_source_deletes_owned_rows`
 - `parser::tests::product_merge_accepts_an_unaliased_target_with_derived_qualifier`
 - `cargo test -p kaveon-sql --lib product_merge_supports_bounded_matched_update` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-sql --lib product_merge_accepts_an_unaliased_target_with_derived_qualifier` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-server sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` — 1 passed, 0 failed on 2026-11-02
+- `cargo test -p kaveon-sql --lib product_merge_supports_bounded_not_matched_by_source_delete` — 1 passed, 0 failed on 2026-11-02
+- `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_bounded_merge_not_matched_by_source_deletes_owned_rows` — 1 passed, 0 failed on 2026-11-02
 
 The transaction API test commits two revisions and one insert atomically, then
 reads the committed snapshot and verifies revisions `2, 2, 1`. It stages the

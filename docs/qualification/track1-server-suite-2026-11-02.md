@@ -1,6 +1,6 @@
 # Server suite qualification — 2026-11-02
 
-Source commit: `2e7c6de6`
+Source commit: `34ad3aa7`
 
 ## Result
 
@@ -25,8 +25,8 @@ module, also passed:
 ```text
 cargo test -p kaveon-server --bin kaveon-server
 
-test result: ok. 674 passed; 0 failed; 0 ignored; 0 measured;
-finished in 717.09s
+test result: ok. 675 passed; 0 failed; 0 ignored; 0 measured;
+finished in 659.51s
 ```
 
 This supersedes the earlier 671-test and 670-test full-suite results and the 470-test
