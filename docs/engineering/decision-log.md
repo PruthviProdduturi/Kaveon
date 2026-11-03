@@ -403,6 +403,25 @@ Reference pages: [The learning engine](../engine/learning-engine.md),
   query, and its first run is the test of that path. The stop/start
   procedure in `aks-suspend-resume.md` remains the ordinary weekend rule.
 
+## 2026-11-03
+
+### Exact distinct totals require explicit profiling
+
+- **Decision.** An unfiltered, ungrouped `COUNT(DISTINCT column)` may use the
+  exact distinct count persisted by `ANALYZE ... WITH (distinct = true)`. The
+  planner recognizes the normalized `Distinct(Project(Scan))` shape and the
+  context path requires a source-version-current `distinct_exact` value.
+- **Reason.** Exact distinct totals over large immutable sources should not
+  rescan hundreds of millions of rows after the user has explicitly paid for
+  exact profiling. Treating every distinct request as answerable would be
+  unsafe: filters, grouping, joins, derived sources, and stale statistics all
+  change the value.
+- **Consequence.** Before profiling, or after a source version changes, the
+  query remains a live scan. The shortcut returns the same typed `UInt64`
+  result and records `execution.mode: "context"` with no scan metrics. The
+  acceptance boundary is recorded in
+  `docs/qualification/track3-exact-distinct-context-2026-11-03.md`.
+
 ## 2026-09-18
 
 ### Stale statistics cost, never answer
