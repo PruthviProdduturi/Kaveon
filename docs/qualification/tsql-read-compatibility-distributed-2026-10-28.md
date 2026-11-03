@@ -12,7 +12,7 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-141-case count in the scope and tracker, enforced by
+142-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
 - Historical corpus at this qualification: 119 cases. The prior full sweep qualified bounded
@@ -36,6 +36,11 @@ sizes, not the current corpus total; the authoritative current total is the
   NULL-preserving input path and passes the same exact local/three-worker gate.
   Expression
   forms preserve SQL NULL-counting semantics.
+- The SQL Server pagination case `ORDER BY ... OFFSET 1 ROWS FETCH NEXT 2
+  ROWS ONLY` is included in the differential sweep and matches local results
+  across the supported layouts and three-worker execution. It requires an
+  explicit deterministic ordering key; conflicting pagination bounds remain
+  rejected before execution.
 - The corpus-level rerun after adding the `ISNUMERIC` distributed shape
   completed 1/1 with exact results in 729.75 seconds; the full differential
   workload completed without worker or spill failures.

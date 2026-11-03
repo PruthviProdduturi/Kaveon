@@ -8,6 +8,7 @@
     {"id": "top_percent", "sql": "SELECT TOP 10 PERCENT * FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_percent_with_ties", "sql": "SELECT TOP 10 PERCENT WITH TIES * FROM t ORDER BY score", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_with_ties", "sql": "SELECT TOP 3 WITH TIES * FROM t ORDER BY score", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
+    {"id": "offset_fetch_rows", "sql": "SELECT * FROM t ORDER BY id OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
     {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "ascii", "sql": "SELECT ASCII(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_ascii_scalars"},
