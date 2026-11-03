@@ -5,7 +5,7 @@
 //! numbers, strings, booleans, nulls; dictionary columns presented as their
 //! values; anything else via its Arrow display string.
 
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, StringViewArray};
 use arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
@@ -87,6 +87,14 @@ fn cell(array: &ArrayRef, row: usize) -> Value {
         DataType::Float64 => Value::from(array.as_primitive::<Float64Type>().value(row)),
         DataType::Utf8 => Value::String(array.as_string::<i32>().value(row).to_owned()),
         DataType::LargeUtf8 => Value::String(array.as_string::<i64>().value(row).to_owned()),
+        DataType::Utf8View => Value::String(
+            array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array must be a StringViewArray")
+                .value(row)
+                .to_owned(),
+        ),
         DataType::List(_) => array_list(array.as_list::<i32>().value(row)),
         DataType::LargeList(_) => array_list(array.as_list::<i64>().value(row)),
         DataType::FixedSizeList(_, _) => array_list(array.as_fixed_size_list().value(row)),
@@ -138,7 +146,7 @@ fn array_list(values: ArrayRef) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
+    use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::Field;
     use serde_json::json;
     use std::sync::Arc;
@@ -238,5 +246,22 @@ mod tests {
             false,
         );
         assert_eq!(presented_type(&map), "Map(Utf8, Int64)");
+    }
+
+    #[test]
+    fn utf8_view_rows_use_text_values() {
+        let values = StringViewArray::from(vec![Some("east"), None, Some("west")]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Utf8View,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(values)])
+            .expect("Utf8View batch should build");
+
+        assert_eq!(
+            batches_to_rows(&[batch]),
+            vec![vec![json!("east")], vec![Value::Null], vec![json!("west")]]
+        );
     }
 }
