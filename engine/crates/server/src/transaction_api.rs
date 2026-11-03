@@ -2972,19 +2972,25 @@ async fn execute_sql_request(
                             kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched { .. }
                         )
                     }),
                     Some("deleted") => commands.iter().any(|command| {
                         !matches!(
                             command,
-                            kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
+                            kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched { .. }
                         )
                     }),
                     _ => true,
                 }
             {
                 return error_response(RegistryError::Invalid(
-                    "MERGE OUTPUT is supported only for homogeneous bounded inserted or deleted action batches; mixed and not-matched-by-source actions are rejected".into(),
+                    "MERGE OUTPUT is supported only for bounded inserted/deleted action batches; unsupported action shapes are rejected".into(),
                 ));
             }
             let ignored_conflicts = if dml.on_conflict_do_nothing && !returning.is_empty() {
@@ -3063,6 +3069,7 @@ async fn execute_sql_request(
                             } else {
                                 &commands
                             },
+                            output_pseudo.as_deref(),
                             &deleted_documents,
                             &ignored_conflicts,
                         ),
@@ -3128,6 +3135,7 @@ fn product_returning_response(
     snapshot: &CatalogSnapshot,
     columns: &[String],
     commands: &[kaveon_sql::parser::ProductDmlCommand],
+    output_pseudo: Option<&str>,
     deleted_documents: &[Option<String>],
     ignored_conflicts: &[bool],
 ) -> Result<serde_json::Value, String> {
@@ -3139,6 +3147,33 @@ fn product_returning_response(
                 .get(*command_index)
                 .copied()
                 .unwrap_or(false)
+        })
+        .filter(|(_, command)| match output_pseudo {
+            // SQL Server MERGE OUTPUT emits one row for each action.  An
+            // update contributes to both pseudo-tables; an insert/delete
+            // contributes only to its corresponding side.  The staging path
+            // has already resolved MERGE actions to ordinary commands and
+            // removed source rows that were no-ops.
+            Some("inserted") => matches!(
+                command,
+                kaveon_sql::parser::ProductDmlCommand::Create { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::Update { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent { .. }
+            ),
+            Some("deleted") => matches!(
+                command,
+                kaveon_sql::parser::ProductDmlCommand::Delete { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::Update { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched { .. }
+                    | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched { .. }
+            ),
+            _ => true,
         })
         .map(|(command_index, command)| {
             if let kaveon_sql::parser::ProductDmlCommand::MergeUpdate {
@@ -5235,6 +5270,99 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
         assert_eq!(value["returning"][0]["id"], "new-row");
+        assert_eq!(value["returning"][0]["revision"], 1);
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_delete_or_insert_output_is_action_aware() {
+        let (registry, _catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('delete-me', '{}'), ('second-delete', '{}')".into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let inserted = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('delete-me', '{}'), ('new-row', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) OUTPUT inserted.id, inserted.revision"#.into(),
+                transaction_id: Some(inserted.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["returning"][0]["id"], "new-row");
+        assert_eq!(value["returning"][0]["revision"], 1);
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(inserted.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let deleted = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('second-delete', '{}'), ('another-row', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) OUTPUT deleted.id, deleted.revision"#.into(),
+                transaction_id: Some(deleted.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["returning"][0]["id"], "second-delete");
         assert_eq!(value["returning"][0]["revision"], 1);
     }
 
