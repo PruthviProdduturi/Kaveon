@@ -176,11 +176,12 @@ joins — the shapes Tier 1 and Tier 2 barely touch.
   Trino window (a Trino restart loses its file metastore).
 - Queries: the standard 22 with the specification's validation parameters,
   in Trino's dialect (`tpch/trino-queries.sql`; suite `tpch/kaveon-suite.json`).
-- Coverage: 21 of 22 parse, bind, plan and execute on the Engine with a
+- Coverage: all 22 parse, bind, plan and execute on the Engine with a
   distributed plan (`tpch/coverage.md`; the gate is `cargo test -p
-  kaveon-server tpch`); Q21 needs a semi join with a residual and is a loss
-  until implemented. No SF100 timing record exists yet; the first Kaveon and
-  Trino passes over the generated tables are the next step on this tier.
+  kaveon-server tpch`). Q21 is qualified through a keyed semi/anti join with
+  the `l_suppkey <> l1.l_suppkey` residual. No SF100 timing record exists yet;
+  the first Kaveon and Trino passes over the generated tables are the next
+  step on this tier.
 - Same rounds, same coverage rule.
 
 ## What gets published
