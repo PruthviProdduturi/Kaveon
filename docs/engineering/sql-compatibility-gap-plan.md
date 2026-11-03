@@ -296,7 +296,8 @@ the contract.
 - [x] Add system metadata views with role-filtered visibility. `KaveonDB`
   exposes read-only `product`, `catalog`, and `system` projections to Admins;
   ordinary roles cannot browse or query the reserved authority. Runtime and
-  catalog-access API tests cover the projection and denial boundary.
+  catalog-access API tests cover the projection and denial boundary. Evidence:
+  `docs/qualification/track5-kaveondb-system-catalog-access-2026-11-02.md`.
 
 ## Release gate
 
