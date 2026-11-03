@@ -415,7 +415,8 @@ matched-update-only, matched-delete-only, or unmatched-insert-only forms.
 For an unaliased target, the base table name is the only accepted qualifier.
 Source scans, predicates, arbitrary assignments, and other `MERGE` clause
 orderings remain rejected.
-Product `RETURNING id, revision` and staged `document_json` projections on
+Product `RETURNING id, revision`, `RETURNING *` (the stable
+`id`/`revision`/`document_json` contract), and staged `document_json` projections on
 creates, updates, upserts, and deletes are evaluated from the revision/CAS
 write set. Product inserts
 also support the bounded `ON CONFLICT DO NOTHING`
