@@ -813,7 +813,7 @@ fn used_dictionary_values(
 /// exact without consulting its values.
 fn rewrap_dictionary(keys: &Int32Array, values: ArrayRef) -> Result<ArrayRef> {
     match values.data_type() {
-        DataType::Utf8 | DataType::LargeUtf8 => {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
             let keys = if values.null_count() == 0 {
                 keys.clone()
             } else {
@@ -25384,6 +25384,25 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(20), None, Some(10)]
+        );
+    }
+
+    #[test]
+    fn rewrap_dictionary_preserves_utf8_view_values() {
+        let keys = Int32Array::from(vec![0, 1, 0]);
+        let values = Arc::new(StringViewArray::from(vec![Some("alpha"), Some("beta")])) as ArrayRef;
+
+        let wrapped = rewrap_dictionary(&keys, values).unwrap();
+        let dictionary = wrapped
+            .as_any()
+            .downcast_ref::<Int32DictionaryArray>()
+            .expect("Utf8View values remain dictionary encoded");
+
+        assert_eq!(dictionary.values().data_type(), &DataType::Utf8View);
+        let text = compute::cast(&wrapped, &DataType::Utf8).unwrap();
+        assert_eq!(
+            text.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("beta"), Some("alpha")]
         );
     }
 
