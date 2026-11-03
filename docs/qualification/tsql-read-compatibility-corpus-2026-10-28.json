@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "a938c054",
+  "engine_commit": "ed17f08d",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -141,6 +141,7 @@
     {"id": "json_value_text", "sql": "SELECT JSON_VALUE(payload, '$.customer.id') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_scalar_text_and_null_container_behavior"},
     {"id": "json_query_text", "sql": "SELECT JSON_QUERY(payload, '$.customer') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_canonical_container_text"},
     {"id": "percentile_cont_window", "sql": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_numeric_interpolation"},
-    {"id": "percentile_disc_window", "sql": "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_discrete_selection"}
+    {"id": "percentile_disc_window", "sql": "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_discrete_selection"},
+    {"id": "year_month_day_aliases", "sql": "SELECT YEAR(event_date), MONTH(event_date), DAY(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_typed_date_inputs"}
   ]
 }

@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 139-case corpus has planner coverage and focused exact
+  The current 140-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -185,6 +185,11 @@ evidence is retained in `docs/qualification/track2-tsql-datalength-2026-11-02.md
 `ISNULL` is also preserved as a distinct two-argument SQL Server function with
 first-argument type semantics and exact local/three-worker evidence in
 `docs/qualification/track2-tsql-isnull-contract-2026-11-02.md`.
+
+The common SQL Server `YEAR(value)`, `MONTH(value)`, and `DAY(value)` aliases
+now lower to the existing typed `DATE_PART` path and pass the full local and
+three-worker differential sweep. Evidence:
+`docs/qualification/track2-tsql-date-part-aliases-2026-11-03.md`.
 
 `ASCII`, `UNICODE`, and bounded `CHAR` are also qualified: ASCII returns the
 leading ASCII scalar and NULL for a non-ASCII leading scalar, UNICODE returns
