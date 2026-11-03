@@ -9,7 +9,7 @@ differential module excluded:
 cargo test -p kaveon-server --all-targets --no-default-features -- \
   --nocapture --skip differential_tests
 
-test result: ok. 468 passed; 0 failed; 0 ignored; 0 measured;
+test result: ok. 470 passed; 0 failed; 0 ignored; 0 measured;
 193 filtered out; finished in 31.11s
 ```
 

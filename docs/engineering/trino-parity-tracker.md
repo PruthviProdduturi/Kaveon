@@ -14,7 +14,7 @@ The historical source/build gate record is retained in
 release workflow record remains in `docs/qualification/track1-track2-ci-gates-2026-10-17.md`.
 The historical release-readiness snapshot is in
 `docs/qualification/release-readiness-2026-10-20.md`.
-The current bounded server suite is 468/468 with the long-running
+The current bounded server suite is 470/470 with the long-running
 `differential_tests` module excluded; evidence is in
 `docs/qualification/track1-server-suite-2026-11-02.md`. The differential
 module remains a separate release gate. The earlier 611/611 release-binary
