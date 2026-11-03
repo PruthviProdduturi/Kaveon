@@ -10,6 +10,10 @@ FROM events
 GROUP BY GROUPING SETS ((region), (platform))
 ```
 
+The same bounded grouping-set surface also qualifies `GROUPING(column)` and
+`GROUPING_ID(column, ...)` over `ROLLUP`/`CUBE`, including the documented
+right-to-left bit assignment for `GROUPING_ID`.
+
 The planner lowers each grouping set to the existing finite grouping-set
 expansion. The result preserves NULL subtotal keys and aggregate semantics;
 ordering remains unspecified unless the query supplies `ORDER BY`.
@@ -19,6 +23,9 @@ ordering remains unspecified unless the query supplies `ORDER BY`.
 - SQL planner coverage is provided by the existing grouping-set lowering tests.
 - Three-worker differential test:
   `distributed_grouping_sets_match_the_local_result`.
+- Three-worker grouping-mask differential coverage exercises nullable
+  dimensions and all subtotal/grand-total masks for `GROUPING` and
+  `GROUPING_ID`.
 - The differential test compares canonical result rows from distributed
   execution with the local reference and verifies that the query memory pool
   returns to zero.
