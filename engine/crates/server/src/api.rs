@@ -15222,7 +15222,7 @@ fn compare_json_scalars(
 fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
     match data_type {
         arrow::datatypes::DataType::Utf8View => "Utf8".to_owned(),
-        arrow::datatypes::DataType::Dictionary(_, values) => values.to_string(),
+        arrow::datatypes::DataType::Dictionary(_, values) => presented_type(values),
         // `List(Float64)`, not the item field's Debug rendering.
         arrow::datatypes::DataType::List(field) => {
             format!("List({})", presented_type(field.data_type()))
@@ -25688,6 +25688,13 @@ mod streamed_root_tests {
         );
         assert_eq!(presented_type(&map), "Map(Utf8, Int64)");
         assert_eq!(presented_type(&DataType::Utf8View), "Utf8");
+        assert_eq!(
+            presented_type(&DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8View),
+            )),
+            "Utf8"
+        );
         assert_eq!(
             presented_type(&row),
             "Row(name Utf8, attributes Map(Utf8, Int64))"
