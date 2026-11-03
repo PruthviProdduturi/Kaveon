@@ -300,8 +300,10 @@ unsupported tokens, and unbounded output remain explicitly rejected.
   revision and either a literal source id with a target-id list (capped at
   1,000), or an identity join paired with a target-id list. Sources are
   owner-checked, staged documents are reused, and targets use the existing
-  revision/CAS and `RETURNING` path. Arbitrary joins, cross-kind sources,
-  arbitrary assignments, and general lake-table mutation remain rejected.
+  revision/CAS and `RETURNING` path. The direct source assignment may also be
+  written as `CAST(source.document_json AS JSON)`; this is syntax-only.
+  Arbitrary joins, cross-kind sources, arbitrary assignments, and general
+  lake-table mutation remain rejected.
   Evidence:
   `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
 - [x] Add bounded same-kind product `DELETE ... USING`. The source is
@@ -495,7 +497,7 @@ registered-source passthrough, or KaveonDB transaction behavior.
 
 The current local release-image gate is recorded in
 `docs/qualification/track1-server-suite-2026-11-03.md`: the SQL crate has
-370 passing tests and the server binary has 697 passing tests. This evidence
+373 passing tests and the server binary has 697 passing tests. This evidence
 does not substitute for the open cloud, external-client, or broader semantic
 qualification boundaries listed above.
 

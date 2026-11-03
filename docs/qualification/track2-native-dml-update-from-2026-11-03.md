@@ -21,8 +21,9 @@ RETURNING id, revision, document_json;
 ```
 
 The target and source must be the same supported `kaveon.product` kind. The
-source must be one aliased base table, the assignment must copy exactly
-`source.document_json`, and the predicate must contain a literal
+source must be one aliased base table, and the assignment must either copy
+exactly `source.document_json` or wrap that direct source column in
+`CAST(source.document_json AS JSON)`. The predicate must contain a literal
 `target.revision` plus either one literal `source.id` and one or more literal
 target ids (including an `IN` list capped at 1,000 ids), or an identity join
 `target.id = source.id` paired with a literal target-id list. Source and target
@@ -35,6 +36,8 @@ commit remains atomic and replay-safe.
 
 - Parser acceptance and fail-closed cases:
   `parser::tests::accepts_bounded_product_update_from_and_rejects_wider_shapes`.
+- Typed source assignment:
+  `parser::tests::product_update_from_accepts_a_typed_source_document_assignment`.
 - Transaction/API qualification:
   `transaction_api::tests::sql_endpoint_bounded_update_from_copies_source_document_and_revises_target`.
 - Batch transaction/API qualification:
@@ -45,6 +48,15 @@ commit remains atomic and replay-safe.
   revision, and the persisted source document copied into the target. The batch
   test verifies two target revisions, both returned rows, and atomic publication
   of the copied document.
+- The API single-target test uses `CAST(source.document_json AS JSON)` and
+  verifies the same persisted document and revision/CAS result as the direct
+  source form. The cast is syntax-only and does not broaden the expression
+  contract.
+- Focused verification on 2026-11-03:
+  `cargo test -p kaveon-sql product_update_from_accepts_a_typed_source_document_assignment`
+  and
+  `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_bounded_update_from_copies_source_document_and_revises_target`
+  each passed; SQL/server Clippy also passed with `-D warnings`.
 
 ## Explicit boundary
 

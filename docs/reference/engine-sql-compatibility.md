@@ -415,6 +415,11 @@ assignments remain outside this contract. Multi-row `VALUES` are expanded into b
 typed commands and committed atomically. Unbounded or cross-kind source-backed
 `INSERT ... SELECT`, general `ON CONFLICT` actions, transaction
 modifiers, arbitrary user tables, and lake-table DML are rejected explicitly.
+The bounded same-kind `UPDATE ... FROM` form also accepts
+`SET target.document_json = CAST(source.document_json AS JSON)` when its
+existing literal revision/source-id or identity-join boundary is satisfied;
+the cast is syntax-only and arbitrary source expressions remain rejected. See
+[UPDATE FROM qualification](../qualification/track2-native-dml-update-from-2026-11-03.md).
 The qualified `MERGE` form is intentionally narrow: one target product table
 with an optional simple alias, one source `VALUES` batch of at most 1,000 rows aliased as
 `(id, document_json)`, an equality

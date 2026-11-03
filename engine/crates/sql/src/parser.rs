@@ -2347,7 +2347,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                     || (column.0.len() == 2
                         && column.0[0].value.eq_ignore_ascii_case(&target_alias)
                         && column.0[1].value.eq_ignore_ascii_case("document_json")))
-                    || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+                    || !merge_source_document_ref(&assignments[0].value, &source_alias)
                 {
                     return Err(sql_error(
                         "product UPDATE FROM must set target.document_json from source.document_json",
@@ -4997,6 +4997,26 @@ mod tests {
                 "unsupported UPDATE FROM shape was accepted: {sql}"
             );
         }
+    }
+
+    #[test]
+    fn product_update_from_accepts_a_typed_source_document_assignment() {
+        let sql = "UPDATE product.datasets AS target SET target.document_json = CAST(source.document_json AS JSON) FROM product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 2 AND source.id = 'source-1'";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("typed UPDATE FROM should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::UpdateFrom {
+                kind: "dataset".into(),
+                id: "target-1".into(),
+                expected_revision: 2,
+                source_id: "source-1".into(),
+                source_kind: "dataset".into(),
+            }
+        );
     }
 
     #[test]

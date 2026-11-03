@@ -323,6 +323,11 @@ and arbitrary assignments remain outside the contract. Evidence:
 The same source predicate also qualifies bounded `DELETE ... USING`, with
 source owner validation before target revision/CAS deletes and the same
 1,000-target cap; arbitrary `USING` joins remain outside the contract.
+The bounded `UPDATE ... FROM` assignment may also use the direct typed source
+form `CAST(source.document_json AS JSON)`, reusing the same owner-checked
+revision/CAS path; arbitrary JSON expressions and non-direct casts remain
+rejected. Evidence:
+`docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
 Batch validation is fail-closed: if any target is missing or invalid, the
 pre-batch staged view is restored and no earlier list member can be published
 by a later `COMMIT`.

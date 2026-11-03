@@ -5065,7 +5065,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "UPDATE product.datasets AS target SET target.document_json = source.document_json FROM product.datasets AS source WHERE target.id = 'target' AND target.revision = 1 AND source.id = 'source' RETURNING id, revision, document_json".into(),
+                sql: "UPDATE product.datasets AS target SET target.document_json = CAST(source.document_json AS JSON) FROM product.datasets AS source WHERE target.id = 'target' AND target.revision = 1 AND source.id = 'source' RETURNING id, revision, document_json".into(),
                 transaction_id: Some(update.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
