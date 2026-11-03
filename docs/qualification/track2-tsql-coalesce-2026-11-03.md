@@ -15,6 +15,7 @@ The differential case `tsql_coalesce` runs:
 ```sql
 SELECT user_id,
        COALESCE(country, 'unknown'),
+       COALESCE(CAST(NULL AS VARCHAR), country),
        COALESCE(CAST(NULL AS BIGINT), actions, 0)
 FROM {T}
 ORDER BY user_id, actions, country

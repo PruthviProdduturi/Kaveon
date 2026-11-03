@@ -11,7 +11,7 @@
     {"id": "offset_fetch_rows", "sql": "SELECT * FROM t ORDER BY id OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY", "status": "planner_qualified", "distributed_status": "qualified_when_order_keys_are_deterministic"},
     {"id": "top_with_ties_requires_order", "sql": "SELECT TOP 3 WITH TIES * FROM t", "status": "explicit_rejection"},
     {"id": "isnull", "sql": "SELECT ISNULL(name, 'unknown') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
-    {"id": "coalesce", "sql": "SELECT COALESCE(name, 'unknown'), COALESCE(CAST(NULL AS BIGINT), actions, 0) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_null_fallback_and_left_to_right_type_resolution"},
+    {"id": "coalesce", "sql": "SELECT COALESCE(name, 'unknown'), COALESCE(CAST(NULL AS VARCHAR), name), COALESCE(CAST(NULL AS BIGINT), actions, 0) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_null_fallback_and_left_to_right_type_resolution"},
     {"id": "ascii", "sql": "SELECT ASCII(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_ascii_scalars"},
     {"id": "unicode", "sql": "SELECT UNICODE(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalars"},
     {"id": "char", "sql": "SELECT CHAR(code) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_byte_values"},
