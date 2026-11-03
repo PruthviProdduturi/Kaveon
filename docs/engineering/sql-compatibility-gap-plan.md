@@ -150,7 +150,9 @@ second, millisecond, and microsecond lower to typed calendar arithmetic with
 widths normalized to the arithmetic unit (for example, two weeks is fourteen
 days and two years is twenty-four months). Hour and minute buckets use the
 corresponding seconds offset, and typed custom origins are advanced by the
-whole bucket offset. Exact local/distributed coverage is recorded in
+whole bucket offset. Calendar buckets also normalize typed TIMESTAMP origins
+to the DATE arithmetic domain, while time-of-day buckets retain timestamp
+precision. Exact local/distributed coverage is recorded in
 `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` and
 `docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`;
 row-local and typed-literal custom origins are qualified, while unsupported

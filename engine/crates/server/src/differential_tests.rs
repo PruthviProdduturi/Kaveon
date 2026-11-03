@@ -8592,7 +8592,7 @@ fn distributed_tsql_date_bucket_row_local_origin_matches_local() {
         uuid::Uuid::new_v4()
     ));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, event_date, DATE_BUCKET(month, 2, event_date, event_date) AS bucket FROM events ORDER BY user_id, event_date LIMIT 12";
+    let statement = "SELECT user_id, event_date, DATE_BUCKET(month, 2, event_date, event_date) AS bucket, DATE_BUCKET(month, 1, event_date, TIMESTAMP '2020-02-15 12:34:56') AS timestamp_origin_bucket FROM events ORDER BY user_id, event_date LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-date-bucket-origin-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)

@@ -43,8 +43,9 @@ by the selected database and Kaveon's API guardrails.
 The bounded `DATE_BUCKET` surface also accepts `week` as a seven-day unit and
 normalizes wider calendar widths before arithmetic (for example, two weeks is
 fourteen days and two years is twenty-four months). Typed custom origins are
-advanced by the complete bucket offset. Exact local/three-worker qualification
-is recorded in
+advanced by the complete bucket offset. Calendar buckets normalize typed
+TIMESTAMP origins to the DATE arithmetic domain; time-of-day buckets retain
+timestamp precision. Exact local/three-worker qualification is recorded in
 `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` and
 `docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`.
 

@@ -51,7 +51,8 @@ operations. This is bounded diagnostic evidence, not full operator telemetry:
 `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 
 The latest SQL compatibility increments are corrected calendar-width and
-custom-origin `DATE_BUCKET` semantics, alongside the subsecond timestamp
+custom-origin `DATE_BUCKET` semantics, including typed timestamp origins for
+calendar buckets, alongside the subsecond timestamp
 units, and the full bounded literal/runtime `CONVERT(DATE, ..., style)` set
 (`0`, `1`, `23`, `101`–`112` where defined, `20`, `21`, `120`, `121`, and
 `126`), plus `CONCAT`, all qualified in the current
