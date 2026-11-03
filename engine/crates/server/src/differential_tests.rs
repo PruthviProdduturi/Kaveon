@@ -270,6 +270,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "regexp_like_column_predicate",
+        "SELECT user_id, REGEXP_LIKE(country, 'a') AS has_a FROM {T} ORDER BY user_id, country, actions LIMIT 20",
+        true,
+    ),
+    (
         "tsql_substring_scalar_compatibility",
         "SELECT user_id, SUBSTRING(country, 1, 2) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
         true,
