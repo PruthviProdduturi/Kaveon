@@ -6,7 +6,7 @@ Implementation history lives in Git; reproducible measurements live under
 `docs/qualification/`. A row is **Qualified** only when its stated acceptance
 evidence passes against exact-result references.
 
-The authoritative T-SQL read corpus currently contains 124 unique cases; the
+The authoritative T-SQL read corpus currently contains 125 unique cases; the
 validator checks this count against the corpus and its engine commit pin.
 
 The historical source/build gate record is retained in
@@ -55,7 +55,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 124-case corpus. The bounded date-construction qualifications
+the versioned 125-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -67,7 +67,7 @@ The weekly `DATE_BUCKET` evidence supersedes the earlier date-bucket note:
 `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` is the current
 qualification record for the added week unit.
 
-The corpus currently contains 124 bounded T-SQL read cases, including the
+The corpus currently contains 125 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice, the NULL-preserving
 `FILTER (WHERE ...)` form, and ascending/descending value-ordered
 `WITHIN GROUP` forms (`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md`);
@@ -112,7 +112,7 @@ IDs; unbounded source-copy returning remains rejected. Evidence:
 `track2-native-dml-returning-document-2026-10-29.md`. Arbitrary expressions and
 lake-table DML remain open.
 
-The current T-SQL corpus is 124 cases (the implementation pin is updated after
+The current T-SQL corpus is 125 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -263,7 +263,7 @@ This note supersedes the older Native DML matrix wording that listed all
 source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
-The T-SQL row above is backed by the versioned 124-case corpus pinned at
+The T-SQL row above is backed by the versioned 125-case corpus pinned at
 `1b20d2e5` in `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
@@ -278,7 +278,7 @@ The two newest cases qualify SQL Server/ClickHouse-compatible
 three-worker results with the existing explicit grouping-set forms; `WITH
 TOTALS` and mixed modifier forms remain explicit rejections. Evidence:
 `docs/qualification/track2-tsql-group-by-modifiers-2026-11-02.md`.
-The capability row's historical corpus pointer is superseded by the 124-case
+The capability row's historical corpus pointer is superseded by the 125-case
 corpus and pin above; do not use its older count as current evidence.
 
 Run from `engine/`:

@@ -126,6 +126,7 @@
     {"id": "outer_apply_bounded_derived", "sql": "SELECT t.id, a.next_id FROM t OUTER APPLY (SELECT 1 AS next_id WHERE false) AS a", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "group_by_with_rollup", "sql": "SELECT region, industry, COUNT(*) AS n FROM t GROUP BY region, industry WITH ROLLUP", "status": "planner_qualified", "distributed_status": "qualified_against_explicit_rollup"},
     {"id": "group_by_with_cube", "sql": "SELECT region, industry, COUNT(*) AS n FROM t GROUP BY region, industry WITH CUBE", "status": "planner_qualified", "distributed_status": "qualified_against_explicit_cube"},
+    {"id": "group_by_grouping_sets", "sql": "SELECT region, platform, COUNT(*) AS n FROM t GROUP BY GROUPING SETS ((region), (platform))", "status": "planner_qualified", "distributed_status": "qualified_against_local_reference"},
     {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"}
   ]
 }
