@@ -30281,6 +30281,40 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_string_escape_json_from_utf8_view_values() {
+        use arrow::array::StringViewBuilder;
+
+        let mut value_builder = StringViewBuilder::new();
+        value_builder.append_value("quote \" and newline\n");
+        value_builder.append_null();
+        let mut mode_builder = StringViewBuilder::new();
+        mode_builder.append_value("json");
+        mode_builder.append_value("JSON");
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(value_builder.finish()) as ArrayRef,
+            ),
+            (
+                "mode",
+                Arc::new(mode_builder.finish()) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "STRING_ESCAPE".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("mode".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), r#"quote \" and newline\n"#);
+        assert!(values.is_null(1));
+    }
+
+    #[test]
     fn string_escape_rejects_unsupported_mode() {
         let batch = RecordBatch::try_from_iter([
             (
