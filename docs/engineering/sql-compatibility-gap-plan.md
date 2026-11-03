@@ -332,8 +332,11 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   A matched-only clause may also carry the bounded source filter
   `source.id = 'literal'` or `source.id IN ('literal', ...)`; excluded source
   rows remain no-ops and selected rows use the same revision/CAS path. Target
-  columns, arbitrary expressions, `NOT IN`, and multi-clause predicates remain
-  rejected. Evidence: `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
+  columns, arbitrary expressions, `NOT IN`, and compound predicates remain
+  rejected. The first matched clause may additionally carry the redundant
+  identity predicate `target.id = source.id` (or the reversed operand order),
+  including bounded update-or-insert and not-matched-by-source forms; the
+  `ON` equality makes it a deterministic no-op. Evidence: `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
 - [ ] Expand `MERGE` and broader conflict handling beyond the qualified bounded
   product surface only with explicit revision/CAS semantics. The current
   contract covers update-or-insert, delete-or-insert, matched-update-only,
