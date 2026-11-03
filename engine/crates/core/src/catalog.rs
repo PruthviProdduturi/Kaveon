@@ -326,8 +326,18 @@ impl PartitionColumn {
     /// path value can be read as that type.
     pub fn partition_type(data_type: &DataType) -> Option<DataType> {
         match data_type {
-            DataType::Dictionary(_, values) if **values == DataType::Utf8 => Some(DataType::Utf8),
-            DataType::Int64 | DataType::Date32 | DataType::Utf8 => Some(data_type.clone()),
+            DataType::Dictionary(_, values)
+                if matches!(values.as_ref(), DataType::Utf8 | DataType::Utf8View) =>
+            {
+                Some(DataType::Utf8)
+            }
+            DataType::Int64 | DataType::Date32 | DataType::Utf8 | DataType::Utf8View => {
+                Some(if *data_type == DataType::Utf8View {
+                    DataType::Utf8
+                } else {
+                    data_type.clone()
+                })
+            }
             _ => None,
         }
     }
@@ -1117,6 +1127,23 @@ mod tests {
             }
             _ => panic!("expected Full"),
         }
+    }
+
+    #[test]
+    fn partition_columns_treat_utf8_view_as_logical_text() {
+        assert_eq!(
+            PartitionColumn::partition_type(&DataType::Utf8View),
+            Some(DataType::Utf8)
+        );
+        assert_eq!(
+            PartitionColumn::partition_type(&DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8View),
+            )),
+            Some(DataType::Utf8)
+        );
+        let partition = PartitionColumn::new("region", DataType::Utf8).unwrap();
+        assert!(partition.accepts(&DataType::Utf8View));
     }
 
     #[test]

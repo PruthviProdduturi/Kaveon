@@ -62,6 +62,7 @@ The authoritative capability details remain in:
   and JSON result serialization so chart dimensions and text-key consumers
   receive logical strings. Evidence:
   `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md`,
+  `docs/qualification/track1-utf8view-partition-catalog-2026-11-03.md`,
   `docs/qualification/track3-utf8view-statistics-2026-11-03.md`,
   `docs/qualification/track3-utf8view-cubes-2026-11-03.md`, and
   `docs/qualification/track1-utf8view-distinct-2026-11-03.md`.
