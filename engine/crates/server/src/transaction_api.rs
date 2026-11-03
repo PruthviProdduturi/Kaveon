@@ -5080,6 +5080,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_bounded_update_from_batch_is_atomic_and_returns_each_target() {
+        let (registry, catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"INSERT INTO product.datasets (id, document_json) VALUES ('target-1', '{"name":"before-1"}'), ('target-2', '{"name":"before-2"}'), ('source', '{"name":"after"}')"#.into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let update = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "UPDATE product.datasets AS target SET target.document_json = source.document_json FROM product.datasets AS source WHERE target.id IN ('target-1', 'target-2') AND target.revision = 1 AND source.id = 'source' RETURNING id, revision, document_json".into(),
+                transaction_id: Some(update.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["returning"],
+            serde_json::json!([
+                {"id": "target-1", "revision": 2, "document_json": "{\"name\":\"after\"}"},
+                {"id": "target-2", "revision": 2, "document_json": "{\"name\":\"after\"}"}
+            ])
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(update.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let snapshot = catalog.read_current().await.unwrap();
+        for id in ["target-1", "target-2"] {
+            let target = snapshot
+                .product_record(ProductRecordKind::Dataset, id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(target.revision, 2);
+            assert_eq!(
+                catalog
+                    .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, id)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                b"{\"name\":\"after\"}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_on_conflict_do_update_revises_owned_product() {
         let (registry, catalog) = registry().await;
         let first = registry.begin("alice").await.unwrap();
