@@ -13,6 +13,9 @@ The Engine now qualifies the SQL Server/Fabric spellings
 scalar expressions whose result is represented as Arrow UTF-8 text. The
 qualification covers numeric-to-text conversion through the existing typed
 cast path, including nullable values and distributed fragment execution.
+The planner also accepts unbounded `NVARCHAR`/`TRY_CONVERT(NVARCHAR, ...)` as
+the same UTF-8 text target; this alias has planner coverage here and is not
+yet added to the distributed corpus.
 
 This is a logical text contract, not SQL Server code-page or `nvarchar`
 storage emulation. Sized `VARCHAR(n)`, `CHAR(n)`, and equivalent text casts are
