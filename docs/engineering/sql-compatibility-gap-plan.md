@@ -304,9 +304,11 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
 - [ ] Finish adaptive joins and aggregate exchange for high-cardinality data.
 - [ ] Distribute remaining window and global-sort shapes.
 - [x] Complete correlated/lateral execution or maintain explicit rejection.
-  Bounded correlated and lateral forms are qualified; residual, table-valued,
-  and other unsupported shapes remain explicit parser/planner rejections with
-  actionable diagnostics in the compatibility corpus.
+  Bounded correlated and lateral forms are qualified, including residual
+  predicates in semi/anti-join `EXISTS`/`NOT EXISTS` shapes. Scalar residual
+  `OFFSET`/`LIMIT`, table-valued, and other unsupported shapes remain explicit
+  parser/planner rejections with actionable diagnostics in the compatibility
+  corpus.
 - [ ] Qualify object-store retries, spill exhaustion, cancellation, and mixed
   workload endurance on every release image.
 
