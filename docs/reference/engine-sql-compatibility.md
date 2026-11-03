@@ -431,7 +431,7 @@ join on the target qualifier's `id` and `source.id`, and one of the qualified
 matched-update (from the source document or one string literal)/not-matched-insert, matched-delete/not-matched-insert,
 matched-update-only, matched-delete-only, or unmatched-insert-only forms.
 For an unaliased target, the base table name is the only accepted qualifier.
-Matched updates may also use the direct typed source assignment
+Matched updates and not-matched inserts may also use the direct typed source assignment
 `CAST(source.document_json AS JSON)`; this is syntax-only and does not permit
 arbitrary JSON expressions or non-direct casts. Evidence is recorded in
 `../qualification/track2-native-dml-merge-json-typed-source-2026-11-03.md`.

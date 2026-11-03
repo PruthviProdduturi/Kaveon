@@ -18,12 +18,14 @@ USING (VALUES ('ds-1', '{"name":"Orders"}')) AS source (id, document_json)
 WHEN MATCHED THEN
   UPDATE SET target.document_json = CAST(source.document_json AS JSON)
 WHEN NOT MATCHED THEN
-  INSERT (id, document_json) VALUES (source.id, source.document_json)
+  INSERT (id, document_json)
+  VALUES (source.id, CAST(source.document_json AS JSON))
 ```
 
 The parser accepts only a direct `source.document_json` operand wrapped in the
-`JSON` cast. It lowers to the same `ProductDmlCommand::Upsert` as the direct
-source assignment, so owner isolation, revision CAS, pinned-snapshot
+`JSON` cast for either the matched update or not-matched insert projection. It
+lowers to the same `ProductDmlCommand::Upsert` as the direct source assignment,
+so owner isolation, revision CAS, pinned-snapshot
 visibility, atomic commit, and replay behavior are unchanged.
 
 ## Evidence

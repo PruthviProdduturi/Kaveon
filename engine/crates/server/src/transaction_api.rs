@@ -5414,7 +5414,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('one', '{"n":1}'), ('two', '{"n":2}'), ('three', '{"n":3}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND target.id = source.id THEN UPDATE SET document_json = CAST(source.document_json AS JSON) WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)"#.into(),
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('one', '{"n":1}'), ('two', '{"n":2}'), ('three', '{"n":3}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND target.id = source.id THEN UPDATE SET document_json = CAST(source.document_json AS JSON) WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, CAST(source.document_json AS JSON))"#.into(),
                 transaction_id: Some(merge.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
