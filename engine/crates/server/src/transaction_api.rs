@@ -4221,6 +4221,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_expands_bounded_product_id_list_dml_under_one_cas_revision() {
+        let (registry, _catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        for sql in [
+            r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('one', '{"name":"One"}'), ('two', '{"name":"Two"}')"#,
+            "COMMIT",
+        ] {
+            let response = execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: sql.into(),
+                    transaction_id: Some(begun.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{sql}");
+        }
+
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "UPDATE kaveon.product.datasets SET document_json = '{\"updated\":true}' WHERE id IN ('one', 'two') AND revision = 1".into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let identity = Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        for id in ["one", "two"] {
+            let record = registry
+                .read_product(&identity, ProductRecordKind::Dataset, id)
+                .await
+                .unwrap();
+            assert_eq!(record.revision, 2);
+            assert_eq!(record.document["updated"], true);
+        }
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_returns_product_identity_metadata_from_staged_dml() {
         let (registry, _catalog) = registry().await;
         let begun = registry.begin("alice").await.unwrap();
