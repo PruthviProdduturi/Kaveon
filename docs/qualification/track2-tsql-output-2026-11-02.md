@@ -38,6 +38,9 @@ revision, transaction, or result semantics.
 
 ## Rejections
 
-Expressions, aliases, `OUTPUT INTO`, `MERGE OUTPUT`, mixed inserted/deleted
-projections, mixed wildcard/column projections, arbitrary table DML, and
-unsupported columns remain fail-closed.
+Expressions, aliases, `OUTPUT INTO`, mixed inserted/deleted projections,
+mixed wildcard/column projections, arbitrary table DML, and unsupported
+columns remain fail-closed. `MERGE OUTPUT` is no longer part of this record;
+the bounded update-or-insert form is qualified separately in
+[`track2-tsql-merge-output-2026-11-03.md`](track2-tsql-merge-output-2026-11-03.md),
+while delete-bearing and by-source forms remain rejected.

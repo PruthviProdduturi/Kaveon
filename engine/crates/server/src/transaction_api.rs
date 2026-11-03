@@ -2923,6 +2923,19 @@ async fn execute_sql_request(
                 Ok(command) => command,
                 Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
             };
+            if dml.kind == kaveon_sql::parser::NativeDmlKind::Merge
+                && !returning.is_empty()
+                && commands.iter().any(|command| {
+                    !matches!(
+                        command,
+                        kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
+                    )
+                })
+            {
+                return error_response(RegistryError::Invalid(
+                    "MERGE OUTPUT is supported only for bounded update-or-insert batches; delete and not-matched-by-source actions are rejected".into(),
+                ));
+            }
             let ignored_conflicts = if dml.on_conflict_do_nothing && !returning.is_empty() {
                 match registry
                     .conflict_ignore_existing(owner, &id, &commands)
@@ -4893,6 +4906,66 @@ mod tests {
                 revision
             );
         }
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_accepts_inserted_output() {
+        let (registry, _catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql:
+                        "INSERT INTO product.datasets (id, document_json) VALUES ('existing', '{}')"
+                            .into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('existing', '{"updated":true}'), ('new', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) OUTPUT inserted.*"#.into(),
+                transaction_id: Some(merge.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "existing");
+        assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(value["returning"][1]["id"], "new");
+        assert_eq!(value["returning"][1]["revision"], 1);
     }
 
     #[tokio::test]
