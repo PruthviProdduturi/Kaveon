@@ -18,6 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "docs" / "qualification" / "tsql-read-compatibility-corpus-2026-10-28.json"
 TRACKER = ROOT / "docs" / "engineering" / "trino-parity-tracker.md"
+COUNTED_DOCUMENTS = (
+    TRACKER,
+    ROOT / "docs" / "engineering" / "sql-compatibility-gap-plan.md",
+)
 
 
 def fail(message: str) -> None:
@@ -82,8 +86,22 @@ def main() -> int:
         fail("tracker is missing its authoritative corpus count")
     if any(int(value) != len(cases) for value in count_matches):
         fail(f"tracker corpus count {count_matches!r} does not match {len(cases)} cases")
-    if "60-case versioned corpus" in tracker:
-        fail("tracker contains stale 60-case corpus wording")
+    stale_count_pattern = re.compile(
+        r"\b(?:current|complete|versioned)\s+\d+(?:-case\s+versioned\s+corpus|-case|\s+cases)\b",
+        re.IGNORECASE,
+    )
+    for document in COUNTED_DOCUMENTS:
+        try:
+            text = document.read_text(encoding="utf-8")
+        except OSError as error:
+            fail(f"cannot read counted compatibility document {document}: {error}")
+        for match in stale_count_pattern.finditer(text):
+            number = int(re.search(r"\d+", match.group(0)).group(0))
+            if number != len(cases):
+                fail(
+                    f"stale compatibility count in {document.relative_to(ROOT)}: "
+                    f"{match.group(0)!r}; expected {len(cases)}"
+                )
     if "tsql-read-compatibility-corpus-2026-10-28.json" not in tracker:
         fail("tracker does not link the authoritative corpus")
     pin_matches = re.findall(r"corpus pinned at\s*`([0-9a-f]{7,40})`", tracker)
