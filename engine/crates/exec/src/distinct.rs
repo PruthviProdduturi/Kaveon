@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use ahash::{AHashMap, AHashSet};
 use arrow::array::{
-    Array, ArrayRef, AsArray, LargeListArray, ListArray, MapArray, RecordBatch, StructArray,
+    Array, ArrayRef, AsArray, LargeListArray, ListArray, MapArray, RecordBatch, StringViewArray,
+    StructArray,
 };
 use arrow::datatypes::{
     DataType, Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UInt8Type,
@@ -165,6 +166,21 @@ impl DistinctOperator {
             }
             DataType::Utf8 => {
                 let values = array.as_string::<i32>();
+                let mut words = Vec::with_capacity(rows);
+                for row in 0..rows {
+                    words.push(if values.is_null(row) {
+                        None
+                    } else {
+                        Some(self.intern(values.value(row))?)
+                    });
+                }
+                Some(words)
+            }
+            DataType::Utf8View => {
+                let values = array
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .expect("Utf8View array");
                 let mut words = Vec::with_capacity(rows);
                 for row in 0..rows {
                     words.push(if values.is_null(row) {
@@ -591,6 +607,14 @@ pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateVa
                 .value(row)
                 .to_owned(),
         )),
+        DataType::Utf8View => Ok(AggregateValue::Utf8(
+            array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array")
+                .value(row)
+                .to_owned(),
+        )),
         dt => Err(KaveonError::Execution(format!(
             "DISTINCT not supported for type {dt}"
         ))),
@@ -602,7 +626,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, DictionaryArray, Int32Array, StringArray};
+    use arrow::array::{ArrayRef, DictionaryArray, Int32Array, StringArray, StringViewArray};
     use arrow::datatypes::{Field, Schema};
 
     use super::*;
@@ -872,5 +896,49 @@ mod tests {
         let output = distinct.next_batch().unwrap().unwrap();
         assert_eq!(output.num_rows(), 3);
         assert!(distinct.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn utf8_view_values_are_distinct_by_text_across_batches() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Utf8View,
+            true,
+        )]));
+        let first = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("east"),
+                Some("west"),
+            ]))],
+        )
+        .unwrap();
+        let second = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("east"),
+                None,
+                Some("north"),
+            ]))],
+        )
+        .unwrap();
+        let mut distinct = DistinctOperator::new(Box::new(Input {
+            schema,
+            batches: VecDeque::from(vec![first, second]),
+        }));
+        let mut output = Vec::new();
+        while let Some(batch) = distinct.next_batch().unwrap() {
+            output.push(batch);
+        }
+
+        assert_eq!(
+            rows(&output),
+            vec![
+                vec![Some("east".into())],
+                vec![Some("west".into())],
+                vec![None],
+                vec![Some("north".into())]
+            ]
+        );
     }
 }
