@@ -327,9 +327,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   source rows produce no result row. Delete-or-insert output is action-aware:
   `inserted` returns inserted/update actions and `deleted` returns deleted/update
   actions from the ordered staged write set. Bounded not-matched-by-source
-  delete forms also qualify `deleted.id` and `deleted.revision`; by-source
-  inserted output, `deleted.document_json`, and mixed projections remain
-  rejected. Evidence:
+  delete forms also qualify `deleted.id` and `deleted.revision`, and mixed
+  action batches qualify the corresponding inserted identity/revision output;
+  document projections and mixed pseudo-table projections remain rejected.
+  Evidence:
   `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.
 - [x] Qualify bounded snapshot isolation and transaction-session restart
   behavior for KaveonDB-owned product records; see

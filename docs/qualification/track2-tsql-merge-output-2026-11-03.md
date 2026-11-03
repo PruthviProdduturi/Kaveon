@@ -38,11 +38,12 @@ are no-ops and matched rows return the deleted identity and prior revision.
 The parser and endpoint reject `deleted.document_json`, `$action`, expressions,
 `OUTPUT INTO`, mixed pseudo-table projections, and unsupported columns. Bounded
 by-source delete batches accept `OUTPUT deleted.id` and
-`OUTPUT deleted.revision`; by-source inserted output, `deleted.document_json`,
-and broader by-source combinations remain rejected. The transaction API
+`OUTPUT deleted.revision`; mixed by-source action batches also accept the
+corresponding `inserted.id`/`inserted.revision` projection. The transaction API
 resolves supported MERGE actions to revision/CAS commands, then filters the
 staged write set by the requested pseudo-table; source rows that are no-ops are
-omitted rather than fabricated.
+omitted rather than fabricated. Document projections and broader by-source
+combinations remain rejected.
 
 ## Evidence
 
