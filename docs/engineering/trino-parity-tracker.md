@@ -312,6 +312,11 @@ locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in
 `docs/qualification/track2-tsql-character-code-2026-10-29.md`. This note
 supersedes the older case-count wording embedded in the capability table.
+The bounded SQL Server `PARSENAME` slice is also covered by a focused
+three-worker differential for plain dotted names, including out-of-range parts
+and malformed segments. This remains local distributed evidence only; deployed
+and external-client parity are not claimed. Evidence:
+`docs/qualification/track2-tsql-parsename-2026-11-03.md`.
 The two newest cases qualify SQL Server/ClickHouse-compatible
 `GROUP BY ... WITH ROLLUP` and `WITH CUBE` modifier spellings by comparing
 three-worker results with the existing explicit grouping-set forms; `WITH

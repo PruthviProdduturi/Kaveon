@@ -100,7 +100,7 @@
     {"id": "try_convert_unstyled", "sql": "SELECT TRY_CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "string_escape_json", "sql": "SELECT STRING_ESCAPE(value, 'json') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "formatmessage_bounded_template", "sql": "SELECT FORMATMESSAGE('country=%s actions=%d %%', country, actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_templates_and_positional_text_or_numeric_arguments"},
-    {"id": "parsename", "sql": "SELECT PARSENAME('server.database.schema.object', 1), PARSENAME('server.database.schema.object', 4)", "status": "planner_qualified"},
+    {"id": "parsename", "sql": "SELECT PARSENAME('server.database.schema.object', 1), PARSENAME('server.database.schema.object', 4)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_plain_dotted_names"},
     {"id": "quotename_default_brackets", "sql": "SELECT QUOTENAME(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "quotename_double_quote", "sql": "SELECT QUOTENAME(name, '\"') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "replicate", "sql": "SELECT REPLICATE(name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns_and_nonnegative_counts"},
