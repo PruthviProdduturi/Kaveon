@@ -90,6 +90,11 @@ def main() -> int:
         r"\b(?:current|complete|versioned)\s+\d+(?:-case\s+versioned\s+corpus|-case|\s+cases)\b",
         re.IGNORECASE,
     )
+    authoritative_count_patterns = (
+        re.compile(r"authoritative\s+current\s+corpus\s+is\s+(\d+)\s+cases", re.IGNORECASE),
+        re.compile(r"current\s+T-SQL\s+corpus\s+is\s+(\d+)\s+cases", re.IGNORECASE),
+        re.compile(r"versioned\s+(\d+)-case\s+corpus", re.IGNORECASE),
+    )
     for document in COUNTED_DOCUMENTS:
         try:
             text = document.read_text(encoding="utf-8")
@@ -102,6 +107,14 @@ def main() -> int:
                     f"stale compatibility count in {document.relative_to(ROOT)}: "
                     f"{match.group(0)!r}; expected {len(cases)}"
                 )
+        for pattern in authoritative_count_patterns:
+            for match in pattern.finditer(text):
+                number = int(match.group(1))
+                if number != len(cases):
+                    fail(
+                        f"stale authoritative compatibility count in {document.relative_to(ROOT)}: "
+                        f"{match.group(0)!r}; expected {len(cases)}"
+                    )
     if "tsql-read-compatibility-corpus-2026-10-28.json" not in tracker:
         fail("tracker does not link the authoritative corpus")
     pin_matches = re.findall(r"corpus pinned at\s*`([0-9a-f]{7,40})`", tracker)
