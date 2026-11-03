@@ -25907,12 +25907,16 @@ mod streamed_root_tests {
         use arrow::array::{ArrayRef, MapBuilder, StringViewArray, StringViewBuilder};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
-        let values: ArrayRef = Arc::new(StringViewArray::from(vec!["east", "west"]));
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("east"),
+            None,
+            Some("west"),
+        ]));
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new(
                 "region",
                 DataType::Utf8View,
-                false,
+                true,
             )])),
             vec![values],
         )
@@ -25921,6 +25925,7 @@ mod streamed_root_tests {
             batches_to_json(&[batch]),
             vec![
                 vec![serde_json::json!("east")],
+                vec![serde_json::Value::Null],
                 vec![serde_json::json!("west")]
             ]
         );
