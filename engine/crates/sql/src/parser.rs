@@ -3942,8 +3942,8 @@ mod tests {
     #[test]
     fn accepts_identity_returning_for_product_update_and_delete() {
         for sql in [
-            "UPDATE product.datasets SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
-            "DELETE FROM product.datasets WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision, document_json",
+            "UPDATE product.datasets AS target SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
+            "DELETE FROM product.datasets AS target WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision, document_json",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("product DML should parse")
