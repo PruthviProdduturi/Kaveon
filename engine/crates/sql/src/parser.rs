@@ -1,4 +1,5 @@
 use kaveon_core::{KaveonError, Result};
+use sqlparser::ast::DataType as SqlDataType;
 use sqlparser::ast::Statement;
 use sqlparser::ast::{
     AssignmentTarget, BinaryOperator, Expr, FromTable, GroupByExpr, MergeAction, MergeClauseKind,
@@ -2319,7 +2320,7 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
             if column.0.len() != 1 || !column.0[0].value.eq_ignore_ascii_case("document_json") {
                 return Err(sql_error("product UPDATE may set document_json only"));
             }
-            let document_json = string_literal(&assignments[0].value, "product document_json")?;
+            let document_json = product_document_literal(&assignments[0].value)?;
             let (ids, expected_revision) = product_key_predicate(selection.as_ref())?;
             Ok(ids
                 .into_iter()
@@ -2935,6 +2936,24 @@ fn string_literal(expression: &Expr, label: &str) -> Result<String> {
     match expression {
         Expr::Value(Value::SingleQuotedString(value)) => Ok(value.clone()),
         _ => Err(sql_error(&format!("{label} must be a string literal"))),
+    }
+}
+
+/// Accept a bounded JSON-typed literal in product UPDATE assignments. The
+/// transaction layer still validates the resulting bytes as an object before
+/// publication; this only widens the SQL spelling from a bare string literal
+/// to `CAST('<json>' AS JSON)` without evaluating arbitrary expressions.
+fn product_document_literal(expression: &Expr) -> Result<String> {
+    match expression {
+        Expr::Value(Value::SingleQuotedString(value)) => Ok(value.clone()),
+        Expr::Cast {
+            expr,
+            data_type: SqlDataType::JSON,
+            ..
+        } => string_literal(expr, "product document_json"),
+        _ => Err(sql_error(
+            "product document_json must be a string literal or CAST(string AS JSON)",
+        )),
     }
 }
 
@@ -4297,6 +4316,24 @@ mod tests {
         };
         assert_eq!(dml.returning, ["id", "revision"]);
         assert!(adapt_product_dml(&dml).is_ok());
+    }
+
+    #[test]
+    fn product_update_accepts_a_json_typed_document_literal() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "UPDATE product.datasets SET document_json = CAST('{\"name\":\"Orders\"}' AS JSON) WHERE id = 'ds-1' AND revision = 1",
+        )
+        .expect("JSON-typed document literals should parse")
+        else {
+            panic!("expected product UPDATE");
+        };
+        let commands = adapt_product_dml_batch(&dml).expect("JSON-typed document should adapt");
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            ProductDmlCommand::Update { document_json, .. }
+                if document_json == r#"{"name":"Orders"}"#
+        ));
     }
 
     #[test]
