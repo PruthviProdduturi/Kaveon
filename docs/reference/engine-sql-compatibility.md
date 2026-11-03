@@ -421,10 +421,13 @@ Source scans, predicates, arbitrary assignments, and other `MERGE` clause
 orderings remain rejected. `OUTPUT inserted.id`, `OUTPUT inserted.revision`,
 `OUTPUT inserted.document_json`, and `OUTPUT inserted.*` are accepted on the
 update-or-insert, delete-or-insert, matched-update-only, and unmatched-insert-only
-forms. Matched-delete-only and delete-or-insert forms accept `OUTPUT deleted.id`
-and `OUTPUT deleted.revision`; delete-or-insert output is filtered by action
-from the ordered staged write set. Deleted document projection, by-source forms,
-and mixed pseudo-table projections reject `OUTPUT` before staging.
+forms. Matched-delete-only and delete-or-insert forms accept `OUTPUT deleted.id`,
+`OUTPUT deleted.revision`, and `OUTPUT deleted.document_json`; bounded
+not-matched-by-source deletes accept the same deleted projection, while mixed
+by-source action batches accept the corresponding inserted projection. Deleted
+documents are captured from the pinned pre-delete snapshot, including staged
+replacements, and delete-or-insert output is filtered by action from the ordered
+staged write set. Mixed pseudo-table projections reject `OUTPUT` before staging.
 Product `RETURNING id, revision`, `RETURNING *` (the stable
 `id`/`revision`/`document_json` contract), and staged `document_json` projections on
 creates, updates, upserts, and deletes are evaluated from the revision/CAS
