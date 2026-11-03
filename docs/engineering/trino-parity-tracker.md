@@ -53,7 +53,8 @@ operations. This is bounded diagnostic evidence, not full operator telemetry:
 The latest SQL compatibility increments are corrected calendar-width and
 custom-origin `DATE_BUCKET` semantics, including typed timestamp origins for
 calendar buckets, alongside the subsecond timestamp
-units, and the full bounded literal/runtime `CONVERT(DATE, ..., style)` set
+units, the qualified literal/row-local `EOMONTH` month-offset form, and the
+full bounded literal/runtime `CONVERT(DATE, ..., style)` set
 (`0`, `1`, `23`, `101`–`112` where defined, `20`, `21`, `120`, `121`, and
 `126`), plus `CONCAT`, all qualified in the current
 three-worker differential gates. `DATETIME2FROMPARTS` precision 4–6 remains
@@ -64,6 +65,7 @@ and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
 `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` and
 `docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`,
+`docs/qualification/track2-tsql-eomonth-offset-2026-11-03.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
 the versioned 134-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including

@@ -461,7 +461,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_eomonth",
-        "SELECT TOP 5 EOMONTH(event_date) AS month_end FROM {T} ORDER BY event_date",
+        "SELECT TOP 5 EOMONTH(event_date) AS month_end, EOMONTH(event_date, 2) AS shifted_month_end, EOMONTH(event_date, actions - 20) AS row_local_month_end FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
     ),
     (
@@ -8644,6 +8644,30 @@ fn distributed_tsql_date_bucket_subsecond_matches_local() {
     let statement = "SELECT user_id, DATE_BUCKET(millisecond, 250, CAST(event_date AS TIMESTAMP)) AS millis_bucket, DATE_BUCKET(ms, 250, CAST(event_date AS TIMESTAMP)) AS millis_alias_bucket, DATE_BUCKET(microsecond, 250000, CAST(event_date AS TIMESTAMP)) AS micros_bucket, DATE_BUCKET(mcs, 250000, CAST(event_date AS TIMESTAMP)) AS micros_alias_bucket, DATE_BUCKET(us, 250000, CAST(event_date AS TIMESTAMP)) AS micros_us_alias_bucket FROM events ORDER BY user_id, event_date, actions LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-date-bucket-subsecond-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_eomonth_offsets_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-eomonth-offset-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, EOMONTH(event_date) AS month_end, EOMONTH(event_date, 2) AS shifted_month_end, EOMONTH(event_date, actions - 20) AS row_local_month_end FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-eomonth-offset-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);
