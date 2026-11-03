@@ -255,9 +255,10 @@ Styled literal `CONVERT`/`TRY_CONVERT` to the T-SQL timestamp family is also
 planner-qualified: ISO date-time styles preserve the supplied time, while
 date-only styles produce midnight. Runtime text-column timestamp styles now
 have local vectorized evaluator coverage for ISO styles `20`, `21`, `120`,
-`121`, and `126`, plus date-only styles through `101`, with `TRY_CONVERT`
-NULL/error behavior. Styles `20`, `21`, `120`, `121`, `126`, and `101` are
-qualified across the local and three-worker differential. See
+`121`, and `126`, date-only styles through `112`, and SQL Server style `113`
+(`dd mon yyyy hh:mi:ss:mmm`) with invariant English month names, with
+`TRY_CONVERT` NULL/error behavior. Styles `20`, `21`, `120`, `121`, `126`,
+`101`, and `113` are qualified across the local and three-worker differential. See
 [`track2-tsql-convert-timestamp-literals-2026-10-29.md`](../qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md).
 `LEFT` and `RIGHT` are qualified for bounded Unicode scalar text lengths and
 preserve NULLs across local and three-worker execution.
