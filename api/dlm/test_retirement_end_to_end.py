@@ -7,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 
 from dlm import engine
-from routers import context as context_router
 from routers import dlm as dlm_router
 
 
@@ -81,17 +80,6 @@ def test_generate_profile_curate_context_and_ask_are_postgresql_free(no_postgres
          patch("services.product_store.list_records", return_value=[]):
         answer = dlm_router.ask(dlm_router.AskBody(question="SELECT 1"), ctx)
     assert answer["reason"] == "out_of_scope"
-    no_postgres.assert_not_called()
-
-
-def test_legacy_context_profiler_fails_before_postgresql(no_postgres):
-    ctx = SimpleNamespace(email="owner", role="Admin")
-    with patch.object(context_router.profiler, "build_context",
-                      side_effect=AssertionError("legacy profiler reached")) as profile:
-        with pytest.raises(HTTPException) as error:
-            context_router.build_context(context_router.BuildBody(database="lake"), ctx)
-    assert error.value.status_code == 503
-    profile.assert_not_called()
     no_postgres.assert_not_called()
 
 

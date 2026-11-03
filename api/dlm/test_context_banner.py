@@ -358,12 +358,6 @@ class TheBannerIsServedFromMemoryWithNoEngineRoundTrip(unittest.TestCase):
         listed.assert_called_once()
         read.assert_not_called()
 
-    def test_a_deployment_with_no_banner_cache_is_said_to_have_none(self):
-        with patch.object(_runtime, "requested", return_value=False):
-            self.assertEqual(engine.warm_coverage("owner", "Admin"),
-                             engine.COVERAGE_NOT_CACHED)
-        self.assertEqual(self.cache.stats()["entries"], 0)
-
     def test_warming_without_a_principal_is_refused(self):
         with self.assertRaises(ValueError):
             engine.warm_coverage("")

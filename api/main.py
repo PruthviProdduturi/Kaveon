@@ -13,7 +13,8 @@ import time
 
 from config import settings
 from middleware.demo import demo_read_only
-from middleware.errors import AppError, app_error_handler, generic_error_handler
+import database.pool as pool
+from middleware.errors import AppError, app_error_handler, generic_error_handler, unknown_data_source_handler
 from database.pool import LargeIntResponse, TokenAuthError
 from database.warmup import start_warmup_and_heartbeat
 
@@ -85,9 +86,7 @@ from routers import (
     setup,
     users,
     user_recents,
-    chat,
     chat_history,
-    context,
     dlm,
 )
 
@@ -216,6 +215,7 @@ async def _token_auth_handler(request: Request, exc: TokenAuthError) -> JSONResp
 # Exception handlers
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(TokenAuthError, _token_auth_handler)
+app.add_exception_handler(pool.UnknownDataSource, unknown_data_source_handler)
 app.add_exception_handler(Exception, generic_error_handler)
 
 
@@ -271,9 +271,7 @@ app.include_router(catalog.router,          prefix="/api/v1")
 app.include_router(setup.router,            prefix="/api/v1")
 app.include_router(users.router,            prefix="/api/v1")
 app.include_router(user_recents.router,     prefix="/api/v1")
-app.include_router(context.router,          prefix="/api/v1")
 app.include_router(dlm.router,              prefix="/api/v1")
-app.include_router(chat.router,             prefix="/api/v1")
 app.include_router(chat_history.router,     prefix="/api/v1")
 
 

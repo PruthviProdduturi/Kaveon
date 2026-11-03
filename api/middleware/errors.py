@@ -57,6 +57,28 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
+async def unknown_data_source_handler(request: Request, exc: Exception) -> JSONResponse:
+    """A name the source registry does not know is a bad request, not a fault.
+
+    Nothing was attempted: no active source answers to it. The generic handler
+    below would report an unexpected failure, which sends the reader looking
+    for a broken connection instead of a missing registration. The database
+    name is the caller's own input, so echoing it leaks nothing.
+    """
+    database = str(exc) or "that name"
+    print(f"[API] unknown data source: {database} — {request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "code": "unknown_data_source",
+                "message": (f"No active data source named '{database}'. Register it "
+                            "under Sources, or pick an Engine catalog."),
+            }
+        },
+    )
+
+
 async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
     # Always log full details server-side
     print(f"[API Error] Unhandled: {type(exc).__name__} — {request.method} {request.url.path}")

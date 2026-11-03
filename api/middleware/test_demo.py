@@ -91,7 +91,7 @@ class ReadOnlyDependencyTests(unittest.TestCase):
                     patch.object(sql.history_svc, "create_history"), \
                     patch.object(sql, "assert_no_platform_tables"), \
                     patch.object(sql.sql_execute_limiter, "check"), \
-                    patch.object(sql.postgresql_retirement_runtime, "requested", return_value=False):
+                    patch.object(sql, "_engine_source_for_catalog", return_value=None):
                 allowed = self.client.post("/api/v1/sql/execute", json={"sql_text": "SELECT 1", "database": "d"})
             self.assertEqual(allowed.status_code, 200, allowed.text)
 
@@ -171,13 +171,12 @@ class RouteInventoryTests(unittest.TestCase):
         "DELETE /api/v1/lab/query/{query_id}", "POST /api/v1/lab/switch-database",
         "DELETE /api/v1/lab/query-history", "POST /api/v1/lab/record-query",
         "POST /api/v1/sql/generate", "DELETE /api/v1/sql/async/{job_id}",
-        "POST /api/v1/dlm/ask", "POST /api/v1/dlm/serve-chart", "POST /api/v1/chat",
+        "POST /api/v1/dlm/ask", "POST /api/v1/dlm/serve-chart",
     }
     STATEMENT = {
         "POST /api/v1/lab/execute": "sql", "POST /api/v1/lab/query": "query",
         "POST /api/v1/sql/execute": "sql_text", "POST /api/v1/sql/execute-async": "sql_text",
         "POST /api/v1/sql/engine": "sql_text", "POST /api/v1/dlm/reproduce": "sql",
-        "POST /api/v1/context/ask": "sql",
     }
 
     def test_the_application_dependency_and_the_allowances(self):
@@ -204,7 +203,10 @@ class RouteInventoryTests(unittest.TestCase):
                     "POST /api/v1/lab/saved-queries", "POST /api/v1/lab/ctas", "POST /api/v1/catalog-sources",
                     "POST /api/v1/engine/catalog/tables", "PUT /api/v1/datasets/{dataset_id}/dlm/context",
                     "POST /api/v1/datasets/{dataset_id}/dlm/generate", "PUT /api/v1/engine/admin/resource-groups",
-                    "POST /api/v1/admin/reset", "DELETE /api/v1/sql/cache"):
+                    # `POST /api/v1/admin/reset` was in this list until the
+                    # legacy metadata control path was removed; a route that
+                    # does not exist cannot be ungoverned.
+                    "DELETE /api/v1/sql/cache"):
             self.assertIn(key, governed)
 
 

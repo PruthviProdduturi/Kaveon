@@ -263,6 +263,84 @@ export const ChartIcon: React.FC<{ id: string; color: string; size?: number }> =
           <rect x="22" y="17" width="3.5" height="7"  rx="1" fill={color} fillOpacity="0.45" />
         </svg>
       );
+    case "bullet":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Bars with a target crossing each: the chart in miniature. */}
+          <rect x="2" y="5"  width="15" height="4" rx="1" fill={color} fillOpacity="0.8" />
+          <rect x="2" y="12" width="9"  height="4" rx="1" fill={color} fillOpacity="0.55" />
+          <rect x="2" y="19" width="19" height="4" rx="1" fill={color} fillOpacity="0.8" />
+          <rect x="13" y="3.5"  width="1.6" height="7" rx="0.6" fill={color} />
+          <rect x="14" y="10.5" width="1.6" height="7" rx="0.6" fill={color} />
+          <rect x="17" y="17.5" width="1.6" height="7" rx="0.6" fill={color} />
+        </svg>
+      );
+    case "ribbon":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Two series swapping rank, which is the whole point. */}
+          <path d="M3,7 C10,7 11,20 25,20"  fill="none" stroke={color} strokeWidth="2.6" strokeOpacity="0.85" />
+          <path d="M3,20 C10,20 11,7 25,7"  fill="none" stroke={color} strokeWidth="2.6" strokeOpacity="0.5" />
+          <path d="M3,13.5 C12,13.5 15,13.5 25,13.5" fill="none" stroke={color} strokeWidth="1.8" strokeOpacity="0.3" />
+          <circle cx="3"  cy="7"  r="1.8" fill={color} />
+          <circle cx="25" cy="7"  r="1.8" fill={color} fillOpacity="0.5" />
+          <circle cx="3"  cy="20" r="1.8" fill={color} fillOpacity="0.5" />
+          <circle cx="25" cy="20" r="1.8" fill={color} />
+        </svg>
+      );
+    case "flow_map":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Land behind, movement in front: the chart itself. */}
+          <path d="M3,9 Q7,6 11,9 T19,8 Q23,7 25,10 L25,19 Q20,21 15,19 T6,20 Q3,19 3,16 Z"
+                fill={color} fillOpacity="0.12" stroke={color} strokeOpacity="0.25" strokeWidth="0.8" />
+          <path d="M7,17 Q13,8 20,12"  fill="none" stroke={color} strokeWidth="2.4" strokeOpacity="0.8" />
+          <path d="M7,17 Q11,20 18,19" fill="none" stroke={color} strokeWidth="1.5" strokeOpacity="0.5" />
+          <circle cx="7"  cy="17" r="2.6" fill={color} />
+          <circle cx="20" cy="12" r="1.9" fill={color} fillOpacity="0.8" />
+          <circle cx="18" cy="19" r="1.4" fill={color} fillOpacity="0.6" />
+        </svg>
+      );
+    case "bubble_map":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          {/* Land as a backdrop, value in the bubbles -- the chart itself. */}
+          <path d="M3,9 Q7,6 11,9 T19,8 Q23,7 25,10 L25,19 Q20,21 15,19 T6,20 Q3,19 3,16 Z"
+                fill={color} fillOpacity="0.14" stroke={color} strokeOpacity="0.3" strokeWidth="0.8" />
+          <circle cx="8"  cy="13" r="3.4" fill={color} fillOpacity="0.7" />
+          <circle cx="17" cy="11" r="2.2" fill={color} fillOpacity="0.8" />
+          <circle cx="21" cy="17" r="1.5" fill={color} fillOpacity="0.65" />
+          <circle cx="12" cy="18" r="1.1" fill={color} fillOpacity="0.55" />
+        </svg>
+      );
+    case "network_graph":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <path d="M14,14 L6,7"   stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M14,14 L23,9"  stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M14,14 L7,21"  stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M14,14 L22,22" stroke={color} strokeWidth="1.6" strokeOpacity="0.5" />
+          <path d="M6,7 L23,9"    stroke={color} strokeWidth="1.2" strokeOpacity="0.3" />
+          <circle cx="14" cy="14" r="4"   fill={color} />
+          <circle cx="6"  cy="7"  r="2.4" fill={color} fillOpacity="0.75" />
+          <circle cx="23" cy="9"  r="2.1" fill={color} fillOpacity="0.65" />
+          <circle cx="7"  cy="21" r="2.1" fill={color} fillOpacity="0.65" />
+          <circle cx="22" cy="22" r="1.8" fill={color} fillOpacity="0.55" />
+        </svg>
+      );
+    case "tree":
+      return (
+        <svg viewBox="0 0 28 28" style={s}>
+          <path d="M5,14 H11 M11,14 V7  H17" stroke={color} strokeWidth="1.6" strokeOpacity="0.55" fill="none" />
+          <path d="M11,14 V21 H17"           stroke={color} strokeWidth="1.6" strokeOpacity="0.55" fill="none" />
+          <path d="M17,7 H22 M17,21 H22"     stroke={color} strokeWidth="1.6" strokeOpacity="0.4"  fill="none" />
+          <circle cx="4"  cy="14" r="2.6" fill={color} />
+          <circle cx="17" cy="7"  r="2"   fill={color} fillOpacity="0.75" />
+          <circle cx="17" cy="21" r="2"   fill={color} fillOpacity="0.75" />
+          <circle cx="23" cy="7"  r="1.6" fill={color} fillOpacity="0.5" />
+          <circle cx="23" cy="21" r="1.6" fill={color} fillOpacity="0.5" />
+        </svg>
+      );
     case "sankey":
       return (
         <svg viewBox="0 0 28 28" style={s}>

@@ -754,6 +754,23 @@ _pools: Dict[str, ConnectionPool] = {}
 _pool_lock = Lock()
 
 
+class UnknownDataSource(Exception):
+    """No registered source answers to this name.
+
+    Distinct from a connection failure: nothing was attempted, because the
+    registry has no active source with this database name or id. Routers turn
+    it into a 400 naming the database, since the caller asked for something
+    that does not exist rather than something that is broken.
+    """
+
+
+# The prefix `services.credentials` uses to recognise a Key Vault reference.
+# Named here rather than imported at module scope because `credentials` is
+# imported lazily inside the resolvers to keep this module importable without
+# a keyring.
+KEY_VAULT_ENVELOPE = "kaveon:keyvault:v1:"
+
+
 def _live_meta_db() -> str:
     """Return the current metadata database name from os.environ (kept live by
     main.py lifespan and config update endpoints) with fallback to the frozen
@@ -782,11 +799,17 @@ def _aad_dbs() -> set:
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 
-def get_connection_pool(database: str) -> ConnectionPool:
+def get_connection_pool(database: str, actor: Optional[str] = None,
+                        role: str = "Viewer") -> ConnectionPool:
     """Get or create the pool for *database* (keyed by database name).
 
     Uses os.environ for metadata DB identity so live config updates take effect
     without requiring a full process restart.
+
+    `actor` is the caller's identity, needed to read the source registry out of
+    KaveonDB. It is optional only so the metadata-era paths above keep working;
+    resolving a registered data source without it falls back to the legacy
+    table, which no longer exists.
     """
     with _pool_lock:
         if database in _pools:
@@ -816,7 +839,7 @@ def get_connection_pool(database: str) -> ConnectionPool:
                 )
         else:
             # Data source — resolve its type + connection info from data_sources.
-            ds = _resolve_data_source(database)
+            ds = _resolve_data_source(database, actor, role)
             ds_type = _map_ds_type(ds.get("type") if ds else None)
             pool_size = settings.MAX_POOL_SIZE_DATAWAREHOUSE
             # Use the resolved database_name for the pool key (not the passed ID)
@@ -831,6 +854,8 @@ def get_connection_pool(database: str) -> ConnectionPool:
                 password = info["password"] or (ds.get("password", "") if ds else "")
                 sslmode = info["sslmode"] or (ds.get("sslmode", "require") if ds else "require")
                 if not host:
+                    if ds is None:
+                        raise UnknownDataSource(database)
                     raise ValueError(f"No host configured for {ds_type} data source: {database}")
                 # The physical DB to connect to comes from the connection string (or an
                 # explicit db field) — NOT from `database_name`, which is just the routing
@@ -845,6 +870,8 @@ def get_connection_pool(database: str) -> ConnectionPool:
                 # Fabric SQL / Azure SQL — connection_string is the ODBC endpoint.
                 endpoint = (ds.get("connection_string", "") if ds else "") or settings.DATAWAREHOUSE_ENDPOINT or ""
                 if not endpoint:
+                    if ds is None:
+                        raise UnknownDataSource(database)
                     raise ValueError(f"No endpoint configured for database: {database}")
                 pool = ConnectionPool(endpoint, actual_db, pool_size=pool_size)
 
@@ -855,13 +882,85 @@ def get_connection_pool(database: str) -> ConnectionPool:
         return pool
 
 
-def _resolve_data_source(database: str) -> Optional[Dict[str, Any]]:
+def _kaveondb_source_row(database: str, actor: str, role: str) -> Optional[Dict[str, Any]]:
+    """The registered data source named *database*, as a legacy-shaped row.
+
+    Sources live in KaveonDB now; this reads them from there and returns the
+    same keys the connection code below expects, with `connection_string`
+    carrying the Key Vault envelope rather than a secret. Resolution of that
+    envelope stays in `services.credentials.source_for_use`, which already
+    knows how to read a Key Vault reference without a database connection.
+    """
+    from services import product_read_authority, source_secret_store
+
+    documents = product_read_authority.list_documents("sources", actor, role)
+    wanted = str(database)
+    match = None
+    for document in documents:
+        if document.get("source_kind") != "data" or not document.get("is_active"):
+            continue
+        source_id = str(document.get("source_id") or "")
+        if not source_id.startswith("data-"):
+            continue
+        # Callers pass either the routing label a dataset references or the
+        # bare id, the same two ways the legacy lookup accepted.
+        if str(document.get("database_name") or "") == wanted or source_id[5:] == wanted:
+            match = document
+            break
+    if match is None:
+        return None
+
+    source_id = str(match.get("source_id"))[5:]
+    reference = str(match.get("secret_ref") or "")
+    if reference.startswith("https://"):
+        envelope = reference
+    elif reference.startswith("key-managed:"):
+        # Written by the backfill, which recorded that a secret is managed
+        # without naming it. The name is derived the way it was written.
+        try:
+            name = source_secret_store.secret_name("data", source_id)
+            envelope = f"{source_secret_store.vault_url()}/secrets/{name}"
+        except Exception:
+            return None
+    else:
+        # No usable reference: fail closed rather than fall back to an
+        # endpoint from the environment, which would connect somewhere the
+        # source does not name.
+        return None
+
+    return {
+        "id": source_id,
+        "type": match.get("source_type"),
+        "database_name": match.get("database_name"),
+        "connection_string": KEY_VAULT_ENVELOPE + envelope,
+    }
+
+
+def _resolve_data_source(database: str, actor: Optional[str] = None,
+                         role: str = "Viewer") -> Optional[Dict[str, Any]]:
     """Return {type, connection_string} for a registered data source, or None.
 
-    Dialect-aware: uses %s / TRUE against a Postgres/MySQL metadata DB and ? / 1
-    against Fabric/Azure SQL.
+    KaveonDB first, because that is where sources are registered. The legacy
+    path below reads the `data_sources` table out of the metadata database and
+    cannot answer once that database is gone.
     """
     from services.credentials import source_for_use, CredentialError
+
+    if actor:
+        try:
+            from services import product_read_authority
+            if product_read_authority.enabled("sources"):
+                row = _kaveondb_source_row(database, actor, role)
+                # `source_for_use` takes its Key Vault branch for this
+                # envelope and never touches the connection arguments, which
+                # is why there is no connection to give it.
+                return source_for_use(row, None, None) if row else None
+        except CredentialError:
+            raise
+        except Exception as error:
+            print(f"[Pool] Could not resolve data source {database} from KaveonDB: {type(error).__name__}")
+            return None
+
     meta_db = _live_meta_db()
     if meta_db not in _pools:
         return None
@@ -991,7 +1090,8 @@ def _bound_statement(sql: str, db_type: str, timeout_seconds: float) -> str:
 
 
 def execute_query(sql: str, database: str, params: Optional[list] = None,
-                  timeout_seconds: Optional[float] = None, max_rows: Optional[int] = None) -> Dict[str, Any]:
+                  timeout_seconds: Optional[float] = None, max_rows: Optional[int] = None,
+                  actor: Optional[str] = None, role: str = "Viewer") -> Dict[str, Any]:
     """
     Execute *sql* against *database* using the connection pool.
     Retries up to 3 attempts on stale-connection errors (08S01 / 10054), with a
@@ -999,7 +1099,7 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
     `timeout_seconds` bounds the statement on the server (or the driver, for
     SQL Server); a bounded statement that runs over raises like any other error.
     """
-    pool = get_connection_pool(database)
+    pool = get_connection_pool(database, actor, role)
     # Translate T-SQL idioms when the target is Postgres/MySQL (idempotent).
     sql = adapt_sql(sql, pool.db_type)
     if timeout_seconds:
@@ -1036,10 +1136,10 @@ def execute_query(sql: str, database: str, params: Optional[list] = None,
 
 def execute_query_cancellable(
     sql: str, database: str, params: Optional[list] = None, cancel_event=None,
-    max_rows: Optional[int] = None,
+    max_rows: Optional[int] = None, actor: Optional[str] = None, role: str = "Viewer",
 ) -> Dict[str, Any]:
     """execute_query variant that supports mid-flight cancellation via cancel_event."""
-    db_pool = get_connection_pool(database)
+    db_pool = get_connection_pool(database, actor, role)
     sql = adapt_sql(sql, db_pool.db_type)
     if max_rows:
         sql = _bound_rows(sql, db_pool.db_type, max_rows)
@@ -1056,8 +1156,9 @@ def execute_query_cancellable(
         raise
 
 
-def get_tables(database: str) -> List[Dict[str, Any]]:
-    pool = get_connection_pool(database)
+def get_tables(database: str, actor: Optional[str] = None,
+               role: str = "Viewer") -> List[Dict[str, Any]]:
+    pool = get_connection_pool(database, actor, role)
     conn = pool.get_connection()
     try:
         tables = conn.get_tables()
@@ -1074,12 +1175,13 @@ def get_tables(database: str) -> List[Dict[str, Any]]:
         pool.return_connection(conn)
 
 
-def get_table_columns(table_id: str, database: str) -> List[Dict[str, Any]]:
+def get_table_columns(table_id: str, database: str, actor: Optional[str] = None,
+                      role: str = "Viewer") -> List[Dict[str, Any]]:
     parts = table_id.split(".")
     if len(parts) != 2:
         raise ValueError(f"Invalid table ID format: {table_id}")
     schema, table_name = parts
-    pool = get_connection_pool(database)
+    pool = get_connection_pool(database, actor, role)
     conn = pool.get_connection()
     try:
         return conn.get_table_columns(schema, table_name)

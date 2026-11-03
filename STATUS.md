@@ -3,11 +3,18 @@
 > Branch: `dev` (default)
 > Module: Analyze module of the Kaveon suite
 > Deploy: Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) · [kaveon.io](https://kaveon.io)
-> Control plane: the Engine's transaction API over object storage when
-> `KAVEON_POSTGRESQL_RETIREMENT_MODE` is set, which `docker-compose.yml`
-> sets for the local stack; Azure PostgreSQL (`kaveonmeta` + `kaveon`)
-> otherwise. One switch decides it, so say which one rather than naming a
-> database the installation may not be using.
+> Control plane: the Engine's transaction API over object storage. **PostgreSQL
+> is retired** — datasets, charts, dashboards, saved queries, favourites and
+> query history are product records committed through the Engine, not rows in a
+> relational database.
+>
+> ⚠️ A fresh install does not match yet. The runtime reads
+> `KAVEON_POSTGRESQL_RETIREMENT_MODE`, which is false when unset, and the only
+> place in this repo that sets it is `docker-compose.yml` for the local stack.
+> The Helm chart still ships `retirementMode: false`
+> (`infra/helm/kaveon-platform/values.yaml:102`). Until those defaults flip,
+> someone deploying this commit gets the PostgreSQL path the product no longer
+> uses.
 
 ---
 

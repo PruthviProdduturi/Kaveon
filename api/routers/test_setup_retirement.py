@@ -1,44 +1,51 @@
-"""Retirement mode must never reach the legacy metadata database control path."""
+"""The setup router offers nothing to configure, because there is nothing.
 
-import os
+These tests used to prove that retirement mode fenced the legacy metadata
+control path before it could reach PostgreSQL -- a 409 from `/setup/test`,
+`/admin/metadata/test`, `/admin/metadata/update` and `/admin/reset`. Those
+endpoints are removed, so the fence has nothing to guard and a refusal is no
+longer the thing worth asserting. Absence is: a route that does not exist
+cannot reach a database that does not exist, and cannot be brought back by a
+missing environment variable.
+
+What is still worth pinning is the shape of the two endpoints Studio reads, and
+that the module has no way back to a second system of record -- no pool, no
+environment reader, no probe.
+"""
+
 import unittest
-from unittest.mock import patch
 
-from fastapi import HTTPException
-
-from models.setup import SetupConnectionBody
 from routers import setup
 
 
-class SetupRetirementTests(unittest.TestCase):
-    def setUp(self):
-        self.mode = patch.dict(os.environ, {"KAVEON_POSTGRESQL_RETIREMENT_MODE": "true"})
-        self.mode.start()
+class SetupSurfaceTests(unittest.TestCase):
+    def test_only_the_two_endpoints_studio_reads_are_served(self):
+        self.assertEqual(
+            sorted(route.path for route in setup.router.routes),
+            ["/admin/metadata", "/setup/status"],
+        )
 
-    def tearDown(self):
-        self.mode.stop()
+    def test_the_legacy_metadata_control_path_is_gone(self):
+        """Each of these configured, probed or reset an external metadata
+        database. Asserting the attributes are absent catches a reintroduction
+        that an endpoint-path check alone would miss -- a helper can come back
+        before a route does."""
+        for name in (
+            "setup_test", "setup_initialize",
+            "admin_test_metadata", "admin_update_metadata", "admin_start_fresh",
+            "_probe", "_read_env_vars", "_upsert_env", "_parse_odbc",
+            "_resolve_fabric", "_assert_setup_mode",
+            "_assert_external_metadata_enabled", "_is_metadata_configured",
+            "_is_reset_allowed",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(setup, name), f"{name} came back")
 
-    def test_status_reports_kaveondb_without_database_probe(self):
-        with patch.object(setup.pool, "execute_query", side_effect=AssertionError("PostgreSQL reached")):
-            self.assertEqual(
-                setup.setup_status(),
-                {"status": "ok", "authority": "kaveondb"},
-            )
-
-    def test_admin_metadata_reports_kaveondb_without_reading_legacy_config(self):
-        with patch.object(setup, "_read_env_vars", side_effect=AssertionError("legacy config reached")):
-            result = setup.admin_get_metadata(ctx={})
-        self.assertEqual(result["db_type"], "kaveondb")
-        self.assertEqual(result["authority"], "kaveondb")
-        self.assertTrue(result["ui_configured"])
-
-    def test_setup_probe_is_fenced_before_pool_access(self):
-        request = SetupConnectionBody(db_type="postgresql", database="metadata", host="localhost")
-        with patch.object(setup, "_probe", side_effect=AssertionError("PostgreSQL reached")):
-            with self.assertRaises(HTTPException) as raised:
-                setup.setup_test(request)
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(raised.exception.detail["code"], "postgresql_retired")
+    def test_the_module_cannot_reach_a_database_at_all(self):
+        """No pool, and no PostgreSQL retirement switch: the authority is not
+        conditional any more, so neither is this router."""
+        self.assertFalse(hasattr(setup, "pool"))
+        self.assertFalse(hasattr(setup, "postgresql_retirement_runtime"))
 
     def test_the_neon_migration_route_is_gone(self):
         """`POST /admin/fix-datasource-refs` rewrote `database_name` from
@@ -51,21 +58,21 @@ class SetupRetirementTests(unittest.TestCase):
             [route.path for route in setup.router.routes],
         )
 
-    def test_admin_mutations_are_fenced_before_side_effects(self):
-        request = SetupConnectionBody(db_type="postgresql", database="metadata", host="localhost")
-        calls = (
-            lambda: setup.admin_test_metadata(request, ctx={}),
-            lambda: setup.admin_update_metadata(request, ctx={}),
-            lambda: setup.admin_start_fresh(ctx={}),
-        )
-        with patch.object(setup, "_probe", side_effect=AssertionError("PostgreSQL reached")), \
-             patch.object(setup, "_upsert_env", side_effect=AssertionError("config mutation reached")), \
-             patch.object(setup.pool, "get_connection_pool", side_effect=AssertionError("PostgreSQL reached")):
-            for call in calls:
-                with self.subTest(call=call):
-                    with self.assertRaises(HTTPException) as raised:
-                        call()
-                    self.assertEqual(raised.exception.status_code, 409)
+    def test_status_reports_the_engine_as_the_authority(self):
+        self.assertEqual(setup.setup_status(), {"status": "ok", "authority": "kaveondb"})
+
+    def test_admin_metadata_describes_one_system_and_no_dsn(self):
+        result = setup.admin_get_metadata(ctx={})
+        self.assertEqual(result["db_type"], "kaveondb")
+        self.assertEqual(result["authority"], "kaveondb")
+        self.assertTrue(result["ui_configured"])
+        # The Engine is reached over the bridge, so there is no host to report.
+        # Publishing an empty string rather than omitting the key keeps the
+        # connections page's shape stable.
+        for empty in ("endpoint", "host", "port"):
+            self.assertEqual(result[empty], "", f"{empty} should be empty")
+        self.assertTrue(result["database"])
+        self.assertTrue(result["schema"])
 
 
 if __name__ == "__main__":
