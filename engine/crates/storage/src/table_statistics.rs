@@ -17,7 +17,7 @@ use crate::{
     source_statistics::{column_facts_from_delta_stats, columns_from_footers, is_object},
 };
 use arrow::{
-    array::{Array, ArrayRef, AsArray},
+    array::{Array, ArrayRef, AsArray, StringViewArray},
     compute,
     datatypes::{DataType, SchemaRef},
 };
@@ -930,6 +930,30 @@ impl ColumnReadProfile {
                     compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
                 );
             }
+            DataType::Utf8View => {
+                let values = array
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .ok_or_else(|| {
+                        KaveonError::Storage(
+                            "Utf8View column is not backed by StringViewArray".to_owned(),
+                        )
+                    })?;
+                let mut min = None;
+                let mut max = None;
+                for value in values.iter().flatten() {
+                    if min.is_none_or(|current| value < current) {
+                        min = Some(value);
+                    }
+                    if max.is_none_or(|current| value > current) {
+                        max = Some(value);
+                    }
+                }
+                self.widen(
+                    min.map(|value| StatValue::Text(value.to_owned())),
+                    max.map(|value| StatValue::Text(value.to_owned())),
+                );
+            }
             other => {
                 return Err(KaveonError::Storage(format!(
                     "column type {other} cannot be sketched"
@@ -1179,7 +1203,7 @@ pub fn sketched_columns(
 mod tests {
     use super::*;
     use arrow::{
-        array::{ArrayRef, Date32Array, Float64Array, Int64Array, StringArray},
+        array::{ArrayRef, Date32Array, Float64Array, Int64Array, StringArray, StringViewArray},
         datatypes::{Field, Schema},
         record_batch::RecordBatch,
     };
@@ -1511,5 +1535,22 @@ mod tests {
         assert!(error.contains("reserve"), "{error}");
         assert_eq!(pool.snapshot().current_bytes, 0);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn utf8_view_profiles_preserve_text_bounds_and_distinct_values() {
+        let mut profile = ColumnReadProfile::new(&DataType::Utf8View).unwrap();
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("west"),
+            None,
+            Some("east"),
+            Some("west"),
+        ]));
+        profile.fold_array(&values).unwrap();
+
+        assert_eq!(profile.nulls, 1);
+        assert_eq!(profile.min, Some(StatValue::Text("east".to_owned())));
+        assert_eq!(profile.max, Some(StatValue::Text("west".to_owned())));
+        assert_eq!(profile.distinct.unwrap().estimate(), 2);
     }
 }
