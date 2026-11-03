@@ -1,7 +1,8 @@
 # Track 2 — T-SQL text conversion
 
 **Status:** qualified for the bounded UTF-8 text contract  
-**Implementation:** `a8660664`
+**Implementation:** `a8660664` (qualified text conversion); current boundary
+validation is extended by the follow-up commit that records this qualification.
 **Date:** 2026-11-03
 
 ## Scope
@@ -14,7 +15,9 @@ qualification covers numeric-to-text conversion through the existing typed
 cast path, including nullable values and distributed fragment execution.
 
 This is a logical text contract, not SQL Server code-page or `nvarchar`
-storage emulation. Length limits, binary conversion styles, collation-specific
+storage emulation. Sized `VARCHAR(n)`, `CHAR(n)`, and equivalent text casts are
+rejected explicitly: the planner must not accept a length and silently drop it.
+Length limits, binary conversion styles, collation-specific
 formatting, and locale-sensitive date formatting remain outside the boundary
 and continue to fail closed or use their separately qualified temporal forms.
 
@@ -44,4 +47,10 @@ Result:
 The sweep compares local execution with the three-worker fragment path across
 dictionary, plain, multi-file, partitioned, hive-ordered, and clustered
 Parquet layouts. The corpus is now 148 cases and is pinned to `a8660664`.
+
+The explicit rejection boundary is covered by the SQL planner regression
+`rejects_sized_tsql_text_casts_instead_of_dropping_length`, which checks
+`CAST`, `TRY_CAST`, `CONVERT`, and `TRY_CONVERT` sized text forms. This is a
+fail-closed contract test rather than a distributed result qualification:
+length-aware truncation and padding remain a separate implementation phase.
 
