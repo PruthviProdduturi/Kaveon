@@ -404,6 +404,28 @@ const ALIASES: Record<string, string> = {
   "ye": "Yemen", "yem": "Yemen",
   "zm": "Zambia", "zmb": "Zambia",
   "zw": "Zimbabwe", "zwe": "Zimbabwe",
+
+  // ── Found by joining real Engine output against the shipped GeoJSON ──────
+  // 234 distinct iso_code/country pairs out of `covid_global`: 42 did not
+  // join, and these 13 are countries whose names are features in
+  // `world.json`. Their codes had no alias, so the join fell through to the
+  // pass-through and matched nothing -- Chad, a large country, was silently
+  // absent from any choropleth keyed on ISO-3. The other 29 are small
+  // territories this GeoJSON does not carry, and an alias cannot invent a
+  // feature, so those stay reported by the unmapped badge.
+  "td": "Chad", "tcd": "Chad",
+  "gl": "Greenland", "grl": "Greenland",
+  "pr": "Puerto Rico", "pri": "Puerto Rico",
+  "bm": "Bermuda", "bmu": "Bermuda",
+  "gd": "Grenada", "grd": "Grenada",
+  "lc": "Saint Lucia", "lca": "Saint Lucia",
+  "ms": "Montserrat", "msr": "Montserrat",
+  "sh": "Saint Helena", "shn": "Saint Helena",
+  "im": "Isle of Man", "imn": "Isle of Man",
+  "je": "Jersey", "jey": "Jersey",
+  "as": "American Samoa", "asm": "American Samoa",
+  "gu": "Guam", "gum": "Guam",
+  "nu": "Niue", "niu": "Niue",
 };
 
 /**
