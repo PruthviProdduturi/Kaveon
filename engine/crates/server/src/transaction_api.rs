@@ -5367,6 +5367,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_merge_by_source_output_remains_fail_closed() {
+        let (registry, _catalog) = registry().await;
+        let transaction = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE OUTPUT deleted.id, deleted.revision"#.into(),
+                transaction_id: Some(transaction.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop() {
         let (registry, catalog) = registry().await;
         let first = registry.begin("alice").await.unwrap();
