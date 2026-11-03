@@ -499,7 +499,7 @@ registered-source passthrough, or KaveonDB transaction behavior.
 
 The current local release-image gate is recorded in
 `docs/qualification/track1-server-suite-2026-11-03.md`: the SQL crate has
-373 passing tests and the server binary has 697 passing tests. This evidence
+374 passing tests and the server binary has 697 passing tests. This evidence
 does not substitute for the open cloud, external-client, or broader semantic
 qualification boundaries listed above.
 
