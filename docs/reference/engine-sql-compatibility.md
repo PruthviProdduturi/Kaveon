@@ -69,6 +69,10 @@ bounded finite numeric contract with NULL propagation; see the
 [`track2-tsql-trigonometric-2026-11-03.md`](../qualification/track2-tsql-trigonometric-2026-11-03.md)
 qualification record.
 
+SQL Server's `ATN2(y, x)` spelling is also qualified through the same typed
+two-argument arctangent path; `ATAN2` remains the generic Trino-compatible
+name. See [`track2-tsql-atn2-2026-11-03.md`](../qualification/track2-tsql-atn2-2026-11-03.md).
+
 `JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
 SQL NULL arguments as JSON `null`; its bounded `ABSENT ON NULL` form omits
 NULL elements. `JSON_OBJECT(key : value, ...)` (or the

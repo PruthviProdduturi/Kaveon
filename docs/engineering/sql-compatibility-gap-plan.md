@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 154-case corpus has planner coverage and focused exact
+  The current 155-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -258,6 +258,11 @@ The same bounded numeric contract now qualifies SQL Server/Fabric `SIN`, `COS`,
 `TAN`, `ASIN`, `ACOS`, `ATAN`, `DEGREES`, `RADIANS`, and `PI`, including
 NULL-preserving local and three-worker results. Evidence:
 `docs/qualification/track2-tsql-trigonometric-2026-11-03.md`.
+
+SQL Server's `ATN2(y, x)` now maps to the existing typed two-argument
+arctangent path and is qualified across local and three-worker execution;
+`ATAN2` remains the generic Trino-compatible spelling. Evidence:
+`docs/qualification/track2-tsql-atn2-2026-11-03.md`.
 
 The bounded SQL Server `FORMATMESSAGE` literal-template form is qualified for
 `%s`, `%d`, `%i`, `%u`, and `%%` substitutions with positional text or numeric

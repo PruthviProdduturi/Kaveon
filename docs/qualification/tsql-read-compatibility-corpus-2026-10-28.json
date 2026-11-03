@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "8b6ecdef",
+  "engine_commit": "2430209c",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -27,6 +27,7 @@
     {"id": "power_scalar_compatibility", "sql": "SELECT POWER(CAST(actions AS DOUBLE), 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "log_exp_scalar_compatibility", "sql": "SELECT LOG(CAST(actions AS DOUBLE) + 1), LOG(CAST(actions AS DOUBLE) + 1, 10), LOG10(CAST(actions AS DOUBLE) + 1), EXP(CAST(actions AS DOUBLE) / 10) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "trigonometric_scalar_compatibility", "sql": "SELECT SIN(CAST(actions AS DOUBLE) / 10), COS(CAST(actions AS DOUBLE) / 10), TAN(CAST(actions AS DOUBLE) / 10), ASIN(SIN(CAST(actions AS DOUBLE) / 10)), ACOS(COS(CAST(actions AS DOUBLE) / 10)), ATAN(CAST(actions AS DOUBLE) / 10), DEGREES(PI()), RADIANS(180), PI() FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
+    {"id": "atn2_scalar_compatibility", "sql": "SELECT ATN2(CAST(actions AS DOUBLE) + 1, CAST(actions AS DOUBLE) + 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "greatest_numeric", "sql": "SELECT GREATEST(actions, sessions, duration_sec) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "least_numeric", "sql": "SELECT LEAST(actions, sessions, errors) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "string_scalar_compatibility", "sql": "SELECT UPPER(name), LOWER(name), REPLACE(name, 'a', 'A') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
