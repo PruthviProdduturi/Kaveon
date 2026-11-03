@@ -410,6 +410,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_space",
+        "SELECT TOP 5 SPACE(actions - 20) AS padding FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_string_escape_json",
         "SELECT TOP 5 STRING_ESCAPE(country, 'json') AS escaped FROM {T} ORDER BY user_id, event_date, actions, country",
         true,

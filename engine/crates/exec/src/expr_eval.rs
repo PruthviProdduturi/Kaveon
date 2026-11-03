@@ -628,6 +628,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "SPLIT_PART",
     "REVERSE",
     "REPEAT",
+    "SPACE",
 ];
 
 /// A function over one dictionary column and literals runs once per
@@ -12359,6 +12360,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ))),
             }
         }
+        "SPACE" => {
+            check_arity(name, args, 1)?;
+            let counts = compute::cast(&args[0], &DataType::Int64)?;
+            let counts = counts.as_primitive::<Int64Type>();
+            let bytes = (0..num_rows).try_fold(0_u64, |total, row| {
+                if counts.is_null(row) || counts.value(row) < 0 {
+                    return Ok(total);
+                }
+                total
+                    .checked_add(counts.value(row) as u64)
+                    .ok_or_else(|| KaveonError::Execution("SPACE output size overflow".into()))
+            })?;
+            reserve_string_expansion(bytes, num_rows)?;
+            let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
+            for row in 0..num_rows {
+                if counts.is_null(row) || counts.value(row) < 0 {
+                    result.append_null();
+                } else {
+                    result.append_value(" ".repeat(counts.value(row) as usize));
+                }
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "REPEAT" => {
             check_arity(name, args, 2)?;
             // Trino overloads REPEAT for both VARCHAR and ARRAY values. Keep
@@ -18348,6 +18372,17 @@ mod tests {
         assert_eq!(nulls.len(), 2);
         assert_eq!(nulls.null_count(), 2);
         assert_eq!(repeated.value(2).len(), 0);
+    }
+
+    #[test]
+    fn space_returns_bounded_padding_and_nulls_negative_counts() {
+        let counts = Arc::new(Int64Array::from(vec![Some(3), Some(0), Some(-1), None])) as ArrayRef;
+        let result = eval_scalar_function("SPACE", &[counts], 4).unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "   ");
+        assert_eq!(values.value(1), "");
+        assert!(values.is_null(2));
+        assert!(values.is_null(3));
     }
 
     #[test]
