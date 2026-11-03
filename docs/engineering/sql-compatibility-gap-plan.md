@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 119-case corpus has planner coverage and focused exact
+  The current 121-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -83,10 +83,12 @@ qualified for date/timestamp inputs with an optional row-local month offset.
 `DATETRUNC` now canonicalizes to the same typed `DATE_TRUNC` path for the
 qualified SQL Server datepart/input boundary; evidence is retained in
 `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
-Unordered SQL Server `STRING_AGG(value, literal_separator)` now carries a
-mergeable distributed string state with NULL omission and explicit rejection of
-ordered/dynamic forms; evidence is retained in
-`docs/qualification/track2-tsql-string-agg-boundary-2026-10-30.md`.
+SQL Server `STRING_AGG(value, literal_separator)` now carries a mergeable
+distributed string state with NULL omission. The bounded
+`WITHIN GROUP (ORDER BY value [ASC|DESC])` form is also qualified; independent
+or multiple order keys, explicit NULL placement, dynamic separators, and
+unbounded ordered state remain rejected. Evidence is retained in
+`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md`.
 `DATEFROMPARTS` now builds validated `DATE` values from integer parts with
 NULL propagation and distributed differential coverage.
 `DATENAME` now returns deterministic English calendar names or textual numeric
