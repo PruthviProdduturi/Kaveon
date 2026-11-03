@@ -1,4 +1,4 @@
-# DLM Curation at Scale: How Kaveon Precomputes 375 Answers Across 10 Million Rows
+# Historical DLM Curation Baseline: 375 Answers Across 10 Million Rows
 
 **Pruthvi Prodduturi**
 August 2026
@@ -384,11 +384,17 @@ Merges into existing rows: adds delta to existing cells, appends new cells.
 
 ---
 
-## 9. The Storage Model
+## 9. Historical Adapter Storage Model
+
+The schema in this section is the PostgreSQL-backed reference implementation
+used for the dated measurements in this paper. It is retained for reproducibility
+and migration analysis, not as the native KaveonDB storage contract. Native
+deployments persist DLM definitions, runs, and product metadata as KaveonDB
+transaction records; the Engine catalog owns source versions and statistics.
 
 ### 9.1 Schema
 
-Five tables in the metadata database (`kaveonmeta`):
+The legacy adapter used five tables in its metadata database (`kaveonmeta`):
 
 ```
 dlm_artifact       -- one row per dataset: manifest, stats_rollup, usage_rollup,
@@ -399,7 +405,7 @@ dlm_answers        -- precomputed results (this paper's focus)
 dlm_sketch         -- HLL registers for COUNT DISTINCT
 ```
 
-### 9.2 `dlm_answers` Schema
+### 9.2 Legacy `dlm_answers` Schema
 
 | Column | Type | Description |
 |---|---|---|
@@ -423,7 +429,7 @@ ON CONFLICT (dataset_id, metric_name, group_col) DO UPDATE SET
   computed_at = EXCLUDED.computed_at
 ```
 
-### 9.3 In-Memory Cache
+### 9.3 Legacy In-Memory Cache
 
 On first access, all `dlm_answers` rows for a dataset are loaded into
 `_ANSWER_CACHE` — a Python dict keyed by `(dataset_id, metric_name, group_col)`.
@@ -546,7 +552,7 @@ can serve. This is by design, not a gap.
 | Single-dimension filter | ~8 seconds | <10ms |
 | Chart serve (serve-chart endpoint) | ~5--30 seconds | ~5ms |
 
-### 11.5 Infrastructure
+### 11.5 Historical Infrastructure
 
 | Component | Spec | Cost |
 |---|---|---|
@@ -555,8 +561,9 @@ can serve. This is by design, not a gap.
 | API (Azure Container Apps) | 0.5 vCPU, 1 GB | ~$10/month |
 | Frontend (Vercel) | Hobby plan | $0 |
 
-375 precomputed answers serving 67 dashboard charts and natural-language queries
-over 10 million rows, on $40/month of infrastructure.
+The historical case study served 375 precomputed answers and 67 dashboard charts
+over 10 million rows on the infrastructure listed above. Those prices, instance
+sizes, and PostgreSQL topology are not a current Kaveon deployment requirement.
 
 ---
 
