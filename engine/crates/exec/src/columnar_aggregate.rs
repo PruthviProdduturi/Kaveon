@@ -811,6 +811,21 @@ fn for_each_text<'a>(
                         }
                     }
                 }
+                DataType::Utf8View => {
+                    let values = dictionary
+                        .values()
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .expect("dictionary Utf8View values must be a StringViewArray");
+                    for (row, &slot) in slots.iter().enumerate() {
+                        if keys.is_valid(row) {
+                            let code = keys.value(row) as usize;
+                            if !values.is_null(code) {
+                                apply(slot as usize, values.value(code));
+                            }
+                        }
+                    }
+                }
                 other => {
                     return Err(exec_err(format!(
                         "text aggregate over dictionary of {other}"
@@ -835,7 +850,11 @@ pub fn supports_key(data_type: &DataType) -> bool {
             | DataType::LargeUtf8
             | DataType::Utf8View
     ) || matches!(data_type, DataType::Dictionary(key, values)
-        if key.as_ref() == &DataType::Int32 && matches!(values.as_ref(), DataType::Utf8 | DataType::LargeUtf8))
+    if key.as_ref() == &DataType::Int32
+        && matches!(
+            values.as_ref(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ))
 }
 
 /// Whether the columnar path carries this aggregate over this input type.
@@ -997,6 +1016,17 @@ fn key_words(
                             }
                             DataType::LargeUtf8 => {
                                 let strings = values.as_string::<i64>();
+                                (!strings.is_null(code)).then(|| strings.value(code))
+                            }
+                            DataType::Utf8View => {
+                                let strings = values
+                                    .as_any()
+                                    .downcast_ref::<StringViewArray>()
+                                    .ok_or_else(|| {
+                                        exec_err(
+                                            "dictionary Utf8View values must be a StringViewArray",
+                                        )
+                                    })?;
                                 (!strings.is_null(code)).then(|| strings.value(code))
                             }
                             _ => None,
@@ -1876,6 +1906,40 @@ impl ColumnarGroups {
                             .downcast_ref::<StringViewArray>()
                             .ok_or_else(|| exec_err("invalid UTF-8 view key array"))?
                             .value(row),
+                        DataType::Dictionary(key_type, values)
+                            if key_type.as_ref() == &DataType::Int32
+                                && matches!(
+                                    values.as_ref(),
+                                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                                ) =>
+                        {
+                            let dictionary = array
+                                .as_any()
+                                .downcast_ref::<Int32DictionaryArray>()
+                                .ok_or_else(|| {
+                                    exec_err("dictionary text key has an invalid key type")
+                                })?;
+                            let code = dictionary.keys().value(row) as usize;
+                            match values.as_ref() {
+                                DataType::Utf8 => {
+                                    dictionary.values().as_string::<i32>().value(code)
+                                }
+                                DataType::LargeUtf8 => {
+                                    dictionary.values().as_string::<i64>().value(code)
+                                }
+                                DataType::Utf8View => dictionary
+                                    .values()
+                                    .as_any()
+                                    .downcast_ref::<StringViewArray>()
+                                    .ok_or_else(|| {
+                                        exec_err(
+                                            "dictionary Utf8View values must be a StringViewArray",
+                                        )
+                                    })?
+                                    .value(code),
+                                _ => unreachable!("dictionary text type was checked above"),
+                            }
+                        }
                         other => {
                             return Err(exec_err(format!(
                                 "text count fast path received key type {other}"
@@ -3241,6 +3305,30 @@ mod tests {
         assert_eq!(groups.group(1).1, vec![AggregateState::Count(1)]);
         assert_eq!(groups.group(2).0, vec![GroupKey::Utf8(Arc::from("beta"))]);
         assert_eq!(groups.key_arrays()[0].data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn dictionary_utf8_view_keys_fold_by_text() {
+        let mut groups = ColumnarGroups::new(
+            &[DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8View),
+            )],
+            &[AggregateState::Count(0)],
+        )
+        .unwrap();
+        let keys: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![Some(0), Some(0), None, Some(1)]),
+            Arc::new(StringViewArray::from(vec![Some("alpha"), Some("beta")])),
+        ));
+        let (created, _) = groups.push_batch(&[keys], &[None], 4).unwrap();
+
+        assert_eq!(created, 3);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups.group(0).0, vec![GroupKey::Utf8(Arc::from("alpha"))]);
+        assert_eq!(groups.group(0).1, vec![AggregateState::Count(2)]);
+        assert_eq!(groups.group(1).0, vec![GroupKey::Null]);
+        assert_eq!(groups.group(2).0, vec![GroupKey::Utf8(Arc::from("beta"))]);
     }
 
     #[test]
