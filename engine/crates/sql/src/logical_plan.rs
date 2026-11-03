@@ -5463,7 +5463,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             name: "DATE_TRUNC".into(),
             args: vec![
                 Expr::Literal(ScalarValue::Utf8(bucket_unit.to_owned())),
-                bucket_value,
+                bucket_value.clone(),
             ],
         };
         if dynamic_width.is_none() && width == 1 && args.len() == 3 {
@@ -5509,13 +5509,36 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 data_type: origin_type.clone(),
             }
         };
-        let difference_unit = if unit == "week" { "day" } else { unit.as_str() };
+        // DATE_BUCKET works in the unit's smallest calendar boundary.  The
+        // width must be converted to that same unit before taking the
+        // remainder: two weeks is fourteen days, two years is twenty-four
+        // months, and hours/minutes need the seconds-based add operator.
+        let (difference_unit, width_multiplier, add_operator, add_multiplier) = match unit.as_str()
+        {
+            "year" => ("month", 12_i64, "DATE_ADD_MONTHS", 1_i64),
+            "quarter" => ("month", 3, "DATE_ADD_MONTHS", 1),
+            "month" => ("month", 1, "DATE_ADD_MONTHS", 1),
+            "week" => ("day", 7, "DATE_ADD_DAYS", 1),
+            "day" => ("day", 1, "DATE_ADD_DAYS", 1),
+            "hour" => ("hour", 1, "DATE_ADD_SECONDS", 3_600),
+            "minute" => ("minute", 1, "DATE_ADD_SECONDS", 60),
+            "second" => ("second", 1, "DATE_ADD_SECONDS", 1),
+            "millisecond" => ("millisecond", 1, "DATE_ADD_MILLISECONDS", 1),
+            "microsecond" => ("microsecond", 1, "DATE_ADD_MICROSECONDS", 1),
+            _ => unreachable!("DATE_BUCKET unit was validated above"),
+        };
+        let custom_origin = args.len() == 4;
+        let difference_input = if custom_origin {
+            bucket_value.clone()
+        } else {
+            truncated.clone()
+        };
         let difference = Expr::Function {
             name: "DATE_DIFF".into(),
             args: vec![
                 Expr::Literal(ScalarValue::Utf8(difference_unit.to_owned())),
-                origin,
-                truncated.clone(),
+                origin.clone(),
+                difference_input,
             ],
         };
         let width_expr = dynamic_width
@@ -5543,9 +5566,24 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         } else {
             width_expr.clone()
         };
+        let safe_width_in_difference_units = if width_multiplier == 1 {
+            safe_width.clone()
+        } else if dynamic_width.is_some() {
+            Expr::BinaryOp {
+                left: Box::new(safe_width.clone()),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(width_multiplier))),
+            }
+        } else {
+            Expr::Literal(ScalarValue::Int64(
+                width
+                    .checked_mul(width_multiplier)
+                    .ok_or_else(|| sql_err("DATE_BUCKET width overflows its datepart"))?,
+            ))
+        };
         let remainder = Expr::Function {
             name: "MOD".into(),
-            args: vec![difference, safe_width.clone()],
+            args: vec![difference.clone(), safe_width_in_difference_units.clone()],
         };
         let normalized_remainder = Expr::Function {
             name: "IF".into(),
@@ -5558,37 +5596,37 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 Expr::BinaryOp {
                     left: Box::new(remainder.clone()),
                     op: BinaryOp::Plus,
-                    right: Box::new(safe_width),
+                    right: Box::new(safe_width_in_difference_units),
                 },
                 remainder,
             ],
         };
-        let multiplier = match unit.as_str() {
-            "year" => 12,
-            "quarter" => 3,
-            "month" | "day" | "hour" | "minute" | "second" | "millisecond" | "microsecond" => 1,
-            "week" => 7,
-            _ => unreachable!("DATE_BUCKET unit was validated above"),
-        };
-        let amount = Expr::BinaryOp {
-            left: Box::new(normalized_remainder),
-            op: BinaryOp::Multiply,
-            right: Box::new(Expr::Literal(ScalarValue::Int64(-multiplier))),
-        };
-        let operator = if matches!(unit.as_str(), "year" | "quarter" | "month") {
-            "DATE_ADD_MONTHS"
-        } else if matches!(unit.as_str(), "week" | "day") {
-            "DATE_ADD_DAYS"
-        } else if unit == "millisecond" {
-            "DATE_ADD_MILLISECONDS"
-        } else if unit == "microsecond" {
-            "DATE_ADD_MICROSECONDS"
+        let signed_offset = if custom_origin {
+            Expr::BinaryOp {
+                left: Box::new(difference),
+                op: BinaryOp::Minus,
+                right: Box::new(normalized_remainder),
+            }
         } else {
-            "DATE_ADD_SECONDS"
+            Expr::BinaryOp {
+                left: Box::new(normalized_remainder),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(-1))),
+            }
         };
+        let amount = if add_multiplier == 1 {
+            signed_offset
+        } else {
+            Expr::BinaryOp {
+                left: Box::new(signed_offset),
+                op: BinaryOp::Multiply,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(add_multiplier))),
+            }
+        };
+        let bucket_base = if custom_origin { origin } else { truncated };
         let bucket = Expr::Function {
-            name: operator.into(),
-            args: vec![truncated, amount],
+            name: add_operator.into(),
+            args: vec![bucket_base, amount],
         };
         if let Some(_width_expr) = dynamic_width {
             return Ok(Expr::Function {
@@ -10077,6 +10115,26 @@ mod tests {
         let week_rendered = format!("{week_plan:?}");
         assert!(week_rendered.contains("DATE_DIFF"), "{week_rendered}");
         assert!(week_rendered.contains("DATE_ADD_DAYS"), "{week_rendered}");
+        assert!(
+            week_rendered.contains("Int64(14)"),
+            "two weeks must use fourteen day units: {week_rendered}"
+        );
+        let year_plan = sql_to_logical_plan("SELECT DATE_BUCKET(year, 2, event_date) FROM t")
+            .expect("year DATE_BUCKET should normalize to months");
+        let year_rendered = format!("{year_plan:?}");
+        assert!(
+            year_rendered.contains("Int64(24)"),
+            "two years must use twenty-four month units: {year_rendered}"
+        );
+        let hour_plan = sql_to_logical_plan(
+            "SELECT DATE_BUCKET(hour, 2, CAST(event_date AS TIMESTAMP)) FROM t",
+        )
+        .expect("hour DATE_BUCKET should lower through seconds");
+        let hour_rendered = format!("{hour_plan:?}");
+        assert!(
+            hour_rendered.contains("Int64(3600)"),
+            "hour buckets must use seconds in the add operator: {hour_rendered}"
+        );
         let error = sql_to_logical_plan("SELECT DATE_BUCKET(month, 0, event_date) FROM t")
             .expect_err("non-positive buckets must remain unqualified");
         assert!(error.to_string().contains("positive literal"));
@@ -10086,10 +10144,15 @@ mod tests {
         assert!(rendered.contains("IsNull"), "{rendered}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         let plan = sql_to_logical_plan(
-            "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-01-01') FROM t",
+            "SELECT DATE_BUCKET(month, 1, event_date, DATE '2020-02-15') FROM t",
         )
         .expect("typed custom origins should lower");
-        assert!(format!("{plan:?}").contains("DATE_DIFF"));
+        let custom_rendered = format!("{plan:?}");
+        assert!(custom_rendered.contains("DATE_DIFF"), "{custom_rendered}");
+        assert!(
+            custom_rendered.contains("BinaryOp { left: Function { name: \"DATE_DIFF\""),
+            "custom origins must offset the origin by the whole bucket: {custom_rendered}"
+        );
         let plan =
             sql_to_logical_plan("SELECT DATE_BUCKET(month, width, event_date, origin_date) FROM t")
                 .expect("row-local custom origins should lower");

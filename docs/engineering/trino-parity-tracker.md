@@ -50,8 +50,9 @@ scope; propagation stops at filters, limits, aggregates, joins, and set
 operations. This is bounded diagnostic evidence, not full operator telemetry:
 `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 
-The latest SQL compatibility increments are subsecond `DATE_BUCKET` timestamp
-units and the full bounded literal/runtime `CONVERT(DATE, ..., style)` set
+The latest SQL compatibility increments are corrected calendar-width and
+custom-origin `DATE_BUCKET` semantics, alongside the subsecond timestamp
+units, and the full bounded literal/runtime `CONVERT(DATE, ..., style)` set
 (`0`, `1`, `23`, `101`–`112` where defined, `20`, `21`, `120`, `121`, and
 `126`), plus `CONCAT`, all qualified in the current
 three-worker differential gates. `DATETIME2FROMPARTS` precision 4–6 remains
@@ -60,7 +61,8 @@ explicit rejection because the engine stores microseconds). It follows the
 qualified ISO-week alias slice (`DATEPART`/`DATENAME` with `iso_week`, `isowk`,
 and `isoww`) in `73eeb842`, plus the earlier bounded date-construction slices.
 Planner, executor, and focused three-worker differential evidence are recorded in
-`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`,
+`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` and
+`docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
 the versioned 134-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
@@ -70,9 +72,9 @@ The versioned T-SQL corpus pins the latest implementation commit `20b25ae7`; lat
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
-The weekly `DATE_BUCKET` evidence supersedes the earlier date-bucket note:
-`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` is the current
-qualification record for the added week unit.
+The width/origin qualification supersedes the earlier date-bucket note for
+calendar normalization; `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`
+remains the record for the added week unit.
 
 The corpus currently contains 134 bounded T-SQL read cases, including the
 qualified unordered literal-separator `STRING_AGG` slice, exact
