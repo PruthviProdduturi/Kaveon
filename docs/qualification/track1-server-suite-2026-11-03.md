@@ -8,19 +8,19 @@ not an AKS, object-store fault-injection, or external-client qualification.
 
 ## Commands and results
 
-From `engine/` at commit `4991739f`:
+From `engine/` at commit `a928d5a6`:
 
 ```text
 cargo test -p kaveon-sql --lib
 370 passed; 0 failed; 0 ignored
 
 cargo test -p kaveon-server --bin kaveon-server
-696 passed; 0 failed; 0 ignored
-finished in 685.40s
+697 passed; 0 failed; 0 ignored
+finished in 689.54s
 
 cargo test -p kaveon-exec --lib
-627 passed; 0 failed; 4 ignored
-finished in 37.42s
+630 passed; 0 failed; 4 ignored
+finished in 38.15s
 
 cargo test -p kaveon-optim --lib
 86 passed; 0 failed; 0 ignored
