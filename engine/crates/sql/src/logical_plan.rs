@@ -9992,6 +9992,9 @@ mod tests {
         assert!(rendered.contains("DATE_ADD_MONTHS"), "{rendered}");
         assert!(rendered.contains("DATE_TRUNC"), "{rendered}");
         assert!(rendered.contains("Date32"), "{rendered}");
+        let dynamic = sql_to_logical_plan("SELECT EOMONTH(event_date, actions - 20) FROM t")
+            .expect("EOMONTH should accept a row-local month offset");
+        assert!(format!("{dynamic:?}").contains("DATE_ADD_MONTHS"));
         assert!(sql_to_logical_plan("SELECT EOMONTH(d, 1, 2) FROM t").is_err());
     }
 

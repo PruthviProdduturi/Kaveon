@@ -147,7 +147,9 @@ for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only style `101`.
 Styles `20`, `21`, `120`, `121`, `126`, and `101` are now included in
 `distributed_tsql_runtime_timestamp_styles_match_local`, which compares exact
 local and three-worker results.
-`DATE_BUCKET` is qualified for literal and bounded row-local BIGINT widths over
+`EOMONTH` is qualified for DATE/TIMESTAMP inputs with zero, literal, and
+row-local month offsets; the result remains a typed DATE. `DATE_BUCKET` is
+qualified for literal and bounded row-local BIGINT widths over
 year/quarter/month/day/hour/minute/second buckets. Widths are checked at
 runtime: zero, negative, and NULL values produce typed NULL rather than a
 divide-by-zero or approximation. Literal DATE/TIMESTAMP origins and bounded

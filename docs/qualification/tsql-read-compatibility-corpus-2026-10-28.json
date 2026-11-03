@@ -53,7 +53,7 @@
     {"id": "stuff", "sql": "SELECT STUFF(name, 2, 1, 'X') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_positions"},
     {"id": "patindex", "sql": "SELECT PATINDEX('%a%', name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_percent_and_underscore_wildcards"},
     {"id": "translate", "sql": "SELECT TRANSLATE(name, 'ae', 'AE') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
-    {"id": "eomonth", "sql": "SELECT EOMONTH(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_input_is_date_or_timestamp"},
+    {"id": "eomonth", "sql": "SELECT EOMONTH(event_date), EOMONTH(event_date, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_date_or_timestamp_inputs_and_literal_month_offsets"},
     {"id": "datetrunc", "sql": "SELECT DATETRUNC(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_date_trunc"},
     {"id": "datefromparts", "sql": "SELECT DATEFROMPARTS(2024, 2, 29)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "datetimefromparts", "sql": "SELECT DATETIMEFROMPARTS(2024, 2, 29, 12, 34, 56, 789)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
