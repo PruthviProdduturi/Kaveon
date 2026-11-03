@@ -35,8 +35,12 @@ commit remains atomic and replay-safe.
   `parser::tests::accepts_bounded_product_update_from_and_rejects_wider_shapes`.
 - Transaction/API qualification:
   `transaction_api::tests::sql_endpoint_bounded_update_from_copies_source_document_and_revises_target`.
+- Batch transaction/API qualification:
+  `transaction_api::tests::sql_endpoint_bounded_update_from_batch_is_atomic_and_returns_each_target`.
 - The API test verifies `RETURNING id, revision, document_json`, the committed
-  revision, and the persisted source document copied into the target.
+  revision, and the persisted source document copied into the target. The batch
+  test verifies two target revisions, both returned rows, and atomic publication
+  of the copied document.
 
 ## Explicit boundary
 
