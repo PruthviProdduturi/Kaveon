@@ -5295,6 +5295,53 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        let filtered_merge = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('update-me', '{"ignored":true}'), ('missing-literal', '{"ignored":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('update-me') THEN UPDATE SET document_json = '{"filtered":true}'"#.into(),
+                    transaction_id: Some(filtered_merge.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(filtered_merge.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        let updated = snapshot
+            .product_record(ProductRecordKind::Dataset, "update-me")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.revision, 4);
+        let document = catalog
+            .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, "update-me")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&document).unwrap(),
+            serde_json::json!({"filtered": true})
+        );
     }
 
     #[tokio::test]
