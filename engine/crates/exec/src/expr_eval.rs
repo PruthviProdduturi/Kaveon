@@ -31091,21 +31091,26 @@ mod tests {
             Some("country=%s signed=%i unsigned=%u %%"),
             Some("country=%s signed=%i unsigned=%u %%"),
             None,
+            Some("country=%s signed=%i unsigned=%u %%"),
         ])) as ArrayRef;
         let country = Arc::new(StringArray::from(vec![
             Some("Japan"),
             Some("Brazil"),
             Some("Kenya"),
+            None,
         ])) as ArrayRef;
-        let signed = Arc::new(Int64Array::from(vec![Some(-12), Some(7), Some(3)])) as ArrayRef;
-        let unsigned = Arc::new(UInt64Array::from(vec![Some(12), Some(7), Some(3)])) as ArrayRef;
+        let signed =
+            Arc::new(Int64Array::from(vec![Some(-12), Some(7), Some(3), Some(4)])) as ArrayRef;
+        let unsigned =
+            Arc::new(UInt64Array::from(vec![Some(12), Some(7), Some(3), Some(4)])) as ArrayRef;
         let result =
-            eval_scalar_function("FORMATMESSAGE", &[template, country, signed, unsigned], 3)
+            eval_scalar_function("FORMATMESSAGE", &[template, country, signed, unsigned], 4)
                 .unwrap();
         let values = result.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(values.value(0), "country=Japan signed=-12 unsigned=12 %");
         assert_eq!(values.value(1), "country=Brazil signed=7 unsigned=7 %");
         assert!(values.is_null(2));
+        assert!(values.is_null(3));
         let error = format_message_template("%s", &[]).unwrap_err();
         assert!(error.to_string().contains("more substitution tokens"));
         let error = format_message_template("%q", &[Some("x".into())]).unwrap_err();
