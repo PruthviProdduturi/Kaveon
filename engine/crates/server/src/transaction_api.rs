@@ -3476,6 +3476,52 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn committed_product_records_survive_registry_restart() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('restart-proof', '{"name":"Restart proof"}')"#.into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let restarted = TransactionRegistry::enabled(catalog);
+        let record = restarted
+            .read_product(
+                &Identity {
+                    principal: "alice".into(),
+                    display_identity: None,
+                    role: crate::security::Role::Analyst,
+                },
+                ProductRecordKind::Dataset,
+                "restart-proof",
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.revision, 1);
+        assert_eq!(record.document["name"], "Restart proof");
+    }
+
     #[test]
     fn recovery_resolution_exposes_committed_conflict_and_unresolved_states() {
         let operation_id = "operation-1";
