@@ -294,6 +294,8 @@ unsupported tokens, and unbounded output remain explicitly rejected.
   `RETURNING id, revision, document_json` is qualified from the staged snapshot
   with or without the literal ID filter; the unfiltered form keeps the same
   1,000-row expansion cap. General lake-table source DML remains open.
+  The document projection may also use the direct typed form
+  `CAST(document_json AS JSON)`; arbitrary expressions remain rejected.
 - [x] Add bounded source-backed product `UPDATE ... FROM`. One same-kind,
   aliased product source table can replace one or more target `document_json`
   values under a pinned snapshot when the statement supplies a literal

@@ -6856,7 +6856,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING *".into(),
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, CAST(document_json AS JSON) FROM product.datasets WHERE id IN ('orders') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING *".into(),
                 transaction_id: Some(copy.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),

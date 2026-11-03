@@ -3003,10 +3003,21 @@ fn bounded_product_source_kind(
         }
     };
     if select.projection.len() != 2
-        || !select.projection.iter().all(|item| {
-            matches!(item, SelectItem::UnnamedExpr(Expr::Identifier(identifier))
-                if identifier.value.eq_ignore_ascii_case("id")
-                    || identifier.value.eq_ignore_ascii_case("document_json"))
+        || !select.projection.iter().all(|item| match item {
+            SelectItem::UnnamedExpr(Expr::Identifier(identifier)) => {
+                identifier.value.eq_ignore_ascii_case("id")
+                    || identifier.value.eq_ignore_ascii_case("document_json")
+            }
+            SelectItem::UnnamedExpr(Expr::Cast {
+                expr,
+                data_type: SqlDataType::JSON,
+                ..
+            }) => matches!(
+                expr.as_ref(),
+                Expr::Identifier(identifier)
+                    if identifier.value.eq_ignore_ascii_case("document_json")
+            ),
+            _ => false,
         })
     {
         return Err(sql_error(
@@ -5906,7 +5917,7 @@ mod tests {
     #[test]
     fn product_insert_select_accepts_bounded_product_copy() {
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
-            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets ON CONFLICT DO NOTHING",
+            "INSERT INTO product.datasets (id, document_json) SELECT id, CAST(document_json AS JSON) FROM product.datasets ON CONFLICT DO NOTHING",
         )
         .expect("product source copy should parse")
         else {
