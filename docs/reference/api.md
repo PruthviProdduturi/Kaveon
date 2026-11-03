@@ -252,7 +252,11 @@ Finished query records also retain plan attributes for runtime diagnostics:
 `actual_output_rows` with `actual_rows_scope=query_result` on the physical root,
 and, when scan telemetry maps one-to-one to physical scans,
 `actual_rows_selected` with `actual_rows_scope=scan_selected_rows` on each scan.
-Ambiguous mappings are intentionally omitted.
+The same scan node may also expose `actual_rows_emitted` after decoder-side
+filtering, plus `actual_filter_rows_examined` and
+`actual_filter_rows_admitted` when a decoder predicate ran. These are exact
+reader counters, not inferred rows for a parent operator; ambiguous mappings
+are intentionally omitted.
 
 ### Catalog statements
 
