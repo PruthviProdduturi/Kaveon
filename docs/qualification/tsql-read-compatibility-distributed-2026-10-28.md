@@ -9,6 +9,12 @@ parity or external-client parity.
 
 ## Evidence
 
+The sweep-count bullets below are retained as dated evidence for the corpus
+revision that existed when each run was executed. They are historical run
+sizes, not the current corpus total; the authoritative current total is the
+116-case count in the scope and tracker, enforced by
+`scripts/validate-tsql-compatibility-tracker.py`.
+
 - Corpus: 116 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
