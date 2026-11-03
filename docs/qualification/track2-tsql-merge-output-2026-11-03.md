@@ -35,15 +35,16 @@ are no-ops and matched rows return the deleted identity and prior revision.
 
 ## Safety boundary
 
-The parser and endpoint reject `deleted.document_json`, `$action`, expressions,
-`OUTPUT INTO`, mixed pseudo-table projections, and unsupported columns. Bounded
+The parser and endpoint reject `$action`, expressions, `OUTPUT INTO`, mixed
+pseudo-table projections, and unsupported columns. Bounded
 by-source delete batches accept `OUTPUT deleted.id` and
 `OUTPUT deleted.revision`; mixed by-source action batches also accept the
 corresponding `inserted.id`/`inserted.revision` projection. The transaction API
 resolves supported MERGE actions to revision/CAS commands, then filters the
 staged write set by the requested pseudo-table; source rows that are no-ops are
-omitted rather than fabricated. `deleted.document_json`, mixed pseudo-table
-projections, and broader by-source combinations remain rejected.
+omitted rather than fabricated. Deleted documents are captured before the
+revision-CAS delete from the transaction snapshot, including read-your-writes
+for earlier staged updates. Broader by-source combinations remain rejected.
 
 ## Evidence
 
