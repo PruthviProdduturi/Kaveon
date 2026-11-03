@@ -427,6 +427,11 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   choice, selectivity, and reader pruning. Cloud pruning and universal
   cost-based planning remain separate gates; see
   `docs/qualification/track3-statistics-planning-boundary-2026-10-28.md`.
+- [x] Answer an unfiltered single-table `COUNT(DISTINCT column)` from an exact,
+  source-version-bound distinct count produced by `ANALYZE ... WITH
+  (distinct = true)`, while keeping missing/stale metadata and all filtered,
+  grouped, joined, or derived shapes on the scan path. Evidence:
+  `docs/qualification/track3-exact-distinct-context-2026-11-03.md`.
 - [x] Add bounded plan-vs-runtime diagnostics. The query-level estimate-vs-actual
   endpoint now compares source-row estimates with finished scan telemetry and
   exposes ordinal per-scan attribution when scan cardinalities match exactly;

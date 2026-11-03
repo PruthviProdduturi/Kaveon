@@ -11082,6 +11082,9 @@ async fn optimize_with_durable_statistics(
 /// The aggregates a statement answered from statistics computes.
 enum ContextAggregate {
     Count,
+    /// Exact `COUNT(DISTINCT column)`, answered only from an exact distinct
+    /// count persisted by `ANALYZE ... WITH (distinct = true)`.
+    ExactDistinct(String),
     Min(String),
     Max(String),
     /// `APPROX_COUNT_DISTINCT(col)`, or `COUNT(DISTINCT col)` under
@@ -11128,19 +11131,45 @@ fn context_answer_shape(plan: &LogicalPlan) -> Option<(&str, Vec<ContextAggregat
     else {
         return None;
     };
-    let LogicalPlan::Scan { table, .. } = input.as_ref() else {
-        return None;
-    };
     if !group_by.is_empty() || aggregates.is_empty() {
         return None;
     }
+    // The logical planner represents COUNT(DISTINCT column) as a one-column
+    // projection below a Distinct node followed by an ordinary COUNT. Keep
+    // this shape explicit so an exact ANALYZE distinct count can answer it,
+    // while COUNT(column) over any other input remains a scan.
+    let (table, exact_distinct_column) = match input.as_ref() {
+        LogicalPlan::Scan { table, .. } => (table.as_str(), None),
+        LogicalPlan::Distinct { input } => match input.as_ref() {
+            LogicalPlan::Project { input, columns }
+                if columns.len() == 1 && matches!(input.as_ref(), LogicalPlan::Scan { .. }) =>
+            {
+                let LogicalPlan::Scan { table, .. } = input.as_ref() else {
+                    unreachable!()
+                };
+                (table.as_str(), expression_column(&columns[0]))
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
     let mut shape = Vec::with_capacity(aggregates.len());
     for aggregate in aggregates {
         shape.push(match aggregate {
             AggregateExpr::Count {
                 expr: kaveon_core::Expr::Star,
                 distinct: false,
-            } => ContextAggregate::Count,
+            } if exact_distinct_column.is_none() => ContextAggregate::Count,
+            AggregateExpr::Count {
+                expr: kaveon_core::Expr::Column(column),
+                distinct: true,
+            } => ContextAggregate::ExactDistinct(column.clone()),
+            AggregateExpr::Count {
+                expr: kaveon_core::Expr::Column(column),
+                distinct: false,
+            } if exact_distinct_column == Some(column.as_str()) => {
+                ContextAggregate::ExactDistinct(column.clone())
+            }
             AggregateExpr::Min(kaveon_core::Expr::Column(column)) => {
                 ContextAggregate::Min(column.clone())
             }
@@ -11339,6 +11368,14 @@ fn context_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<C
                 presented_type(&arrow::datatypes::DataType::UInt64),
                 serde_json::json!(statistics.rows),
             ),
+            ContextAggregate::ExactDistinct(column) => {
+                let column = statistics_column(column)?;
+                let value = column.distinct_exact?;
+                (
+                    presented_type(&arrow::datatypes::DataType::UInt64),
+                    serde_json::json!(value),
+                )
+            }
             // An exact count from ANALYZE answers before the sketch and is
             // noted with no error; the sketch answers with its standard
             // error. A record without either scans.
@@ -21311,6 +21348,30 @@ mod tests {
             let (_, record) = submit_and_record(&state, sql).await;
             assert_ne!(record["execution"]["mode"], "context", "{sql}");
         }
+
+        // An exact distinct count may answer from statistics only after the
+        // caller explicitly requested exact distinct profiling. Without that
+        // metadata, the same shape above remains a scan.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (distinct = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            stored_events_statistics(&state)
+                .unwrap()
+                .column("id")
+                .and_then(|column| column.distinct_exact),
+            Some(300)
+        );
+        let (body, record) =
+            submit_and_record(&state, "SELECT COUNT(DISTINCT id) FROM events").await;
+        assert_eq!(body["data"], serde_json::json!([[300]]));
+        assert_eq!(record["execution"]["mode"], "context", "{record}");
+        assert!(record["scans"].as_array().unwrap().is_empty(), "{record}");
 
         // The source moves on: the statistics on record no longer describe
         // the pinned version, so the count scans — and comes back right.
