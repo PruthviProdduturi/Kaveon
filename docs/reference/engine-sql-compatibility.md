@@ -346,9 +346,9 @@ server or a general row-store protocol.
 | Existing operation | Behavior |
 |---|---|
 | `BEGIN` / `BEGIN TRAN` / `BEGIN TRANSACTION` | Creates an owner-isolated transaction session against the current product snapshot |
-| `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit |
-| `UPDATE` | Revision-checked replacement of one product document; an optional simple target alias is accepted, and `id` and `revision` are required in `WHERE` |
-| `DELETE` | Revision-checked deletion of one product document; an optional simple target alias is accepted, and `id` and `revision` are required in `WHERE` |
+| `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit; bounded `OUTPUT inserted.column` is accepted as the result projection |
+| `UPDATE` | Revision-checked replacement of one product document; an optional simple target alias is accepted, `id` and `revision` are required in `WHERE`, and bounded `OUTPUT inserted.column` is accepted |
+| `DELETE` | Revision-checked deletion of one product document; an optional simple target alias is accepted, `id` and `revision` are required in `WHERE`, and bounded `OUTPUT deleted.column` is accepted |
 | `MERGE` | One bounded `VALUES` batch (up to 1,000 rows), with an optional simple target alias, can update-or-insert, delete-or-insert, matched-update-only, matched-delete-only, or unmatched-insert-only `id, document_json` rows through owner-checked revision/CAS paths; SQL Server's explicit `WHEN NOT MATCHED BY TARGET` spelling is accepted as the same bounded clause |
 | `COMMIT` / `COMMIT TRAN` / `COMMIT TRANSACTION` | Publishes a prepared immutable catalog snapshot through the configured product store |
 | `ROLLBACK` / `ROLLBACK TRAN` / `ROLLBACK TRANSACTION` | Discards the session without publishing its staged changes |

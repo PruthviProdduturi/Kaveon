@@ -2741,6 +2741,7 @@ fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
 /// execute, isolate, commit, or recover the returned statement.
 pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatement> {
     let normalized = normalize_transaction_control_aliases(sql);
+    let normalized = normalize_product_output(&normalized)?;
     let mut statements = parse_sql(&normalized)?;
     if statements.len() != 1 {
         return Err(sql_error(
@@ -2958,6 +2959,84 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             "native transaction parser accepts INSERT, UPDATE, DELETE, MERGE, BEGIN, COMMIT, or ROLLBACK only",
         )),
     }
+}
+
+/// Normalize the bounded SQL Server `OUTPUT` projection into the existing
+/// product-record `RETURNING` contract.  This intentionally handles only
+/// simple inserted/deleted column references; expressions, `OUTPUT INTO`,
+/// MERGE output, and arbitrary table DML stay fail-closed.
+fn normalize_product_output(sql: &str) -> Result<String> {
+    let trimmed = sql.trim();
+    let (body, terminator) = match trimmed.strip_suffix(';') {
+        Some(body) => (body.trim_end(), ";"),
+        None => (trimmed, ""),
+    };
+    let upper = body.to_ascii_uppercase();
+    let statement_kind = if upper.starts_with("INSERT") {
+        "INSERT"
+    } else if upper.starts_with("UPDATE") {
+        "UPDATE"
+    } else if upper.starts_with("DELETE") {
+        "DELETE"
+    } else {
+        return Ok(sql.to_owned());
+    };
+    let Some(output_position) = find_top_level_keyword(&upper, "OUTPUT") else {
+        return Ok(sql.to_owned());
+    };
+    let expression_start = output_position + "OUTPUT".len();
+    let boundary_keywords: &[&str] = match statement_kind {
+        "INSERT" => &["VALUES", "SELECT", "DEFAULT", "ON", "RETURNING"],
+        "UPDATE" | "DELETE" => &["WHERE", "ORDER", "LIMIT", "RETURNING"],
+        _ => unreachable!(),
+    };
+    let tail_start = boundary_keywords
+        .iter()
+        .filter_map(|keyword| {
+            find_top_level_keyword(&upper[expression_start..], keyword)
+                .map(|position| expression_start + position)
+        })
+        .min()
+        .unwrap_or(body.len());
+    let projection = body[expression_start..tail_start].trim();
+    if projection.is_empty() {
+        return Err(sql_error("OUTPUT requires a bounded column projection"));
+    }
+    let mut returning = Vec::new();
+    for item in split_top_level_commas(projection)? {
+        let parts = item.trim().split('.').collect::<Vec<_>>();
+        if parts.len() != 2 {
+            return Err(sql_error(
+                "OUTPUT supports only inserted/deleted.column projections",
+            ));
+        }
+        let pseudo = parts[0].trim();
+        let column = parts[1].trim();
+        let expected_pseudo = if statement_kind == "DELETE" {
+            "deleted"
+        } else {
+            "inserted"
+        };
+        if !pseudo.eq_ignore_ascii_case(expected_pseudo) || !is_simple_identifier(column) {
+            return Err(sql_error(
+                "OUTPUT supports only the statement's inserted/deleted column projections",
+            ));
+        }
+        returning.push(column.to_owned());
+    }
+    if returning.is_empty() {
+        return Err(sql_error("OUTPUT requires at least one column"));
+    }
+    let mut rewritten = String::with_capacity(body.len() + 16);
+    rewritten.push_str(body[..output_position].trim_end());
+    if tail_start < body.len() {
+        rewritten.push(' ');
+        rewritten.push_str(body[tail_start..].trim_start());
+    }
+    rewritten.push_str(" RETURNING ");
+    rewritten.push_str(&returning.join(", "));
+    rewritten.push_str(terminator);
+    Ok(rewritten)
 }
 
 /// SQL Server clients commonly spell the transaction controls with an
@@ -3956,6 +4035,40 @@ mod tests {
                 assert_eq!(dml.returning, ["id", "revision"]);
             }
             assert!(adapt_product_dml(&dml).is_ok());
+        }
+    }
+
+    #[test]
+    fn sql_server_output_lowers_to_bounded_product_returning() {
+        for sql in [
+            "INSERT INTO product.datasets (id, document_json) OUTPUT inserted.id, inserted.revision VALUES ('ds-1', '{}')",
+            "UPDATE product.datasets SET document_json = '{}' OUTPUT inserted.id, inserted.revision WHERE id = 'ds-1' AND revision = 1",
+            "DELETE FROM product.datasets OUTPUT deleted.id, deleted.revision, deleted.document_json WHERE id = 'ds-1' AND revision = 1",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("bounded OUTPUT should parse")
+            else {
+                panic!("expected product DML");
+            };
+            assert!(
+                dml.returning.iter().all(|column| {
+                    matches!(column.as_str(), "id" | "revision" | "document_json")
+                })
+            );
+            assert!(adapt_product_dml(&dml).is_ok());
+        }
+    }
+
+    #[test]
+    fn sql_server_output_rejects_expressions_and_output_into() {
+        for sql in [
+            "UPDATE product.datasets SET document_json = '{}' OUTPUT inserted.id AS key WHERE id = 'ds-1' AND revision = 1",
+            "DELETE FROM product.datasets OUTPUT deleted.id INTO audit.rows WHERE id = 'ds-1' AND revision = 1",
+        ] {
+            assert!(
+                parse_native_transactional(sql).is_err(),
+                "unsafe OUTPUT shape was accepted: {sql}"
+            );
         }
     }
 

@@ -187,6 +187,11 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   Joins, `UPDATE ... FROM`, qualified assignments, and arbitrary lake-table
   mutation remain rejected. Evidence is recorded in
   `docs/qualification/track2-native-dml-target-alias-2026-11-02.md`.
+- [x] Accept the bounded SQL Server `OUTPUT inserted/deleted.column` spelling
+  for product `INSERT`, `UPDATE`, and `DELETE`, lowering it to the existing
+  revision/CAS result projection. Expressions, `OUTPUT INTO`, `MERGE OUTPUT`,
+  and mixed pseudo-tables remain rejected. Evidence:
+  `docs/qualification/track2-tsql-output-2026-11-02.md`.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
   copies `id` and `document_json` from one same-kind `kaveon.product` table
   under the pinned transaction snapshot, optionally narrowed by a literal

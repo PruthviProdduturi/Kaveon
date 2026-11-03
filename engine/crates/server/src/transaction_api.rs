@@ -4362,7 +4362,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "UPDATE product.datasets AS target SET document_json = '{\"name\":\"Orders\"}' WHERE id = 'orders' AND revision = 1 RETURNING id, revision".into(),
+                sql: "UPDATE product.datasets AS target SET document_json = '{\"name\":\"Orders\"}' OUTPUT inserted.id, inserted.revision WHERE id = 'orders' AND revision = 1".into(),
                 transaction_id: Some(update.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4397,7 +4397,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "DELETE FROM product.datasets AS target WHERE id = 'orders' AND revision = 2 RETURNING id, revision, document_json".into(),
+                sql: "DELETE FROM product.datasets AS target OUTPUT deleted.id, deleted.revision, deleted.document_json WHERE id = 'orders' AND revision = 2".into(),
                 transaction_id: Some(delete.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
