@@ -12023,6 +12023,8 @@ struct ScanEstimateDiagnostic {
     actual_filter_rows_examined: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     actual_filter_rows_admitted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filter_selectivity: Option<f64>,
     ratio: f64,
     classification: &'static str,
     estimate_source: Option<String>,
@@ -12041,6 +12043,8 @@ struct OperatorEstimateDiagnostic {
     actual_filter_rows_examined: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     actual_filter_rows_admitted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filter_selectivity: Option<f64>,
     ratio: f64,
     classification: &'static str,
     estimate_scope: Option<String>,
@@ -12071,6 +12075,12 @@ fn estimate_classification(estimated_rows: u64, actual_rows: u64) -> (&'static s
         "within_2x"
     };
     (classification, ratio)
+}
+
+fn filter_selectivity(examined: Option<u64>, admitted: Option<u64>) -> Option<f64> {
+    let examined = examined?;
+    let admitted = admitted?;
+    (examined > 0).then(|| admitted as f64 / examined as f64)
 }
 
 /// Reports stage-root estimate versus task output rows only when the stage
@@ -12151,6 +12161,14 @@ fn collect_operator_estimate_details(
                 .attributes
                 .get("actual_filter_rows_admitted")
                 .and_then(|value| value.parse::<u64>().ok()),
+            filter_selectivity: filter_selectivity(
+                node.attributes
+                    .get("actual_filter_rows_examined")
+                    .and_then(|value| value.parse::<u64>().ok()),
+                node.attributes
+                    .get("actual_filter_rows_admitted")
+                    .and_then(|value| value.parse::<u64>().ok()),
+            ),
             ratio,
             classification,
             estimate_scope: node.attributes.get("estimate_scope").cloned(),
@@ -12261,6 +12279,10 @@ async fn estimate_diagnostics(
                         actual_rows_emitted: Some(scan.rows_emitted),
                         actual_filter_rows_examined: Some(scan.row_filter_rows_examined),
                         actual_filter_rows_admitted: Some(scan.row_filter_rows_admitted),
+                        filter_selectivity: filter_selectivity(
+                            Some(scan.row_filter_rows_examined),
+                            Some(scan.row_filter_rows_admitted),
+                        ),
                         ratio,
                         classification,
                         estimate_source,
@@ -16620,8 +16642,16 @@ mod tests {
         assert_eq!(details[0].actual_rows_emitted, Some(25));
         assert_eq!(details[0].actual_filter_rows_examined, Some(40));
         assert_eq!(details[0].actual_filter_rows_admitted, Some(25));
+        assert_eq!(details[0].filter_selectivity, Some(0.625));
         assert_eq!(details[0].classification, "overestimated");
         assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn filter_selectivity_requires_examined_rows() {
+        assert_eq!(super::filter_selectivity(Some(40), Some(25)), Some(0.625));
+        assert_eq!(super::filter_selectivity(Some(0), Some(0)), None);
+        assert_eq!(super::filter_selectivity(None, Some(1)), None);
     }
 
     #[test]
