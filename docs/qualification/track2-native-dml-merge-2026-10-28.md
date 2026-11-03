@@ -106,7 +106,9 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `cargo test -p kaveon-sql --lib product_merge_supports_bounded_not_matched_by_source_delete` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_bounded_merge_not_matched_by_source_deletes_owned_rows` — 1 passed, 0 failed on 2026-11-02
 
-The transaction API test commits two revisions and one insert atomically, then
-reads the committed snapshot and verifies revisions `2, 2, 1`. It stages the
-adapted commands through the same `ProductDmlCommand::Upsert` path used by the
+The transaction API matched-update test first commits the source-expression
+form, then commits a literal-assignment form through a second transaction. It
+reads the committed snapshot and verifies the revision advances to `3`, the
+literal document is persisted, and the unmatched source key is a no-op. Both
+forms stage through the same `ProductDmlCommand::Upsert` path used by the
 qualified conflict-upsert tests.
