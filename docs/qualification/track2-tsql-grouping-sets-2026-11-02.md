@@ -14,6 +14,9 @@ The same bounded grouping-set surface also qualifies `GROUPING(column)` and
 `GROUPING_ID(column, ...)` over `ROLLUP`/`CUBE`, including the documented
 right-to-left bit assignment for `GROUPING_ID`.
 
+An empty grouping set (`GROUPING SETS (())`) is also qualified as a single
+grand-total aggregate branch.
+
 The planner lowers each grouping set to the existing finite grouping-set
 expansion. The result preserves NULL subtotal keys and aggregate semantics;
 ordering remains unspecified unless the query supplies `ORDER BY`.
