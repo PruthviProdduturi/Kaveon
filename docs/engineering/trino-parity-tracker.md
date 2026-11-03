@@ -352,7 +352,8 @@ predicate combinations remain outside the contract. Evidence:
 `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
 
 Bounded `MERGE` matched updates and not-matched inserts also accept the direct
-typed source assignment `CAST(source.document_json AS JSON)`. Matched updates
+typed source assignment `CAST(source.document_json AS JSON)`. The insert
+document may also be a bounded literal or `CAST('<json>' AS JSON)`. Matched updates
 and `WHEN NOT MATCHED BY SOURCE THEN UPDATE` may also use a bounded literal
 `CAST('<json>' AS JSON)`. These are syntax-only and reuse the same
 owner-checked revision/CAS path; arbitrary JSON expressions and non-direct

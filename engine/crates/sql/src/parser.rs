@@ -2606,7 +2606,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             || values.rows.len() != 1
             || values.rows[0].len() != 2
             || !merge_source_ref(&values.rows[0][0], &source_alias, "id")
-            || !merge_source_document_ref(&values.rows[0][1], &source_alias)
+            || merge_document_assignment(&values.rows[0][1], &source_alias).is_none()
         {
             return Err(sql_error(
                 "MERGE WHEN NOT MATCHED must insert source id and document_json",
@@ -2618,7 +2618,11 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 Ok(ProductDmlCommand::Upsert {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
-                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                    document_json: merge_document_value(
+                        &values.rows[0][1],
+                        &source_alias,
+                        &row[1],
+                    )?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2735,7 +2739,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             || values.rows.len() != 1
             || values.rows[0].len() != 2
             || !merge_source_ref(&values.rows[0][0], &source_alias, "id")
-            || !merge_source_document_ref(&values.rows[0][1], &source_alias)
+            || merge_document_assignment(&values.rows[0][1], &source_alias).is_none()
         {
             return Err(sql_error(
                 "MERGE WHEN NOT MATCHED must insert source id and document_json",
@@ -2747,7 +2751,11 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 Ok(ProductDmlCommand::MergeCreateIfAbsent {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
-                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                    document_json: merge_document_value(
+                        &values.rows[0][1],
+                        &source_alias,
+                        &row[1],
+                    )?,
                 })
             })
             .collect();
@@ -2789,7 +2797,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         || values.rows.len() != 1
         || values.rows[0].len() != 2
         || !merge_source_ref(&values.rows[0][0], &source_alias, "id")
-        || !merge_source_document_ref(&values.rows[0][1], &source_alias)
+        || merge_document_assignment(&values.rows[0][1], &source_alias).is_none()
     {
         return Err(sql_error(
             "MERGE WHEN NOT MATCHED must insert source id and document_json",
@@ -2810,7 +2818,11 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 ProductDmlCommand::MergeDeleteOrInsert {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
-                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                    document_json: merge_document_value(
+                        &values.rows[0][1],
+                        &source_alias,
+                        &row[1],
+                    )?,
                 }
             } else {
                 let document_json = match matched_document_assignment.as_ref().unwrap() {
@@ -2938,6 +2950,22 @@ fn merge_document_assignment(
         product_document_literal(expression)
             .ok()
             .map(MergeDocumentAssignment::Literal)
+    }
+}
+
+fn merge_document_value(
+    expression: &Expr,
+    source_alias: &str,
+    source_document: &Expr,
+) -> Result<String> {
+    match merge_document_assignment(expression, source_alias) {
+        Some(MergeDocumentAssignment::Source) => {
+            string_literal(source_document, "MERGE source document_json")
+        }
+        Some(MergeDocumentAssignment::Literal(value)) => Ok(value),
+        None => Err(sql_error(
+            "MERGE document_json must be source.document_json or a string literal/CAST(string AS JSON)",
+        )),
     }
 }
 
@@ -5546,6 +5574,24 @@ mod tests {
                 kind: "dataset".into(),
                 id: "ds-1".into(),
                 document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn product_merge_accepts_typed_literal_not_matched_document() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, CAST('{\"created\":true}' AS JSON))";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("typed literal MERGE insert should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::MergeCreateIfAbsent {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"created\":true}".into(),
             }
         );
     }

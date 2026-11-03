@@ -321,7 +321,8 @@ unsupported tokens, and unbounded output remain explicitly rejected.
   `document_json`, an equality `target.id = source.id` predicate, and exactly
   `WHEN MATCHED THEN UPDATE SET document_json = source.document_json` followed
   by `WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id,
-  source.document_json)`. Each source row lowers to the existing
+  source.document_json)` or a bounded literal `CAST('<json>' AS JSON)`
+  document. Each source row lowers to the existing
   owner-isolated `Upsert` command, so commit/revision behavior is shared with
   the qualified conflict upsert path. Explicit `WHEN NOT MATCHED BY TARGET`
   is accepted as an alias, and duplicate source ids fail closed before staging

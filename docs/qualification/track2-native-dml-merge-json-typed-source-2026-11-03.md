@@ -25,7 +25,8 @@ WHEN NOT MATCHED THEN
 The parser accepts only a direct `source.document_json` operand wrapped in the
 `JSON` cast for either the matched update or not-matched insert projection. It
 also accepts a string literal wrapped in `CAST('<json>' AS JSON)` for matched
-updates and `WHEN NOT MATCHED BY SOURCE THEN UPDATE`. These forms lower to the
+updates, `WHEN NOT MATCHED` document inserts, and
+`WHEN NOT MATCHED BY SOURCE THEN UPDATE`. These forms lower to the
 same `ProductDmlCommand::Upsert` or revision-CAS update as the direct source assignment,
 so owner isolation, revision CAS, pinned-snapshot
 visibility, atomic commit, and replay behavior are unchanged.
@@ -34,6 +35,7 @@ visibility, atomic commit, and replay behavior are unchanged.
 
 - `parser::tests::product_merge_accepts_a_typed_source_document_assignment`
 - `parser::tests::product_merge_accepts_typed_literal_document_assignments`
+- `parser::tests::product_merge_accepts_typed_literal_not_matched_document`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
 - `transaction_api::tests::sql_endpoint_bounded_merge_not_matched_by_source_updates_owned_rows`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`

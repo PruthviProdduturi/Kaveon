@@ -6138,7 +6138,7 @@ mod tests {
                 &registry,
                 "alice",
                 SqlTransactionRequest {
-                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN UPDATE SET document_json = CAST('{"archived":true}' AS JSON)"#.into(),
+                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, CAST('{"created":true}' AS JSON)) WHEN NOT MATCHED BY SOURCE THEN UPDATE SET document_json = CAST('{"archived":true}' AS JSON)"#.into(),
                     transaction_id: Some(merge.transaction_id.clone()),
                     parameters: vec![],
                     named_parameters: HashMap::new(),
