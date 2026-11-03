@@ -3,22 +3,24 @@
 ## Scope
 
 Query records now retain a bounded estimate-vs-actual chain through physical
-`Window`, `Project`, and `Sort` operators. When the finished query has an exact
-result row count, that count is attached to each directly connected
-row-preserving child with `actual_rows_scope=derived_row_preserving`.
+`Window`, `Project`, `Sort`, and the first directly reached `Filter` operator.
+When the finished query has an exact result row count, that count is attached
+to each directly connected row-preserving child and to that filter with
+`actual_rows_scope=derived_row_preserving`.
 
-The propagation is intentionally fail-closed. It stops before a child of a
-`Filter`, `Limit`, `Offset`, `Aggregate`, `Distinct`, join, or set operation;
-those operators can change cardinality and still require counters emitted by
-their runtime operators. No selectivity, group cardinality, or join result is
-inferred from the final result.
+The propagation is intentionally fail-closed. It stops at the first `Filter`
+and never labels the filter's input scan with post-filter rows. It also stops
+before a child of `Limit`, `Offset`, `Aggregate`, `Distinct`, a join, or a set
+operation; those operators can change cardinality and still require counters
+emitted by their runtime operators. No selectivity, group cardinality, or join
+result is inferred from the final result.
 
 ## Evidence
 
 The server unit `actual_rows_follow_only_row_preserving_operator_chains`
 verifies that a `Window → Project → Sort → Filter → Scan` plan receives the
-exact result count on the row-preserving chain, while the filter's input scan
-does not receive a fabricated count.
+exact result count on the row-preserving chain and on the filter output, while
+the filter's input scan does not receive a fabricated count.
 
 ```text
 cargo test -p kaveon-server --bin kaveon-server \
