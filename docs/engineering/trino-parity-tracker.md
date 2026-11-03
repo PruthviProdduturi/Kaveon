@@ -8,7 +8,7 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 149 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-current pin is `a8660664`, which includes SQL Server text conversion
+current pin is `3187d01d`, which includes SQL Server text conversion
 conversion (`dd mon yyyy hh:mi:ss:mmm`) and the `%i`/`%u` `FORMATMESSAGE`
 qualification.
 
@@ -82,7 +82,7 @@ are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus is the authoritative
 `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`, with the
-corpus pinned at `a8660664`;
+corpus pinned at `3187d01d`;
 later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
@@ -183,7 +183,7 @@ a focused three-worker differential. The `CONCAT` evidence is retained in
 The current revision also qualifies `CONVERT(VARCHAR, expression)` and
 `TRY_CONVERT(VARCHAR, expression)` for Engine UTF-8 text output, together with
 `TRY_CAST(expression AS VARCHAR)`. Unbounded `NVARCHAR` now maps to the same
-UTF-8 planner target; distributed corpus coverage remains pending. Sized
+UTF-8 target and has exact local/three-worker differential coverage. Sized
 `VARCHAR(n)`, `CHAR(n)`, and equivalent
 text casts are explicitly rejected until truncation/padding and code-page
 semantics exist; their length is never silently discarded. Length,

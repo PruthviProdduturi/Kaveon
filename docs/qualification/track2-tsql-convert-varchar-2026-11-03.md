@@ -1,8 +1,7 @@
 # Track 2 — T-SQL text conversion
 
 **Status:** qualified for the bounded UTF-8 text contract  
-**Implementation:** `a8660664` (qualified text conversion); current boundary
-validation is extended by the follow-up commit that records this qualification.
+**Implementation:** `3187d01d`
 **Date:** 2026-11-03
 
 ## Scope
@@ -14,8 +13,8 @@ scalar expressions whose result is represented as Arrow UTF-8 text. The
 qualification covers numeric-to-text conversion through the existing typed
 cast path, including nullable values and distributed fragment execution.
 The planner also accepts unbounded `NVARCHAR`/`TRY_CONVERT(NVARCHAR, ...)` as
-the same UTF-8 text target; this alias has planner coverage here and is not
-yet added to the distributed corpus.
+the same UTF-8 text target. The alias is included in the exact local/three-
+worker differential corpus.
 
 This is a logical text contract, not SQL Server code-page or `nvarchar`
 storage emulation. Sized `VARCHAR(n)`, `CHAR(n)`, and equivalent text casts are
@@ -31,8 +30,9 @@ The authoritative corpus adds:
 - `convert_varchar`
 - `try_convert_varchar`
 - `try_cast_varchar`
+- `try_convert_nvarchar`
 
-All three cases are included in
+All four cases are included in
 `engine/crates/server/src/differential_tests.rs` and were run by:
 
 ```text
@@ -49,7 +49,7 @@ Result:
 
 The sweep compares local execution with the three-worker fragment path across
 dictionary, plain, multi-file, partitioned, hive-ordered, and clustered
-Parquet layouts. The corpus is now 149 cases and is pinned to `a8660664`.
+Parquet layouts. The corpus is now 149 cases and is pinned to `3187d01d`.
 
 The explicit rejection boundary is covered by the SQL planner regression
 `rejects_sized_tsql_text_casts_instead_of_dropping_length`, which checks
