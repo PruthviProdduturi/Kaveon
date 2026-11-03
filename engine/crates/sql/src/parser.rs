@@ -2638,10 +2638,11 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                     "MERGE WHEN NOT MATCHED BY SOURCE must set document_json to a string literal",
                 ));
             }
-            let document_json = string_literal(
-                &assignments[0].value,
-                "MERGE WHEN NOT MATCHED BY SOURCE document_json",
-            )?;
+            let document_json = product_document_literal(&assignments[0].value).map_err(|_| {
+                sql_error(
+                    "MERGE WHEN NOT MATCHED BY SOURCE document_json must be a string literal or CAST(string AS JSON)",
+                )
+            })?;
             commands.push(ProductDmlCommand::MergeUpdateNotMatched {
                 kind: kind.clone(),
                 source_ids,
@@ -2934,7 +2935,7 @@ fn merge_document_assignment(
     if merge_source_document_ref(expression, source_alias) {
         Some(MergeDocumentAssignment::Source)
     } else {
-        string_literal(expression, "MERGE document_json")
+        product_document_literal(expression)
             .ok()
             .map(MergeDocumentAssignment::Literal)
     }
@@ -5536,6 +5537,39 @@ mod tests {
                 id: "ds-1".into(),
                 document_json: "{\"name\":\"Orders\"}".into(),
             }
+        );
+    }
+
+    #[test]
+    fn product_merge_accepts_typed_literal_document_assignments() {
+        let matched = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = CAST('{\"archived\":true}' AS JSON)";
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(matched)
+            .expect("typed literal matched assignment should remain bounded MERGE")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::MergeUpdate {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"archived\":true}".into(),
+            }
+        );
+
+        let not_matched = "MERGE INTO product.datasets AS t USING (VALUES ('keep', '{\"name\":\"kept\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE THEN UPDATE SET document_json = CAST('{\"archived\":true}' AS JSON)";
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(not_matched)
+            .expect("typed literal not-matched assignment should remain bounded MERGE")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap().last(),
+            Some(&ProductDmlCommand::MergeUpdateNotMatched {
+                kind: "dataset".into(),
+                source_ids: vec!["keep".into()],
+                document_json: "{\"archived\":true}".into(),
+            })
         );
     }
 
