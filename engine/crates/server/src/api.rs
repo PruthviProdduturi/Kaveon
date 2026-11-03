@@ -16169,7 +16169,7 @@ mod tests {
             .with_attribute("estimate_source", "source_metadata")
             .with_attribute("actual_rows_selected", "40")
             .with_attribute("actual_rows_scope", "scan_selected_rows");
-        let mut root = kaveon_core::PlanNode::new(31, kaveon_core::PlanPhase::Physical, "Filter")
+        let root = kaveon_core::PlanNode::new(31, kaveon_core::PlanPhase::Physical, "Filter")
             .with_attribute("estimated_output_rows", "80")
             .with_child(scan);
         let mut details = Vec::new();
