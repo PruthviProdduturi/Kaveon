@@ -1,6 +1,6 @@
 # Server suite qualification — 2026-11-02
 
-Source commit: `5c5a00ee`
+Source commit: `75f063d1`
 
 ## Result
 
@@ -25,11 +25,11 @@ module, also passed:
 ```text
 cargo test -p kaveon-server --bin kaveon-server
 
-test result: ok. 671 passed; 0 failed; 0 ignored; 0 measured;
-finished in 674.99s
+test result: ok. 673 passed; 0 failed; 0 ignored; 0 measured;
+finished in 698.81s
 ```
 
-This supersedes the earlier 670-test full-suite result and the 470-test
+This supersedes the earlier 671-test and 670-test full-suite results and the 470-test
 bounded-suite count as the latest total for the server binary; the bounded run
 remains useful as the fast pre-merge gate.
 
