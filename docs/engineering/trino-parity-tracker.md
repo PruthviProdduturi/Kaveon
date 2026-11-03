@@ -352,7 +352,8 @@ The T-SQL row above is backed by the versioned 145-case corpus in
 `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
-`NULLIF`, `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
+`NULLIF` (with exact local/three-worker evidence in
+`docs/qualification/track2-tsql-nullif-2026-11-03.md`), `ROUND` operation mode, and the value-only/ordinal/row-local-lateral/
 `CROSS APPLY` `STRING_SPLIT` forms, with
 locale-independent UTF-8/byte semantics and the row-producing qualification
 documented in

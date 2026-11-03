@@ -206,7 +206,8 @@ recorded in `docs/qualification/track2-tsql-character-code-2026-10-29.md`.
 rejects NULL, surrogate, negative, and out-of-range code points; it has the
 same local and three-worker qualification boundary.
 `NULLIF` is qualified for row-local scalar expressions through the existing
-vectorized null-preserving conditional path.
+vectorized null-preserving conditional path, with exact local and three-worker
+evidence in `docs/qualification/track2-tsql-nullif-2026-11-03.md`.
 SQL Server `ROUND` now accepts the bounded third `operation` argument (`0` for
 rounding and `1` for truncation toward zero), including row-local integer
 expressions; other operation values fail closed.
