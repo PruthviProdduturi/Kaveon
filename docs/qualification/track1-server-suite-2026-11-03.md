@@ -1,22 +1,37 @@
-# Server suite qualification — 2026-11-03
+# Server and SQL compatibility suite — 2026-11-03
 
-Source commit: `d2b0d9ba`
+## Scope
 
-## Result
+This qualification records the local release-image test gates for the current
+`dev` branch. It is correctness evidence for the Engine and API crates; it is
+not an AKS, object-store fault-injection, or external-client qualification.
 
-The complete server binary suite was run from `engine/`:
+## Commands and results
+
+From `engine/` at commit `b8d69cb4`:
 
 ```text
-cargo test -p kaveon-server --bin kaveon-server --no-fail-fast
+cargo test -p kaveon-sql --lib
+370 passed; 0 failed; 0 ignored
 
-test result: ok. 686 passed; 0 failed; 0 ignored; 0 measured;
-finished in 678.05s
+cargo test -p kaveon-server --bin kaveon-server
+696 passed; 0 failed; 0 ignored
+finished in 685.40s
 ```
 
-This run includes the long-running distributed differential module, SQL/T-SQL
-planner and executor coverage, result serialization (including `Utf8View`),
-catalog and transaction APIs, exchange/retry/cancellation, spill, recovery,
-result-cache, and UI/security server tests.
+The server suite includes the versioned T-SQL corpus, distributed differential
+execution across Parquet encodings, joins, windows, aggregates, JSON and
+bounded product DML/MERGE, catalog access, cancellation, retry/recovery,
+result-cache, and `Utf8View` result serialization. The SQL suite covers parser
+and planner boundaries, including explicit rejection of unsupported shapes.
 
-The run is local evidence only. It does not qualify a deployed image, cloud
-object-store behavior, external-client compatibility, or a performance win.
+The focused `Utf8View` regression also covers nullable text values and map keys;
+those values are emitted as logical JSON strings or `null`, never Arrow debug
+representations.
+
+## Boundary
+
+This evidence does not close the remaining tracker items: broader MERGE and
+conflict semantics, full per-operator runtime attribution, adaptive
+high-cardinality exchange, cloud/object-store recovery, cross-source joins, or
+JDBC/ODBC and external Trino-client qualification remain open.
