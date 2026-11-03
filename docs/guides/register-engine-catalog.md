@@ -126,10 +126,16 @@ credential material must not be committed or printed.
 
 ## Restore after a cluster rebuild
 
-The Engine catalog is SQLite on the coordinator volume. It is not in the
-PostgreSQL snapshot, so a rebuilt cluster comes back with datasets, artifacts
-and answers but an empty `/v1/catalog/definitions`. The 2026-09-14 westus2
-rebuild was recovered this way, in this order:
+Native deployments restore the KaveonDB transaction/catalog authority and the
+ADLS data snapshot together. PostgreSQL is not a restore dependency or a
+source of catalog definitions. Restore the KaveonDB snapshot/checkpoint first,
+then restore the immutable lake prefix and verify the catalog snapshot identity
+before serving traffic.
+
+The procedure below is retained as a **historical pre-KaveonDB recovery record**
+for the 2026-09-14 westus2 rebuild. It describes the old coordinator SQLite
+catalog and PostgreSQL-backed product state; do not use it as the native restore
+procedure for a new deployment:
 
 1. Copy the lake prefix to the new account server-side (`azcopy copy
    https://<old>.blob.core.windows.net/opensource/snapshots/2026-09-09-v1
