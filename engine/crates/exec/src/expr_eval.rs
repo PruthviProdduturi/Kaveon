@@ -12791,6 +12791,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
 
         // ── Null-handling functions ──────────────────────────────────────
+        "ISNULL" => {
+            check_arity(name, args, 2)?;
+            // SQL Server ISNULL returns the first argument's type, even when
+            // the replacement value would otherwise have a wider type.
+            let target_type = args[0].data_type().clone();
+            let first = compute::cast(&args[0], &target_type)?;
+            let replacement = compute::cast(&args[1], &target_type)?;
+            let is_not_null = compute::is_not_null(&first)?;
+            zip_arrays(&is_not_null, &first, &replacement)
+        }
         "COALESCE" => {
             if args.is_empty() {
                 return Err(KaveonError::Execution(
@@ -26366,6 +26376,37 @@ mod tests {
         assert_eq!(arr.value(0), 10);
         assert_eq!(arr.value(1), 2);
         assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_tsql_isnull_with_exact_two_argument_contract() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![None, Some(2), None])),
+                Arc::new(Int64Array::from(vec![Some(10), Some(20), None])),
+            ],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ISNULL".into(),
+            args: vec![Expr::Column("a".into()), Expr::Column("b".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let arr = result.as_primitive::<Int64Type>();
+        assert_eq!(
+            arr.iter().collect::<Vec<_>>(),
+            vec![Some(10), Some(2), None]
+        );
+
+        let invalid = Expr::Function {
+            name: "ISNULL".into(),
+            args: vec![Expr::Column("a".into())],
+        };
+        assert!(evaluate(&invalid, &batch).is_err());
     }
 
     #[test]
