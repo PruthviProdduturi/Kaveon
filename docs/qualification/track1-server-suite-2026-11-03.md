@@ -8,7 +8,7 @@ not an AKS, object-store fault-injection, or external-client qualification.
 
 ## Commands and results
 
-From `engine/` at commit `99e2c506`:
+From `engine/` at commit `b4ab344f`:
 
 ```text
 cargo test -p kaveon-sql --lib
@@ -16,7 +16,7 @@ cargo test -p kaveon-sql --lib
 
 cargo test -p kaveon-server --bin kaveon-server
 697 passed; 0 failed; 0 ignored
-finished in 761.64s
+finished in 690.17s
 
 cargo test -p kaveon-exec --lib
 630 passed; 0 failed; 4 ignored
@@ -55,6 +55,11 @@ result serialization. The executor regression suite now also proves
 `STRING_ESCAPE(value, 'json')` preserves logical text when the input and mode
 arrive as Arrow `Utf8View` arrays. The SQL suite covers parser and planner
 boundaries, including explicit rejection of unsupported shapes.
+
+The server suite also covers live distributed-stage estimate metadata: a
+running stage retains its planner operator and estimate when a later task
+completion supplies them, without inferring intermediate row counts. Evidence:
+`docs/qualification/track3-live-stage-estimate-metadata-2026-11-03.md`.
 
 The focused `Utf8View` regression also covers nullable text values and map keys;
 those values are emitted as logical JSON strings or `null`, never Arrow debug
