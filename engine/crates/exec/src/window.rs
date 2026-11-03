@@ -520,7 +520,8 @@ fn evaluate_window_with_context(
                         .ok_or_else(|| error("PERCENTILE_CONT requires a numeric value"))?;
                     let non_null = rows
                         .iter()
-                        .filter_map(|&index| values.is_valid(index).then(|| values.value(index)))
+                        .filter(|&&index| values.is_valid(index))
+                        .map(|&index| values.value(index))
                         .collect::<Vec<_>>();
                     if non_null.is_empty() {
                         percentile_values[row] = None;
