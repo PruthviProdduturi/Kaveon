@@ -246,6 +246,12 @@ results. NULL-bearing arguments remain outside this cross-dialect claim because
 SQL Server and Trino differ in their function-level NULL semantics; evidence is
 recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
 
+The bounded SQL Server `FORMATMESSAGE` literal-template form is qualified for
+`%s`, `%d`, and `%%` substitutions with positional text or numeric arguments.
+Its local and three-worker differential evidence is recorded in
+`docs/qualification/track2-tsql-formatmessage-2026-11-03.md`; dynamic templates,
+unsupported tokens, and unbounded output remain explicitly rejected.
+
 ### Phase 2 — Transactional SQL surface
 
 - [x] Qualify bounded typed-row DML for KaveonDB-owned tables. The
