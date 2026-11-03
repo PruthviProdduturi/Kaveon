@@ -1,4 +1,4 @@
-# Bounded native `MERGE` qualification — 2026-11-02
+# Bounded native `MERGE` qualification — 2026-11-03
 
 ## Status
 
@@ -57,6 +57,9 @@ clause. Existing source keys resolve to the current owner-checked revision and
 stage a compare-and-swap update; source keys with no match are transactional
 no-ops. This gives the common update-only `MERGE` shape explicit revision
 semantics without pretending to support arbitrary predicates or assignments.
+The matched update may either copy `source.document_json` or assign one string
+literal to every matched source row; both forms stage the same CAS update and
+remain limited to the bounded product document column.
 
 A sixth bounded form adds SQL Server's `WHEN NOT MATCHED BY SOURCE THEN
 DELETE` after the matched-update and not-matched-insert clauses. The source ids
@@ -84,6 +87,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_supports_bounded_delete_or_insert`
 - `parser::tests::product_merge_supports_bounded_matched_delete`
 - `parser::tests::product_merge_supports_bounded_matched_update`
+- `parser::tests::product_merge_supports_bounded_literal_matched_update`
 - `parser::tests::product_merge_supports_bounded_unmatched_insert`
 - `parser::tests::product_merge_supports_bounded_not_matched_by_source_delete`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
@@ -96,6 +100,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `transaction_api::tests::sql_endpoint_bounded_merge_not_matched_by_source_deletes_owned_rows`
 - `parser::tests::product_merge_accepts_an_unaliased_target_with_derived_qualifier`
 - `cargo test -p kaveon-sql --lib product_merge_supports_bounded_matched_update` — 1 passed, 0 failed on 2026-11-02
+- `cargo test -p kaveon-sql --lib product_merge_supports_bounded_literal_matched_update` — 1 passed, 0 failed on 2026-11-03
 - `cargo test -p kaveon-sql --lib product_merge_accepts_an_unaliased_target_with_derived_qualifier` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-server sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-sql --lib product_merge_supports_bounded_not_matched_by_source_delete` — 1 passed, 0 failed on 2026-11-02

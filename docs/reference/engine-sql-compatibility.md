@@ -386,7 +386,7 @@ The qualified `MERGE` form is intentionally narrow: one target product table
 with an optional simple alias, one source `VALUES` batch of at most 1,000 rows aliased as
 `(id, document_json)`, an equality
 join on the target qualifier's `id` and `source.id`, and one of the qualified
-matched-update/not-matched-insert, matched-delete/not-matched-insert,
+matched-update (from the source document or one string literal)/not-matched-insert, matched-delete/not-matched-insert,
 matched-update-only, matched-delete-only, or unmatched-insert-only forms.
 For an unaliased target, the base table name is the only accepted qualifier.
 Source scans, predicates, arbitrary assignments, and other `MERGE` clause
