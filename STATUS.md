@@ -37,7 +37,7 @@
 | Authentication (GitHub / Google / Entra) + RBAC | 🔄 In Progress |
 | Multi-source connectors | 🔄 In Progress |
 | DLM (no-LLM NL→SQL, answer-from-context) — primary homepage path | ✅ Done |
-| Metadata/data DB split (`kaveonmeta` + `kaveon`) | ✅ Done |
+| KaveonDB product authority and lake catalogs | 🧪 Alpha | Product records use the Engine transaction API; external SQL systems remain optional passthrough sources |
 | CI/CD + repo standards | ✅ Done |
 | Superset-parity gaps | 📋 Planning |
 
@@ -46,21 +46,21 @@
 | Capability | Status | Notes |
 |---|---|---|
 | Local Parquet reader, projection, metadata statistics, row-group pruning | 🧪 Alpha | Synchronous Arrow `RecordBatch` stream |
-| Local Delta Lake reader | 🧪 Alpha | Replays complete JSON commits from version 0 and streams all active Parquet files; checkpoints unsupported |
+| Local Delta Lake reader | 🧪 Alpha | Pins a Delta snapshot, reads JSON commits and supported v1 checkpoints, and streams active Parquet files; deletion vectors and other advanced table features remain unsupported |
 | Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
 | SQL coverage — window functions, set operations, date/time, decimal, subqueries | 🧪 Alpha | ROW_NUMBER/RANK/DENSE_RANK/LAG/LEAD/SUM/AVG/COUNT/MIN/MAX OVER with frame specs (ROWS/RANGE/GROUPS BETWEEN), INTERSECT/EXCEPT, EXTRACT, DATE_TRUNC, DATE_PART, TO_CHAR, NOW/CURRENT_DATE/CURRENT_TIMESTAMP; DISTINCT on SUM/AVG; Decimal128 type; IN/NOT IN/EXISTS/NOT EXISTS subqueries via semi/anti join |
-| SQL parser, remote-first CLI, HTTP statement API | 🧪 Alpha | Engine query execution is not yet wired into Studio/API identity |
+| SQL parser, remote-first CLI, HTTP statement API | 🧪 Alpha | Studio/API routes use the authenticated Engine bridge; native statements remain an alpha contract |
 | Native durable catalog | 🧪 Alpha | SQLite/WAL single-coordinator authority with revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker local Docker topology verified on real Delta data |
 | Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, scan throughput, and decoded-cache hit/miss/eviction/single-flight counters |
-| Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; live and per-operator metrics remain target |
+| Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; estimate diagnostics are emitted when matching runtime counters exist, while full intermediate attribution remains target |
 | Sort and TopN | 🧪 Alpha | Local and distributed execution with fixed-fan-in external merge |
 | Filter-pushdown optimizer pass | 🧪 Alpha | Wired conservative pushdown with residual row-level evaluation |
-| ADLS Gen2 / S3 readers | 🚧 Alpha | ADLS Gen2 Parquet ranged reads are executable; cloud Delta and S3 remain pending |
-| Cloud Delta Lake / Iceberg readers | 📋 Planning | ADLS/S3 Delta, checkpoint replay, and Iceberg manifest semantics not implemented |
+| ADLS Gen2 / S3 readers | 🧪 Alpha | ADLS Gen2 Parquet and Delta reads are qualified on the declared datasets; S3 uses the shared object-store path but remains unqualified |
+| Cloud Delta Lake / Iceberg readers | 🧪 Alpha | Delta is qualified on ADLS Gen2; Iceberg is qualified locally but its ADLS deployment gate remains open |
 | Distributed scheduling, exchange, retry | 🧪 Alpha | Versioned fragments execute scans, partial/final aggregates including AVG/exact DISTINCT, Sort/TopN, and repartitioned/broadcast joins; retry/cancellation wired |
 | Hash exchange | 🧪 Alpha | Authenticated Arrow IPC v2, stable partitioning, bounded payloads, idempotent upload, and cleanup; streaming flow control remains target |
-| Engine HTTP auth and TLS | 📋 Planning | Internal exchange/catalog mutation tokens exist; end-user statements still require a trusted boundary |
+| Engine HTTP auth and TLS | 🧪 Alpha | Internal exchange/catalog mutation tokens and authenticated end-user statement routes exist; keep the Engine behind the trusted API boundary while broader deployment qualification remains open |
 
 ---
 
@@ -105,7 +105,7 @@
 |--------|--------|
 | Fabric SQL | ✅ Done |
 | Azure SQL | ✅ Done |
-| PostgreSQL | ✅ Done |
+| PostgreSQL | 🧭 Legacy / migration only | Not a KaveonDB authority; retained only for explicitly controlled migration or reconciliation windows |
 | MySQL | ✅ Done |
 | StarRocks (MySQL protocol) | ✅ Done |
 | Trino | 📋 Planning (no driver yet) |
