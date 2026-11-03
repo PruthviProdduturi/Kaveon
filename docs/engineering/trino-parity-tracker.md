@@ -7,7 +7,9 @@ Implementation history lives in Git; reproducible measurements live under
 evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 145 unique cases; the
-validator checks this count against the corpus and its engine commit pin.
+validator checks this count against the corpus and its engine commit pin. The
+current pin is `c0ea5fbc`, which includes the `%i`/`%u` `FORMATMESSAGE`
+qualification.
 
 The historical source/build gate record is retained in
 `docs/qualification/track1-track2-workspace-2026-10-19.md`; the earlier CI and
