@@ -23,6 +23,9 @@ width for `nvarchar` values. The function works for plain and dictionary/
   -p kaveon-server --bin kaveon-server differential_tests --quiet` — 197 tests
   passed, including dictionary, plain, multi-file, partitioned, clustered, and
   three-worker fragment paths; the selected case returned exact matching rows.
+- Regression suites after the implementation: `cargo test -p kaveon-sql --lib
+  --quiet` — 347 passed; `cargo test -p kaveon-exec --lib --quiet` — 615 passed,
+  4 ignored.
 - Full bounded corpus entry: `datalength` in
   `tsql-read-compatibility-corpus-2026-10-28.json`, pinned to implementation
   commit `ff7d17be`.
