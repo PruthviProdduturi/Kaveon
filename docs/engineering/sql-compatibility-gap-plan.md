@@ -57,6 +57,10 @@ The authoritative capability details remain in:
   execution. Native Engine catalog resolution and Fabric/Azure SQL passthrough
   separation are qualified in
   `docs/qualification/track1-fabric-passthrough-routing-2026-10-29.md`.
+- [x] Preserve Arrow `Utf8View` text through aggregate grouping, statistics
+  metadata, client-facing type labels, and JSON result serialization so chart
+  dimensions and text-key consumers receive logical strings. Evidence:
+  `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md`.
 
 Progress: the Engine now lowers bounded `TOP n PERCENT`, `TOP n WITH TIES`, `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, character-set `TRIM` in BOTH/LEADING/TRAILING modes, `DATEADD`, `DATEDIFF`, `DATEPART`, and common SQL Server clock functions,
 unstyled `CONVERT`, and unstyled `TRY_CONVERT`, including common SQL Server
