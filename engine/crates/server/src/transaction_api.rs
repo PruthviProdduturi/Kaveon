@@ -4528,7 +4528,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}') RETURNING id, revision, document_json"#.into(),
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}') RETURNING *"#.into(),
                 transaction_id: Some(begun.transaction_id),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
