@@ -968,7 +968,11 @@ mod query_journal {
                 {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                if std::fs::write(path, lines_of(&recent).as_bytes()).is_err() {
+                // Normalizing an over-bound or partially corrupt journal on
+                // open must be crash-safe too.  A direct write would truncate
+                // the acknowledged history before the replacement contents
+                // had reached stable storage.
+                if write_snapshot(path, &recent).is_err() {
                     return (None, entries);
                 }
                 (entries, recent)
@@ -1051,27 +1055,9 @@ mod query_journal {
                 .iter()
                 .filter_map(|entry| serde_json::to_string(entry).ok())
                 .collect();
-            let staged = self.path.with_extension("jsonl.rewriting");
-            if std::fs::write(&staged, lines_of(&recent).as_bytes()).is_err() {
-                let _ = std::fs::remove_file(&staged);
+            if write_snapshot(&self.path, &recent).is_err() {
                 return;
             }
-            let staged_synced = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&staged)
-                .and_then(|file| file.sync_data());
-            if staged_synced.is_err() || std::fs::rename(&staged, &self.path).is_err() {
-                let _ = std::fs::remove_file(&staged);
-                return;
-            }
-            // The rename makes the replacement inode visible atomically.  On
-            // filesystems that expose directory fsync, persist that name
-            // change as well; otherwise a power loss can acknowledge the
-            // staged file while the old directory entry reappears.  Windows
-            // does not provide a portable directory handle, so the file sync
-            // above remains the available guarantee there.
-            let _ = sync_parent_directory(&self.path);
             if let Ok(file) = std::fs::OpenOptions::new().append(true).open(&self.path) {
                 self.file = file;
                 self.recent = recent;
@@ -1095,6 +1081,27 @@ mod query_journal {
             text.push('\n');
         }
         text
+    }
+
+    /// Publish a complete journal snapshot without exposing a truncated file.
+    /// The staged file is synced before the atomic rename, and the containing
+    /// directory is synced where the platform exposes that operation.
+    fn write_snapshot(path: &Path, lines: &VecDeque<String>) -> std::io::Result<()> {
+        let staged = path.with_extension("jsonl.rewriting");
+        let result = (|| {
+            std::fs::write(&staged, lines_of(lines).as_bytes())?;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&staged)
+                .and_then(|file| file.sync_data())?;
+            std::fs::rename(&staged, path)?;
+            sync_parent_directory(path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+        result
     }
 
     fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
