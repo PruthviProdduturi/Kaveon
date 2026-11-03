@@ -22,9 +22,11 @@ revision, transaction, or result semantics.
 
 - `parser::tests::sql_server_output_lowers_to_bounded_product_returning`
 - `parser::tests::sql_server_output_rejects_expressions_and_output_into`
+- `transaction_api::tests::sql_endpoint_product_insert_accepts_sql_server_output`
 - `transaction_api::tests::sql_endpoint_update_and_delete_return_identity_and_revision`
 - `cargo test -p kaveon-sql --lib sql_server_output` — 2 passed
 - `cargo test -p kaveon-server sql_endpoint_update_and_delete_return_identity_and_revision` — passed
+- `cargo test -p kaveon-server sql_endpoint_product_insert_accepts_sql_server_output` — passed
 - `cargo clippy -p kaveon-sql -p kaveon-server --all-targets --no-default-features -- -D warnings` — passed
 
 ## Rejections
