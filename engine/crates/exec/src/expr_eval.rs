@@ -608,6 +608,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "RTRIM",
     "LENGTH",
     "LEN",
+    "DATALENGTH",
     "CHAR_LENGTH",
     "CHARACTER_LENGTH",
     "SUBSTR",
@@ -9049,6 +9050,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     text_value(&args[0], row).map(|value| {
                         value.map(|value| value.trim_end_matches(' ').chars().count() as i64)
                     })
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
+        // SQL Server DATALENGTH reports bytes, including trailing spaces.
+        // Kaveon's text contract is UTF-8, so this is the UTF-8 byte length
+        // rather than the Unicode scalar count returned by LENGTH/LEN.
+        "DATALENGTH" => {
+            check_arity(name, args, 1)?;
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    text_value(&args[0], row).map(|value| value.map(|value| value.len() as i64))
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -30013,6 +30027,33 @@ mod tests {
         .unwrap();
         let values = tsql_length.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(8), None]);
+
+        let byte_length = evaluate(
+            &Expr::Function {
+                name: "DATALENGTH".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = byte_length.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), None]);
+
+        let unicode = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(LargeStringArray::from(vec![Some("λ "), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let byte_length = evaluate(
+            &Expr::Function {
+                name: "DATALENGTH".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &unicode,
+        )
+        .unwrap();
+        let values = byte_length.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(3), None]);
 
         let single = RecordBatch::try_from_iter([(
             "value",

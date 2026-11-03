@@ -9645,6 +9645,14 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_datalength_as_bounded_scalar_function() {
+        let plan = sql_to_logical_plan("SELECT DATALENGTH(name) FROM t")
+            .expect("DATALENGTH should lower as a scalar function");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("DATALENGTH"), "{rendered}");
+    }
+
+    #[test]
     fn lowers_tsql_choose_to_null_preserving_case() {
         let plan = sql_to_logical_plan("SELECT CHOOSE(2, region, industry, platform) FROM t")
             .expect("CHOOSE should lower through CASE");
