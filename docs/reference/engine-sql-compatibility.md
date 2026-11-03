@@ -279,16 +279,17 @@ values are omitted, empty groups return NULL, and partial workers carry a
 mergeable string state bounded to 16 MiB per group. A predicate
 `FILTER (WHERE ...)` is also qualified by lowering the predicate to a
 NULL-preserving aggregate input before the same mergeable state path. Merge
-order is unspecified, matching SQL Server's unordered form. Ordered
-`WITHIN GROUP`, dynamic separators, and `DISTINCT` remain explicitly
-rejected until their ordered state and bounded memory/spill contract are
-qualified. The focused planner and three-worker differential evidence is
-recorded in the compatibility corpus gate for 2026-10-30.
+order is unspecified, matching SQL Server's unordered form. The bounded
+`WITHIN GROUP (ORDER BY value [ASC|DESC])` form is also qualified: workers
+retain value strings, merge them under a 1,000,000-value/16 MiB per-group
+bound, and sort once during finalization. Independent or multiple order keys,
+explicit NULL placement, dynamic separators, and `DISTINCT` remain explicitly
+rejected. Focused planner, state round-trip, and three-worker differential
+evidence is recorded in
+`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md`.
 The embedded/local CLI planner uses the same bounded aggregate state and
 separator validation, so local and server execution share this declared
-surface; ordered forms remain rejected in both paths. Local evidence is
-recorded in
-`docs/qualification/track2-tsql-string-agg-local-cli-2026-10-30.md`.
+surface; the same ordered boundary is enforced in both paths.
 
 - Correlated subqueries beyond the qualified bounded forms: residual
   correlations inside scalar `OFFSET`/`LIMIT` forms, `LIMIT`/set operations
