@@ -4943,7 +4943,7 @@ mod tests {
     #[test]
     fn product_insert_select_accepts_bounded_identity_returning() {
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
-            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('one') RETURNING id, revision, document_json",
+            "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets WHERE id IN ('one') RETURNING *",
         )
         .expect("bounded source RETURNING should parse")
         else {

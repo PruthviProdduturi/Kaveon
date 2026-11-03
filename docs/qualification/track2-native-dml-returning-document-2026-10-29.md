@@ -17,6 +17,11 @@ bounded conflict-upsert, revision-checked update, and delete. The typed row docu
 returned as `document_json`; arbitrary typed-column expansion remains outside
 the contract.
 
+The bounded same-kind source-copy `INSERT ... SELECT` form also accepts
+`RETURNING *` when narrowed by its literal `id IN (...)` filter; the result uses
+the same stable product projection. Unfiltered source-copy returning remains
+rejected.
+
 Typed-row DELETE now returns a canonical typed-row document with its table,
 owner, revision, columns, and unique-key metadata. Bounded source-copy
 `INSERT ... SELECT RETURNING document_json` remains rejected because expansion
@@ -31,6 +36,8 @@ Evidence:
   UPDATE `RETURNING *` and verifies the staged document alongside the identity and
   incremented revision. `typed_row_transactions_are_owner_isolated_and_rollback_is_invisible`
   covers typed-row conflict-upsert, update, and delete `RETURNING *`.
+- `sql_endpoint_commits_bounded_product_table_insert_select` covers filtered
+  source-copy `RETURNING *` and verifies the copied document.
 - Delete capture is read-before-stage and validates owner plus expected
   revision before returning the document.
 - The focused SQL parser and transaction API tests pass.
