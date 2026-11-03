@@ -17,6 +17,19 @@ The run includes the server, API, transaction, storage, scheduler, exchange,
 recovery, cancellation, result-cache, and spill tests. The injected-failure
 and worker-loss recovery cases passed.
 
+The latest full server binary run, including the long-running differential
+module, also passed:
+
+```text
+cargo test -p kaveon-server --bin kaveon-server --no-fail-fast --quiet
+
+test result: ok. 670 passed; 0 failed; 0 ignored;
+finished in 674.99s
+```
+
+This supersedes the 470-test bounded-suite count as the latest total for the
+server binary; the bounded run remains useful as the fast pre-merge gate.
+
 ## Boundary
 
 This is a local workspace result. The `differential_tests` module is excluded
