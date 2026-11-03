@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 121-case corpus has planner coverage and focused exact
+  The current 122-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -146,6 +146,12 @@ Subsecond timestamp buckets have exact local/three-worker evidence in
 `docs/qualification/track2-tsql-date-bucket-subsecond-2026-11-02.md`;
 nanosecond bucket inputs remain rejected because the execution timestamp
 contract is microsecond precision.
+
+`DATALENGTH` is qualified for text inputs as a nullable UTF-8 byte count,
+including trailing spaces, across dictionary, plain, fragmented,
+partitioned, clustered, and three-worker execution. This is explicitly the
+Engine UTF-8 contract, not SQL Server UTF-16 `nvarchar` storage emulation;
+evidence is retained in `docs/qualification/track2-tsql-datalength-2026-11-02.md`.
 
 `ASCII`, `UNICODE`, and bounded `CHAR` are also qualified: ASCII returns the
 leading ASCII scalar and NULL for a non-ASCII leading scalar, UNICODE returns
