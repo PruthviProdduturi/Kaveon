@@ -13,7 +13,7 @@ product contract (`id`, `revision`, `document_json`) rather than implying an
 arbitrary typed-row or lake-table schema.
 
 The same stable projection is now exercised through the typed-row facade for
-bounded conflict-upsert and revision-checked delete. The typed row document is
+bounded conflict-upsert, revision-checked update, and delete. The typed row document is
 returned as `document_json`; arbitrary typed-column expansion remains outside
 the contract.
 
@@ -30,7 +30,7 @@ Evidence:
   `sql_endpoint_update_and_delete_return_identity_and_revision` covers revision-CAS
   UPDATE `RETURNING *` and verifies the staged document alongside the identity and
   incremented revision. `typed_row_transactions_are_owner_isolated_and_rollback_is_invisible`
-  covers typed-row conflict-upsert and delete `RETURNING *`.
+  covers typed-row conflict-upsert, update, and delete `RETURNING *`.
 - Delete capture is read-before-stage and validates owner plus expected
   revision before returning the document.
 - The focused SQL parser and transaction API tests pass.
