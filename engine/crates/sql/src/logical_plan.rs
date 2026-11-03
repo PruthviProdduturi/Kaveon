@@ -6670,10 +6670,10 @@ fn canonical_function_name(func: &ast::Function) -> String {
     let name = func.name.to_string().to_uppercase();
     match name.as_str() {
         "APPROX_DISTINCT" => "APPROX_COUNT_DISTINCT".to_owned(),
-        // SQL Server/Fabric spellings that have identical scalar semantics
-        // in the Engine. Keep the aliases here so every caller (aggregates,
-        // windows, and ordinary expressions) sees one canonical contract.
-        "ISNULL" => "COALESCE".to_owned(),
+        // Keep SQL Server ISNULL distinct from COALESCE. Both are
+        // null-coalescing functions, but ISNULL has exactly two arguments and
+        // preserves the first argument's type; silently rewriting it obscures
+        // that bounded T-SQL contract.
         "DATEADD" => "DATE_ADD".to_owned(),
         // SQL Server 2022's DATETRUNC has the same bounded two-argument
         // calendar contract as the Engine's DATE_TRUNC path.
@@ -9637,7 +9637,7 @@ mod tests {
         )
         .expect("common T-SQL scalar aliases should lower");
         let rendered = format!("{plan:?}");
-        assert!(rendered.contains("COALESCE"), "{rendered}");
+        assert!(rendered.contains("ISNULL"), "{rendered}");
         assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("DATE_PART"), "{rendered}");
