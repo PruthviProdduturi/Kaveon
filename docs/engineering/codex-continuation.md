@@ -6,14 +6,14 @@
 **Repository:** `PruthviProdduturi/Kaveon`
 
 > **Historical handoff.** This brief records an earlier cloud migration
-> snapshot and is not a current deployment authority. Do not use its
-> PostgreSQL resource status or cutover instructions as present state; verify
-> the active KaveonDB profile and current deployment evidence before operating
-> any environment.
+> snapshot and is not a current deployment authority. Every cloud resource,
+> PostgreSQL, retirement, and benchmark statement below is historical and
+> must not be treated as present state. Verify the active KaveonDB profile and
+> current deployment evidence before operating any environment.
 
-## Current handoff - 2026-10-05
+## Historical handoff snapshot - 2026-10-05
 
-### Performance lane update — 2026-10-12
+### Historical performance lane snapshot — 2026-10-12
 
 Codex owns the Kaveon-versus-Trino qualification lane while Claude owns the
 PostgreSQL retirement lane. The local Engine is healthy and the current
@@ -222,7 +222,7 @@ Azure API logs proved that `kaveonmeta` lacked `catalog_sources`. Commit `bd4141
 
 The obsolete `kaveon-migrate` Container Apps job and `kaveon-migrate` ACR repository were removed. The legacy image embedded database credentials and targeted the wrong destination database, so it must never be restored or rerun. The exposed Azure PostgreSQL administrator password was rotated and the replacement stored as `postgres-admin-password` in `kaveon-kv`; the API remained healthy because it uses managed identity. The separately embedded legacy Neon credential cannot be rotated from Azure and must be rotated or revoked in Neon before considering the incident fully contained outside Kaveon's Azure boundary. Never copy either credential into source, logs, issues, or this brief.
 
-## Honest open gates
+## Historical open gates at the snapshot
 
 Status on 2026-09-17 of the ten gates listed on 2026-09-04 (evidence in the HANDSHAKE Log and under `docs/qualification/`):
 
@@ -239,7 +239,7 @@ Status on 2026-09-17 of the ten gates listed on 2026-09-04 (evidence in the HAND
 
 Do not call Kaveon Trino-class or production-ready until the relevant gates have measured evidence. Current wording is distributed alpha, measured against Trino on a matched three-worker cluster.
 
-## Next execution order (2026-09-04, kept as written)
+## Historical next execution order (2026-09-04, retained for provenance)
 
 The list below is the 2026-09-04 order; items 3 to 5 are done as recorded above, and the current order is the "Continuation point" in `engine/DISTRIBUTED_EXECUTION_STATUS.md`.
 
