@@ -216,8 +216,10 @@ the API is Ready on
 `kvtestegmf6oweugsno.azurecr.io/kaveon-api@sha256:4dc35a7b61f905f7debbf93f45da68c5560a2a17d6ca33e485d1956f54e526f6`.
 The portal is authenticated with a public Entra client and server-verified
 session; no subscription policy changed for this rollout. The coordinator
-restart preserves catalog data but in-memory query history starts afresh, so
-attribution checks use newly submitted queries.
+restart preserves catalog data and restores the bounded terminal query history
+from the coordinator journal. Restored records intentionally do not claim that
+plans, task telemetry, or preview rows survived; attribution checks use newly
+submitted queries when those runtime details are required.
 
 The `kavedb` catalog contains `bronze.orders`, `bronze.customers`,
 `silver.orders`, `silver.customers`, and `gold.daily_sales` in ADLS Parquet.

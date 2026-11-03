@@ -84,7 +84,7 @@
 | Async query execution + result caching (SHA-256, TTL) | ✅ Done | Async job store not cleaned on restart |
 | CTAS endpoint | ✅ Done | |
 | Per-user favorites, themes, workspace activity | ✅ Done | |
-| First-run setup wizard (metadata DB) | ✅ Done | |
+| First-run setup wizard (KaveonDB authority) | ✅ Done | Native setup no longer requires a PostgreSQL metadata database |
 | Rate limiting (120 SQL/user/min; Redis-backed if `REDIS_URL`) | ✅ Done | In-process limiter not shared across replicas |
 | Connection pool warmup + 5-min heartbeat | ✅ Done | |
 
@@ -134,7 +134,7 @@
 | Async job store not cleaned on restart | Add cleanup on startup |
 | Connection strings stored plaintext in `data_sources` | Needs vault integration |
 | In-process rate limiting not shared across replicas | Redis fixes this |
-| Engine server has no auth/TLS | Keep behind a trusted local boundary during alpha |
+| Engine deployment hardening | TLS/auth are implemented; keep the Engine behind the trusted API boundary while rotation, network controls and recovery qualification remain open |
 | Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
 | Hash aggregate/join stop at their configured query budget instead of spilling | Add partitioned aggregate/join spill before production scale claims |
 | Control-plane record sharding is not qualified against the cluster | A published-format change verified on the in-memory, filesystem and Azurite stores. The measured 11,900-owner capacity and the one-shard write cost are local figures; qualify both on AKS before either is claimed publicly |
