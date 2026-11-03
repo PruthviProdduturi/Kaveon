@@ -27223,6 +27223,30 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_date_at_time_zone_as_midnight_in_the_requested_offset() {
+        let source = Arc::new(Date32Array::from(vec![Some(0), None])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("value", source)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "AT_TIME_ZONE".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Utf8("+05:30".into())),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+05:30")))
+        );
+        let values = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(values.value(0), -19_800_000_000);
+        assert!(values.is_null(1));
+    }
+
+    #[test]
     fn at_time_zone_preserves_instants_for_zoned_inputs_and_rejects_bad_zones() {
         let source = Arc::new(
             TimestampMicrosecondArray::from(vec![Some(1_735_603_200_000_000)]).with_timezone("UTC"),
