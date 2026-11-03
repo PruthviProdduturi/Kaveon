@@ -71,7 +71,8 @@ the versioned 134-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
-The versioned T-SQL corpus pins the latest implementation commit `7d13b115`; later
+The versioned T-SQL corpus pins the latest implementation commit after the
+runtime timestamp-style qualification; later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
 
@@ -111,8 +112,9 @@ subsecond aliases (`MS`, `MCS`, `US`, and `NS`). Runtime text-column
 Parquet differential (`docs/qualification/track2-tsql-convert-runtime-styles-2026-10-29.md`).
 Runtime text-column timestamp conversion now has local vectorized evaluator
 coverage for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only
-style `101`; all six styles also have exact three-worker differential evidence
-(`docs/qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md`).
+styles `0`, `1`, `23`, `101`, `102`, `103`, `104`, `105`, `106`, `107`, `110`,
+`111`, and `112`; all eighteen styles have exact three-worker differential
+evidence (`docs/qualification/track2-tsql-runtime-timestamp-date-styles-2026-11-03.md`).
 Temporal `FORMAT` now shares the vectorized `TO_CHAR` path for invariant date
 patterns, and `DATE_FORMAT`/`TO_CHAR` honor their supplied pattern rather than
 falling back to a fixed ISO rendering
