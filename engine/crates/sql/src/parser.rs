@@ -3283,6 +3283,11 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             if or.is_some() {
                 return Err(sql_error("UPDATE conflict clauses are not supported"));
             }
+            if from.is_some() && product_kind(&table_name).is_err() {
+                return Err(sql_error(
+                    "UPDATE FROM is supported only for bounded product tables",
+                ));
+            }
             if selection.is_none() {
                 return Err(sql_error("UPDATE requires a WHERE predicate"));
             }
