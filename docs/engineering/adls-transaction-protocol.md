@@ -207,7 +207,8 @@ are neither transaction authority nor a replacement for application history.
 > It is not the current authority model: native deployments read and write
 > KaveonDB directly, with no PostgreSQL fallback.
 
-PostgreSQL remains authoritative during transition. For each family, write a
+In the historical transition this protocol modeled, PostgreSQL remained
+authoritative. For each family, the migration runner wrote a
 source outbox row in the same PostgreSQL transaction as the source mutation,
 take a repeatable snapshot/watermark, import through this protocol, replay the
 outbox idempotently and reconcile counts, IDs, ownership, visibility, references,

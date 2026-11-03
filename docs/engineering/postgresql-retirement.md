@@ -92,10 +92,12 @@ authority-family or global retirement gates.
 The PostgreSQL-free runtime was verified on
 the local native profile (`verify-local-postgresql-retirement.ps1` passed with
 16 healthy authority families, the PostgreSQL service stopped, and no 5432/5433
-listeners). The personal Azure deployment remains PostgreSQL-authoritative;
-its live replay, shadow parity, write fence, restart, backup/restore, rollback,
-and final evidence gates have not passed. **Do not delete or scale down the
-cloud PostgreSQL server yet.**
+listeners). The remainder of this paragraph is historical evidence from the
+October 5 snapshot: that deployment was still PostgreSQL-authoritative and its
+live replay, shadow parity, write fence, restart, backup/restore, rollback and
+final evidence gates had not passed at that time. The paragraph is not a
+current resource-state assertion or an instruction to retain a live database;
+verify the active deployment and its receipts before any destructive action.
 
 The complete code-path and runtime-table audit is maintained in
 [PostgreSQL authority inventory](postgresql-authority-inventory.md).
