@@ -113,6 +113,7 @@
     {"id": "string_escape_json", "sql": "SELECT STRING_ESCAPE(value, 'json') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "formatmessage_bounded_template", "sql": "SELECT FORMATMESSAGE('country=%s signed=%i unsigned=%u %%', country, actions, actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_templates_and_positional_text_or_numeric_arguments"},
     {"id": "parsename", "sql": "SELECT PARSENAME('server.database.schema.object', 1), PARSENAME('server.database.schema.object', 4)", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_plain_dotted_names"},
+    {"id": "parsename_row_local", "sql": "SELECT PARSENAME(CONCAT(country, '.', region, '.', industry), actions - 20) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_row_local_text_and_part"},
     {"id": "quotename_default_brackets", "sql": "SELECT QUOTENAME(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "quotename_double_quote", "sql": "SELECT QUOTENAME(name, '\"') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "replicate", "sql": "SELECT REPLICATE(name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns_and_nonnegative_counts"},
