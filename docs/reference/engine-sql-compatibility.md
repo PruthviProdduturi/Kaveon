@@ -163,7 +163,8 @@ The Engine accepts a deliberately bounded set of SQL Server/Fabric spellings:
 `[bracketed_identifiers]`, `TOP n`, bounded `TOP n PERCENT`, `TOP n PERCENT WITH TIES`, and `TOP n WITH TIES`
 with `ORDER BY`, `ISNULL`, `DATEADD`, `DATEDIFF`, `DATEPART`, `GETDATE`,
 `GETUTCDATE`, `SYSDATETIME`, `SYSUTCDATETIME`, `ISDATE`, `ISNUMERIC`, `TRANSLATE`, `LEFT`, `RIGHT`, `REVERSE`, `STUFF`, `SPACE`, `TRIM` (including qualified BOTH, LEADING, and TRAILING character sets), `LTRIM`, `RTRIM`, unstyled `CONVERT`, and
-unstyled `TRY_CONVERT`. Literal DATE conversion styles `0`, `1`, `23`, `101`,
+unstyled `TRY_CONVERT` (including qualified numeric and UTF-8 text targets).
+Literal DATE conversion styles `0`, `1`, `23`, `101`,
 `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`,
 `120`, `121`, and `126` are normalized to ISO dates;
 runtime column style evaluation remains bounded. Runtime timestamp conversion
@@ -251,6 +252,11 @@ Runtime `TRY_CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `102`
 is qualified across local and three-worker Parquet execution; malformed and
 NULL inputs remain NULL. See
 [`track2-tsql-convert-runtime-styles-2026-10-29.md`](../qualification/track2-tsql-convert-runtime-styles-2026-10-29.md).
+`CONVERT(VARCHAR, expression)` and `TRY_CONVERT(VARCHAR, expression)` are
+also qualified for the Engine's UTF-8 text representation; length, code-page,
+binary-style, and locale-sensitive formatting semantics remain outside this
+boundary. See
+[`track2-tsql-convert-varchar-2026-11-03.md`](../qualification/track2-tsql-convert-varchar-2026-11-03.md).
 Styled literal `CONVERT`/`TRY_CONVERT` to the T-SQL timestamp family is also
 planner-qualified: ISO date-time styles preserve the supplied time, while
 date-only styles produce midnight. Runtime text-column timestamp styles now
