@@ -972,6 +972,24 @@ fn string_arrays_overlap(
     if saw_null { None } else { Some(false) }
 }
 
+fn string_view_arrays_overlap(left: &StringViewArray, right: &StringViewArray) -> Option<bool> {
+    let saw_null = left.null_count() > 0 || right.null_count() > 0;
+    for left_index in 0..left.len() {
+        if left.is_null(left_index) {
+            continue;
+        }
+        for right_index in 0..right.len() {
+            if right.is_null(right_index) {
+                continue;
+            }
+            if left.value(left_index) == right.value(right_index) {
+                return Some(true);
+            }
+        }
+    }
+    if saw_null { None } else { Some(false) }
+}
+
 // ── Binary operations ───────────────────────────────────────────────────────
 
 fn eval_binary_op(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
@@ -2692,6 +2710,37 @@ fn arrays_overlap_utf8<L: OffsetSizeTrait>(
                 string_arrays_overlap(
                     left.value(row).as_string::<i32>(),
                     right.value(row).as_string::<i32>(),
+                )
+            }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(rows))
+}
+
+fn arrays_overlap_utf8_view<L: OffsetSizeTrait>(
+    left: &GenericListArray<L>,
+    right: &GenericListArray<L>,
+) -> Result<ArrayRef> {
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+        ));
+    }
+    let rows = (0..left.len())
+        .map(|row| {
+            if left.is_null(row) || right.is_null(row) {
+                None
+            } else {
+                string_view_arrays_overlap(
+                    left.value(row)
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .expect("Utf8View list values must be StringViewArray"),
+                    right
+                        .value(row)
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .expect("Utf8View list values must be StringViewArray"),
                 )
             }
         })
@@ -14562,6 +14611,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     DataType::Boolean => arrays_overlap_boolean(left, right),
                     DataType::Utf8 => arrays_overlap_utf8(left, right),
                     DataType::LargeUtf8 => arrays_overlap_large_utf8(left, right),
+                    DataType::Utf8View => arrays_overlap_utf8_view(left, right),
                     other => Err(KaveonError::Execution(format!(
                         "ARRAYS_OVERLAP does not support list element type {other}"
                     ))),
@@ -14732,6 +14782,24 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         large_string_arrays_overlap(
                             left.value(row).as_string::<i64>(),
                             right.value(row).as_string::<i64>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::Utf8View => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        string_view_arrays_overlap(
+                            left.value(row)
+                                .as_any()
+                                .downcast_ref::<StringViewArray>()
+                                .expect("Utf8View list values must be StringViewArray"),
+                            right
+                                .value(row)
+                                .as_any()
+                                .downcast_ref::<StringViewArray>()
+                                .expect("Utf8View list values must be StringViewArray"),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -23712,6 +23780,29 @@ mod tests {
         left.values().append_null();
         left.append(true);
         let mut right = LargeListBuilder::new(LargeStringBuilder::new());
+        right.values().append_value("omega");
+        right.values().append_value("alpha");
+        right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(left.finish()) as ArrayRef,
+                Arc::new(right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(result.as_boolean().value(0));
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_utf8_view_lists() {
+        use arrow::array::StringViewBuilder;
+        let mut left = LargeListBuilder::new(StringViewBuilder::new());
+        left.values().append_value("alpha");
+        left.values().append_null();
+        left.append(true);
+        let mut right = LargeListBuilder::new(StringViewBuilder::new());
         right.values().append_value("omega");
         right.values().append_value("alpha");
         right.append(true);
