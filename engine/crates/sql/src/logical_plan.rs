@@ -5318,6 +5318,20 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // SQL Server's IIF is the three-argument spelling of a searched CASE.
+    // Lower it before planning so it inherits the existing vectorized CASE
+    // null and type-resolution semantics in local and distributed execution.
+    if name == "IIF" {
+        let [condition, when_true, when_false] = args.as_slice() else {
+            return Err(sql_err("IIF requires exactly three arguments"));
+        };
+        return Ok(Expr::Case {
+            operand: None,
+            when_then: vec![(condition.clone(), when_true.clone())],
+            else_expr: Some(Box::new(when_false.clone())),
+        });
+    }
+
     // SQL Server's SQUARE is exactly POWER(value, 2). Lower it before
     // planning so it shares the existing vectorized numeric implementation
     // and distributed expression semantics.
@@ -9983,6 +9997,16 @@ mod tests {
         assert!(rendered.contains("when_then"), "{rendered}");
         assert!(rendered.contains("Int64(2)"), "{rendered}");
         assert!(sql_to_logical_plan("SELECT CHOOSE(1) FROM t").is_err());
+    }
+
+    #[test]
+    fn lowers_tsql_iif_to_searched_case() {
+        let plan =
+            sql_to_logical_plan("SELECT IIF(actions > 10, region, 'small') AS bucket FROM t")
+                .expect("IIF should lower through searched CASE");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Case"), "{debug}");
+        assert!(sql_to_logical_plan("SELECT IIF(actions > 10, region) FROM t").is_err());
     }
 
     #[test]

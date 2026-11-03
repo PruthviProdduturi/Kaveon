@@ -43,6 +43,7 @@
     {"id": "trim_leading_characters", "sql": "SELECT TRIM(LEADING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_leading_character_set"},
     {"id": "trim_trailing_characters", "sql": "SELECT TRIM(TRAILING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_trailing_character_set"},
     {"id": "choose", "sql": "SELECT CHOOSE(2, region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "iif", "sql": "SELECT IIF(actions > 10, region, 'small') FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_searched_case_lowering"},
     {"id": "count_big", "sql": "SELECT COUNT_BIG(*) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "count_big_distinct", "sql": "SELECT COUNT_BIG(DISTINCT user_id) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "pivot_count_big", "sql": "SELECT * FROM (SELECT region, month FROM t) src PIVOT (COUNT_BIG(*) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
