@@ -20,7 +20,7 @@ The editor is [Monaco Editor](https://microsoft.github.io/monaco-editor/) — th
 
 ### Autocomplete
 
-Monaco provides autocomplete for SQL keywords. Column and table names are populated from the **schema browser** on the left — select a database first to load its tables, then expand a table to load its columns.
+Monaco provides autocomplete for SQL keywords. Column and table names are populated from the **schema browser** on the left — select a catalog first to load its schemas and tables, then expand a table to load its columns.
 
 ---
 
@@ -32,17 +32,18 @@ Double-click a tab title to rename it.
 
 ---
 
-## Selecting a Database
+## Selecting a Catalog
 
-In the test portal, select the active Engine catalog source before running a
-query. The platform metadata database is not exposed through SQL Lab, so it
-cannot be browsed or queried from this path.
+Select the active catalog before running a query. The default `KaveonDB` catalog
+contains the product's transactional system records; `OpenSource` and other
+registered catalogs expose lake data. Catalog visibility and query access are
+controlled by the principal's catalog grants.
 
 ---
 
-## OpenSource in the test portal
+## OpenSource in a local or hosted Studio
 
-With the test add-on running, forward the Studio service and open the portal at
+For a local Kubernetes deployment, forward the Studio service and open
 `http://localhost:3000`:
 
 ```powershell
@@ -55,10 +56,10 @@ Engine SQL execution requires **Analyst** or **Admin**. Grant Administrator only
 by explicitly listing the Entra object ID in `AUTH_ENTRA_ADMIN_OBJECT_IDS`; a
 display name or email does not grant that role.
 
-Choose **Kaveon DB** in **Source**, then **OpenSource** in **Catalog**. The explorer
-groups its four subject schemas without a separate schema dropdown. Use schema-qualified
-names such as `nyc_taxi.yellow_trips` in SQL; table insertion includes the schema
-automatically. Expand a table to see actual Engine columns
+Choose `OpenSource` in the catalog selector. The explorer groups its subject
+schemas without a separate schema dropdown. Use schema-qualified names such as
+`nyc_taxi.yellow_trips` in SQL; table insertion includes the schema
+automatically. Expand a table to see the Engine columns
 and types. The curated catalog contains January 2025 NYC TLC trips, WHO reported
 COVID counts, energy/climate snapshots, and an archived Open LLM leaderboard
 snapshot. Source coverage and checks are in the [OpenSource validation report](../engineering/opensource-validation-2026-09-09.json).
