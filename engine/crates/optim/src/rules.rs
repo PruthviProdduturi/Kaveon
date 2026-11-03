@@ -419,7 +419,10 @@ fn collect_columns_scoped(expression: &Expr, columns: &mut HashSet<String>, boun
         // pushdown.  The evaluator still receives the token as the first
         // function argument and uses it to select the temporal operation.
         Expr::Function { name, args }
-            if matches!(name.as_str(), "DATE_ADD" | "DATE_DIFF" | "DATE_PART") =>
+            if matches!(
+                name.as_str(),
+                "DATE_ADD" | "DATE_DIFF" | "DATE_PART" | "DATE_PART_TSQL"
+            ) =>
         {
             for argument in args.iter().skip(1) {
                 collect_columns_scoped(argument, columns, bound);
