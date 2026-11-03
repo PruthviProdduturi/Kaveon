@@ -10,6 +10,9 @@ strings in both result paths:
 - statistics values and client-facing type labels treat `Utf8View` as text.
 - the embedded/local CLI row adapter and table renderer treat `Utf8View` as
   text rather than falling back to Arrow's debug representation.
+- map entries whose keys are `Utf8View` preserve the logical string key in the
+  JSON object shape, so chart dimensions and key-based consumers do not lose
+  matches at the API boundary.
 
 This keeps text dimensions stable at the API boundary. Charts receive their
 actual category labels, and clients that key or join result values do not see
@@ -24,6 +27,8 @@ distributed partial aggregation.
 ## Evidence
 
 - `streamed_root_tests::result_rows_encode_utf8_view_values_as_text`
+- `streamed_root_tests::result_rows_encode_utf8_view_values_as_text` also
+  covers a `Map<Utf8View, Int64>` result and asserts the logical text key.
 - `api::tests::statistics_statements_read_the_stored_statistics`
 - `streamed_root_tests::presented_type_uses_client_facing_nested_names`
 - `aggregate::tests::utf8_view_min_max_and_group_keys_use_logical_text_values`
