@@ -62,7 +62,9 @@ literal, or use the typed source form
 `CAST(source.document_json AS JSON)` to every matched source row; all three
 forms stage the same CAS update and remain limited to the bounded product
 document column. The typed cast is syntax-only: it must wrap the direct source
-document column and does not enable arbitrary JSON expressions or casts.
+document column and does not enable arbitrary JSON expressions or casts. The
+`WHEN NOT MATCHED` insert projection may use the same direct typed source form
+for `document_json`; it lowers to the same upsert/create path.
 
 A sixth bounded form adds SQL Server's `WHEN NOT MATCHED BY SOURCE THEN
 DELETE` after the matched-update and not-matched-insert clauses. The source ids
