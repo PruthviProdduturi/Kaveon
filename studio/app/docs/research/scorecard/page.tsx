@@ -50,9 +50,9 @@ export default function KaveonDbScorecardDocs() {
     <Scores rows={analytics} />
     <p><strong>Standing.</strong> On the workload it was built for, KaveonDB completes more exact queries per second than Trino on matched resources, with exact statistics and fail-closed semantics Trino does not have. Outside that workload — federation, SQL breadth, ecosystem, optimizer — Trino is years ahead.</p>
 
-    <h2>Transactions — against PostgreSQL 18</h2>
+    <h2>Transactions — compared with PostgreSQL 18</h2>
     <Scores rows={transactions} />
-    <p><strong>Standing.</strong> KaveonDB is a typed product-record protocol on object storage, not a relational database, and does not claim to be one. Recovery, isolation and latency must reach the middle of the scale before PostgreSQL can be retired.</p>
+    <p><strong>Standing.</strong> KaveonDB is a typed product-record protocol on object storage, not a relational database, and does not claim to be one. PostgreSQL is a comparison baseline only; it is not a Kaveon runtime dependency. The measured dimensions below identify the remaining work before KaveonDB should claim general-purpose relational parity.</p>
 
     <h2>What may be claimed</h2>
     <ul>
