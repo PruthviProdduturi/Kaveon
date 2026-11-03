@@ -23,6 +23,8 @@
     {"id": "round_operation", "sql": "SELECT ROUND(CAST(actions AS DOUBLE), 1, 1) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_or_row_local_operation_0_or_1"},
     {"id": "math_scalar_compatibility", "sql": "SELECT ABS(actions - 10), CEILING(CAST(actions AS DOUBLE) / 3), FLOOR(CAST(actions AS DOUBLE) / 3), SIGN(actions - 10), SQRT(CAST(actions AS DOUBLE)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
     {"id": "power_scalar_compatibility", "sql": "SELECT POWER(CAST(actions AS DOUBLE), 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_numeric_inputs"},
+    {"id": "greatest_numeric", "sql": "SELECT GREATEST(actions, sessions, duration_sec) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
+    {"id": "least_numeric", "sql": "SELECT LEAST(actions, sessions, errors) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "string_scalar_compatibility", "sql": "SELECT UPPER(name), LOWER(name), REPLACE(name, 'a', 'A') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "substring_scalar_compatibility", "sql": "SELECT SUBSTRING(name, 1, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "try_parse_numeric", "sql": "SELECT TRY_PARSE(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_numeric_parsing"},
