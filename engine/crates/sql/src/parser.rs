@@ -2584,7 +2584,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         };
         if assignments.len() != 1
             || !merge_document_target(&assignments[0].target, &target_alias)
-            || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+            || !merge_source_document_ref(&assignments[0].value, &source_alias)
         {
             return Err(sql_error(
                 "MERGE WHEN MATCHED must set document_json from source",
@@ -2893,6 +2893,18 @@ fn merge_source_ref(expression: &Expr, alias: &str, column: &str) -> bool {
             && parts[1].value.eq_ignore_ascii_case(column))
 }
 
+fn merge_source_document_ref(expression: &Expr, alias: &str) -> bool {
+    merge_source_ref(expression, alias, "document_json")
+        || matches!(
+            expression,
+            Expr::Cast {
+                expr,
+                data_type: SqlDataType::JSON,
+                ..
+            } if merge_source_ref(expr, alias, "document_json")
+        )
+}
+
 /// Accept the ordinary SQL Server spelling for a target assignment while
 /// keeping MERGE writes bounded to the one product document column. The
 /// unqualified form remains valid; a two-part name is valid only when its
@@ -2919,7 +2931,7 @@ fn merge_document_assignment(
     expression: &Expr,
     source_alias: &str,
 ) -> Option<MergeDocumentAssignment> {
-    if merge_source_ref(expression, source_alias, "document_json") {
+    if merge_source_document_ref(expression, source_alias) {
         Some(MergeDocumentAssignment::Source)
     } else {
         string_literal(expression, "MERGE document_json")
@@ -5468,6 +5480,24 @@ mod tests {
             panic!("expected product MERGE");
         };
         assert_eq!(dml.kind, NativeDmlKind::Merge);
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"Orders\"}".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn product_merge_accepts_a_typed_source_document_assignment() {
+        let sql = "MERGE INTO product.datasets AS target USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET target.document_json = CAST(source.document_json AS JSON) WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)";
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql)
+            .expect("typed source document assignment should remain bounded MERGE")
+        else {
+            panic!("expected product MERGE");
+        };
         assert_eq!(
             adapt_product_dml(&dml).unwrap(),
             ProductDmlCommand::Upsert {

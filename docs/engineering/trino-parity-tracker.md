@@ -334,6 +334,12 @@ rows are no-ops and selected rows retain ownership and revision/CAS checks.
 General search conditions, target-column predicates, `NOT IN`, and multi-clause
 predicate combinations remain outside the contract. Evidence:
 `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
+
+Bounded `MERGE` matched updates also accept the direct typed source assignment
+`CAST(source.document_json AS JSON)`. This is syntax-only and reuses the same
+owner-checked revision/CAS path; arbitrary JSON expressions and non-direct
+casts remain rejected. Evidence:
+`docs/qualification/track2-native-dml-merge-json-typed-source-2026-11-03.md`.
 | Explicit unsupported behavior | Qualified | Unsupported syntax fails closed with actionable SQL error names and no silent coordinator fallback; `TRY` now lowers JSON parse/format/array-get failures to NULL. Reusing a `SELECT` alias -- later in the same list or in `WHERE` -- is refused at planning, naming the alias and a rewrite, where it previously survived planning and surfaced from storage as a missing Parquet column (`docs/qualification/track2-select-alias-refusal-2026-10-23.md`). Only bare identifiers count, so a qualified column sharing an alias's name still resolves as that column. | Keep rejection corpus in every release gate. |
 
 ## Qualification commands

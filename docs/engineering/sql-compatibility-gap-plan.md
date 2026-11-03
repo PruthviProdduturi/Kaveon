@@ -329,7 +329,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   unaliased target derives its qualifier from the base table name, with the
   same fail-closed clause and source-shape rules. Matched document assignments
   may use either the unqualified `document_json` name or the declared target
-  alias (`target.document_json`); mismatched qualifiers remain rejected.
+  alias (`target.document_json`), and may wrap the direct source value as
+  `CAST(source.document_json AS JSON)`; mismatched qualifiers, arbitrary
+  expressions, and other casts remain rejected. Evidence:
+  `docs/qualification/track2-native-dml-merge-json-typed-source-2026-11-03.md`.
   A matched-only clause may also carry the bounded source filter
   `source.id = 'literal'` or `source.id IN ('literal', ...)`; excluded source
   rows remain no-ops and selected rows use the same revision/CAS path. Target
