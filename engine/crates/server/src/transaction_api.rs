@@ -4397,7 +4397,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "DELETE FROM product.datasets WHERE id = 'orders' AND revision = 2 RETURNING id, revision, document_json".into(),
+                sql: "DELETE FROM product.datasets AS target WHERE id = 'orders' AND revision = 2 RETURNING id, revision, document_json".into(),
                 transaction_id: Some(delete.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),

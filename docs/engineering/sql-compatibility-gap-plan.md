@@ -181,11 +181,11 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
   stage no write. Arbitrary typed-table schemas and conflict updates
   remain outside this contract. Evidence:
   `docs/qualification/track2-native-dml-typed-row-conflict-ignore-2026-10-28.md`.
-- [x] Accept an unambiguous target alias on the bounded product `UPDATE`
-  contract. The alias is syntactic only; revision/CAS predicates, owner
-  isolation, assignments, and `RETURNING` semantics are unchanged. Joins,
-  `UPDATE ... FROM`, qualified assignments, and arbitrary lake-table mutation
-  remain rejected. Evidence is recorded in
+- [x] Accept an unambiguous target alias on the bounded product `UPDATE` and
+  `DELETE` contracts. The alias is syntactic only; revision/CAS predicates,
+  owner isolation, assignments, and `RETURNING` semantics are unchanged.
+  Joins, `UPDATE ... FROM`, qualified assignments, and arbitrary lake-table
+  mutation remain rejected. Evidence is recorded in
   `docs/qualification/track2-native-dml-target-alias-2026-11-02.md`.
 - [x] Add bounded source-backed product `INSERT … SELECT`. The qualified form
   copies `id` and `document_json` from one same-kind `kaveon.product` table
