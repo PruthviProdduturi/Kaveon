@@ -2979,7 +2979,10 @@ async fn execute_sql_request(
                     Some("deleted") => commands.iter().any(|command| {
                         !matches!(
                             command,
-                            kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
+                            kaveon_sql::parser::ProductDmlCommand::Create { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched { .. }
@@ -5374,21 +5377,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sql_endpoint_merge_by_source_output_remains_fail_closed() {
+    async fn sql_endpoint_merge_by_source_output_returns_deleted_identity() {
         let (registry, _catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('remove-me', '{}')".into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
         let transaction = registry.begin("alice").await.unwrap();
         let response = execute_sql_request(
             &registry,
             "alice",
             SqlTransactionRequest {
                 sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE OUTPUT deleted.id, deleted.revision"#.into(),
+                transaction_id: Some(transaction.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["returning"][0]["id"], "remove-me");
+        assert_eq!(value["returning"][0]["revision"], 1);
+
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
                 transaction_id: Some(transaction.transaction_id),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
             },
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

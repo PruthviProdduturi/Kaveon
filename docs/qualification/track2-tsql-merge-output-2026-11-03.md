@@ -36,10 +36,13 @@ are no-ops and matched rows return the deleted identity and prior revision.
 ## Safety boundary
 
 The parser and endpoint reject `deleted.document_json`, `$action`, expressions,
-`OUTPUT INTO`, mixed pseudo-table projections, and unsupported columns. By-source
-forms remain rejected. The transaction API resolves supported MERGE actions to
-revision/CAS commands, then filters the staged write set by the requested
-pseudo-table; source rows that are no-ops are omitted rather than fabricated.
+`OUTPUT INTO`, mixed pseudo-table projections, and unsupported columns. Bounded
+by-source delete batches accept `OUTPUT deleted.id` and
+`OUTPUT deleted.revision`; by-source inserted output, `deleted.document_json`,
+and broader by-source combinations remain rejected. The transaction API
+resolves supported MERGE actions to revision/CAS commands, then filters the
+staged write set by the requested pseudo-table; source rows that are no-ops are
+omitted rather than fabricated.
 
 ## Evidence
 
@@ -51,7 +54,7 @@ pseudo-table; source rows that are no-ops are omitted rather than fabricated.
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_accepts_deleted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_unmatched_insert_accepts_inserted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_delete_or_insert_output_is_action_aware`
-- `transaction_api::tests::sql_endpoint_merge_by_source_output_remains_fail_closed`
+- `transaction_api::tests::sql_endpoint_merge_by_source_output_returns_deleted_identity`
 - `cargo test -p kaveon-sql --lib sql_server_merge_output -- --nocapture` — 2 passed
 - `cargo test -p kaveon-server --bin kaveon-server transaction_api::tests::sql_endpoint_bounded_merge -- --nocapture` — 12 passed
 

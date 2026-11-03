@@ -153,8 +153,9 @@ and `OUTPUT inserted.*`, while matched-delete-only accepts
 snapshot; unmatched source rows are no-ops and produce no output row.
 Delete-or-insert now qualifies action-aware `MERGE OUTPUT`: `inserted` returns
 inserted/update actions and `deleted` returns deleted/update actions from the
-ordered staged write set. Not-matched-by-source forms and mixed pseudo-table
-projections remain rejected; evidence is in
+ordered staged write set. Not-matched-by-source delete forms also qualify
+`OUTPUT deleted.id|revision`; by-source inserted output, `deleted.document_json`,
+and mixed pseudo-table projections remain rejected. Evidence is in
 `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.
 
 The current T-SQL corpus is 142 cases (the implementation pin is updated after
