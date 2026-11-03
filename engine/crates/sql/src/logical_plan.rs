@@ -4498,6 +4498,7 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             ..
         } => {
             let inner = ast_expr_to_expr(expr)?;
+            reject_unsupported_text_cast_length(data_type)?;
             // JSON is represented as validated UTF-8 text in Arrow.  Lower
             // the cast to a dedicated function so invalid documents fail at
             // execution (and TRY_CAST can preserve SQL's NULL-on-error rule)
@@ -4547,6 +4548,7 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             let data_type = data_type
                 .as_ref()
                 .ok_or_else(|| sql_err("CONVERT requires a target data type"))?;
+            reject_unsupported_text_cast_length(data_type)?;
             let style = if styles.is_empty() {
                 None
             } else if styles.len() == 1 {
@@ -5057,6 +5059,26 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         }
         other => Err(sql_err(format!("unsupported CAST target type: {other}"))),
     }
+}
+
+/// The Engine's text contract is unbounded UTF-8.  SQL Server's sized
+/// VARCHAR/CHAR/NVARCHAR forms require truncation, padding, and code-page
+/// rules that are not represented by `CastTarget::Utf8`; accepting the AST
+/// and silently dropping the length would produce incorrect results.  Keep
+/// this boundary explicit for CAST, CONVERT, and their TRY variants.
+fn reject_unsupported_text_cast_length(dt: &ast::DataType) -> Result<()> {
+    let sized = match dt {
+        ast::DataType::Varchar(length) | ast::DataType::CharVarying(length) => length.is_some(),
+        ast::DataType::String(length) => length.is_some(),
+        ast::DataType::Char(length) => length.is_some(),
+        _ => false,
+    };
+    if sized {
+        return Err(sql_err(
+            "sized text casts are not supported; use unbounded VARCHAR/CHAR for UTF-8 text",
+        ));
+    }
+    Ok(())
 }
 
 fn is_tsql_timestamp_type(dt: &ast::DataType) -> bool {
@@ -10540,6 +10562,25 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("Cast"), "{rendered}");
         assert!(rendered.contains("TRY_CAST_DATE32"), "{rendered}");
+    }
+
+    #[test]
+    fn rejects_sized_tsql_text_casts_instead_of_dropping_length() {
+        for sql in [
+            "SELECT CAST(value AS VARCHAR(12)) FROM t",
+            "SELECT TRY_CAST(value AS CHAR(4)) FROM t",
+            "SELECT CONVERT(VARCHAR(8), value) FROM t",
+            "SELECT TRY_CONVERT(CHAR(2), value) FROM t",
+        ] {
+            let error = sql_to_logical_plan(sql)
+                .expect_err("sized text casts must fail closed until length semantics exist");
+            assert!(
+                error
+                    .to_string()
+                    .contains("sized text casts are not supported"),
+                "{sql}: {error}"
+            );
+        }
     }
 
     #[test]
