@@ -21,6 +21,7 @@ from services.sql_table_extractor import extract_tables_from_sql
 from services.sql_guard import assert_no_platform_tables, assert_read_only
 from services import engine_cube_rewrite
 import database.pool as pool
+from database.connectors import execute_registered_source
 import database.metadata as meta_db
 from services import postgresql_retirement_runtime, product_read_authority
 
@@ -711,8 +712,13 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     if (chart_type or "").lower() in GEOGRAPHIC_CHART_TYPES:
         hard_limit = min(hard_limit, MAX_GEOGRAPHIC_ROWS)
     try:
-        result = pool.execute_query(sql_text, database, max_rows=hard_limit,
-                                    actor=ctx.email, role=ctx.role)
+        result = execute_registered_source(
+            sql_text,
+            database,
+            max_rows=hard_limit,
+            actor=ctx.email,
+            role=ctx.role,
+        )
     except pool.UnknownDataSource:
         # Nothing was attempted: no registered source answers to this name.
         # Saying so beats "Query execution failed", which described a query
