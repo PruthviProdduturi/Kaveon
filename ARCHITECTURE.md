@@ -50,9 +50,10 @@ The defining data model is the **Live Lake Path**: Kaveon reads data in the cust
 ## What runs today
 
 The analytical and product-transaction paths are integrated through Studio and
-FastAPI. PostgreSQL remains present in qualification deployments until the live
-retirement gate passes; checked-in retirement mode switches exact authority
-families to KaveonDB and fails closed rather than falling back.
+FastAPI. KaveonDB is the native authority for product metadata, catalog state,
+and transactional records. PostgreSQL is not a runtime dependency; the
+remaining PostgreSQL adapters are explicitly legacy migration/reconciliation
+paths and fail closed when native mode is selected.
 
 ### Shipping application path — implemented
 
@@ -63,7 +64,7 @@ flowchart LR
     API --> DLM[DLM context and routing]
     API --> Engine[Kaveon Engine bridge]
     API --> Tx[KaveonDB typed product records]
-    API -->|pre-cutover dual write / replay| Metadata[(PostgreSQL rollback source)]
+    API -->|optional legacy migration / replay| Legacy[(External SQL source)]
     API -->|registered-source passthrough| SQL[(External SQL sources)]
 ```
 
@@ -79,7 +80,7 @@ SQL sources remain an explicit passthrough path rather than Engine federation.
 ```mermaid
 flowchart LR
     Client[Remote CLI or HTTP client] --> Coordinator[Engine coordinator]
-    Coordinator --> Catalog[(Native durable catalog)]
+    Coordinator --> Catalog[(KaveonDB catalog and transaction log)]
     Coordinator --> Parser[SQL + optimizer]
     Parser --> Graph[Stage graph + executable fragments]
     Graph --> Workers[Engine workers]
@@ -89,7 +90,7 @@ flowchart LR
     Workers -->|Root Arrow results| Coordinator
 ```
 
-Today the Engine queries local Parquet, Delta, and Iceberg tables, plus Parquet and Delta objects in ADLS Gen2 through ranged object-store reads. The Iceberg reader and shared S3 object-store reader are implemented, but Iceberg has only local qualification and S3 has no live-bucket qualification yet. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution requires supported JSON commits or v1 checkpoints; broader Delta protocol-v2 features remain unsupported. Studio and FastAPI route native analytical work and retirement DLM scans through the Engine bridge; registered external SQL sources use a separate passthrough path rather than Engine federation. Python bindings remain a scaffold.
+Today the Engine queries local Parquet, Delta, and Iceberg tables, plus Parquet and Delta objects in ADLS Gen2 through ranged object-store reads. The Iceberg reader and shared S3 object-store reader are implemented, but Iceberg has only local qualification and S3 has no live-bucket qualification yet. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution requires supported JSON commits or v1 checkpoints; broader Delta protocol-v2 features remain unsupported. Studio and FastAPI route native analytical work and DLM scans through the Engine bridge; registered external SQL sources use a separate passthrough path rather than Engine federation. Python bindings remain a scaffold.
 
 HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. Completed distributed stages report their worker tasks, partitions, elapsed time, output rows, Arrow batches, and transport bytes. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory, blocked time, spill, and live task updates are not yet emitted.
 

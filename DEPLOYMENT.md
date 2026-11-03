@@ -1,6 +1,6 @@
 # Kaveon — Deployment Guide
 
-> **Stack:** Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) + Azure PostgreSQL (`kaveonmeta` + `kaveon`)
+> **Stack:** Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) + KaveonDB (native catalog, transaction log, and product state)
 > **Live:** [kaveon.io](https://kaveon.io)
 
 ---
@@ -11,28 +11,28 @@
 flowchart TD
     B["🌐 Browser"]
     V["▲ Vercel · kaveon-studio<br/><small>NextAuth: GitHub / Google / Entra<br/>/api/kaveon proxy → X-User-* + secret</small>"]
-    A["⚙️ Azure Container Apps · kaveon-api<br/><small>psycopg2 / DefaultAzureCredential</small>"]
-    M[("🗄️ kaveonmeta<br/><small>metadata + DLM context</small>")]
-    D[("📊 kaveon<br/><small>data warehouse</small>")]
+    A["⚙️ Azure Container Apps · kaveon-api<br/><small>KaveonDB client / DefaultAzureCredential</small>"]
+    K[("🗄️ KaveonDB<br/><small>catalog + product state + DLM records</small>")]
+    L[("📦 customer lake<br/><small>Parquet / Delta / Iceberg</small>")]
     X[("🔌 registered data sources")]
     B --> V --> A
-    A --> M
-    A --> D
+    A --> K
+    A --> L
     A --> X
 ```
 
-Vercel hosts the Next.js frontend. Azure Container Apps hosts the FastAPI backend (persistent process + connection pool). Azure Database for PostgreSQL Flexible Server holds `kaveonmeta` (metadata + DLM context) and the default/demo `kaveon` warehouse, authenticated via Managed Identity. Analytical data may instead remain in a registered external SQL source. IaC lives in `infra/bicep/`.
+Vercel hosts the Next.js frontend. Azure Container Apps hosts the FastAPI backend. KaveonDB owns the catalog, product state, DLM definitions/runs, query records, and transactional metadata; analytical data remains in customer-controlled Parquet/Delta/Iceberg storage and is read by the Engine. Registered external SQL sources are optional passthrough connectors, not hidden application dependencies. IaC lives in `infra/bicep/`.
 
 ## Full Walkthrough
 
-See **[docs/guides/deploy-vercel-azure-postgres.md](docs/guides/deploy-vercel-azure-postgres.md)** for the complete step-by-step setup guide covering:
+See **[docs/guides/deploy-vercel-azure-postgres.md](docs/guides/deploy-vercel-azure-postgres.md)** for the historical PostgreSQL migration profile. For a native deployment, use the checked-in IaC under `infra/bicep/` and the [local-stack guide](docs/guides/local-stack.md); the legacy guide must not be used to provision a runtime authority.
 
-1. **Azure PostgreSQL** — create the server + `kaveonmeta`/`kaveon` databases, apply the schema
-2. **Azure Container Registry** — build and push the API image
-3. **Azure Container Apps** — deploy kaveon-api via Bicep
-4. **Vercel** — deploy kaveon-studio, configure NextAuth providers + env vars
+1. **KaveonDB and lake storage** — configure the native catalog and customer-owned Parquet/Delta/Iceberg roots
+2. **Azure Container Registry** — build and push the API and Engine images
+3. **Azure Container Apps** — deploy kaveon-api and the Engine bridge via Bicep
+4. **Vercel** — deploy kaveon-studio and configure OAuth/provider env vars
 5. **Wire together** — configure callback URLs, proxy identity, allowed origins, and secrets
-6. **Verify** — sign in, add a data source, build a chart
+6. **Verify** — sign in, inspect the catalog, run SQL, and build a chart
 
 The checked-in automation is split across two workflows: `.github/workflows/deploy.yml`
 builds and deploys the API on pushes to `dev`, while `.github/workflows/ci.yml` deploys
@@ -43,11 +43,9 @@ see [configuration reference](docs/reference/configuration.md).
 
 The recommended production path sends browser traffic through Vercel. `kaveon-studio`'s `/api/kaveon/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to the Container App, stamped with `KAVEON_PROXY_SECRET`. See [SECURITY.md](SECURITY.md) for provider bearer-token access, the explicitly configured development-only identity bypass, and current hardening gaps. Kaveon has no local-password authentication.
 
-## Engine alpha deployment
+## Engine deployment
 
-`engine/docker-compose.yml` starts one coordinator and two workers against a shared local volume. It validates packaging, node discovery, heartbeats, and node-local Parquet queries.
-
-It is **not** a production distributed query cluster yet: there is no fragment scheduler, exchange/shuffle layer, cross-worker retry, Engine HTTP authentication, or TLS termination. Populate the shared data volume before starting the stack; the repository does not ship production data.
+`engine/docker-compose.yml` starts one coordinator and two workers against a shared local volume. It validates packaging, node discovery, heartbeats, stage scheduling, Arrow exchange/shuffle, bounded retries, and node-local Parquet/Delta queries. Populate the shared data volume before starting the stack; the repository does not ship production data. Production deployments must add the configured Engine authentication/TLS boundary and durable customer storage.
 
 ```bash
 cd engine
@@ -60,13 +58,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md#delivery-topology) for current-versus-targ
 
 - The Container App Bicep module enables public ingress. Restrict ingress to the
   trusted Studio/proxy path before treating the topology as hardened production.
-- PostgreSQL Bicep currently enables public network access and provisions an admin
-  password even though the running application can use Managed Identity. Network,
-  firewall, identity, and database-role setup remain deployment responsibilities.
+- Legacy SQL connector infrastructure, if enabled for a migration, must be
+  isolated from the native KaveonDB authority and removed after reconciliation.
 - The deployment does not provision Redis. Without `REDIS_URL`, rate limiting and
   query/job state are process-local and do not coordinate across replicas.
-- Engine state, including query history, is process-local. Deleting an Engine query
-  record does not cancel running work.
+- Engine execution state is separate from KaveonDB product state; query cancellation
+  is propagated through the Engine bridge, while durable product/query records are
+  committed by the API in KaveonDB.
 
 ---
 
