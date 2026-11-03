@@ -4,6 +4,13 @@ This plan covers work that can proceed without an AKS subscription or live
 ADLS account. It is deliberately separate from the cloud gates: local evidence
 can make the release safer and faster, but it cannot claim cloud qualification.
 
+> **Dated qualification snapshot.** The baseline and cloud-availability notes
+> below describe the environment observed when this plan was written. They are
+> not the current deployment or metadata-authority contract. For present
+> architecture, use the native KaveonDB deployment and current release gates;
+> PostgreSQL references here are retained only as historical qualification
+> evidence.
+
 ## Current baseline
 
 - Formatting, strict Clippy, CI, catalog tests, storage tests, and the local
