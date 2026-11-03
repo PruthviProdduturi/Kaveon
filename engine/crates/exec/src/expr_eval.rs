@@ -8851,21 +8851,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     result.append_null();
                     continue;
                 };
-                let segments = value.split('.').collect::<Vec<_>>();
-                let valid = !segments.is_empty()
-                    && segments.len() <= 4
-                    && segments
-                        .iter()
-                        .all(|segment| !segment.is_empty() && segment.chars().count() <= 128);
-                if !valid {
+                let Some(segments) = parse_parsename_segments(value) else {
                     result.append_null();
                     continue;
-                }
+                };
                 let Some(index) = segments.len().checked_sub(part as usize) else {
                     result.append_null();
                     continue;
                 };
-                result.append_value(segments[index]);
+                result.append_value(&segments[index]);
             }
             Ok(Arc::new(result.finish()))
         }
@@ -14933,6 +14927,92 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         other => Err(KaveonError::Execution(format!(
             "unknown scalar function: {other}"
         ))),
+    }
+}
+
+/// Parse SQL Server's dotted four-part identifier spelling for PARSENAME.
+///
+/// Bracketed and double-quoted segments may contain dots and escaped closing
+/// delimiters. The result is the unquoted identifier text, which is what
+/// PARSENAME returns. This remains deliberately bounded to four segments and
+/// SQL Server's 128-Unicode-character `sysname` limit.
+fn parse_parsename_segments(value: &str) -> Option<Vec<String>> {
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut segments = Vec::with_capacity(4);
+    loop {
+        if index >= chars.len() || segments.len() == 4 {
+            return None;
+        }
+        let mut segment = String::new();
+        match chars[index] {
+            '[' => {
+                index += 1;
+                let mut closed = false;
+                while index < chars.len() {
+                    let character = chars[index];
+                    if character == ']' {
+                        if chars.get(index + 1) == Some(&']') {
+                            segment.push(']');
+                            index += 2;
+                        } else {
+                            index += 1;
+                            closed = true;
+                            break;
+                        }
+                    } else {
+                        segment.push(character);
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            '"' => {
+                index += 1;
+                let mut closed = false;
+                while index < chars.len() {
+                    let character = chars[index];
+                    if character == '"' {
+                        if chars.get(index + 1) == Some(&'"') {
+                            segment.push('"');
+                            index += 2;
+                        } else {
+                            index += 1;
+                            closed = true;
+                            break;
+                        }
+                    } else {
+                        segment.push(character);
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            _ => {
+                while index < chars.len() && chars[index] != '.' {
+                    segment.push(chars[index]);
+                    index += 1;
+                }
+            }
+        }
+        if segment.is_empty() || segment.chars().count() > 128 {
+            return None;
+        }
+        segments.push(segment);
+        if index == chars.len() {
+            return Some(segments);
+        }
+        if chars[index] != '.' {
+            return None;
+        }
+        index += 1;
+        if index == chars.len() {
+            return None;
+        }
     }
 }
 
@@ -30700,6 +30780,9 @@ mod tests {
                     Some("schema.object"),
                     Some("schema.object"),
                     Some("server..object"),
+                    Some("[server].[db.with.dot].[schema].[obj]]ect]"),
+                    Some("\"server\".\"database\".\"schema\".\"object\""),
+                    Some("[broken"),
                     None,
                 ])) as ArrayRef,
             ),
@@ -30709,6 +30792,9 @@ mod tests {
                     Some(4),
                     Some(1),
                     Some(4),
+                    Some(1),
+                    Some(3),
+                    Some(1),
                     Some(1),
                     Some(1),
                 ])) as ArrayRef,
@@ -30728,7 +30814,10 @@ mod tests {
         assert_eq!(values.value(1), "object");
         assert!(values.is_null(2));
         assert!(values.is_null(3));
-        assert!(values.is_null(4));
+        assert_eq!(values.value(4), "db.with.dot");
+        assert_eq!(values.value(5), "object");
+        assert!(values.is_null(6));
+        assert!(values.is_null(7));
     }
 
     #[test]

@@ -290,6 +290,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_parsename_quoted_identifiers",
+        "SELECT user_id, PARSENAME('[server].[db.with.dot].[schema].[obj]]ect]', 3), PARSENAME('\"server\".\"database\".\"schema\".\"object\"', 1) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
+        true,
+    ),
+    (
         "tsql_year_month_day_aliases",
         "SELECT user_id, YEAR(event_date), MONTH(event_date), DAY(event_date) FROM {T} ORDER BY user_id, event_date, actions LIMIT 20",
         true,
