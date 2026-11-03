@@ -4410,6 +4410,37 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             })
         }
 
+        // Keep SQL Server's `AT TIME ZONE` bounded to explicit fixed-offset
+        // zones.  IANA/Windows zone databases and DST gap/overlap rules are
+        // deliberately outside the Engine's deterministic timestamp
+        // contract; rejecting them here is safer than silently applying a
+        // host-local timezone.
+        ast::Expr::AtTimeZone {
+            timestamp,
+            time_zone,
+        } => {
+            let zone = match time_zone.as_ref() {
+                ast::Expr::Value(ast::Value::SingleQuotedString(value))
+                | ast::Expr::Value(ast::Value::DoubleQuotedString(value)) => value.trim(),
+                other => {
+                    return Err(sql_err(format!(
+                        "AT TIME ZONE requires a literal fixed offset or UTC zone, got {other}"
+                    )));
+                }
+            };
+            if !is_supported_fixed_timezone(zone) {
+                return Err(sql_err(format!(
+                    "AT TIME ZONE supports only UTC or fixed offsets (+HH:MM/-HH:MM), got '{zone}'"
+                )));
+            }
+            Ok(Expr::Function {
+                // Encode the validated zone in the internal function name so
+                // empty fragments retain the output timezone metadata.
+                name: format!("AT_TIME_ZONE_{zone}"),
+                args: vec![ast_expr_to_expr(timestamp)?],
+            })
+        }
+
         ast::Expr::TypedString {
             data_type: ast::DataType::Decimal(_) | ast::DataType::Numeric(_),
             value,
@@ -4748,6 +4779,20 @@ fn cast_target_name(target: CastTarget) -> String {
             )
         }
     }
+}
+
+fn is_supported_fixed_timezone(zone: &str) -> bool {
+    let zone = zone.trim();
+    if zone.eq_ignore_ascii_case("UTC") || zone.eq_ignore_ascii_case("Z") {
+        return true;
+    }
+    let bytes = zone.as_bytes();
+    if bytes.len() != 6 || !matches!(bytes[0], b'+' | b'-') || bytes[3] != b':' {
+        return false;
+    }
+    let hour = zone[1..3].parse::<u8>().ok();
+    let minute = zone[4..6].parse::<u8>().ok();
+    matches!((hour, minute), (Some(hour), Some(minute)) if hour <= 14 && minute < 60 && (hour < 14 || minute == 0))
 }
 
 /// `date + INTERVAL 'n' DAY` and `date - INTERVAL 'n' DAY` lower to
@@ -9075,6 +9120,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn lowers_at_time_zone_for_fixed_offsets_and_rejects_named_zones() {
+        let plan = sql_to_logical_plan(
+            "SELECT CAST(event_time AS TIMESTAMP) AT TIME ZONE '+05:30' FROM events",
+        )
+        .expect("fixed-offset AT TIME ZONE should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("AT_TIME_ZONE"), "{rendered}");
+        assert!(rendered.contains("+05:30"), "{rendered}");
+        let error = sql_to_logical_plan(
+            "SELECT CAST(event_time AS TIMESTAMP) AT TIME ZONE 'America/Los_Angeles' FROM events",
+        )
+        .expect_err("named zones must remain outside the fixed-offset contract")
+        .to_string();
+        assert!(error.contains("fixed offset"), "{error}");
     }
 
     #[test]

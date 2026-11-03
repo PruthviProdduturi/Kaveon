@@ -8558,7 +8558,52 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         check_arity(name, args, 1)?;
         return eval_tsql_runtime_timestamp_style(name, &args[0], style, num_rows);
     }
+    if let Some(zone) = upper.strip_prefix("AT_TIME_ZONE_") {
+        check_arity(name, args, 1)?;
+        let (zone_name, offset_micros) = parse_fixed_timezone(zone).ok_or_else(|| {
+            KaveonError::Execution(format!(
+                "AT TIME ZONE supports only UTC or fixed offsets (+HH:MM/-HH:MM), got '{zone}'"
+            ))
+        })?;
+        return eval_at_time_zone(&args[0], &zone_name, offset_micros, num_rows);
+    }
     match upper.as_str() {
+        "AT_TIME_ZONE" => {
+            check_arity(name, args, 2)?;
+            if num_rows == 0 {
+                return Ok(Arc::new(
+                    TimestampMicrosecondArray::from(Vec::<Option<i64>>::new()).with_timezone("UTC"),
+                ));
+            }
+            let zone = text_value(&args[1], 0)?.ok_or_else(|| {
+                KaveonError::Execution(
+                    "AT TIME ZONE requires a non-NULL fixed offset or UTC zone".into(),
+                )
+            })?;
+            let (zone_name, offset_micros) = parse_fixed_timezone(zone).ok_or_else(|| {
+                KaveonError::Execution(format!(
+                    "AT TIME ZONE supports only UTC or fixed offsets (+HH:MM/-HH:MM), got '{zone}'"
+                ))
+            })?;
+            for row in 1..num_rows {
+                let other = text_value(&args[1], row)?.ok_or_else(|| {
+                    KaveonError::Execution(
+                        "AT TIME ZONE requires a non-NULL fixed offset or UTC zone".into(),
+                    )
+                })?;
+                let (other_name, _) = parse_fixed_timezone(other).ok_or_else(|| {
+                    KaveonError::Execution(format!(
+                        "AT TIME ZONE supports only UTC or fixed offsets (+HH:MM/-HH:MM), got '{other}'"
+                    ))
+                })?;
+                if other_name != zone_name {
+                    return Err(KaveonError::Execution(
+                        "AT TIME ZONE requires one zone for the complete batch".into(),
+                    ));
+                }
+            }
+            eval_at_time_zone(&args[0], &zone_name, offset_micros, num_rows)
+        }
         // SQL Server's character-code helpers are intentionally bounded to
         // Unicode scalar values. ASCII rejects a non-ASCII leading scalar
         // rather than silently applying a locale/code-page conversion;
@@ -15758,6 +15803,111 @@ fn eval_time_from_parts(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Arc::new(Time64MicrosecondArray::from(result)))
+}
+
+fn parse_fixed_timezone(zone: &str) -> Option<(String, i64)> {
+    let zone = zone.trim();
+    if zone.eq_ignore_ascii_case("UTC") || zone.eq_ignore_ascii_case("Z") {
+        return Some(("UTC".to_owned(), 0));
+    }
+    let bytes = zone.as_bytes();
+    if bytes.len() != 6 || !matches!(bytes[0], b'+' | b'-') || bytes[3] != b':' {
+        return None;
+    }
+    let hour = zone[1..3].parse::<i64>().ok()?;
+    let minute = zone[4..6].parse::<i64>().ok()?;
+    if hour > 14 || minute >= 60 || (hour == 14 && minute != 0) {
+        return None;
+    }
+    let sign: i64 = if bytes[0] == b'-' { -1 } else { 1 };
+    let offset_seconds = sign.checked_mul(hour.checked_mul(3_600)?.checked_add(minute * 60)?)?;
+    let offset_micros = offset_seconds.checked_mul(1_000_000)?;
+    Some((zone.to_owned(), offset_micros))
+}
+
+fn eval_at_time_zone(
+    source: &ArrayRef,
+    zone_name: &str,
+    offset_micros: i64,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let values = (0..num_rows)
+        .map(|row| {
+            let value = match source.data_type() {
+                DataType::Date32 => {
+                    let array = source.as_primitive::<Date32Type>();
+                    if array.is_null(row) {
+                        return Ok(None);
+                    }
+                    i64::from(array.value(row))
+                        .checked_mul(86_400_000_000)
+                        .and_then(|value| value.checked_sub(offset_micros))
+                }
+                DataType::Timestamp(TimeUnit::Second, timezone) => {
+                    let array = source.as_primitive::<TimestampSecondType>();
+                    if array.is_null(row) {
+                        return Ok(None);
+                    }
+                    array.value(row).checked_mul(1_000_000).and_then(|value| {
+                        timezone
+                            .is_some()
+                            .then_some(value)
+                            .or_else(|| value.checked_sub(offset_micros))
+                    })
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, timezone) => {
+                    let array = source.as_primitive::<TimestampMillisecondType>();
+                    if array.is_null(row) {
+                        return Ok(None);
+                    }
+                    array.value(row).checked_mul(1_000).and_then(|value| {
+                        timezone
+                            .is_some()
+                            .then_some(value)
+                            .or_else(|| value.checked_sub(offset_micros))
+                    })
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+                    let array = source.as_primitive::<TimestampMicrosecondType>();
+                    if array.is_null(row) {
+                        return Ok(None);
+                    }
+                    let value = array.value(row);
+                    let adjusted = if timezone.is_some() {
+                        value
+                    } else {
+                        value.checked_sub(offset_micros).ok_or_else(|| {
+                            KaveonError::Execution("AT TIME ZONE timestamp overflows".into())
+                        })?
+                    };
+                    Some(adjusted)
+                }
+                DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
+                    let array = source.as_primitive::<TimestampNanosecondType>();
+                    if array.is_null(row) {
+                        return Ok(None);
+                    }
+                    array.value(row).checked_div(1_000).and_then(|value| {
+                        timezone
+                            .is_some()
+                            .then_some(value)
+                            .or_else(|| value.checked_sub(offset_micros))
+                    })
+                }
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "AT TIME ZONE requires DATE or timestamp input, got {other}"
+                    )));
+                }
+            };
+            value
+                .map(Some)
+                .ok_or_else(|| KaveonError::Execution("AT TIME ZONE timestamp overflows".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(
+        TimestampMicrosecondArray::from(values).with_timezone(zone_name),
+    ))
 }
 
 fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
@@ -27046,6 +27196,73 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_fixed_offset_at_time_zone_without_host_timezone() {
+        let source = Arc::new(TimestampMicrosecondArray::from(vec![
+            Some(1_735_603_200_000_000),
+            None,
+        ])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("value", source)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "AT_TIME_ZONE".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Utf8("+05:30".into())),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+05:30")))
+        );
+        let values = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(values.value(0), 1_735_583_400_000_000);
+        assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn at_time_zone_preserves_instants_for_zoned_inputs_and_rejects_bad_zones() {
+        let source = Arc::new(
+            TimestampMicrosecondArray::from(vec![Some(1_735_603_200_000_000)]).with_timezone("UTC"),
+        ) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("value", source)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "AT_TIME_ZONE".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Utf8("-08:00".into())),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_primitive::<TimestampMicrosecondType>().value(0),
+            1_735_603_200_000_000
+        );
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("-08:00")))
+        );
+
+        let error = evaluate(
+            &Expr::Function {
+                name: "AT_TIME_ZONE".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Utf8("America/Los_Angeles".into())),
+                ],
+            },
+            &batch,
+        )
+        .expect_err("named timezone databases remain outside the bounded contract");
+        assert!(error.to_string().contains("fixed offsets"));
+    }
+
+    #[test]
     fn evaluates_real_cast_as_float32_with_null_preservation() {
         let batch = RecordBatch::try_from_iter([(
             "value",
@@ -30291,14 +30508,8 @@ mod tests {
         mode_builder.append_value("json");
         mode_builder.append_value("JSON");
         let batch = RecordBatch::try_from_iter([
-            (
-                "value",
-                Arc::new(value_builder.finish()) as ArrayRef,
-            ),
-            (
-                "mode",
-                Arc::new(mode_builder.finish()) as ArrayRef,
-            ),
+            ("value", Arc::new(value_builder.finish()) as ArrayRef),
+            ("mode", Arc::new(mode_builder.finish()) as ArrayRef),
         ])
         .unwrap();
         let result = evaluate(

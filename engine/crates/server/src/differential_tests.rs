@@ -490,6 +490,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_at_time_zone_fixed_offset",
+        "SELECT TOP 5 CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30' AS event_time FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_datefromparts",
         "SELECT TOP 5 DATEFROMPARTS(DATEPART(yyyy, event_date), DATEPART(mm, event_date), DATEPART(dd, event_date)) AS rebuilt FROM {T} ORDER BY event_date",
         true,
@@ -8751,6 +8756,28 @@ fn distributed_tsql_eomonth_offsets_match_local() {
     let statement = "SELECT user_id, EOMONTH(event_date) AS month_end, EOMONTH(event_date, 2) AS shifted_month_end, EOMONTH(event_date, actions - 20) AS row_local_month_end FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-eomonth-offset-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_at_time_zone_fixed_offset_matches_local() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-tsql-at-time-zone-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30' AS event_time FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-at-time-zone-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);
