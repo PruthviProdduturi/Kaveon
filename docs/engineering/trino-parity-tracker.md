@@ -304,10 +304,11 @@ up to 1,000 owner-isolated commands under one transaction. Evidence:
 `docs/qualification/track2-native-dml-id-list-cas-2026-11-02.md`.
 
 The same product-record boundary now also qualifies a bounded source-backed
-`UPDATE ... FROM`: one same-kind aliased source row can replace one target
-document from the pinned snapshot when literal target id/revision and source id
-predicates are present. Joins, multiple source rows, cross-kind sources, and
-arbitrary assignments remain outside the contract. Evidence:
+`UPDATE ... FROM`: one same-kind aliased source table can replace one or more
+target documents from the pinned snapshot when a literal revision and either a
+literal source id with a target-id list (capped at 1,000), or an identity join
+paired with a target-id list, are present. Arbitrary joins, cross-kind sources,
+and arbitrary assignments remain outside the contract. Evidence:
 `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
 Batch validation is fail-closed: if any target is missing or invalid, the
 pre-batch staged view is restored and no earlier list member can be published

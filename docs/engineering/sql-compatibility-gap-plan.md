@@ -282,12 +282,14 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
   with or without the literal ID filter; the unfiltered form keeps the same
   1,000-row expansion cap. General lake-table source DML remains open.
 - [x] Add bounded source-backed product `UPDATE ... FROM`. One same-kind,
-  aliased product source row can replace one target `document_json` under a
-  pinned snapshot when the statement supplies literal target id/revision and
-  source id predicates. The source is owner-checked, staged documents are
-  reused, and the target uses the existing revision/CAS and `RETURNING` path.
-  Joins, multiple source rows, cross-kind sources, arbitrary assignments, and
-  general lake-table mutation remain rejected. Evidence:
+  aliased product source table can replace one or more target `document_json`
+  values under a pinned snapshot when the statement supplies a literal
+  revision and either a literal source id with a target-id list (capped at
+  1,000), or an identity join paired with a target-id list. Sources are
+  owner-checked, staged documents are reused, and targets use the existing
+  revision/CAS and `RETURNING` path. Arbitrary joins, cross-kind sources,
+  arbitrary assignments, and general lake-table mutation remain rejected.
+  Evidence:
   `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
 - [x] Add bounded `MERGE` with explicit revision/CAS semantics. `MERGE`
   accepts one `VALUES` batch with an optional simple target alias, up to 1,000 rows containing `id` and
