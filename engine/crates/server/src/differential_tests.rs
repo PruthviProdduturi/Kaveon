@@ -280,6 +280,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_atn2_scalar_compatibility",
+        "SELECT user_id, ATN2(CAST(actions AS DOUBLE) + 1, CAST(actions AS DOUBLE) + 2) FROM {T} ORDER BY user_id, actions LIMIT 20",
+        true,
+    ),
+    (
         "tsql_string_scalar_compatibility",
         "SELECT user_id, UPPER(country), LOWER(country), REPLACE(country, 'a', 'A') FROM {T} ORDER BY user_id, country, actions LIMIT 20",
         true,

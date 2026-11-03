@@ -12915,7 +12915,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::atan)
         }
-        "ATAN2" => {
+        // SQL Server names the same two-argument arctangent `ATN2`; Trino
+        // and the generic function surface use `ATAN2`.
+        "ATAN2" | "ATN2" => {
             check_arity(name, args, 2)?;
             let y = compute::cast(&args[0], &DataType::Float64)?;
             let x = compute::cast(&args[1], &DataType::Float64)?;
