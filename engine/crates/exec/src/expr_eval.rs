@@ -1822,10 +1822,53 @@ fn normalize_tsql_runtime_date_style(value: &str, style: u32) -> Option<i32> {
                 value[6..8].parse::<u32>().ok()?,
             )
         }
+        113 => {
+            let (date, _) = normalize_tsql_style_113(value)?;
+            return i32::try_from(date_literal_days(&date)?).ok();
+        }
         _ => return None,
     };
     let canonical = format!("{year:04}-{month:02}-{day:02}");
     i32::try_from(date_literal_days(&canonical)?).ok()
+}
+
+fn normalize_tsql_style_113(value: &str) -> Option<(String, String)> {
+    let mut parts = value.split_whitespace();
+    let day = parts.next()?.parse::<u32>().ok()?;
+    let month = match parts.next()?.to_ascii_lowercase().as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
+        _ => return None,
+    };
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let time = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let mut fields = time.split(':');
+    let hour = fields.next()?.parse::<u32>().ok()?;
+    let minute = fields.next()?.parse::<u32>().ok()?;
+    let second = fields.next()?.parse::<u32>().ok()?;
+    let millis = fields.next()?.parse::<u32>().ok()?;
+    if fields.next().is_some() || hour > 23 || minute > 59 || second > 59 || millis > 999 {
+        return None;
+    }
+    let date = format!("{year:04}-{month:02}-{day:02}");
+    date_literal_days(&date)?;
+    Some((
+        date,
+        format!("{hour:02}:{minute:02}:{second:02}.{millis:03}"),
+    ))
 }
 
 fn eval_tsql_runtime_date_style(
@@ -1858,6 +1901,10 @@ fn eval_tsql_runtime_date_style(
 /// values.  The output is deliberately canonical UTF-8 so Arrow's timestamp
 /// cast remains the single representation/overflow implementation.
 fn normalize_tsql_runtime_timestamp_style(value: &str, style: u32) -> Option<String> {
+    if style == 113 {
+        let (date, time) = normalize_tsql_style_113(value.trim())?;
+        return Some(format!("{date} {time}"));
+    }
     if !matches!(style, 20 | 21 | 120 | 121 | 126) {
         return None;
     }
@@ -1908,7 +1955,7 @@ fn eval_tsql_runtime_timestamp_style(
     style: u32,
     num_rows: usize,
 ) -> Result<ArrayRef> {
-    if !matches!(style, 20 | 21 | 120 | 121 | 126) {
+    if !matches!(style, 20 | 21 | 113 | 120 | 121 | 126) {
         let dates = eval_tsql_runtime_date_style(name, source, style, num_rows)?;
         return Ok(compute::cast(
             &dates,
@@ -27126,6 +27173,7 @@ mod tests {
             (111, "2024/12/30", 20_087),
             (106, "30 Dec 2024", 20_087),
             (107, "Dec 30, 2024", 20_087),
+            (113, "30 Dec 2024 12:00:00:123", 20_087),
             (126, "2024-12-31T12:00:00.123", 20_088),
         ] {
             let result = evaluate(
@@ -27193,6 +27241,24 @@ mod tests {
             result.as_primitive::<TimestampMicrosecondType>().value(0),
             1_735_560_000_123_000
         );
+
+        let result = evaluate(
+            &expression("TRY_CONVERT_TIMESTAMP_STYLE_113"),
+            &RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![
+                    Some("30 Dec 2024 12:00:00:123"),
+                    Some("bad"),
+                    None,
+                ])) as ArrayRef,
+            )])
+            .unwrap(),
+        )
+        .unwrap();
+        let result = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(result.value(0), 1_735_560_000_123_000);
+        assert!(result.is_null(1));
+        assert!(result.is_null(2));
     }
 
     #[test]

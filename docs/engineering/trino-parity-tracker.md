@@ -131,8 +131,9 @@ Parquet differential (`docs/qualification/track2-tsql-convert-runtime-styles-202
 Runtime text-column timestamp conversion now has local vectorized evaluator
 coverage for ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only
 styles `0`, `1`, `23`, `101`, `102`, `103`, `104`, `105`, `106`, `107`, `110`,
-`111`, and `112`; all eighteen styles have exact three-worker differential
-evidence (`docs/qualification/track2-tsql-runtime-timestamp-date-styles-2026-11-03.md`).
+`111`, and `112`, plus runtime style `113` (`dd mon yyyy hh:mi:ss:mmm`);
+all nineteen style boundaries have exact three-worker differential evidence
+(`docs/qualification/track2-tsql-runtime-timestamp-date-styles-2026-11-03.md`).
 Temporal `FORMAT` now shares the vectorized `TO_CHAR` path for invariant date
 patterns, and `DATE_FORMAT`/`TO_CHAR` honor their supplied pattern rather than
 falling back to a fixed ISO rendering
