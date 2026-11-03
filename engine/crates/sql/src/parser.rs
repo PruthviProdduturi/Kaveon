@@ -2711,8 +2711,18 @@ fn product_key_predicate(selection: Option<&Expr>) -> Result<(Vec<String>, u64)>
                     ));
                 };
                 if column.value.eq_ignore_ascii_case("id") {
+                    if ids.is_some() {
+                        return Err(sql_error(
+                            "product key predicates may contain one id predicate",
+                        ));
+                    }
                     ids = Some(vec![string_literal(right, "product ID")?]);
                 } else if column.value.eq_ignore_ascii_case("revision") {
+                    if revision.is_some() {
+                        return Err(sql_error(
+                            "product key predicates may contain one revision predicate",
+                        ));
+                    }
                     revision = Some(integer_literal(right, "expected revision")?);
                 } else {
                     return Err(sql_error(
@@ -2735,6 +2745,11 @@ fn product_key_predicate(selection: Option<&Expr>) -> Result<(Vec<String>, u64)>
                 }
                 if list.is_empty() || list.len() > 1_000 {
                     return Err(sql_error("product key IN predicates require 1 to 1000 IDs"));
+                }
+                if ids.is_some() {
+                    return Err(sql_error(
+                        "product key predicates may contain one id predicate",
+                    ));
                 }
                 let values = list
                     .iter()
