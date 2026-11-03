@@ -1351,6 +1351,7 @@ fn aggregate_bindings(
             let mut expression = AggExpr::new(function, column).with_alias(&aggregate.output);
             expression.percentiles = aggregate.percentiles.clone();
             expression.delimiter = delimiter;
+            expression.string_agg_order_desc = aggregate.string_agg_order_desc;
             Ok(if aggregate.distinct || function_distinct {
                 expression.distinct()
             } else {
@@ -2557,6 +2558,7 @@ mod tests {
                             output: "unique_values".into(),
                             percentiles: None,
                             distinct: false,
+                            string_agg_order_desc: None,
                         }],
                     },
                 ),
@@ -2627,6 +2629,7 @@ mod tests {
                 output: "count_value".into(),
                 percentiles: None,
                 distinct: false,
+                string_agg_order_desc: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Sum,
@@ -2634,6 +2637,7 @@ mod tests {
                 output: "sum_value".into(),
                 percentiles: None,
                 distinct: false,
+                string_agg_order_desc: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Min,
@@ -2641,6 +2645,7 @@ mod tests {
                 output: "min_value".into(),
                 percentiles: None,
                 distinct: false,
+                string_agg_order_desc: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Max,
@@ -2648,6 +2653,7 @@ mod tests {
                 output: "max_value".into(),
                 percentiles: None,
                 distinct: false,
+                string_agg_order_desc: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Avg,
@@ -2655,6 +2661,7 @@ mod tests {
                 output: "avg_value".into(),
                 percentiles: None,
                 distinct: false,
+                string_agg_order_desc: None,
             },
             AggregateSpec {
                 function: AggregateFunction::CountDistinct,
@@ -2662,6 +2669,7 @@ mod tests {
                 output: "distinct_value".into(),
                 percentiles: None,
                 distinct: false,
+                string_agg_order_desc: None,
             },
         ];
         let fragment = |mode, exchange: &str| ExecutableFragment {
@@ -2807,6 +2815,7 @@ mod tests {
                     Expr::Literal(ScalarValue::Utf8(",".into())),
                 ],
             }),
+            string_agg_order_desc: None,
             output: "joined".into(),
             percentiles: None,
             distinct: false,
@@ -2897,6 +2906,7 @@ mod tests {
                                 output: "rows".into(),
                                 percentiles: None,
                                 distinct: false,
+                                string_agg_order_desc: None,
                             },
                             AggregateSpec {
                                 function: AggregateFunction::Sum,
@@ -2904,6 +2914,7 @@ mod tests {
                                 output: "total".into(),
                                 percentiles: None,
                                 distinct: false,
+                                string_agg_order_desc: None,
                             },
                         ],
                     },

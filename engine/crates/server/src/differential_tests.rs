@@ -360,6 +360,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_string_agg_within_group",
+        "SELECT STRING_AGG(country, ',') WITHIN GROUP (ORDER BY country) AS countries FROM {T}",
+        true,
+    ),
+    (
+        "tsql_string_agg_within_group_desc",
+        "SELECT STRING_AGG(country, ',') WITHIN GROUP (ORDER BY country DESC) AS countries FROM {T}",
+        true,
+    ),
+    (
         "tsql_pivot_count_big",
         "SELECT * FROM (SELECT region, surface FROM {T}) src PIVOT (COUNT_BIG(*) FOR surface IN ([Chat], [Export])) p",
         false,

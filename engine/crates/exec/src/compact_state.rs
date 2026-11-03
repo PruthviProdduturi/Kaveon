@@ -32,6 +32,7 @@ pub(crate) const TAG_DISTINCT_SKETCH: u8 = 19;
 /// A column profile (`COLUMN_STATISTICS`): its JSON as one payload.
 pub(crate) const TAG_COLUMN_PROFILE: u8 = 20;
 pub(crate) const TAG_STRING_AGG: u8 = 21;
+pub(crate) const TAG_STRING_AGG_ORDERED: u8 = 22;
 
 /// The payload of a sketch state, the same under both state encodings.
 pub(crate) fn sketch_payload(state: &AggregateState) -> Result<Vec<u8>> {
@@ -141,7 +142,25 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                     )?;
                 }
             }
-            AggregateState::StringAgg { value, delimiter } => {
+            AggregateState::StringAgg {
+                ordered_values: Some(values),
+                ordered_desc: Some(descending),
+                delimiter,
+                ..
+            } => {
+                out.push(TAG_STRING_AGG_ORDERED);
+                let mut items = Vec::with_capacity(values.len() + 2);
+                items.push(AggregateValue::Utf8(delimiter.clone()));
+                items.push(AggregateValue::Bool(*descending));
+                items.extend(values.iter().cloned().map(AggregateValue::Utf8));
+                payload(out, &encode_group_keys(&items)?)?;
+            }
+            AggregateState::StringAgg {
+                value,
+                delimiter,
+                ordered_values: None,
+                ordered_desc: None,
+            } => {
                 out.push(TAG_STRING_AGG);
                 payload(
                     out,
@@ -152,6 +171,9 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                     None => vec![VALUE_NULL],
                 };
                 payload(out, &encoded_value)?;
+            }
+            AggregateState::StringAgg { .. } => {
+                return Err(exec_err("invalid ordered STRING_AGG state"));
             }
             AggregateState::CountDistinct(values)
             | AggregateState::SumDistinct(values)
@@ -303,7 +325,48 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
                     }
                     _ => return Err(exec_err("invalid STRING_AGG value payload")),
                 };
-                AggregateState::StringAgg { value, delimiter }
+                AggregateState::StringAgg {
+                    value,
+                    delimiter,
+                    ordered_values: None,
+                    ordered_desc: None,
+                }
+            }
+            TAG_STRING_AGG_ORDERED => {
+                let values = decode_group_keys(input.payload()?)?;
+                let [
+                    AggregateValue::Utf8(delimiter),
+                    AggregateValue::Bool(descending),
+                    items @ ..,
+                ] = values.as_slice()
+                else {
+                    return Err(exec_err("invalid ordered STRING_AGG state payload"));
+                };
+                if delimiter.len() > 64 * 1024 || items.len() > MAX_ORDERED_STRING_AGG_VALUES {
+                    return Err(exec_err("ordered STRING_AGG state exceeds its bound"));
+                }
+                let mut strings = Vec::with_capacity(items.len());
+                let mut total = 0usize;
+                for item in items {
+                    let AggregateValue::Utf8(value) = item else {
+                        return Err(exec_err("invalid ordered STRING_AGG value payload"));
+                    };
+                    total = total
+                        .checked_add(value.len())
+                        .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
+                    strings.push(value.clone());
+                }
+                if total > MAX_STRING_AGG_BYTES {
+                    return Err(exec_err(
+                        "STRING_AGG result exceeds the 16 MiB per-group limit",
+                    ));
+                }
+                AggregateState::StringAgg {
+                    value: None,
+                    delimiter: delimiter.clone(),
+                    ordered_values: Some(strings),
+                    ordered_desc: Some(*descending),
+                }
             }
             TAG_COUNT_DISTINCT | TAG_SUM_DISTINCT | TAG_AVG_DISTINCT | TAG_INTEGER_SUM_DISTINCT => {
                 let values = decode_distinct_values(input.payload()?)?;

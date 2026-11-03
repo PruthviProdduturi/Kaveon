@@ -30,11 +30,15 @@ pub enum AggregateExpr {
         expr: Expr,
         distinct: bool,
     },
-    /// `STRING_AGG(expr, literal_separator)`. Ordered `WITHIN GROUP` forms
-    /// remain outside this bounded contract.
+    /// `STRING_AGG(expr, literal_separator)`, optionally ordered by the same
+    /// value expression through SQL Server's `WITHIN GROUP` clause.
     StringAgg {
         expr: Expr,
         delimiter: Expr,
+        /// `Some(true)` means descending, `Some(false)` ascending.  The
+        /// bounded contract intentionally permits only the aggregate value as
+        /// the order key so distributed merges can retain exact semantics.
+        order_desc: Option<bool>,
     },
     Min(Expr),
     Max(Expr),
@@ -6566,11 +6570,6 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                         let ast::FunctionArguments::List(args) = &func.args else {
                             return Err(sql_err("STRING_AGG requires a value and separator"));
                         };
-                        if !func.within_group.is_empty() {
-                            return Err(sql_err(
-                                "ordered STRING_AGG WITHIN GROUP is not implemented; use ARRAY_AGG with an explicit bounded order",
-                            ));
-                        }
                         if args.args.len() != 2 || distinct {
                             return Err(sql_err(
                                 "STRING_AGG requires exactly two arguments and does not support DISTINCT",
@@ -6590,9 +6589,30 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                         if separator.len() > 64 * 1024 {
                             return Err(sql_err("STRING_AGG separator exceeds the 64 KiB limit"));
                         }
+                        let order_desc = if func.within_group.is_empty() {
+                            None
+                        } else if func.within_group.len() == 1 {
+                            let order = &func.within_group[0];
+                            if ast_expr_to_expr(&order.expr)? != arg {
+                                return Err(sql_err(
+                                    "STRING_AGG WITHIN GROUP may order only by its value expression",
+                                ));
+                            }
+                            if order.nulls_first.is_some() {
+                                return Err(sql_err(
+                                    "STRING_AGG WITHIN GROUP does not support explicit NULLS placement",
+                                ));
+                            }
+                            Some(matches!(order.asc, Some(false)))
+                        } else {
+                            return Err(sql_err(
+                                "STRING_AGG WITHIN GROUP supports exactly one value order key",
+                            ));
+                        };
                         AggregateExpr::StringAgg {
                             expr: arg,
                             delimiter,
+                            order_desc,
                         }
                     }
                     "MIN" => AggregateExpr::Min(arg),
@@ -9666,6 +9686,31 @@ mod tests {
             sql_to_logical_plan("SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10) FROM t")
                 .expect("STRING_AGG FILTER should lower through the null-preserving argument path");
         assert!(format!("{filter_plan:?}").contains("StringAgg"));
+    }
+
+    #[test]
+    fn lowers_bounded_ordered_string_agg_and_rejects_unsafe_order_keys() {
+        let ascending =
+            sql_to_logical_plan("SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name) FROM t")
+                .expect("ordered STRING_AGG should lower");
+        assert!(format!("{ascending:?}").contains("order_desc: Some(false)"));
+        let descending = sql_to_logical_plan(
+            "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name DESC) FROM t",
+        )
+        .expect("descending ordered STRING_AGG should lower");
+        assert!(format!("{descending:?}").contains("order_desc: Some(true)"));
+        assert!(
+            sql_to_logical_plan(
+                "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY actions) FROM t"
+            )
+            .is_err()
+        );
+        assert!(
+            sql_to_logical_plan(
+                "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name, actions) FROM t"
+            )
+            .is_err()
+        );
     }
 
     #[test]
