@@ -5062,6 +5062,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_product_insert_accepts_sql_server_output() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "INSERT INTO product.datasets (id, document_json) OUTPUT inserted.id, inserted.revision VALUES ('output-insert', '{}')".into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"][0]["id"], "output-insert");
+        assert_eq!(value["returning"][0]["revision"], 1);
+        let commit = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(commit.status(), StatusCode::OK);
+        assert!(
+            catalog
+                .read_current()
+                .await
+                .unwrap()
+                .product_record(ProductRecordKind::Dataset, "output-insert")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_commits_product_insert_with_reordered_columns() {
         let (registry, _catalog) = registry().await;
         let begun = registry.begin("alice").await.unwrap();
