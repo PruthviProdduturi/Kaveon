@@ -33,6 +33,15 @@ cargo test -p kaveon-catalog --lib
 
 cargo clippy -p kaveon-optim --all-targets -- -D warnings
 passed
+
+cargo clippy -p kaveon-server --all-targets -- -D warnings
+passed
+
+cargo clippy -p kaveon-exec --all-targets -- -D warnings
+passed
+
+cargo clippy -p kaveon-sql --all-targets -- -D warnings
+passed
 ```
 
 Together these suites cover the versioned T-SQL corpus, distributed
