@@ -385,6 +385,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datalength",
+        "SELECT TOP 5 DATALENGTH(country) AS country_bytes FROM {T} ORDER BY country",
+        true,
+    ),
+    (
         "tsql_iif",
         "SELECT TOP 5 IIF(actions > 10, 'high', 'low') AS bucket FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
