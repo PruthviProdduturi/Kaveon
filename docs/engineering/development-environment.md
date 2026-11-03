@@ -17,12 +17,17 @@ memory, distributed execution, and security work measurable.
 | SQL/file tooling | DuckDB 1.5.5, PyArrow 25.0.1, Trino client 0.339.0, psycopg2 |
 | Test tooling | pytest, Hypothesis, Rust workspace tests and Criterion |
 | Containers | Docker Engine 29.7.2, Compose 5.5.0, Linux containers |
-| References | Trino 483 and PostgreSQL 17, pinned image digests |
+| References | Trino 483 and PostgreSQL 17, pinned image digests for comparison/qualification only; neither is a native KaveonDB runtime dependency |
 | Operations | Git, GitHub CLI, Azure CLI, kubectl 1.36.1, Helm 4.2.4, Gitleaks 8.30.1 |
 
 This machine has 24 logical CPUs and approximately 191 GiB RAM. Docker reports
 approximately 94 GiB available memory. Reference services have explicit resource
 limits. These facts are capacity inventory, not measured scale or performance.
+
+The Trino and PostgreSQL images are isolated reference fixtures used for
+differential results and compatibility comparisons. The native local profile
+uses KaveonDB for product metadata and transactions and does not require either
+service to run.
 
 ## Session entry and repeatable checks
 
