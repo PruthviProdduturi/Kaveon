@@ -5340,7 +5340,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Updated"}') ON CONFLICT ON CONSTRAINT datasets_pkey DO UPDATE SET document_json = CAST(excluded.document_json AS JSON) WHERE id = excluded.id RETURNING id, revision"#.into(),
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Inserted"}') ON CONFLICT ON CONSTRAINT datasets_pkey DO UPDATE SET document_json = CAST('{"name":"Conflict override"}' AS JSON) WHERE id = excluded.id RETURNING id, revision, document_json"#.into(),
                 transaction_id: Some(upsert.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -5354,6 +5354,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "orders");
         assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            value["returning"][0]["document_json"],
+            "{\"name\":\"Conflict override\"}"
+        );
         assert_eq!(
             execute_sql_request(
                 &registry,

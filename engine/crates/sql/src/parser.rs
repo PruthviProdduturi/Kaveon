@@ -2182,6 +2182,11 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                             "product INSERT rows must contain id and document_json",
                         ));
                     }
+                    let conflict_override = if dml.on_conflict_do_update {
+                        conflict_document_override(insert.on.as_ref())?
+                    } else {
+                        None
+                    };
                     values
                         .rows
                         .iter()
@@ -2190,10 +2195,12 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                                 ProductDmlCommand::Upsert {
                                     kind: kind.clone(),
                                     id: string_literal(&row[id_index], "product ID")?,
-                                    document_json: string_literal(
-                                        &row[document_index],
-                                        "product document_json",
-                                    )?,
+                                    document_json: conflict_override.clone().unwrap_or(
+                                        string_literal(
+                                            &row[document_index],
+                                            "product document_json",
+                                        )?,
+                                    ),
                                 }
                             } else if dml.on_conflict_do_nothing {
                                 ProductDmlCommand::CreateIgnore {
@@ -2218,6 +2225,13 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         .collect()
                 }
                 SetExpr::Select(select) => {
+                    if dml.on_conflict_do_update
+                        && conflict_document_override(insert.on.as_ref())?.is_some()
+                    {
+                        return Err(sql_error(
+                            "literal ON CONFLICT document assignments require VALUES",
+                        ));
+                    }
                     if query.with.is_some()
                         || query.order_by.is_some()
                         || query.limit.is_some()
@@ -3258,22 +3272,41 @@ fn conflict_target_is_product_id(
 }
 
 fn is_conflict_document_assignment(expression: &Expr) -> bool {
-    let direct = matches!(
-        expression,
-        Expr::CompoundIdentifier(parts)
-            if parts.len() == 2
+    match expression {
+        Expr::CompoundIdentifier(parts) => {
+            parts.len() == 2
                 && parts[0].value.eq_ignore_ascii_case("excluded")
                 && parts[1].value.eq_ignore_ascii_case("document_json")
-    );
-    direct
-        || matches!(
-            expression,
-            Expr::Cast {
-                expr,
-                data_type: SqlDataType::JSON,
-                ..
-            } if is_conflict_document_assignment(expr)
-        )
+        }
+        Expr::Cast {
+            expr,
+            data_type: SqlDataType::JSON,
+            ..
+        } => is_conflict_document_assignment(expr),
+        _ => product_document_literal(expression).is_ok(),
+    }
+}
+
+/// Return a literal document override for a bounded `ON CONFLICT DO UPDATE`.
+/// The override applies only when the inserted key already exists; the
+/// ordinary VALUES document remains the create path.
+fn conflict_document_override(on: Option<&OnInsert>) -> Result<Option<String>> {
+    let Some(OnInsert::OnConflict(conflict)) = on else {
+        return Ok(None);
+    };
+    let OnConflictAction::DoUpdate(update) = &conflict.action else {
+        return Ok(None);
+    };
+    if update.assignments.len() != 1 {
+        return Ok(None);
+    }
+    let value = &update.assignments[0].value;
+    if !product_document_literal(value).is_ok() {
+        // `excluded.document_json` (including its JSON cast spelling) means
+        // the incoming VALUES document, not a literal override.
+        return Ok(None);
+    }
+    Ok(Some(product_document_literal(value)?))
 }
 
 fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
@@ -5576,13 +5609,27 @@ mod tests {
         for sql in [
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO UPDATE SET document_json = excluded.document_json",
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE id = 'ds-1'",
-            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = '{}'",
         ] {
             assert!(
                 parse_native_transactional(sql).is_err(),
                 "unexpectedly accepted unsafe upsert: {sql}"
             );
         }
+        let NativeTransactionalStatement::Dml(literal) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"insert\"}') ON CONFLICT (id) DO UPDATE SET document_json = '{\"name\":\"conflict\"}'",
+        )
+        .expect("literal conflict document should remain bounded")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&literal).unwrap(),
+            ProductDmlCommand::Upsert {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+                document_json: "{\"name\":\"conflict\"}".into(),
+            }
+        );
     }
 
     #[test]

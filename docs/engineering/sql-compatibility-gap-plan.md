@@ -365,6 +365,11 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   conflict predicates, arbitrary assignments, and arbitrary conflict targets remain
   rejected. Product `RETURNING id, revision` and the qualified `RETURNING *`
   expansion are implemented from the staged revision/CAS write set.
+  A bounded literal `document_json` assignment (including `CAST(literal AS
+  JSON)`) is also accepted on the conflict/update path; new rows still use the
+  `VALUES` document, and source-backed `INSERT ... SELECT` literal overrides
+  remain rejected. Evidence:
+  `docs/qualification/track2-native-dml-conflict-literal-2026-11-03.md`.
   Savepoints are implemented for the product
   transaction session and covered by parser, catalog, and API tests. The
   update-only form is qualified in
