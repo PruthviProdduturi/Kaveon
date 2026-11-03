@@ -26,6 +26,7 @@ distributed partial aggregation.
 
 ## Evidence
 
+- Implementation commit: `fb52c9b1` (`fix(api): serialize utf8 view results as text`).
 - `streamed_root_tests::result_rows_encode_utf8_view_values_as_text`
 - `streamed_root_tests::result_rows_encode_utf8_view_values_as_text` also
   covers a `Map<Utf8View, Int64>` result and asserts the logical text key.
