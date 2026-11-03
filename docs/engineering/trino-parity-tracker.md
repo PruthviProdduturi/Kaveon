@@ -310,6 +310,9 @@ literal source id with a target-id list (capped at 1,000), or an identity join
 paired with a target-id list, are present. Arbitrary joins, cross-kind sources,
 and arbitrary assignments remain outside the contract. Evidence:
 `docs/qualification/track2-native-dml-update-from-2026-11-03.md`.
+The same source predicate also qualifies bounded `DELETE ... USING`, with
+source owner validation before target revision/CAS deletes and the same
+1,000-target cap; arbitrary `USING` joins remain outside the contract.
 Batch validation is fail-closed: if any target is missing or invalid, the
 pre-batch staged view is restored and no earlier list member can be published
 by a later `COMMIT`.
