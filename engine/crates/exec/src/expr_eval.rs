@@ -5955,10 +5955,52 @@ fn array_histogram<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Arr
         }
         DataType::Utf8 => array_histogram_text::<L, i32>(list),
         DataType::LargeUtf8 => array_histogram_text::<L, i64>(list),
+        DataType::Utf8View => array_histogram_text_view(list),
         other => Err(KaveonError::Execution(format!(
             "ARRAY_HISTOGRAM does not support list element type {other}"
         ))),
     }
+}
+
+fn array_histogram_text_view<L>(list: &GenericListArray<L>) -> Result<ArrayRef>
+where
+    L: OffsetSizeTrait,
+{
+    let mut keys = ListBuilder::new(GenericStringBuilder::<i32>::new());
+    let mut counts = ListBuilder::new(Int64Builder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            keys.append(false);
+            counts.append(false);
+            continue;
+        }
+        let values = list.value(row);
+        let values = values
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
+        let mut histogram = std::collections::BTreeMap::<String, i64>::new();
+        for index in 0..values.len() {
+            if values.is_null(index) {
+                continue;
+            }
+            let count = histogram.entry(values.value(index).to_owned()).or_default();
+            *count = count
+                .checked_add(1)
+                .ok_or_else(|| KaveonError::Execution("ARRAY_HISTOGRAM count overflow".into()))?;
+        }
+        for (value, count) in histogram {
+            keys.values().append_value(value);
+            counts.values().append_value(count);
+        }
+        keys.append(true);
+        counts.append(true);
+    }
+    eval_scalar_function(
+        "MAP",
+        &[Arc::new(keys.finish()), Arc::new(counts.finish())],
+        list.len(),
+    )
 }
 
 fn array_histogram_text<L, O>(list: &GenericListArray<L>) -> Result<ArrayRef>
@@ -19035,6 +19077,26 @@ mod tests {
         assert_eq!(map.keys().data_type(), &DataType::LargeUtf8);
         assert_eq!(
             map.keys().as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("beta")]
+        );
+        assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn array_histogram_accepts_utf8_view_elements() {
+        let values = StringViewArray::from(vec![Some("beta"), Some("alpha"), Some("beta"), None]);
+        let list = ListArray::try_new(
+            Arc::new(Field::new("item", DataType::Utf8View, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 4_i32])),
+            Arc::new(values),
+            None,
+        )
+        .unwrap();
+        let value = eval_scalar_function("ARRAY_HISTOGRAM", &[Arc::new(list)], 1).unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().data_type(), &DataType::Utf8);
+        assert_eq!(
+            map.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
             vec![Some("alpha"), Some("beta")]
         );
         assert_eq!(map.values().as_primitive::<Int64Type>().values(), &[1, 2]);
