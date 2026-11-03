@@ -3224,7 +3224,9 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                         && matches!(
                             &conflict.action,
                             OnConflictAction::DoUpdate(update)
-                                if update.selection.is_none()
+                                if update.selection.as_ref().is_none_or(|selection| {
+                                    matches!(selection, Expr::Value(Value::Boolean(true)))
+                                })
                                     && update.assignments.len() == 1
                                     && matches!(
                                         &update.assignments[0].target,
@@ -5371,6 +5373,18 @@ mod tests {
                 document_json: "{\"name\":\"new\"}".into(),
             }
         );
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"new\"}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE TRUE",
+        )
+        .expect("literal TRUE conflict predicate should remain bounded")
+        else {
+            panic!("expected product DML");
+        };
+        assert!(dml.on_conflict_do_update);
+        assert!(matches!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert { .. }
+        ));
         for sql in [
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO UPDATE SET document_json = excluded.document_json",
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE id = 'ds-1'",
