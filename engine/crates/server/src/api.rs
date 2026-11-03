@@ -11551,20 +11551,52 @@ fn annotate_actual_root(plan: &mut Option<kaveon_core::PlanNode>, row_count: Opt
         .insert("actual_rows_scope".to_owned(), "query_result".to_owned());
 }
 
+/// Return whether a plan subtree can change its row cardinality. This is used
+/// only to keep the bounded Filter attribution below from labeling a filter
+/// whose output later feeds an aggregate, join, or other cardinality-changing
+/// operator.
+fn contains_cardinality_changer(node: &kaveon_core::PlanNode) -> bool {
+    matches!(
+        node.operator.to_ascii_lowercase().as_str(),
+        "filter"
+            | "limit"
+            | "offset"
+            | "topn"
+            | "aggregate"
+            | "hashaggregate"
+            | "finalaggregate"
+            | "distinct"
+            | "join"
+            | "unnest"
+            | "union"
+            | "intersect"
+            | "except"
+    ) || node.children.iter().any(contains_cardinality_changer)
+}
+
+fn filter_input_is_row_preserving(node: &kaveon_core::PlanNode) -> bool {
+    node.children
+        .first()
+        .is_some_and(|child| !contains_cardinality_changer(child))
+}
+
 /// Propagate the query-result cardinality through operators whose SQL
-/// semantics preserve one output row for every input row.  This deliberately
-/// stops at filters, limits, aggregates, joins, and set operations: without
-/// operator-level counters, inferring through those nodes would manufacture
-/// selectivity data and make estimate diagnostics misleading.
+/// semantics preserve one output row for every input row. A directly reached
+/// Filter is attributed only when its input subtree is row-preserving; this
+/// prevents post-aggregate rows from being mistaken for filter output.
 fn annotate_row_preserving_actuals(node: &mut kaveon_core::PlanNode, actual_rows: Option<u64>) {
     let Some(actual_rows) = actual_rows else {
         return;
     };
-    // Once a row-preserving chain reaches a Filter, the filter's output is the
-    // query result represented by this chain. Attach the measured count to the
-    // filter itself, but never descend into its input: that would incorrectly
-    // label pre-filter rows with the post-filter cardinality.
+    // Once a row-preserving chain reaches a Filter whose input is also
+    // row-preserving, the filter's output is the query result represented by
+    // this chain. Attach the measured count to the filter itself, but never
+    // descend into its input: that would incorrectly label pre-filter rows
+    // with the post-filter cardinality.
     if node.operator.eq_ignore_ascii_case("Filter") {
+        if !filter_input_is_row_preserving(node) {
+            return;
+        }
         node.attributes
             .insert("actual_output_rows".to_owned(), actual_rows.to_string());
         node.attributes.insert(
@@ -11582,6 +11614,14 @@ fn annotate_row_preserving_actuals(node: &mut kaveon_core::PlanNode, actual_rows
     let Some(child) = node.children.first_mut() else {
         return;
     };
+    let child_is_row_preserving = match child.operator.to_ascii_lowercase().as_str() {
+        "project" | "sort" | "window" => true,
+        "filter" => filter_input_is_row_preserving(child),
+        _ => false,
+    };
+    if !child_is_row_preserving {
+        return;
+    }
     child
         .attributes
         .insert("actual_output_rows".to_owned(), actual_rows.to_string());
@@ -16408,6 +16448,28 @@ mod tests {
             !root.children[0].children[0].children[0].children[0]
                 .attributes
                 .contains_key("actual_output_rows")
+        );
+    }
+
+    #[test]
+    fn filter_actuals_do_not_cross_a_cardinality_changing_child() {
+        let scan = kaveon_core::PlanNode::new(45, kaveon_core::PlanPhase::Physical, "Scan");
+        let aggregate =
+            kaveon_core::PlanNode::new(46, kaveon_core::PlanPhase::Physical, "Aggregate")
+                .with_child(scan);
+        let filter = kaveon_core::PlanNode::new(47, kaveon_core::PlanPhase::Physical, "Filter")
+            .with_child(aggregate);
+        let mut root = kaveon_core::PlanNode::new(48, kaveon_core::PlanPhase::Physical, "Project")
+            .with_child(filter);
+
+        super::annotate_row_preserving_actuals(&mut root, Some(3));
+
+        assert_eq!(root.children[0].attributes.get("actual_output_rows"), None);
+        assert_eq!(
+            root.children[0].children[0]
+                .attributes
+                .get("actual_output_rows"),
+            None
         );
     }
 

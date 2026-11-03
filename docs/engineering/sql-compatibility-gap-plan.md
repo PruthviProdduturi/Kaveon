@@ -459,9 +459,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   `docs/qualification/track3-operator-estimate-diagnostics-2026-11-02.md`.
   Finished query rows now also propagate through a directly connected
   `Window`/`Project`/`Sort` chain and attach to the first directly reached
-  `Filter` with an explicit `derived_row_preserving` scope; the filter's input
-  is never labeled with post-filter rows, and propagation stops at other
-  cardinality-changing operators. Evidence:
+  `Filter` whose input subtree is row-preserving, with an explicit
+  `derived_row_preserving` scope; the filter's input is never labeled with
+  post-filter rows, and propagation stops at other cardinality-changing
+  operators. Evidence:
   `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 - [x] Preserve stage operator and planner-estimate metadata during live
   distributed task publication. A later completion fills metadata on an
