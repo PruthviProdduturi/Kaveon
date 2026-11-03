@@ -1471,9 +1471,7 @@ pub(crate) fn compile_final_aggregate_parallel(
     // stay on broadcast: their compact merge is faster than repartitioning.
     let key_types = grouped_aggregate_key_types(sources.schema())?;
     let source_threaded = matches!(&sources, Sources::Threads { .. });
-    let has_text_key = key_types
-        .iter()
-        .any(|data_type| matches!(data_type, DataType::Utf8 | DataType::LargeUtf8));
+    let has_text_key = has_text_group_key(&key_types);
     // Unsigned identifiers (for example ClickBench's WatchID) are usually
     // near-unique. Repartitioning those mixed keys retains too many state
     // rows per worker under the normal query budget, so keep the established
@@ -1575,6 +1573,15 @@ pub(crate) fn compile_final_aggregate_parallel(
 }
 
 /// The finalised schema of a grouped-state input.
+fn has_text_group_key(key_types: &[DataType]) -> bool {
+    key_types.iter().any(|data_type| {
+        matches!(
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        )
+    })
+}
+
 fn final_schema(
     input: &SchemaRef,
     group_by: &[String],
@@ -3252,6 +3259,13 @@ mod tests {
             ])
         );
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn utf8_view_group_keys_use_the_text_partitioning_path() {
+        assert!(has_text_group_key(&[DataType::Utf8View]));
+        assert!(has_text_group_key(&[DataType::LargeUtf8]));
+        assert!(!has_text_group_key(&[DataType::Int64]));
     }
 
     #[test]
