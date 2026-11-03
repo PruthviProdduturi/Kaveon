@@ -40,9 +40,13 @@ by the selected database and Kaveon's API guardrails.
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 | `APPROX_COUNT_DISTINCT` (`APPROX_DISTINCT`), `APPROX_PERCENTILE` | Alpha | Sketch-answered estimates with the error stated on the query record; from the table's statistics without a scan when they carry sketches at the pinned version, else computed over the rows. See [Approximate aggregates](#approximate-aggregates) |
 
-The bounded `DATE_BUCKET` surface also accepts `week` as a seven-day unit;
-the exact local/three-worker qualification is recorded in
-`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`.
+The bounded `DATE_BUCKET` surface also accepts `week` as a seven-day unit and
+normalizes wider calendar widths before arithmetic (for example, two weeks is
+fourteen days and two years is twenty-four months). Typed custom origins are
+advanced by the complete bucket offset. Exact local/three-worker qualification
+is recorded in
+`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` and
+`docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`.
 
 `JSON_ARRAY_CONTAINS(json_array, value)` supports boolean, integer,
 floating-point, and text needles. It preserves NULL inputs, returns NULL for

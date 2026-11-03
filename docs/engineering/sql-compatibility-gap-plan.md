@@ -146,11 +146,17 @@ and `docs/qualification/track2-tsql-trim-directional-characters-2026-10-29.md`.
 path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
 gate. `DATE_BUCKET` buckets for year, quarter, month, week, day, hour, minute,
-second, millisecond, and microsecond lower to the existing typed `DATE_TRUNC` path and have exact
-local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`); row-local and
-typed-literal custom origins are qualified, while unsupported origin shapes
-and dateparts remain explicitly rejected. Row-local BIGINT widths are guarded
-at runtime: zero, negative, or NULL widths return typed NULL.
+second, millisecond, and microsecond lower to typed calendar arithmetic with
+widths normalized to the arithmetic unit (for example, two weeks is fourteen
+days and two years is twenty-four months). Hour and minute buckets use the
+corresponding seconds offset, and typed custom origins are advanced by the
+whole bucket offset. Exact local/distributed coverage is recorded in
+`docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md` and
+`docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`;
+row-local and typed-literal custom origins are qualified, while unsupported
+origin shapes and dateparts remain explicitly rejected. Row-local BIGINT
+widths are guarded at runtime: zero, negative, or NULL widths return typed
+NULL.
 SQL Server `FORMAT` now lowers to the bounded temporal formatter for typed
 DATE/TIMESTAMP values. Invariant patterns cover the common `yyyy`, `MM`, `dd`,
 `HH`, `mm`, `ss`, and fractional-second tokens. It also accepts bounded
