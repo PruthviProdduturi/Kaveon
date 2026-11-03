@@ -3064,7 +3064,14 @@ async fn execute_sql_request(
                         _ => product_returning_response(
                             &snapshot,
                             &returning,
-                            if dml.kind == kaveon_sql::parser::NativeDmlKind::Merge {
+                            if dml.kind == kaveon_sql::parser::NativeDmlKind::Merge
+                                || commands.iter().any(|command| {
+                                    matches!(
+                                        command,
+                                        kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. }
+                                    )
+                                })
+                            {
                                 &staged_commands
                             } else {
                                 &commands
@@ -6225,6 +6232,7 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+
         let identity = Identity {
             principal: "alice".into(),
             display_identity: None,
@@ -6357,6 +6365,48 @@ mod tests {
             .await
             .expect("unselected source row should remain readable");
         assert_eq!(other.revision, 1);
+
+        let unfiltered = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "INSERT INTO product.datasets (id, document_json) SELECT id, document_json FROM product.datasets ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision, document_json".into(),
+                transaction_id: Some(unfiltered.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rows = value["returning"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| {
+            row["id"] == "orders"
+                && row["revision"] == 3
+                && row["document_json"] == r#"{"name":"Orders"}"#
+        }));
+        assert!(rows.iter().any(|row| {
+            row["id"] == "other"
+                && row["revision"] == 2
+                && row["document_json"] == r#"{"name":"Other"}"#
+        }));
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(unfiltered.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
