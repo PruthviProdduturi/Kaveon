@@ -47,9 +47,13 @@ until they receive their own exact lowering and distributed evidence.
   — 1 passed, 0 failed on 2026-11-03.
 - `cargo test -p kaveon-cli --bin kaveon executes_bounded_string_agg_with_literal_separator`
   — 1 passed, 0 failed on 2026-11-03.
+- `differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`
+  with `KAVEON_DIFF_ONLY=tsql_string_agg_distinct` — exact local and
+  three-worker results across dictionary, plain, multi-file, partitioned, and
+  clustered Parquet layouts.
 - `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json` case
   `string_agg_distinct`, pinned to the implementation commit.
-
-Distributed qualification is still required before this is promoted beyond
-the bounded read gate; the rewrite is designed to use the existing exact
-distinct exchange path, but no multi-worker result is claimed by this document.
+- `cargo test -p kaveon-server --bin kaveon-server
+  the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`
+  with `KAVEON_DIFF_ONLY=tsql_string_agg_distinct` — 1 passed, 0 failed on
+  2026-11-03.

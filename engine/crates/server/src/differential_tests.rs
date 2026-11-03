@@ -360,6 +360,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_string_agg_distinct",
+        "SELECT STRING_AGG(DISTINCT country, ',') WITHIN GROUP (ORDER BY country) AS countries FROM {T}",
+        false,
+    ),
+    (
         "tsql_string_agg_within_group",
         "SELECT STRING_AGG(country, ',') WITHIN GROUP (ORDER BY country) AS countries FROM {T}",
         true,
