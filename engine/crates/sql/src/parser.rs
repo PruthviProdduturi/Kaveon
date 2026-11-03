@@ -2026,6 +2026,13 @@ pub enum ProductDmlCommand {
     /// Bounded MERGE semantics: delete a matched product row.  An unmatched
     /// source row is a transactional no-op, matching SQL MERGE semantics.
     MergeDelete { kind: String, id: String },
+    /// Bounded MERGE semantics: update a matched product row. An unmatched
+    /// source row is a transactional no-op, matching SQL MERGE semantics.
+    MergeUpdate {
+        kind: String,
+        id: String,
+        document_json: String,
+    },
     /// Bounded MERGE semantics: create a source product row when unmatched;
     /// an already-present key is a transactional no-op.
     MergeCreateIfAbsent {
@@ -2400,6 +2407,33 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 Ok(ProductDmlCommand::MergeDelete {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
+                })
+            })
+            .collect();
+    }
+    let matched_only_update = clauses.len() == 1
+        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
+        && matches!(clauses[0].action, MergeAction::Update { .. });
+    if matched_only_update {
+        let MergeAction::Update { assignments } = &clauses[0].action else {
+            unreachable!("matched_only_update checks the MERGE action");
+        };
+        if assignments.len() != 1
+            || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
+                if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+            || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+        {
+            return Err(sql_error(
+                "MERGE WHEN MATCHED must set document_json from source",
+            ));
+        }
+        return source_values
+            .iter()
+            .map(|row| {
+                Ok(ProductDmlCommand::MergeUpdate {
+                    kind: kind.clone(),
+                    id: string_literal(&row[0], "MERGE source id")?,
+                    document_json: string_literal(&row[1], "MERGE source document_json")?,
                 })
             })
             .collect();
@@ -4171,6 +4205,32 @@ mod tests {
                 ProductDmlCommand::MergeDelete {
                     kind: "dataset".into(),
                     id: "ds-2".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_matched_update() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders v2\"}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json",
+        )
+        .expect("bounded matched-update MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::MergeUpdate {
+                    kind: "dataset".into(),
+                    id: "ds-1".into(),
+                    document_json: "{\"name\":\"Orders v2\"}".into(),
+                },
+                ProductDmlCommand::MergeUpdate {
+                    kind: "dataset".into(),
+                    id: "ds-2".into(),
+                    document_json: "{}".into(),
                 },
             ]
         );

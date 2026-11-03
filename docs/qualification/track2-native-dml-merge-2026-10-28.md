@@ -1,4 +1,4 @@
-# Bounded native `MERGE` qualification — 2026-10-29
+# Bounded native `MERGE` qualification — 2026-11-02
 
 ## Status
 
@@ -47,6 +47,12 @@ matched clause. New keys use the normal product validation and revision-one
 create path; keys already present in the pinned snapshot are idempotent
 no-ops, so retries cannot overwrite existing product state.
 
+A fifth bounded form supports `WHEN MATCHED THEN UPDATE` without an insert
+clause. Existing source keys resolve to the current owner-checked revision and
+stage a compare-and-swap update; source keys with no match are transactional
+no-ops. This gives the common update-only `MERGE` shape explicit revision
+semantics without pretending to support arbitrary predicates or assignments.
+
 The SQL Server spelling `WHEN NOT MATCHED BY TARGET` is accepted as an alias
 for the same not-matched clause. Source ids must be unique within the bounded
 batch; duplicate keys fail closed before any write is staged, avoiding
@@ -65,6 +71,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `parser::tests::product_merge_expands_a_bounded_values_batch`
 - `parser::tests::product_merge_supports_bounded_delete_or_insert`
 - `parser::tests::product_merge_supports_bounded_matched_delete`
+- `parser::tests::product_merge_supports_bounded_matched_update`
 - `parser::tests::product_merge_supports_bounded_unmatched_insert`
 - `parser::tests::product_merge_rejects_unbounded_or_ambiguous_shapes`
 - `parser::tests::rejects_duplicate_merge_source_ids`
@@ -72,8 +79,9 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `transaction_api::tests::sql_endpoint_bounded_merge_delete_or_insert_is_owner_checked_and_atomic`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
 - `transaction_api::tests::sql_endpoint_bounded_merge_unmatched_insert_is_idempotent`
-- `cargo test -p kaveon-sql --lib product_merge_` — 6 passed, 0 failed on 2026-10-30
-- `cargo test -p kaveon-server --bin kaveon-server transaction_api::tests::sql_endpoint_bounded_merge` — 4 passed, 0 failed on 2026-10-30
+- `transaction_api::tests::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`
+- `cargo test -p kaveon-sql --lib product_merge_supports_bounded_matched_update` — 1 passed, 0 failed on 2026-11-02
+- `cargo test -p kaveon-server sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` — 1 passed, 0 failed on 2026-11-02
 
 The transaction API test commits two revisions and one insert atomically, then
 reads the committed snapshot and verifies revisions `2, 2, 1`. It stages the
