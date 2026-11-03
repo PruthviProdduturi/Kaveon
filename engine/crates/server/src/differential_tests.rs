@@ -3347,6 +3347,22 @@ fn distributed_tsql_percentile_cont_matches_local() {
     assert!(!actual.is_empty());
     assert!(actual.iter().all(|row| row.contains("\u{1f}")));
     assert_eq!(pool.snapshot().current_bytes, 0);
+
+    let null_statement = "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value) OVER () AS median_value FROM (VALUES (CAST(NULL AS BIGINT)), (CAST(NULL AS BIGINT))) AS input(value)";
+    let null_plan = bound_plan(null_statement, &manager);
+    let mut null_local = crate::planner::plan_query_with_memory(&null_plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{null_statement} local: {error}"));
+    let null_expected = canonical_rows(&drain(null_local.operator.as_mut()), false);
+    drop(null_local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let null_actual = canonical_rows(
+        &execute_distributed(null_statement, &null_plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{null_statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(null_expected, vec!["NULL"; 2]);
+    assert_eq!(null_actual, null_expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
 
