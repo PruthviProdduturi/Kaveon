@@ -277,6 +277,10 @@ pub struct AggregateSpec {
     /// For `ApproxPercentile`: what it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percentiles: Option<Percentiles>,
+    /// Ordered `STRING_AGG` retains the value ordering through distributed
+    /// partial/final aggregation. `true` means descending; `false` ascending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub string_agg_order_desc: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

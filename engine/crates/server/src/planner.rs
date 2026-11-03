@@ -1430,7 +1430,9 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                 _ => None,
             };
             let argument = match aggregate {
-                AggregateExpr::StringAgg { expr, delimiter } => Some(Expr::Function {
+                AggregateExpr::StringAgg {
+                    expr, delimiter, ..
+                } => Some(Expr::Function {
                     name: "STRING_AGG".into(),
                     args: vec![expr.clone(), delimiter.clone()],
                 }),
@@ -1451,6 +1453,10 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                     &aggregate.arguments(),
                 ),
                 percentiles,
+                string_agg_order_desc: match aggregate {
+                    AggregateExpr::StringAgg { order_desc, .. } => *order_desc,
+                    _ => None,
+                },
             }
         })
         .collect()
@@ -2815,7 +2821,12 @@ fn logical_agg_to_exec(
     };
 
     let mut expression = AggExpr::new(func, column);
-    if let AggregateExpr::StringAgg { delimiter, .. } = agg {
+    if let AggregateExpr::StringAgg {
+        delimiter,
+        order_desc,
+        ..
+    } = agg
+    {
         let Expr::Literal(ScalarValue::Utf8(value)) = delimiter else {
             return Err(KaveonError::Execution(
                 "STRING_AGG separator must be a text literal".into(),
@@ -2827,6 +2838,7 @@ fn logical_agg_to_exec(
             ));
         }
         expression.delimiter = Some(value.clone());
+        expression.string_agg_order_desc = *order_desc;
     }
     if let AggregateExpr::ApproxPercentile { percentiles, .. } = agg {
         expression.percentiles = Some(percentiles.clone());

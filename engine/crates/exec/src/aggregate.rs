@@ -102,6 +102,7 @@ const AGGREGATE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
 /// an unexpectedly large number of values.  Ordered and spill-aware string
 /// aggregation remains a separate qualification item.
 const MAX_STRING_AGG_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ORDERED_STRING_AGG_VALUES: usize = 1_000_000;
 const STATE_SUM: u8 = 1;
 const STATE_COUNT: u8 = 2;
 const STATE_MIN: u8 = 3;
@@ -120,6 +121,7 @@ const STATE_APPROX_PERCENTILE: u8 = 18;
 const STATE_DISTINCT_SKETCH: u8 = 19;
 const STATE_COLUMN_PROFILE: u8 = 20;
 const STATE_STRING_AGG: u8 = 21;
+const STATE_STRING_AGG_ORDERED: u8 = 22;
 pub(crate) const VALUE_BOOL: u8 = 1;
 pub(crate) const VALUE_INT32: u8 = 2;
 pub(crate) const VALUE_INT64: u8 = 3;
@@ -186,6 +188,8 @@ pub struct AggExpr {
     pub percentiles: Option<Percentiles>,
     /// Literal separator for bounded unordered STRING_AGG.
     pub delimiter: Option<String>,
+    /// `Some(descending)` for bounded ordered `STRING_AGG WITHIN GROUP`.
+    pub string_agg_order_desc: Option<bool>,
 }
 
 impl AggExpr {
@@ -197,6 +201,7 @@ impl AggExpr {
             distinct: false,
             percentiles: None,
             delimiter: None,
+            string_agg_order_desc: None,
         }
     }
 
@@ -320,6 +325,10 @@ pub enum AggregateState {
     StringAgg {
         value: Option<String>,
         delimiter: String,
+        /// Ordered mode keeps values until finalization so partial merges
+        /// can sort globally rather than depending on worker arrival order.
+        ordered_values: Option<Vec<String>>,
+        ordered_desc: Option<bool>,
     },
     Avg {
         sum: f64,
@@ -474,6 +483,8 @@ impl AggregateState {
                 AggFunc::StringAgg => Self::StringAgg {
                     value: None,
                     delimiter: expression.delimiter.clone().unwrap_or_default(),
+                    ordered_values: expression.string_agg_order_desc.map(|_| Vec::new()),
+                    ordered_desc: expression.string_agg_order_desc,
                 },
                 _ => Self::new(expression),
             };
@@ -607,6 +618,8 @@ impl AggregateState {
             (AggFunc::StringAgg, _) => Self::StringAgg {
                 value: None,
                 delimiter: expression.delimiter.clone().unwrap_or_default(),
+                ordered_values: expression.string_agg_order_desc.map(|_| Vec::new()),
+                ordered_desc: expression.string_agg_order_desc,
             },
             (AggFunc::Count, true) => Self::CountDistinct(DistinctSet::new()),
             (AggFunc::Sum, true) => Self::SumDistinct(DistinctSet::new()),
@@ -850,7 +863,30 @@ impl AggregateState {
             Self::StringAgg {
                 value: current,
                 delimiter,
+                ordered_values,
+                ..
             } => {
+                if let Some(values) = ordered_values {
+                    if values.len() >= MAX_ORDERED_STRING_AGG_VALUES {
+                        return Err(exec_err(
+                            "ordered STRING_AGG exceeds the 1,000,000 values per-group limit",
+                        ));
+                    }
+                    let total = values
+                        .iter()
+                        .map(String::len)
+                        .try_fold(value.len(), |total, len| total.checked_add(len))
+                        .and_then(|total| total.checked_add(value.len()))
+                        .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
+                    if total > MAX_STRING_AGG_BYTES {
+                        return Err(exec_err(format!(
+                            "STRING_AGG result exceeds the {} MiB per-group limit",
+                            MAX_STRING_AGG_BYTES / (1024 * 1024)
+                        )));
+                    }
+                    values.push(value.to_owned());
+                    return Ok(());
+                }
                 if let Some(existing) = current {
                     let required = existing
                         .len()
@@ -1047,16 +1083,60 @@ impl AggregateState {
                 }
             }
             (
-                Self::StringAgg { value, delimiter },
+                Self::StringAgg {
+                    value,
+                    delimiter,
+                    ordered_values,
+                    ordered_desc,
+                },
                 Self::StringAgg {
                     value: other,
                     delimiter: other_delimiter,
+                    ordered_values: other_ordered_values,
+                    ordered_desc: other_ordered_desc,
                 },
             ) => {
                 if delimiter != other_delimiter {
                     return Err(exec_err(
                         "cannot merge STRING_AGG states with different separators",
                     ));
+                }
+                if ordered_desc != other_ordered_desc {
+                    return Err(exec_err(
+                        "cannot merge STRING_AGG states with different ordering",
+                    ));
+                }
+                if let (Some(values), Some(other_values)) =
+                    (ordered_values.as_mut(), other_ordered_values.as_ref())
+                {
+                    if values
+                        .len()
+                        .checked_add(other_values.len())
+                        .is_none_or(|count| count > MAX_ORDERED_STRING_AGG_VALUES)
+                    {
+                        return Err(exec_err(
+                            "ordered STRING_AGG exceeds the 1,000,000 values per-group limit",
+                        ));
+                    }
+                    let total = values
+                        .iter()
+                        .chain(other_values.iter())
+                        .map(String::len)
+                        .try_fold(0usize, |total, len| total.checked_add(len))
+                        .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
+                    let separators = values
+                        .len()
+                        .saturating_add(other_values.len())
+                        .saturating_sub(1)
+                        .saturating_mul(delimiter.len());
+                    if total.saturating_add(separators) > MAX_STRING_AGG_BYTES {
+                        return Err(exec_err(format!(
+                            "STRING_AGG result exceeds the {} MiB per-group limit",
+                            MAX_STRING_AGG_BYTES / (1024 * 1024)
+                        )));
+                    }
+                    values.extend(other_values.iter().cloned());
+                    return Ok(());
                 }
                 if let Some(other) = other {
                     if let Some(existing) = value {
@@ -1169,7 +1249,27 @@ impl AggregateState {
     pub fn utf8_result(&self) -> Result<Option<String>> {
         match self {
             Self::Utf8Min(value) | Self::Utf8Max(value) => Ok(value.clone()),
-            Self::StringAgg { value, .. } => Ok(value.clone()),
+            Self::StringAgg {
+                value: _value,
+                delimiter,
+                ordered_values: Some(values),
+                ordered_desc,
+            } => {
+                if values.is_empty() {
+                    return Ok(None);
+                }
+                let mut values = values.clone();
+                values.sort_unstable();
+                if ordered_desc == &Some(true) {
+                    values.reverse();
+                }
+                Ok(Some(values.join(delimiter)))
+            }
+            Self::StringAgg {
+                value,
+                ordered_values: None,
+                ..
+            } => Ok(value.clone()),
             Self::DistinctSketch(sketch) => {
                 Ok(Some(kaveon_core::sketch::base64_encode(&sketch.to_bytes())))
             }
@@ -2175,7 +2275,28 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                         .transpose()?,
                 );
             }
-            AggregateState::StringAgg { value, delimiter } => {
+            AggregateState::StringAgg {
+                ordered_values: Some(values),
+                ordered_desc: Some(descending),
+                delimiter,
+                ..
+            } => {
+                kinds.push(STATE_STRING_AGG_ORDERED);
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                let mut payload = Vec::with_capacity(values.len() + 2);
+                payload.push(AggregateValue::Utf8(delimiter.clone()));
+                payload.push(AggregateValue::Bool(*descending));
+                payload.extend(values.iter().cloned().map(AggregateValue::Utf8));
+                distinct_payloads.push(Some(encode_group_keys(&payload)?));
+            }
+            AggregateState::StringAgg {
+                value,
+                delimiter,
+                ordered_values: None,
+                ordered_desc: None,
+            } => {
                 kinds.push(STATE_STRING_AGG);
                 sums.push(None);
                 counts.push(None);
@@ -2187,6 +2308,9 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                         .map_or(AggregateValue::Null, AggregateValue::Utf8),
                 ];
                 distinct_payloads.push(Some(encode_group_keys(&payload)?));
+            }
+            AggregateState::StringAgg { .. } => {
+                return Err(exec_err("invalid ordered STRING_AGG state"));
             }
             AggregateState::Avg { sum, count } => {
                 kinds.push(STATE_AVG);
@@ -2363,6 +2487,47 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                     AggregateState::StringAgg {
                         value,
                         delimiter: delimiter.clone(),
+                        ordered_values: None,
+                        ordered_desc: None,
+                    }
+                }
+                STATE_STRING_AGG_ORDERED => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("ordered STRING_AGG state payload cannot be null"));
+                    }
+                    let values = decode_group_keys(distinct.value(row))?;
+                    let [
+                        AggregateValue::Utf8(delimiter),
+                        AggregateValue::Bool(descending),
+                        items @ ..,
+                    ] = values.as_slice()
+                    else {
+                        return Err(exec_err("invalid ordered STRING_AGG state payload"));
+                    };
+                    if delimiter.len() > 64 * 1024 || items.len() > MAX_ORDERED_STRING_AGG_VALUES {
+                        return Err(exec_err("ordered STRING_AGG state exceeds its bound"));
+                    }
+                    let mut strings = Vec::with_capacity(items.len());
+                    let mut total = 0usize;
+                    for item in items {
+                        let AggregateValue::Utf8(value) = item else {
+                            return Err(exec_err("invalid ordered STRING_AGG value payload"));
+                        };
+                        total = total
+                            .checked_add(value.len())
+                            .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
+                        strings.push(value.clone());
+                    }
+                    if total > MAX_STRING_AGG_BYTES {
+                        return Err(exec_err(
+                            "STRING_AGG result exceeds the 16 MiB per-group limit",
+                        ));
+                    }
+                    AggregateState::StringAgg {
+                        value: None,
+                        delimiter: delimiter.clone(),
+                        ordered_values: Some(strings),
+                        ordered_desc: Some(*descending),
                     }
                 }
                 STATE_AVG => AggregateState::Avg {
@@ -5325,6 +5490,35 @@ mod tests {
         assert_eq!(
             finalized[0].values,
             vec![FinalAggregateValue::Utf8(Some("alpha,beta,gamma".into()))]
+        );
+    }
+
+    #[test]
+    fn ordered_string_agg_sorts_across_partial_merges_and_round_trips() {
+        let mut expr = AggExpr::new(AggFunc::StringAgg, "name");
+        expr.delimiter = Some("|".into());
+        expr.string_agg_order_desc = Some(false);
+        let mut left = AggregateState::new(&expr);
+        left.update_utf8("zulu").unwrap();
+        left.update_utf8("alpha").unwrap();
+        let mut right = AggregateState::new(&expr);
+        right.update_utf8("mike").unwrap();
+        right.update_utf8("bravo").unwrap();
+        left.merge(&right).unwrap();
+        assert_eq!(
+            left.utf8_result().unwrap().as_deref(),
+            Some("alpha|bravo|mike|zulu")
+        );
+        let encoded = encode_aggregate_states(&[left.clone()]).unwrap();
+        assert_eq!(decode_aggregate_states(&encoded).unwrap(), vec![left]);
+
+        expr.string_agg_order_desc = Some(true);
+        let mut descending = AggregateState::new(&expr);
+        descending.update_utf8("alpha").unwrap();
+        descending.update_utf8("zulu").unwrap();
+        assert_eq!(
+            descending.utf8_result().unwrap().as_deref(),
+            Some("zulu|alpha")
         );
     }
 
