@@ -121,7 +121,7 @@
     {"id": "format_temporal", "sql": "SELECT FORMAT(event_ts, 'yyyy-MM-dd HH:mm:ss') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_temporal_values_and_invariant_patterns"},
     {"id": "format_numeric", "sql": "SELECT FORMAT(CAST(actions AS DOUBLE), 'N2') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_invariant_numeric_patterns"},
     {"id": "pivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, month, amount FROM sales) src PIVOT (SUM(amount) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
-    {"id": "pivot_bounded_count_star", "sql": "SELECT * FROM (SELECT region, month FROM sales) src PIVOT (COUNT(*) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified"},
+    {"id": "pivot_bounded_count_star", "sql": "SELECT * FROM (SELECT region, month FROM sales) src PIVOT (COUNT(*) FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "pivot", "sql": "SELECT * FROM t PIVOT (SUM(v) FOR k IN ([a])) p", "status": "explicit_rejection"},
     {"id": "unpivot_bounded_derived", "sql": "SELECT * FROM (SELECT region, Jan, Feb FROM sales) src UNPIVOT (amount FOR month IN ([Jan], [Feb])) p", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "unpivot", "sql": "SELECT * FROM t UNPIVOT (v FOR k IN (a)) u", "status": "explicit_rejection"},

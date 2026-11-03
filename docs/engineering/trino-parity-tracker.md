@@ -107,6 +107,9 @@ covered by the local evaluator and three-worker differential gate.
 `COUNT(DISTINCT ...)` and is covered by the planner and distributed corpus.
 Bounded derived-source `PIVOT(COUNT_BIG(*))` uses the same conditional
 aggregation lowering as `COUNT(*)` and is covered by the same corpus gate.
+The derived-source `PIVOT(COUNT(*))` case is now explicitly covered by the
+three-worker differential as a canonical row multiset, closing the prior
+planner-only boundary for that SQL Server spelling.
 Expression-valued `PIVOT(COUNT_BIG(value))` preserves NULL-exclusion semantics
 instead of rewriting the expression to a row count.
 qualified `DATENAME` day-of-year aliases (`DOY`, `DY`, and `Y`) and
