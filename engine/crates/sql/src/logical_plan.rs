@@ -5254,6 +5254,15 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         _ => return Err(sql_err(format!("unsupported function arguments in {name}"))),
     };
 
+    if matches!(written_name.as_str(), "YEAR" | "MONTH" | "DAY") {
+        if args.len() != 1 {
+            return Err(sql_err(format!(
+                "{written_name} requires exactly one date argument"
+            )));
+        }
+        args.insert(0, Expr::Literal(ScalarValue::Utf8(written_name.clone())));
+    }
+
     if is_json_object && json_object_absent_on_null {
         name = "JSON_OBJECT_ABSENT_ON_NULL".into();
     } else if is_json_array && json_object_absent_on_null {
@@ -6951,6 +6960,10 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATETRUNC" => "DATE_TRUNC".to_owned(),
         "DATEDIFF" | "DATEDIFF_BIG" => "DATE_DIFF".to_owned(),
         "DATEPART" => "DATE_PART".to_owned(),
+        // SQL Server exposes the common date-part selectors as scalar
+        // aliases. Lower them into the same typed DATE_PART evaluator so
+        // local and distributed execution share one null/type contract.
+        "YEAR" | "MONTH" | "DAY" => "DATE_PART".to_owned(),
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
         // SQL-standard/Trino LISTAGG shares the bounded STRING_AGG state.
@@ -6994,6 +7007,7 @@ fn approx_percentiles(func: &ast::Function) -> Result<Percentiles> {
             "APPROX_PERCENTILE requires a column and a percentile",
         ));
     };
+
     let [
         _,
         ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(second)),
@@ -9936,6 +9950,20 @@ mod tests {
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
         assert!(rendered.contains("DATE_PART"), "{rendered}");
         assert_eq!(rendered.matches("TimestampMicros").count(), 2, "{rendered}");
+    }
+
+    #[test]
+    fn lowers_tsql_year_month_day_aliases_to_date_part() {
+        let plan = sql_to_logical_plan(
+            "SELECT YEAR(event_date), MONTH(event_date), DAY(event_date) FROM t",
+        )
+        .expect("YEAR/MONTH/DAY should lower to DATE_PART");
+        let rendered = format!("{plan:?}");
+        assert_eq!(rendered.matches("DATE_PART").count(), 3, "{rendered}");
+        assert!(rendered.contains("Utf8(\"YEAR\")"), "{rendered}");
+        assert!(rendered.contains("Utf8(\"MONTH\")"), "{rendered}");
+        assert!(rendered.contains("Utf8(\"DAY\")"), "{rendered}");
+        assert!(sql_to_logical_plan("SELECT YEAR(event_date, 1) FROM t").is_err());
     }
 
     #[test]
