@@ -209,7 +209,9 @@ columns, row-local lateral inputs, the bounded `CROSS APPLY` spelling, and the l
 product-record MERGE surface now also qualifies matched-delete-only batches:
 matched rows use revision-CAS and ownership checks, while unmatched source
 rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
-the contract.
+  the contract. The target alias is optional for the bounded form; an
+  unaliased target derives its qualifier from the base table name, with the
+  same fail-closed clause and source-shape rules.
 - [ ] Expand `MERGE` and broader conflict handling beyond the qualified bounded
   product surface only with explicit revision/CAS semantics. The current
   contract covers update-or-insert, delete-or-insert, matched-update-only,

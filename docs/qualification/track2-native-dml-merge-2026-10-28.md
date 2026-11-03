@@ -7,7 +7,8 @@ claim of general SQL Server or PostgreSQL `MERGE` compatibility.
 
 ## Contract
 
-The accepted shape is exactly one target product table with an alias, one
+The accepted shape is exactly one target product table with an optional simple
+alias, one
 aliased derived `VALUES` batch of at most 1,000 rows with columns
 `(id, document_json)`, and an
 equality predicate between the target and source `id` columns:
@@ -25,6 +26,10 @@ WHEN NOT MATCHED THEN
   INSERT (id, document_json)
   VALUES (source.id, source.document_json)
 ```
+
+When no target alias is supplied, the base table name is the only accepted
+target qualifier (for example, `datasets.id`); this is equivalent to the
+explicit `target` alias and does not broaden the write semantics.
 
 The parser lowers each source row to the existing owner-isolated `Upsert`
 command. A second qualified form uses `WHEN MATCHED THEN DELETE` followed by
@@ -80,7 +85,9 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
 - `transaction_api::tests::sql_endpoint_bounded_merge_unmatched_insert_is_idempotent`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`
+- `parser::tests::product_merge_accepts_an_unaliased_target_with_derived_qualifier`
 - `cargo test -p kaveon-sql --lib product_merge_supports_bounded_matched_update` — 1 passed, 0 failed on 2026-11-02
+- `cargo test -p kaveon-sql --lib product_merge_accepts_an_unaliased_target_with_derived_qualifier` — 1 passed, 0 failed on 2026-11-02
 - `cargo test -p kaveon-server sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` — 1 passed, 0 failed on 2026-11-02
 
 The transaction API test commits two revisions and one insert atomically, then
