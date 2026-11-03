@@ -2066,6 +2066,14 @@ pub enum ProductDmlCommand {
         kind: String,
         source_ids: Vec<String>,
     },
+    /// Bounded MERGE semantics: update target rows owned by the actor whose
+    /// ids are absent from the source VALUES batch. The transaction layer
+    /// expands this against the pinned snapshot before staging CAS updates.
+    MergeUpdateNotMatched {
+        kind: String,
+        source_ids: Vec<String>,
+        document_json: String,
+    },
     /// Copy product records from another product table in the pinned
     /// transactional snapshot.  The server expands this bounded form into
     /// ordinary create/update commands; it is deliberately not a lake-table
@@ -2442,7 +2450,12 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         && matches!(clauses[2].action, MergeAction::Delete)
         && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
         && matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched);
-    if has_not_matched_by_source_delete {
+    let has_not_matched_by_source_update = clauses.len() == 3
+        && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
+        && matches!(clauses[2].action, MergeAction::Update { .. })
+        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
+        && matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched);
+    if has_not_matched_by_source_delete || has_not_matched_by_source_update {
         let MergeAction::Update { assignments } = &clauses[0].action else {
             return Err(sql_error(
                 "MERGE WHEN MATCHED must update before WHEN NOT MATCHED BY SOURCE",
@@ -2489,10 +2502,33 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        commands.push(ProductDmlCommand::MergeDeleteNotMatched {
-            kind: kind.clone(),
-            source_ids,
-        });
+        if has_not_matched_by_source_delete {
+            commands.push(ProductDmlCommand::MergeDeleteNotMatched {
+                kind: kind.clone(),
+                source_ids,
+            });
+        } else {
+            let MergeAction::Update { assignments } = &clauses[2].action else {
+                unreachable!("not-matched-by-source update was checked above");
+            };
+            if assignments.len() != 1
+                || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
+                    if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+            {
+                return Err(sql_error(
+                    "MERGE WHEN NOT MATCHED BY SOURCE must set document_json to a string literal",
+                ));
+            }
+            let document_json = string_literal(
+                &assignments[0].value,
+                "MERGE WHEN NOT MATCHED BY SOURCE document_json",
+            )?;
+            commands.push(ProductDmlCommand::MergeUpdateNotMatched {
+                kind: kind.clone(),
+                source_ids,
+                document_json,
+            });
+        }
         return Ok(commands);
     }
     let matched_delete = matches!(clauses[0].action, MergeAction::Delete);
@@ -4616,6 +4652,32 @@ mod tests {
                 ProductDmlCommand::MergeDeleteNotMatched {
                     kind: "dataset".into(),
                     source_ids: vec!["keep".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_not_matched_by_source_update() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('keep', '{\"name\":\"kept\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE THEN UPDATE SET document_json = '{\"archived\":true}'",
+        )
+        .expect("bounded not-matched-by-source update MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::Upsert {
+                    kind: "dataset".into(),
+                    id: "keep".into(),
+                    document_json: "{\"name\":\"kept\"}".into(),
+                },
+                ProductDmlCommand::MergeUpdateNotMatched {
+                    kind: "dataset".into(),
+                    source_ids: vec!["keep".into()],
+                    document_json: "{\"archived\":true}".into(),
                 },
             ]
         );

@@ -249,7 +249,9 @@ discrete selection, and NULL omission; dynamic or ambiguous ordered-set forms re
   is accepted as an alias, and duplicate source ids fail closed before staging
   to keep revisions deterministic. Evidence:
 `docs/qualification/track2-native-dml-merge-2026-10-28.md`. The bounded
-product-record MERGE surface now also qualifies matched-delete-only batches:
+  product-record MERGE surface now also qualifies matched-delete-only batches
+  and bounded not-matched-by-source updates with one literal replacement
+  document:
 matched rows use revision-CAS and ownership checks, while unmatched source
 rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   the contract. The target alias is optional for the bounded form; an
