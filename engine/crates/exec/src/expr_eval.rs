@@ -682,6 +682,13 @@ fn eval_function_through_dictionary(
             Some((values, keys)) => (Arc::new(values) as ArrayRef, keys),
             None => return Ok(None),
         },
+        DataType::Utf8View if regex => {
+            let casted = compute::cast(&array, &DataType::Utf8)?;
+            match distinct_text_values(casted.as_string::<i32>()) {
+                Some((values, keys)) => (Arc::new(values) as ArrayRef, keys),
+                None => return Ok(None),
+            }
+        }
         _ => return Ok(None),
     };
     let evaluated: Vec<ArrayRef> = args
@@ -24787,6 +24794,38 @@ mod tests {
                 Some("not a url"),
                 None
             ]
+        );
+    }
+
+    #[test]
+    fn regexp_replace_accepts_utf8_view_columns() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "referer",
+            DataType::Utf8View,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("日本/one"),
+                None,
+                Some("EU/two"),
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_REPLACE".into(),
+            args: vec![
+                Expr::Column("referer".into()),
+                Expr::Literal(ScalarValue::Utf8(r"^([^/]+)/.*$".into())),
+                Expr::Literal(ScalarValue::Utf8("$1".into())),
+            ],
+        };
+        let evaluated = evaluate(&expr, &batch).unwrap();
+        let result = as_string_array(&evaluated).unwrap();
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some("日本"), None, Some("EU")]
         );
     }
 
