@@ -7,6 +7,7 @@ strings in both result paths:
 
 - batched statement rows serialized by `batches_to_json`; and
 - scalar/nested values serialized by `array_value_to_json`.
+- statistics values and client-facing type labels treat `Utf8View` as text.
 
 This keeps text dimensions stable at the API boundary. Charts receive their
 actual category labels, and clients that key or join result values do not see
@@ -16,6 +17,8 @@ all other data-type serialization behavior are unchanged.
 ## Evidence
 
 - `streamed_root_tests::result_rows_encode_utf8_view_values_as_text`
+- `api::tests::statistics_statements_read_the_stored_statistics`
+- `streamed_root_tests::presented_type_uses_client_facing_nested_names`
 - `cargo test -p kaveon-server result_rows_encode_utf8_view_values_as_text --all-targets --no-default-features -- --nocapture` — passed
 - `cargo clippy -p kaveon-server --all-targets --no-default-features -- -D warnings` — passed
 

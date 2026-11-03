@@ -9401,7 +9401,9 @@ pub(crate) fn stat_value_from_json(
                 .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
                 .ok_or_else(invalid)?,
         ),
-        DataType::Utf8 | DataType::LargeUtf8 => StatValue::Text(text()?.to_owned()),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            StatValue::Text(text()?.to_owned())
+        }
         DataType::Date32 => StatValue::Date(parse_date32(text()?).ok_or_else(invalid)?),
         DataType::Timestamp(unit, zone) => {
             let nanos = arrow::compute::kernels::cast_utils::string_to_timestamp_nanos(text()?)
@@ -15219,6 +15221,7 @@ fn compare_json_scalars(
 /// The type a client sees: a dictionary-encoded column is its value type.
 fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
     match data_type {
+        arrow::datatypes::DataType::Utf8View => "Utf8".to_owned(),
         arrow::datatypes::DataType::Dictionary(_, values) => values.to_string(),
         // `List(Float64)`, not the item field's Debug rendering.
         arrow::datatypes::DataType::List(field) => {
@@ -17569,6 +17572,7 @@ mod tests {
             (StatValue::Float(2.5), DataType::Float64),
             (StatValue::Bool(true), DataType::Boolean),
             (StatValue::Text("x\"y".into()), DataType::Utf8),
+            (StatValue::Text("view".into()), DataType::Utf8View),
             (StatValue::Date(20_635), DataType::Date32),
             (
                 StatValue::Timestamp {
@@ -25683,6 +25687,7 @@ mod streamed_root_tests {
             .into(),
         );
         assert_eq!(presented_type(&map), "Map(Utf8, Int64)");
+        assert_eq!(presented_type(&DataType::Utf8View), "Utf8");
         assert_eq!(
             presented_type(&row),
             "Row(name Utf8, attributes Map(Utf8, Int64))"
