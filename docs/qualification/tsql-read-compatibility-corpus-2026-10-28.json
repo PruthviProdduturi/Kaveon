@@ -43,6 +43,7 @@
     {"id": "iif", "sql": "SELECT IIF(actions > 10, 'yes', 'no') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "charindex", "sql": "SELECT CHARINDEX('a', name) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "charindex_start_location", "sql": "SELECT CHARINDEX('a', name, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_optional_one_based_start_location"},
+    {"id": "stuff", "sql": "SELECT STUFF(name, 2, 1, 'X') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_positions"},
     {"id": "patindex", "sql": "SELECT PATINDEX('%a%', name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_percent_and_underscore_wildcards"},
     {"id": "translate", "sql": "SELECT TRANSLATE(name, 'ae', 'AE') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "eomonth", "sql": "SELECT EOMONTH(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_when_input_is_date_or_timestamp"},
