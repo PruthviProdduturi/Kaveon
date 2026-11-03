@@ -612,6 +612,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "CHARACTER_LENGTH",
     "SUBSTR",
     "SUBSTRING",
+    "STUFF",
     "REPLACE",
     "LEFT",
     "RIGHT",
@@ -9220,6 +9221,64 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }))
             };
             if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    match value_at(row)? {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    match value_at(row)? {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
+        }
+        "STUFF" => {
+            if args.len() != 4 {
+                return Err(KaveonError::Execution("STUFF requires 4 arguments".into()));
+            }
+            let starts = compute::cast(&args[1], &DataType::Int64)?;
+            let lengths = compute::cast(&args[2], &DataType::Int64)?;
+            let starts = starts.as_primitive::<Int64Type>();
+            let lengths = lengths.as_primitive::<Int64Type>();
+            let large = args[0].data_type() == &DataType::LargeUtf8
+                || args[3].data_type() == &DataType::LargeUtf8;
+            let value_at = |row: usize| -> Result<Option<String>> {
+                let (Some(value), Some(replacement)) =
+                    (text_value(&args[0], row)?, text_value(&args[3], row)?)
+                else {
+                    return Ok(None);
+                };
+                if starts.is_null(row) || lengths.is_null(row) {
+                    return Ok(None);
+                }
+                let start = starts.value(row);
+                let length = lengths.value(row);
+                if start <= 0 || length < 0 {
+                    return Ok(None);
+                }
+                let chars = value.chars().collect::<Vec<_>>();
+                let start = start as usize;
+                if start > chars.len() {
+                    return Ok(None);
+                }
+                let prefix = chars[..start - 1].iter().collect::<String>();
+                let suffix_start = start.saturating_sub(1).saturating_add(length as usize);
+                let suffix = chars
+                    .get(suffix_start..)
+                    .unwrap_or_default()
+                    .iter()
+                    .collect::<String>();
+                Ok(Some(format!("{prefix}{replacement}{suffix}")))
+            };
+            if large {
                 let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
                 for row in 0..num_rows {
                     match value_at(row)? {
@@ -30006,6 +30065,46 @@ mod tests {
         let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
         assert_eq!(values.value(0), "Kaveo");
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn evaluates_stuff_with_unicode_positions_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("λKaveon"), Some("abc"), None])) as ArrayRef,
+            ),
+            (
+                "start",
+                Arc::new(Int64Array::from(vec![2, 2, 1])) as ArrayRef,
+            ),
+            (
+                "length",
+                Arc::new(Int64Array::from(vec![2, 1, 1])) as ArrayRef,
+            ),
+            (
+                "replacement",
+                Arc::new(StringArray::from(vec![Some("é"), Some("XYZ"), Some("x")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "STUFF".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Column("start".into()),
+                    Expr::Column("length".into()),
+                    Expr::Column("replacement".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "λéveon");
+        assert_eq!(values.value(1), "aXYZc");
+        assert!(values.is_null(2));
     }
 
     #[test]

@@ -390,6 +390,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_stuff",
+        "SELECT TOP 5 STUFF(country, 2, 1, 'X') AS stuffed FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_patindex",
         "SELECT TOP 5 PATINDEX('%a%', country) AS position FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
