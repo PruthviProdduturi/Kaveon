@@ -419,9 +419,10 @@ matched-update-only, matched-delete-only, or unmatched-insert-only forms.
 For an unaliased target, the base table name is the only accepted qualifier.
 Source scans, predicates, arbitrary assignments, and other `MERGE` clause
 orderings remain rejected. `OUTPUT inserted.id`, `OUTPUT inserted.revision`,
-`OUTPUT inserted.document_json`, and `OUTPUT inserted.*` are accepted only on
-the update-or-insert form; delete-bearing and by-source forms reject `OUTPUT`
-before staging because they need an action-aware ordered result contract.
+`OUTPUT inserted.document_json`, and `OUTPUT inserted.*` are accepted on the
+update-or-insert and matched-update-only forms; delete-bearing, unmatched-
+insert, and by-source forms reject `OUTPUT` before staging because they need an
+action-aware ordered result contract.
 Product `RETURNING id, revision`, `RETURNING *` (the stable
 `id`/`revision`/`document_json` contract), and staged `document_json` projections on
 creates, updates, upserts, and deletes are evaluated from the revision/CAS
