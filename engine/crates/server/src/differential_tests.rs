@@ -250,6 +250,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_coalesce",
+        "SELECT user_id, COALESCE(country, 'unknown'), COALESCE(CAST(NULL AS BIGINT), actions, 0) FROM {T} ORDER BY user_id, actions, country LIMIT 20",
+        true,
+    ),
+    (
         "tsql_round_operation",
         "SELECT user_id, ROUND(CAST(actions AS DOUBLE), 1, 1) FROM {T} ORDER BY user_id, actions LIMIT 20",
         true,
