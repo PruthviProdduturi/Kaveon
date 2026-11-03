@@ -36,11 +36,11 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 111-case corpus has planner coverage and focused exact
+  The current 113-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
-- [ ] Keep unbounded `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected
+- [x] Keep unbounded `PIVOT`, `UNPIVOT`, and unsupported `APPLY` forms rejected
   until their semantics are implemented and qualified. Bounded derived-source
   `PIVOT`, `UNPIVOT`, and `CROSS APPLY` lower to conditional aggregation,
   `UNION ALL`, or the existing lateral path and are qualified across local
@@ -279,7 +279,10 @@ the contract.
 
 - [ ] Finish adaptive joins and aggregate exchange for high-cardinality data.
 - [ ] Distribute remaining window and global-sort shapes.
-- [ ] Complete correlated/lateral execution or maintain explicit rejection.
+- [x] Complete correlated/lateral execution or maintain explicit rejection.
+  Bounded correlated and lateral forms are qualified; residual, table-valued,
+  and other unsupported shapes remain explicit parser/planner rejections with
+  actionable diagnostics in the compatibility corpus.
 - [ ] Qualify object-store retries, spill exhaustion, cancellation, and mixed
   workload endurance on every release image.
 
@@ -290,7 +293,10 @@ the contract.
   semantics are defined.
 - [ ] Qualify JDBC/ODBC and external Trino clients against the documented wire
   surface.
-- [ ] Add system metadata views with role-filtered visibility.
+- [x] Add system metadata views with role-filtered visibility. `KaveonDB`
+  exposes read-only `product`, `catalog`, and `system` projections to Admins;
+  ordinary roles cannot browse or query the reserved authority. Runtime and
+  catalog-access API tests cover the projection and denial boundary.
 
 ## Release gate
 
