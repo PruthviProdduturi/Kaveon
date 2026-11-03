@@ -172,7 +172,8 @@ or double-quote delimiters, with the 128-character limit) and
 `STRING_ESCAPE(value, 'json')`; unsupported delimiter and escape-mode forms
 fail closed.
 
-`LEN`, UTF-8 byte-count `DATALENGTH`, `IIF`, `CHARINDEX`, `STUFF`, and `SPACE` are also qualified on the
+`ISNULL` requires exactly two arguments and preserves the first argument's
+type; `LEN`, UTF-8 byte-count `DATALENGTH`, `IIF`, `CHARINDEX`, `STUFF`, and `SPACE` are also qualified on the
 distributed path. `STUFF` uses one-based Unicode scalar positions and returns
 NULL for invalid start/length values; `SPACE` accepts bounded row-local counts,
 preserving NULL and returning NULL for negative counts.

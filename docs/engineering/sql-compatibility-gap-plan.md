@@ -152,6 +152,9 @@ including trailing spaces, across dictionary, plain, fragmented,
 partitioned, clustered, and three-worker execution. This is explicitly the
 Engine UTF-8 contract, not SQL Server UTF-16 `nvarchar` storage emulation;
 evidence is retained in `docs/qualification/track2-tsql-datalength-2026-11-02.md`.
+`ISNULL` is also preserved as a distinct two-argument SQL Server function with
+first-argument type semantics and exact local/three-worker evidence in
+`docs/qualification/track2-tsql-isnull-contract-2026-11-02.md`.
 
 `ASCII`, `UNICODE`, and bounded `CHAR` are also qualified: ASCII returns the
 leading ASCII scalar and NULL for a non-ASCII leading scalar, UNICODE returns
