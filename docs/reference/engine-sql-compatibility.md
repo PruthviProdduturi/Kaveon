@@ -287,10 +287,15 @@ surface; ordered forms remain rejected in both paths. Local evidence is
 recorded in
 `docs/qualification/track2-tsql-string-agg-local-cli-2026-10-30.md`.
 
-- Correlated subqueries beyond one or two equalities: a correlated non-equality
-  (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
-  `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
-  more than one column, or multi-key correlated `IN`; each is refused by name.
+- Correlated subqueries beyond the qualified bounded forms: residual
+  correlations inside scalar `OFFSET`/`LIMIT` forms, `LIMIT`/set operations
+  inside other correlated subqueries, `EXISTS` shapes whose correlation cannot
+  be reduced to the supported semi/anti-join keys, and multi-key correlated
+  `IN` outside the keyed membership contract are refused by name. Residual
+  non-equality predicates are qualified for bounded `EXISTS`/`NOT EXISTS`
+  semi/anti joins, including the TPC-H Q21 shape
+  (`l2.l_suppkey <> l1.l_suppkey`); see
+  [`docs/qualification/tpch/coverage.md`](../qualification/tpch/coverage.md).
 - Residual outer joins are supported for the qualified local and distributed
   shapes described above; unqualified outer join forms outside that binder
   surface, recursive CTEs, ordered map and JSON comparison remain unsupported.
