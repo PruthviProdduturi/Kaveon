@@ -2443,9 +2443,15 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     if !merge_id_predicate(on, &target_alias, &source_alias) {
         return Err(sql_error("MERGE ON must equate target.id with source.id"));
     }
-    if clauses.iter().any(|clause| clause.predicate.is_some()) {
-        return Err(sql_error("MERGE clauses cannot have predicates"));
-    }
+    let matched_source_filter =
+        if clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::Matched) {
+            merge_source_filter(clauses[0].predicate.as_ref(), &source_alias)?
+        } else {
+            if clauses.iter().any(|clause| clause.predicate.is_some()) {
+                return Err(sql_error("MERGE clauses cannot have predicates"));
+            }
+            None
+        };
     let has_not_matched_by_source_delete = clauses.len() == 3
         && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
         && matches!(clauses[2].action, MergeAction::Delete)
@@ -2539,6 +2545,13 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     if matched_only_delete {
         return source_values
             .iter()
+            .filter(|row| {
+                matched_source_filter.as_ref().is_none_or(|ids| {
+                    string_literal(&row[0], "MERGE source id")
+                        .map(|id| ids.contains(&id))
+                        .unwrap_or(false)
+                })
+            })
             .map(|row| {
                 Ok(ProductDmlCommand::MergeDelete {
                     kind: kind.clone(),
@@ -2569,6 +2582,13 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         };
         return source_values
             .iter()
+            .filter(|row| {
+                matched_source_filter.as_ref().is_none_or(|ids| {
+                    string_literal(&row[0], "MERGE source id")
+                        .map(|id| ids.contains(&id))
+                        .unwrap_or(false)
+                })
+            })
             .map(|row| {
                 let document_json = match &document_assignment {
                     MergeDocumentAssignment::Source => {
@@ -2707,6 +2727,53 @@ fn merge_id_predicate(expression: &Expr, target: &str, source: &str) -> bool {
     }
     (merge_source_ref(left, target, "id") && merge_source_ref(right, source, "id"))
         || (merge_source_ref(right, target, "id") && merge_source_ref(left, source, "id"))
+}
+
+/// Return the source ids selected by the bounded, matched-only MERGE
+/// predicate.  The transaction layer still resolves each selected id against
+/// its pinned snapshot and applies the normal revision/CAS command, so this is
+/// only a deterministic source-row filter, not a second mutation path.
+fn merge_source_filter(
+    predicate: Option<&Expr>,
+    source_alias: &str,
+) -> Result<Option<HashSet<String>>> {
+    let Some(predicate) = predicate else {
+        return Ok(None);
+    };
+    if let Expr::BinaryOp { left, op, right } = predicate
+        && *op == BinaryOperator::Eq
+    {
+        let value = if merge_source_ref(left, source_alias, "id") {
+            string_literal(right, "MERGE matched source id")?
+        } else if merge_source_ref(right, source_alias, "id") {
+            string_literal(left, "MERGE matched source id")?
+        } else {
+            return Err(sql_error(
+                "MERGE matched predicates must filter source.id by a string literal or IN list",
+            ));
+        };
+        return Ok(Some(HashSet::from([value])));
+    }
+    if let Expr::InList {
+        expr,
+        list,
+        negated: false,
+    } = predicate
+    {
+        if !merge_source_ref(expr, source_alias, "id") {
+            return Err(sql_error(
+                "MERGE matched IN predicates must reference source.id",
+            ));
+        }
+        let mut ids = HashSet::with_capacity(list.len());
+        for value in list {
+            ids.insert(string_literal(value, "MERGE matched source id")?);
+        }
+        return Ok(Some(ids));
+    }
+    Err(sql_error(
+        "MERGE matched predicates support only source.id = 'literal' or source.id IN ('literal', ...)",
+    ))
 }
 
 fn merge_source_ref(expression: &Expr, alias: &str, column: &str) -> bool {
@@ -4729,6 +4796,25 @@ mod tests {
                     document_json: "{\"archived\":true}".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_matched_source_filter() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND s.id IN ('ds-2') THEN UPDATE SET document_json = s.document_json",
+        )
+        .expect("bounded matched source filter should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![ProductDmlCommand::MergeUpdate {
+                kind: "dataset".into(),
+                id: "ds-2".into(),
+                document_json: "{}".into(),
+            }]
         );
     }
 
