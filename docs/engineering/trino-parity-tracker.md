@@ -71,8 +71,9 @@ the versioned 143-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
-The versioned T-SQL corpus pins the latest implementation commit after the
-qualification commit is recorded;
+The versioned T-SQL corpus is the authoritative
+`docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`, with the
+corpus pinned at `d9bc46e3`;
 later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
