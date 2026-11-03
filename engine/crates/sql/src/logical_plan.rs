@@ -3123,7 +3123,10 @@ fn build_aggregate(
     {
         let counted = Expr::Column(column.clone());
         let mut columns = group_by.clone();
-        if !columns.contains(&counted) {
+        let already_projected = columns.iter().any(|expression| {
+            matches!(expression, Expr::Column(name) if name.rsplit('.').next() == Some(column))
+        });
+        if !already_projected {
             columns.push(counted);
         }
         let mut aggregate = aggregates[0].clone();
