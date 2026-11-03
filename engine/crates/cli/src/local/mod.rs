@@ -387,6 +387,14 @@ mod tests {
                 vec![json!("view"), json!("view")],
             ]
         );
+        let listagg = engine
+            .execute("SELECT LISTAGG(kind, '|') WITHIN GROUP (ORDER BY kind) AS joined FROM events")
+            .expect("LISTAGG should reuse the bounded string aggregation state");
+        assert_eq!(listagg.rows, vec![vec![json!("click|click|view")]]);
+        let listagg_default = engine
+            .execute("SELECT LISTAGG(kind) WITHIN GROUP (ORDER BY kind) AS joined FROM events")
+            .expect("LISTAGG should default its separator to empty");
+        assert_eq!(listagg_default.rows, vec![vec![json!("clickclickview")]]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

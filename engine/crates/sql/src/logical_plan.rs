@@ -6177,7 +6177,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
-    let args = if name == "APPROX_PERCENTILE" {
+    let mut args = if name == "APPROX_PERCENTILE" {
         args.into_iter().map(normalise_fraction).collect()
     } else {
         args
@@ -6199,6 +6199,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             )],
             else_expr: Some(Box::new(repeat)),
         });
+    }
+    // LISTAGG's separator is optional and defaults to the empty string.
+    // Materialize that default in the normalized expression so the
+    // aggregate-reference name matches the execution aggregate's arguments
+    // in both the local and distributed planners.
+    if written_name == "LISTAGG" && name == "STRING_AGG" && args.len() == 1 {
+        args.push(Expr::Literal(ScalarValue::Utf8(String::new())));
     }
     Ok(Expr::Function { name, args })
 }
@@ -6703,24 +6710,35 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                     },
                     "STRING_AGG" => {
                         let ast::FunctionArguments::List(args) = &func.args else {
-                            return Err(sql_err("STRING_AGG requires a value and separator"));
+                            return Err(sql_err(
+                                "STRING_AGG/LISTAGG requires a value and optional separator",
+                            ));
                         };
-                        if args.args.len() != 2 {
-                            return Err(sql_err("STRING_AGG requires exactly two arguments"));
+                        if !(1..=2).contains(&args.args.len()) {
+                            return Err(sql_err(
+                                "STRING_AGG/LISTAGG requires a value and optional separator",
+                            ));
                         }
-                        let delimiter = match &args.args[1] {
-                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
+                        let delimiter = match args.args.get(1) {
+                            None => Expr::Literal(ScalarValue::Utf8(String::new())),
+                            Some(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
                                 ast::Expr::Value(value),
-                            )) => ast_value_to_expr(value)?,
-                            _ => {
-                                return Err(sql_err("STRING_AGG separator must be a literal"));
+                            ))) => ast_value_to_expr(value)?,
+                            Some(_) => {
+                                return Err(sql_err(
+                                    "STRING_AGG/LISTAGG separator must be a literal",
+                                ));
                             }
                         };
                         let Expr::Literal(ScalarValue::Utf8(separator)) = &delimiter else {
-                            return Err(sql_err("STRING_AGG separator must be a text literal"));
+                            return Err(sql_err(
+                                "STRING_AGG/LISTAGG separator must be a text literal",
+                            ));
                         };
                         if separator.len() > 64 * 1024 {
-                            return Err(sql_err("STRING_AGG separator exceeds the 64 KiB limit"));
+                            return Err(sql_err(
+                                "STRING_AGG/LISTAGG separator exceeds the 64 KiB limit",
+                            ));
                         }
                         let order_desc = if func.within_group.is_empty() {
                             None
@@ -6728,18 +6746,18 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                             let order = &func.within_group[0];
                             if ast_expr_to_expr(&order.expr)? != arg {
                                 return Err(sql_err(
-                                    "STRING_AGG WITHIN GROUP may order only by its value expression",
+                                    "STRING_AGG/LISTAGG WITHIN GROUP may order only by its value expression",
                                 ));
                             }
                             if order.nulls_first.is_some() {
                                 return Err(sql_err(
-                                    "STRING_AGG WITHIN GROUP does not support explicit NULLS placement",
+                                    "STRING_AGG/LISTAGG WITHIN GROUP does not support explicit NULLS placement",
                                 ));
                             }
                             Some(matches!(order.asc, Some(false)))
                         } else {
                             return Err(sql_err(
-                                "STRING_AGG WITHIN GROUP supports exactly one value order key",
+                                "STRING_AGG/LISTAGG WITHIN GROUP supports exactly one value order key",
                             ));
                         };
                         AggregateExpr::StringAgg {
@@ -6816,6 +6834,10 @@ fn canonical_function_name(func: &ast::Function) -> String {
         "DATEPART" => "DATE_PART".to_owned(),
         "DATENAME" => "DATE_NAME".to_owned(),
         "DATEFROMPARTS" => "DATE_FROM_PARTS".to_owned(),
+        // SQL-standard/Trino LISTAGG shares the bounded STRING_AGG state.
+        // Overflow clauses remain outside this alias and fail closed rather
+        // than being silently ignored.
+        "LISTAGG" => "STRING_AGG".to_owned(),
         "DATETIMEFROMPARTS" => "DATETIME_FROM_PARTS".to_owned(),
         "DATETIME2FROMPARTS" => "DATETIME2_FROM_PARTS".to_owned(),
         "DATETIMEOFFSETFROMPARTS" => "DATETIMEOFFSET_FROM_PARTS".to_owned(),
@@ -9854,6 +9876,26 @@ mod tests {
             sql_to_logical_plan("SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10) FROM t")
                 .expect("STRING_AGG FILTER should lower through the null-preserving argument path");
         assert!(format!("{filter_plan:?}").contains("StringAgg"));
+        let listagg =
+            sql_to_logical_plan("SELECT LISTAGG(name, ',') WITHIN GROUP (ORDER BY name) FROM t")
+                .expect("LISTAGG should reuse the bounded STRING_AGG state");
+        let listagg = format!("{listagg:?}");
+        assert!(listagg.contains("StringAgg"), "{listagg}");
+        assert!(listagg.contains("order_desc: Some(false)"), "{listagg}");
+        let listagg_default =
+            sql_to_logical_plan("SELECT LISTAGG(name) WITHIN GROUP (ORDER BY name) FROM t")
+                .expect("LISTAGG should default its separator to the empty string");
+        assert!(
+            format!("{listagg_default:?}").contains("Utf8(\"\")"),
+            "{listagg_default:?}"
+        );
+        assert!(
+            sql_to_logical_plan(
+                "SELECT LISTAGG(name, ',') WITHIN GROUP (ORDER BY name) ON OVERFLOW TRUNCATE"
+            )
+            .is_err(),
+            "LISTAGG overflow clauses must fail closed until bounded semantics exist"
+        );
     }
 
     #[test]

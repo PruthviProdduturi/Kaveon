@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 132-case corpus has planner coverage and focused exact
+  The current 134-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -97,7 +97,8 @@ qualified for date/timestamp inputs with an optional row-local month offset.
 `DATETRUNC` now canonicalizes to the same typed `DATE_TRUNC` path for the
 qualified SQL Server datepart/input boundary; evidence is retained in
 `docs/qualification/track2-tsql-datetrunc-2026-10-30.md`.
-SQL Server `STRING_AGG(value, literal_separator)` now carries a mergeable
+SQL Server `STRING_AGG(value, literal_separator)` and bounded SQL-standard/Trino
+`LISTAGG(value[, literal_separator])` now carry a mergeable
 distributed string state with NULL omission. The bounded
 `WITHIN GROUP (ORDER BY value [ASC|DESC])` form is also qualified; independent
 or multiple order keys, explicit NULL placement, dynamic separators, and
