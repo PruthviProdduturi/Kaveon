@@ -317,7 +317,7 @@ impl TransactionRegistry {
         owner: &str,
         id: &str,
         commands: Vec<kaveon_sql::parser::ProductDmlCommand>,
-    ) -> Result<CatalogSnapshot, RegistryError> {
+    ) -> Result<(CatalogSnapshot, Vec<kaveon_sql::parser::ProductDmlCommand>), RegistryError> {
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
@@ -481,6 +481,7 @@ impl TransactionRegistry {
                     expanded.push(command);
                 }
             }
+            let mut staged_commands = Vec::new();
             for command in expanded {
                 let command = match command {
                     kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
@@ -691,6 +692,7 @@ impl TransactionRegistry {
                         continue;
                     }
                 }
+                let staged_command = command.clone();
                 let (change, document) =
                     product_change(session.transaction.snapshot(), owner, command)?;
                 reject_grant_changes(&change)?;
@@ -710,13 +712,14 @@ impl TransactionRegistry {
                     .transaction
                     .stage(change)
                     .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                staged_commands.push(staged_command);
                 if let Some((path, bytes)) = document {
                     session.transaction.stage_document(path, bytes);
                     session.document_bytes = document_total;
                 }
             }
             session.expires_at = Instant::now() + self.ttl;
-            Ok(session.transaction.snapshot().clone())
+            Ok((session.transaction.snapshot().clone(), staged_commands))
         }
         .await;
         match result {
@@ -2636,7 +2639,7 @@ async fn stage_sql_batch(
         .stage_product_commands(&identity.principal, &transaction_id, commands)
         .await
     {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok((snapshot, _)) => Json(snapshot).into_response(),
         Err(error) => error_response(error),
     }
 }
@@ -2919,22 +2922,32 @@ async fn execute_sql_request(
                 return error_response(RegistryError::Invalid("transaction_id is required".into()));
             };
             let returning = dml.returning.clone();
+            let output_pseudo = dml.output_pseudo.clone();
             let commands = match adapt_product_dml_batch(&dml) {
                 Ok(command) => command,
                 Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
             };
             if dml.kind == kaveon_sql::parser::NativeDmlKind::Merge
                 && !returning.is_empty()
-                && commands.iter().any(|command| {
-                    !matches!(
-                        command,
-                        kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
-                            | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
-                    )
-                })
+                && match output_pseudo.as_deref() {
+                    Some("inserted") => commands.iter().any(|command| {
+                        !matches!(
+                            command,
+                            kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                        )
+                    }),
+                    Some("deleted") => commands.iter().any(|command| {
+                        !matches!(
+                            command,
+                            kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
+                        )
+                    }),
+                    _ => true,
+                }
             {
                 return error_response(RegistryError::Invalid(
-                    "MERGE OUTPUT is supported only for bounded update-or-insert and matched-update batches; delete, unmatched-insert, and not-matched-by-source actions are rejected".into(),
+                    "MERGE OUTPUT is supported only for homogeneous bounded inserted or deleted action batches; mixed and not-matched-by-source actions are rejected".into(),
                 ));
             }
             let ignored_conflicts = if dml.on_conflict_do_nothing && !returning.is_empty() {
@@ -2987,8 +3000,10 @@ async fn execute_sql_request(
                 .stage_product_commands(owner, &id, commands.clone())
                 .await
             {
-                Ok(snapshot) if returning.is_empty() => Json(snapshot).into_response(),
-                Ok(snapshot) => {
+                Ok((snapshot, _staged_commands)) if returning.is_empty() => {
+                    Json(snapshot).into_response()
+                }
+                Ok((snapshot, staged_commands)) => {
                     let result = match commands.as_slice() {
                         [
                             kaveon_sql::parser::ProductDmlCommand::InsertSelect {
@@ -3006,7 +3021,11 @@ async fn execute_sql_request(
                         _ => product_returning_response(
                             &snapshot,
                             &returning,
-                            &commands,
+                            if dml.kind == kaveon_sql::parser::NativeDmlKind::Merge {
+                                &staged_commands
+                            } else {
+                                &commands
+                            },
                             &deleted_documents,
                             &ignored_conflicts,
                         ),
@@ -5066,6 +5085,63 @@ mod tests {
             value["returning"][0]["document_json"],
             r#"{"changed":true}"#
         );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_matched_delete_accepts_deleted_output() {
+        let (registry, _catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('remove-me', '{}')".into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('remove-me', '{}'), ('missing', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE OUTPUT deleted.id, deleted.revision"#.into(),
+                transaction_id: Some(merge.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["returning"][0]["id"], "remove-me");
+        assert_eq!(value["returning"][0]["revision"], 1);
     }
 
     #[tokio::test]

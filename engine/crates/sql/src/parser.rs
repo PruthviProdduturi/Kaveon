@@ -2003,6 +2003,7 @@ pub struct NativeDmlStatement {
     pub table: String,
     pub ast: Statement,
     pub returning: Vec<String>,
+    pub output_pseudo: Option<String>,
     pub on_conflict_do_nothing: bool,
     pub on_conflict_do_update: bool,
 }
@@ -3167,6 +3168,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table,
                     ast: statement,
                     returning,
+                    output_pseudo: None,
                     on_conflict_do_nothing,
                     on_conflict_do_update,
                 },
@@ -3203,6 +3205,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table: table_name,
                     ast: statement,
                     returning,
+                    output_pseudo: None,
                     on_conflict_do_nothing: false,
                     on_conflict_do_update: false,
                 },
@@ -3236,6 +3239,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table,
                     ast: statement,
                     returning,
+                    output_pseudo: None,
                     on_conflict_do_nothing: false,
                     on_conflict_do_update: false,
                 },
@@ -3244,14 +3248,26 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
         Statement::Merge { table, .. } => {
             let table = merge_target_table(table)?;
             product_kind(&table)?;
-            let returning = merge_returning.unwrap_or_default();
+            let (returning, output_pseudo) = merge_returning.map_or_else(
+                || (Vec::new(), None),
+                |(columns, pseudo)| (columns, Some(pseudo)),
+            );
             if returning.iter().any(|column| {
                 !column.eq_ignore_ascii_case("id")
                     && !column.eq_ignore_ascii_case("revision")
                     && !column.eq_ignore_ascii_case("document_json")
             }) {
                 return Err(sql_error(
-                    "MERGE OUTPUT supports only inserted id, revision, or document_json",
+                    "MERGE OUTPUT supports only id, revision, or document_json columns",
+                ));
+            }
+            if output_pseudo.as_deref() == Some("deleted")
+                && returning
+                    .iter()
+                    .any(|column| column.eq_ignore_ascii_case("document_json"))
+            {
+                return Err(sql_error(
+                    "MERGE OUTPUT deleted.document_json is not yet supported",
                 ));
             }
             Ok(NativeTransactionalStatement::Dml(Box::new(
@@ -3260,6 +3276,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     table,
                     ast: statement,
                     returning,
+                    output_pseudo,
                     on_conflict_do_nothing: false,
                     on_conflict_do_update: false,
                 },
@@ -3276,7 +3293,9 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
 /// inserted/deleted column references for INSERT/UPDATE/DELETE; the bounded
 /// update-or-insert and matched-update-only MERGE projections are normalized
 /// separately so mixed-action batches remain fail-closed.
-fn normalize_product_output_with_merge(sql: &str) -> Result<(String, Option<Vec<String>>)> {
+type MergeOutputProjection = Option<(Vec<String>, String)>;
+
+fn normalize_product_output_with_merge(sql: &str) -> Result<(String, MergeOutputProjection)> {
     let trimmed = sql.trim();
     let (body, terminator) = match trimmed.strip_suffix(';') {
         Some(body) => (body.trim_end(), ";"),
@@ -3294,11 +3313,22 @@ fn normalize_product_output_with_merge(sql: &str) -> Result<(String, Option<Vec<
                 "MERGE OUTPUT requires a bounded column projection",
             ));
         }
-        let returning = parse_sql_server_output_projection(projection, "inserted")?;
+        let pseudo = projection
+            .split(',')
+            .next()
+            .and_then(|item| item.trim().split('.').next())
+            .filter(|value| {
+                value.eq_ignore_ascii_case("inserted") || value.eq_ignore_ascii_case("deleted")
+            })
+            .ok_or_else(|| {
+                sql_error("MERGE OUTPUT supports only inserted/deleted column projections")
+            })?
+            .to_ascii_lowercase();
+        let returning = parse_sql_server_output_projection(projection, &pseudo)?;
         let mut rewritten = String::with_capacity(body.len());
         rewritten.push_str(body[..output_position].trim_end());
         rewritten.push_str(terminator);
-        return Ok((rewritten, Some(returning)));
+        return Ok((rewritten, Some((returning, pseudo))));
     }
     Ok((normalize_product_output(sql)?, None))
 }
@@ -4511,7 +4541,19 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, ProductDmlCommand::MergeDelete { .. }))
         );
-        for projection in ["deleted.id", "$action", "inserted.id INTO audit.rows"] {
+        let deleted_output = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT deleted.id, deleted.revision";
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(deleted_output)
+            .expect("bounded deleted OUTPUT should parse")
+        else {
+            panic!("expected MERGE DML");
+        };
+        assert_eq!(dml.output_pseudo.as_deref(), Some("deleted"));
+        assert_eq!(dml.returning, ["id", "revision"]);
+        for projection in [
+            "deleted.document_json",
+            "$action",
+            "inserted.id INTO audit.rows",
+        ] {
             let sql = format!(
                 "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{{}}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT {projection}"
             );
