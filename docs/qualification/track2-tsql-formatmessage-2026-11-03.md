@@ -2,15 +2,17 @@
 
 Kaveon qualifies the bounded SQL Server `FORMATMESSAGE` scalar form for a
 literal template with positional text or numeric arguments. Supported tokens
-are `%s`, `%d`, and `%%`; argument order and literal percent signs are
-preserved. Templates and rendered values remain bounded by the Engine's
+are `%s`, `%d`, `%i`, `%u`, and `%%`; argument order and literal percent signs
+are preserved. `%i` and `%d` use signed decimal text, while `%u` accepts the
+Engine's unsigned integer inputs. Templates and rendered values remain bounded by the Engine's
 documented limits. Dynamic templates, unsupported conversion tokens, missing
 or extra arguments, and oversized output remain explicit rejections.
 
 Evidence:
 
-- `expr_eval::tests::evaluates_formatmessage_literal_template` verifies
-  positional substitution, numeric formatting, and escaped percent signs.
+- `expr_eval::tests::formatmessage_renders_bounded_positional_templates`
+  verifies positional text, signed `%i`, unsigned `%u`, and escaped percent
+  substitution, including a negative signed value.
 - `logical_plan` coverage preserves the function for vectorized execution.
 - Case `formatmessage_bounded_template` is included in the versioned
   145-case T-SQL corpus as `planner_qualified` with distributed status
@@ -18,7 +20,7 @@ Evidence:
 - The focused differential case
   `tsql_formatmessage_scalar_compatibility` compares dictionary, plain,
   multi-file, clustered, partitioned, and three-worker fragment results
-  exactly. This is local distributed evidence; deployed/cloud and
+  exactly for `%s`, `%i`, `%u`, and `%%`. This is local distributed evidence; deployed/cloud and
   external-client qualification remain open.
 
 Focused command:

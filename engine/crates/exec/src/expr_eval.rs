@@ -31088,8 +31088,8 @@ mod tests {
     #[test]
     fn formatmessage_renders_bounded_positional_templates() {
         let template = Arc::new(StringArray::from(vec![
-            Some("country=%s actions=%d %%"),
-            Some("country=%s actions=%d %%"),
+            Some("country=%s signed=%i unsigned=%u %%"),
+            Some("country=%s signed=%i unsigned=%u %%"),
             None,
         ])) as ArrayRef;
         let country = Arc::new(StringArray::from(vec![
@@ -31097,12 +31097,14 @@ mod tests {
             Some("Brazil"),
             Some("Kenya"),
         ])) as ArrayRef;
-        let actions = Arc::new(Int64Array::from(vec![Some(12), Some(7), Some(3)])) as ArrayRef;
+        let signed = Arc::new(Int64Array::from(vec![Some(-12), Some(7), Some(3)])) as ArrayRef;
+        let unsigned = Arc::new(UInt64Array::from(vec![Some(12), Some(7), Some(3)])) as ArrayRef;
         let result =
-            eval_scalar_function("FORMATMESSAGE", &[template, country, actions], 3).unwrap();
+            eval_scalar_function("FORMATMESSAGE", &[template, country, signed, unsigned], 3)
+                .unwrap();
         let values = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(values.value(0), "country=Japan actions=12 %");
-        assert_eq!(values.value(1), "country=Brazil actions=7 %");
+        assert_eq!(values.value(0), "country=Japan signed=-12 unsigned=12 %");
+        assert_eq!(values.value(1), "country=Brazil signed=7 unsigned=7 %");
         assert!(values.is_null(2));
         let error = format_message_template("%s", &[]).unwrap_err();
         assert!(error.to_string().contains("more substitution tokens"));

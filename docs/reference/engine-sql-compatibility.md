@@ -192,7 +192,8 @@ or double-quote delimiters, with the 128-character limit) and
 `STRING_ESCAPE(value, 'json')`; unsupported delimiter and escape-mode forms
 fail closed.
 `FORMATMESSAGE` is qualified for literal templates with positional `%s`, `%d`,
-`%i`, `%u`, and escaped `%%` tokens, with NULL propagation. Width, precision,
+`%i`, `%u`, and escaped `%%` tokens, with NULL propagation. `%i`/`%d` use
+signed decimal text and `%u` accepts unsigned integer inputs. Width, precision,
 numbered arguments, locale-aware forms, and message-ID lookup remain explicit
 rejections.
 
