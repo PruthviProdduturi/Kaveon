@@ -1,6 +1,6 @@
 # Server suite qualification — 2026-11-03
 
-Source commit: `471cf51f`
+Source commit: `d2b0d9ba`
 
 ## Result
 
@@ -9,8 +9,8 @@ The complete server binary suite was run from `engine/`:
 ```text
 cargo test -p kaveon-server --bin kaveon-server --no-fail-fast
 
-test result: ok. 679 passed; 0 failed; 0 ignored; 0 measured;
-finished in 664.62s
+test result: ok. 686 passed; 0 failed; 0 ignored; 0 measured;
+finished in 678.05s
 ```
 
 This run includes the long-running distributed differential module, SQL/T-SQL
