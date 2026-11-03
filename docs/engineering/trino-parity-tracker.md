@@ -8,7 +8,8 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 145 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-current pin is `c0ea5fbc`, which includes the `%i`/`%u` `FORMATMESSAGE`
+current pin is `784463a9`, which includes SQL Server style 113 timestamp
+conversion (`dd mon yyyy hh:mi:ss:mmm`) and the `%i`/`%u` `FORMATMESSAGE`
 qualification.
 
 The historical source/build gate record is retained in
