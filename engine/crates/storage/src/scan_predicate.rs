@@ -13,7 +13,7 @@
 //! fine); a disjunction or negation is compiled whole or not at all.
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Datum, Scalar};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Datum, Scalar, StringViewArray};
 use arrow::compute::kernels::cmp;
 use arrow::compute::kernels::comparison::{ilike, like, nilike, nlike};
 use arrow::datatypes::{DataType, Int32Type, SchemaRef};
@@ -421,6 +421,7 @@ fn text_literal(value: &str, data_type: &DataType) -> Option<ArrayRef> {
     Some(match data_type {
         DataType::Utf8 => Arc::new(StringArray::from(vec![value])),
         DataType::LargeUtf8 => Arc::new(LargeStringArray::from(vec![value])),
+        DataType::Utf8View => Arc::new(StringViewArray::from(vec![value])),
         _ => return None,
     })
 }
@@ -787,6 +788,30 @@ mod tests {
         let mask = compiled.selection(&batch).unwrap();
         assert_eq!(
             mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn utf8_view_runtime_filter_compares_text_without_falling_back() {
+        let batch = RecordBatch::try_from_iter([(
+            "region",
+            Arc::new(StringViewArray::from(vec![Some("EU"), Some("日本"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let predicate = StoragePredicate::Compare {
+            column: "region".into(),
+            op: CompareOp::Eq,
+            value: ScalarValue::Utf8("日本".into()),
+        };
+        let compiled = CompiledPredicate::compile(&predicate, &batch.schema())
+            .expect("Utf8View text comparisons should compile");
+        assert_eq!(
+            compiled
+                .selection(&batch)
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(false), Some(true), Some(false)]
         );
     }

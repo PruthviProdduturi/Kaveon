@@ -66,6 +66,7 @@ The authoritative capability details remain in:
   `docs/qualification/track3-utf8view-statistics-2026-11-03.md`,
   `docs/qualification/track3-utf8view-cubes-2026-11-03.md`, and
   `docs/qualification/track4-utf8view-text-routing-2026-11-03.md`, and
+  `docs/qualification/track3-utf8view-predicate-pushdown-2026-11-03.md`, and
   `docs/qualification/track1-utf8view-distinct-2026-11-03.md`.
 - [x] Enforce the versioned corpus as a release gate. The Engine workflow
   validates the corpus count, case IDs, status fields, repository commit pin,
