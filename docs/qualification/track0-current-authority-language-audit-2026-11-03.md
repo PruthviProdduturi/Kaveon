@@ -1,0 +1,49 @@
+# Current authority and connector-language audit — 2026-11-03
+
+## Scope
+
+This audit prevents historical migration records from being mistaken for the
+current Kaveon runtime contract. It covers the current reference, engineering,
+and guide documentation outside `docs/archive/`.
+
+## Current contract
+
+- Native deployments use KaveonDB for product metadata and transactional state.
+- PostgreSQL is a legacy migration/rollback connector, not a native metadata
+  authority.
+- Fabric SQL/Azure SQL are registered passthrough sources. Kaveon executes the
+  selected source request through the API connector boundary; Engine catalogs
+  are not federated with those sources in one query.
+- Historical PostgreSQL authority and cutover statements remain only in files
+  explicitly labeled as historical transition records.
+
+## Evidence
+
+The current contract is stated in:
+
+- `docs/reference/connector-capabilities.md`
+- `docs/reference/api.md`
+- `docs/reference/configuration.md`
+- `docs/guides/register-engine-catalog.md`
+- `docs/engineering/aks-test-deployment.md`
+- `docs/guides/deploy-vercel-azure-postgres.md` (superseded runbook)
+
+The historical records are explicitly labeled at their document headers in:
+
+- `docs/engineering/postgresql-authority-inventory.md`
+- `docs/engineering/product-catalog-migration.md`
+- `docs/engineering/codex-continuation.md`
+
+The audit search found no current, unlabeled claim that PostgreSQL is the
+native metadata authority or that Engine performs cross-source Fabric
+federation. Historical mentions are retained for migration provenance and are
+not deployment instructions.
+
+## Verification
+
+- `node scripts/validate-docs.mjs` — passed.
+- `git diff --check` — passed.
+- `python scripts/validate-tsql-compatibility-tracker.py` — passed.
+
+This audit does not claim cloud deployment state; live authority remains a
+runtime configuration and evidence question.
