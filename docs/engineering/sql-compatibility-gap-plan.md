@@ -256,10 +256,12 @@ recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
   Joins, `UPDATE ... FROM`, qualified assignments, and arbitrary lake-table
   mutation remain rejected. Evidence is recorded in
   `docs/qualification/track2-native-dml-target-alias-2026-11-02.md`.
-- [x] Accept the bounded SQL Server `OUTPUT inserted/deleted.column` spelling
+- [x] Accept the bounded SQL Server `OUTPUT inserted/deleted.column` and
+  statement-wildcard spellings
   for product `INSERT`, `UPDATE`, and `DELETE`, lowering it to the existing
   revision/CAS result projection. Expressions, `OUTPUT INTO`, `MERGE OUTPUT`,
-  and mixed pseudo-tables remain rejected. Evidence:
+  mixed pseudo-tables, and mixed wildcard/column projections remain rejected.
+  Wildcards expand only to `id`, `revision`, and `document_json`. Evidence:
   `docs/qualification/track2-tsql-output-2026-11-02.md`.
 - [x] Qualify bounded product `UPDATE` and `DELETE` statements with an explicit
   `id IN (...)` list and one positive revision CAS predicate. The adapter

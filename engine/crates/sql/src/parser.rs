@@ -3303,7 +3303,33 @@ fn normalize_product_output(sql: &str) -> Result<String> {
         return Err(sql_error("OUTPUT requires a bounded column projection"));
     }
     let mut returning = Vec::new();
-    for item in split_top_level_commas(projection)? {
+    let items = split_top_level_commas(projection)?;
+    let expected_pseudo = if statement_kind == "DELETE" {
+        "deleted"
+    } else {
+        "inserted"
+    };
+    let wildcard_expanded = if items.len() == 1 {
+        let wildcard = items[0].trim().split('.').collect::<Vec<_>>();
+        if wildcard.len() == 2
+            && wildcard[1].trim() == "*"
+            && wildcard[0].trim().eq_ignore_ascii_case(expected_pseudo)
+        {
+            // Product records expose exactly these three stable fields. This
+            // keeps SQL Server's wildcard spelling bounded instead of
+            // exposing arbitrary internal columns or metadata.
+            returning.extend(["id", "revision", "document_json"].map(str::to_owned));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    for item in items {
+        if wildcard_expanded {
+            break;
+        }
         let parts = item.trim().split('.').collect::<Vec<_>>();
         if parts.len() != 2 {
             return Err(sql_error(
@@ -3312,11 +3338,6 @@ fn normalize_product_output(sql: &str) -> Result<String> {
         }
         let pseudo = parts[0].trim();
         let column = parts[1].trim();
-        let expected_pseudo = if statement_kind == "DELETE" {
-            "deleted"
-        } else {
-            "inserted"
-        };
         if !pseudo.eq_ignore_ascii_case(expected_pseudo) || !is_simple_identifier(column) {
             return Err(sql_error(
                 "OUTPUT supports only the statement's inserted/deleted column projections",
@@ -4370,6 +4391,32 @@ mod tests {
                 })
             );
             assert!(adapt_product_dml(&dml).is_ok());
+        }
+    }
+
+    #[test]
+    fn sql_server_output_wildcard_expands_to_product_fields() {
+        for sql in [
+            "INSERT INTO product.datasets (id, document_json) OUTPUT inserted.* VALUES ('ds-1', '{}')",
+            "UPDATE product.datasets SET document_json = '{}' OUTPUT inserted.* WHERE id = 'ds-1' AND revision = 1",
+            "DELETE FROM product.datasets OUTPUT deleted.* WHERE id = 'ds-1' AND revision = 1",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) =
+                parse_native_transactional(sql).expect("bounded OUTPUT wildcard should parse")
+            else {
+                panic!("expected product DML");
+            };
+            assert_eq!(dml.returning, ["id", "revision", "document_json"]);
+            assert!(adapt_product_dml(&dml).is_ok());
+        }
+        for sql in [
+            "UPDATE product.datasets SET document_json = '{}' OUTPUT deleted.* WHERE id = 'ds-1' AND revision = 1",
+            "UPDATE product.datasets SET document_json = '{}' OUTPUT inserted.*, inserted.id WHERE id = 'ds-1' AND revision = 1",
+        ] {
+            assert!(
+                parse_native_transactional(sql).is_err(),
+                "unsafe OUTPUT wildcard was accepted: {sql}"
+            );
         }
     }
 
