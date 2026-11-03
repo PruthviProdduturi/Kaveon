@@ -11860,6 +11860,8 @@ struct QueryEstimateDiagnostics {
     estimate_sources: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     per_scan: Option<Vec<ScanEstimateDiagnostic>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    per_operator: Option<Vec<OperatorEstimateDiagnostic>>,
 }
 
 #[derive(Serialize)]
@@ -11870,6 +11872,75 @@ struct ScanEstimateDiagnostic {
     ratio: f64,
     classification: &'static str,
     estimate_source: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OperatorEstimateDiagnostic {
+    node_id: kaveon_core::PlanNodeId,
+    operator: String,
+    estimated_rows: u64,
+    actual_rows: u64,
+    actual_rows_scope: String,
+    ratio: f64,
+    classification: &'static str,
+    estimate_scope: Option<String>,
+    estimate_source: Option<String>,
+}
+
+fn estimate_classification(estimated_rows: u64, actual_rows: u64) -> (&'static str, f64) {
+    if estimated_rows == 0 {
+        return ("unavailable", 0.0);
+    }
+    let ratio = actual_rows as f64 / estimated_rows as f64;
+    let classification = if ratio > 2.0 {
+        "underestimated"
+    } else if ratio < 0.5 {
+        "overestimated"
+    } else {
+        "within_2x"
+    };
+    (classification, ratio)
+}
+
+/// Collect only operator estimates for which the runtime attached a matching
+/// actual-row counter. Missing counters are intentionally omitted rather than
+/// inferred from a parent, child, or final result.
+fn collect_operator_estimate_details(
+    node: &kaveon_core::PlanNode,
+    operators: &mut Vec<OperatorEstimateDiagnostic>,
+) {
+    let estimated = node
+        .attributes
+        .get("estimated_output_rows")
+        .or_else(|| node.attributes.get("estimated_rows"))
+        .and_then(|value| value.parse::<u64>().ok());
+    let actual = node
+        .attributes
+        .get("actual_output_rows")
+        .map(|value| (value, "query_result"))
+        .or_else(|| {
+            node.attributes
+                .get("actual_rows_selected")
+                .map(|value| (value, "scan_selected_rows"))
+        })
+        .and_then(|(value, scope)| value.parse::<u64>().ok().map(|rows| (rows, scope)));
+    if let (Some(estimated_rows), Some((actual_rows, actual_rows_scope))) = (estimated, actual) {
+        let (classification, ratio) = estimate_classification(estimated_rows, actual_rows);
+        operators.push(OperatorEstimateDiagnostic {
+            node_id: node.id,
+            operator: node.operator.clone(),
+            estimated_rows,
+            actual_rows,
+            actual_rows_scope: actual_rows_scope.to_owned(),
+            ratio,
+            classification,
+            estimate_scope: node.attributes.get("estimate_scope").cloned(),
+            estimate_source: node.attributes.get("estimate_source").cloned(),
+        });
+    }
+    for child in &node.children {
+        collect_operator_estimate_details(child, operators);
+    }
 }
 
 fn collect_scan_estimates(node: &kaveon_core::PlanNode, rows: &mut u64, sources: &mut Vec<String>) {
@@ -11975,6 +12046,11 @@ async fn estimate_diagnostics(
                 })
                 .collect()
         });
+    let mut operator_estimates = Vec::new();
+    if let Some(plan) = record.plan.physical.as_ref() {
+        collect_operator_estimate_details(plan, &mut operator_estimates);
+    }
+    let per_operator = (!operator_estimates.is_empty()).then_some(operator_estimates);
     Json(QueryEstimateDiagnostics {
         query_id,
         available,
@@ -11984,6 +12060,7 @@ async fn estimate_diagnostics(
         classification,
         estimate_sources,
         per_scan,
+        per_operator,
     })
     .into_response()
 }
@@ -16083,6 +16160,26 @@ mod tests {
             plan.children[0].attributes["actual_rows_scope"],
             "scan_selected_rows"
         );
+    }
+
+    #[test]
+    fn operator_estimates_report_only_attached_runtime_rows() {
+        let scan = kaveon_core::PlanNode::new(30, kaveon_core::PlanPhase::Physical, "Scan")
+            .with_attribute("estimated_rows", "100")
+            .with_attribute("estimate_source", "source_metadata")
+            .with_attribute("actual_rows_selected", "40")
+            .with_attribute("actual_rows_scope", "scan_selected_rows");
+        let mut root = kaveon_core::PlanNode::new(31, kaveon_core::PlanPhase::Physical, "Filter")
+            .with_attribute("estimated_output_rows", "80")
+            .with_child(scan);
+        let mut details = Vec::new();
+        super::collect_operator_estimate_details(&root, &mut details);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].node_id, 30);
+        assert_eq!(details[0].operator, "Scan");
+        assert_eq!(details[0].actual_rows_scope, "scan_selected_rows");
+        assert_eq!(details[0].classification, "overestimated");
+        assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
     }
 
     #[test]

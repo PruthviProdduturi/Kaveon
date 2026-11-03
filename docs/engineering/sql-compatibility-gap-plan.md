@@ -268,8 +268,12 @@ the contract.
   now expose mathematically safe product/sum/minimum/left-input caps without
   inventing selectivity estimates. Aggregate, hash-aggregate, final-aggregate,
   and distinct nodes also expose a safe child-row upper bound, without
-  claiming group cardinality. Evidence:
-  `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
+  claiming group cardinality. The estimate-diagnostics endpoint now reports
+  operator rows only where the runtime attached a matching root or scan
+  counter; missing intermediate counters remain unavailable rather than
+  inferred. Evidence:
+  `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md` and
+  `docs/qualification/track3-operator-estimate-diagnostics-2026-11-02.md`.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
   pinned source versions, and time zone; it reports cache execution mode,
