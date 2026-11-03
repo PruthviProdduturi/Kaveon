@@ -319,7 +319,15 @@ impl TransactionRegistry {
         owner: &str,
         id: &str,
         commands: Vec<kaveon_sql::parser::ProductDmlCommand>,
-    ) -> Result<(CatalogSnapshot, Vec<kaveon_sql::parser::ProductDmlCommand>), RegistryError> {
+        capture_deleted_documents: bool,
+    ) -> Result<
+        (
+            CatalogSnapshot,
+            Vec<kaveon_sql::parser::ProductDmlCommand>,
+            Vec<Option<String>>,
+        ),
+        RegistryError,
+    > {
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
@@ -484,6 +492,7 @@ impl TransactionRegistry {
                 }
             }
             let mut staged_commands = Vec::new();
+            let mut deleted_documents = Vec::new();
             for command in expanded {
                 let command = match command {
                     kaveon_sql::parser::ProductDmlCommand::CreateIgnore {
@@ -695,6 +704,12 @@ impl TransactionRegistry {
                     }
                 }
                 let staged_command = command.clone();
+                let deleted_document = if capture_deleted_documents {
+                    self.capture_deleted_document(&session.transaction, owner, &command)
+                        .await?
+                } else {
+                    None
+                };
                 let (change, document) =
                     product_change(session.transaction.snapshot(), owner, command)?;
                 reject_grant_changes(&change)?;
@@ -715,17 +730,24 @@ impl TransactionRegistry {
                     .stage(change)
                     .map_err(|error| RegistryError::Invalid(error.to_string()))?;
                 staged_commands.push(staged_command);
+                deleted_documents.push(deleted_document);
                 if let Some((path, bytes)) = document {
                     session.transaction.stage_document(path, bytes);
                     session.document_bytes = document_total;
                 }
             }
             session.expires_at = Instant::now() + self.ttl;
-            Ok((session.transaction.snapshot().clone(), staged_commands))
+            Ok((
+                session.transaction.snapshot().clone(),
+                staged_commands,
+                deleted_documents,
+            ))
         }
         .await;
         match result {
-            Ok(snapshot) => Ok(snapshot),
+            Ok((snapshot, staged_commands, deleted_documents)) => {
+                Ok((snapshot, staged_commands, deleted_documents))
+            }
             Err(error) => {
                 session.transaction = transaction_before;
                 session.document_bytes = document_bytes_before;
@@ -734,82 +756,68 @@ impl TransactionRegistry {
         }
     }
 
-    /// Capture deleted documents for `RETURNING document_json` from the same
-    /// transaction snapshot that will validate the staged CAS write. This
-    /// preserves read-your-writes when an earlier update staged a replacement
-    /// document, while falling back to the immutable durable object for rows
-    /// that have not been changed in this transaction.
-    async fn product_returning_documents(
+    async fn capture_deleted_document(
         &self,
+        transaction: &ProductTransaction,
         owner: &str,
-        id: &str,
-        commands: &[kaveon_sql::parser::ProductDmlCommand],
-    ) -> Result<Vec<Option<String>>, RegistryError> {
-        let catalog = self.catalog.clone().ok_or(RegistryError::Disabled)?;
-        let mut sessions = self.sessions.lock().await;
-        expire(&mut sessions);
-        let session = owned_session(&mut sessions, owner, id)?;
-        let snapshot = session.transaction.snapshot().clone();
-        let mut documents = vec![None; commands.len()];
-        for (index, command) in commands.iter().enumerate() {
-            let kaveon_sql::parser::ProductDmlCommand::Delete {
-                kind,
-                id,
-                expected_revision,
-            } = command
-            else {
-                continue;
-            };
-            if kind == "typed_row" {
-                let (table, row) = find_typed_row(&snapshot, id, owner)?;
-                if row.revision != *expected_revision {
-                    return Err(RegistryError::Invalid("stale typed row revision".into()));
-                }
-                let owner_principal = match row.columns.get("owner_principal") {
-                    Some(TypedValue::String(value)) => value.clone(),
-                    _ => return Err(RegistryError::Corrupt),
-                };
-                let document = TypedRowDocument {
-                    table,
-                    primary_key: row.primary_key.clone(),
-                    revision: row.revision,
-                    columns: row.columns.clone(),
-                    unique_keys: row.unique_keys.clone(),
-                    owner_principal,
-                };
-                documents[index] =
-                    Some(serde_json::to_string(&document).map_err(|_| RegistryError::Corrupt)?);
-                continue;
+        command: &kaveon_sql::parser::ProductDmlCommand,
+    ) -> Result<Option<String>, RegistryError> {
+        let kaveon_sql::parser::ProductDmlCommand::Delete {
+            kind,
+            id,
+            expected_revision,
+        } = command
+        else {
+            return Ok(None);
+        };
+        let snapshot = transaction.snapshot();
+        if kind == "typed_row" {
+            let (table, row) = find_typed_row(snapshot, id, owner)?;
+            if row.revision != *expected_revision {
+                return Err(RegistryError::Invalid("stale typed row revision".into()));
             }
-            let product_kind = record_kind(kind)?;
-            let record = snapshot
-                .product_record(product_kind, id)
-                .map_err(|error| RegistryError::Invalid(error.to_string()))?
-                .ok_or(RegistryError::ProductMissing)?;
-            require_product_owner(record, owner)?;
-            if record.revision != *expected_revision {
-                return Err(RegistryError::Invalid("stale product revision".into()));
-            }
-            let path = record.document.path.clone();
-            let staged = session
-                .transaction
-                .staged_document(&path)
-                .map(ToOwned::to_owned);
-            let bytes = match staged {
-                Some(bytes) => bytes,
-                None => catalog
-                    .fetch_product_document_at(&snapshot, product_kind, id)
-                    .await
-                    .map_err(|error| match error {
-                        kaveon_storage::CommitErrorKind::Missing
-                        | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
-                        _ => RegistryError::Unavailable,
-                    })?
-                    .ok_or(RegistryError::Corrupt)?,
+            let owner_principal = match row.columns.get("owner_principal") {
+                Some(TypedValue::String(value)) => value.clone(),
+                _ => return Err(RegistryError::Corrupt),
             };
-            documents[index] = Some(String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?);
+            let document = TypedRowDocument {
+                table,
+                primary_key: row.primary_key.clone(),
+                revision: row.revision,
+                columns: row.columns.clone(),
+                unique_keys: row.unique_keys.clone(),
+                owner_principal,
+            };
+            return Ok(Some(
+                serde_json::to_string(&document).map_err(|_| RegistryError::Corrupt)?,
+            ));
         }
-        Ok(documents)
+        let product_kind = record_kind(kind)?;
+        let record = snapshot
+            .product_record(product_kind, id)
+            .map_err(|error| RegistryError::Invalid(error.to_string()))?
+            .ok_or(RegistryError::ProductMissing)?;
+        require_product_owner(record, owner)?;
+        if record.revision != *expected_revision {
+            return Err(RegistryError::Invalid("stale product revision".into()));
+        }
+        let bytes = if let Some(bytes) = transaction.staged_document(&record.document.path) {
+            bytes.to_vec()
+        } else {
+            let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
+            catalog
+                .fetch_product_document_at(snapshot, product_kind, id)
+                .await
+                .map_err(|error| match error {
+                    kaveon_storage::CommitErrorKind::Missing
+                    | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                    _ => RegistryError::Unavailable,
+                })?
+                .ok_or(RegistryError::Corrupt)?
+        };
+        Ok(Some(
+            String::from_utf8(bytes).map_err(|_| RegistryError::Corrupt)?,
+        ))
     }
 
     async fn source_copy_documents(
@@ -2672,10 +2680,10 @@ async fn stage_sql_batch(
     }
     match state
         .product_transactions
-        .stage_product_commands(&identity.principal, &transaction_id, commands)
+        .stage_product_commands(&identity.principal, &transaction_id, commands, false)
         .await
     {
-        Ok((snapshot, _)) => Json(snapshot).into_response(),
+        Ok((snapshot, _, _)) => Json(snapshot).into_response(),
         Err(error) => error_response(error),
     }
 }
@@ -3008,20 +3016,6 @@ async fn execute_sql_request(
             } else {
                 Vec::new()
             };
-            let deleted_documents = if returning
-                .iter()
-                .any(|column| column.eq_ignore_ascii_case("document_json"))
-            {
-                match registry
-                    .product_returning_documents(owner, &id, &commands)
-                    .await
-                {
-                    Ok(documents) => documents,
-                    Err(error) => return error_response(error),
-                }
-            } else {
-                Vec::new()
-            };
             let source_copy_documents = match commands.as_slice() {
                 [
                     kaveon_sql::parser::ProductDmlCommand::InsertSelect {
@@ -3044,13 +3038,20 @@ async fn execute_sql_request(
                 _ => HashMap::new(),
             };
             match registry
-                .stage_product_commands(owner, &id, commands.clone())
+                .stage_product_commands(
+                    owner,
+                    &id,
+                    commands.clone(),
+                    returning
+                        .iter()
+                        .any(|column| column.eq_ignore_ascii_case("document_json")),
+                )
                 .await
             {
-                Ok((snapshot, _staged_commands)) if returning.is_empty() => {
+                Ok((snapshot, _staged_commands, _deleted_documents)) if returning.is_empty() => {
                     Json(snapshot).into_response()
                 }
-                Ok((snapshot, staged_commands)) => {
+                Ok((snapshot, staged_commands, deleted_documents)) => {
                     let result = match commands.as_slice() {
                         [
                             kaveon_sql::parser::ProductDmlCommand::InsertSelect {
@@ -5417,7 +5418,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE OUTPUT deleted.id, deleted.revision"#.into(),
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE OUTPUT deleted.id, deleted.revision, deleted.document_json"#.into(),
                 transaction_id: Some(transaction.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -5432,6 +5433,7 @@ mod tests {
         assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
         assert_eq!(value["returning"][0]["id"], "remove-me");
         assert_eq!(value["returning"][0]["revision"], 1);
+        assert_eq!(value["returning"][0]["document_json"], "{}");
 
         let response = execute_sql_request(
             &registry,
@@ -6930,6 +6932,7 @@ mod tests {
                     id: "u-1".into(),
                     document_json: create.into(),
                 }],
+                false,
             )
             .await
             .unwrap();

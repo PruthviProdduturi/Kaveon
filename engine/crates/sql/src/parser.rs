@@ -3262,15 +3262,6 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                     "MERGE OUTPUT supports only id, revision, or document_json columns",
                 ));
             }
-            if output_pseudo.as_deref() == Some("deleted")
-                && returning
-                    .iter()
-                    .any(|column| column.eq_ignore_ascii_case("document_json"))
-            {
-                return Err(sql_error(
-                    "MERGE OUTPUT deleted.document_json is not yet supported",
-                ));
-            }
             Ok(NativeTransactionalStatement::Dml(Box::new(
                 NativeDmlStatement {
                     kind: NativeDmlKind::Merge,
@@ -4608,11 +4599,7 @@ mod tests {
         };
         assert_eq!(dml.output_pseudo.as_deref(), Some("deleted"));
         assert_eq!(dml.returning, ["id", "revision"]);
-        for projection in [
-            "deleted.document_json",
-            "$action",
-            "inserted.id INTO audit.rows",
-        ] {
+        for projection in ["$action", "inserted.id INTO audit.rows"] {
             let sql = format!(
                 "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{{}}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT {projection}"
             );

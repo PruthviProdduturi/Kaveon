@@ -329,8 +329,8 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   actions from the ordered staged write set. Bounded not-matched-by-source
   delete forms also qualify `deleted.id` and `deleted.revision`, and mixed
   action batches qualify the corresponding inserted identity/revision/document
-  output; `deleted.document_json` and mixed pseudo-table projections remain
-  rejected.
+  output; deleted documents are captured from the pinned pre-delete snapshot.
+  Mixed pseudo-table projections remain rejected.
   Evidence:
   `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.
 - [x] Qualify bounded snapshot isolation and transaction-session restart
