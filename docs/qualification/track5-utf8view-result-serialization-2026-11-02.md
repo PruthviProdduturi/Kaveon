@@ -14,11 +14,17 @@ actual category labels, and clients that key or join result values do not see
 Arrow debug representations such as `StringViewArray(...)`. Null handling and
 all other data-type serialization behavior are unchanged.
 
+The execution aggregate path also accepts `Utf8View` grouping keys and text
+extrema, normalizing finalized output to the Engine's stable logical `Utf8`
+type. This covers local grouped execution and the key preparation used before
+distributed partial aggregation.
+
 ## Evidence
 
 - `streamed_root_tests::result_rows_encode_utf8_view_values_as_text`
 - `api::tests::statistics_statements_read_the_stored_statistics`
 - `streamed_root_tests::presented_type_uses_client_facing_nested_names`
+- `aggregate::tests::utf8_view_min_max_and_group_keys_use_logical_text_values`
 - `cargo test -p kaveon-server result_rows_encode_utf8_view_values_as_text --all-targets --no-default-features -- --nocapture` — passed
 - `cargo clippy -p kaveon-server --all-targets --no-default-features -- -D warnings` — passed
 
