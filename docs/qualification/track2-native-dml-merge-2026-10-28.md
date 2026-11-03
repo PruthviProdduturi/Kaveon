@@ -21,7 +21,7 @@ USING (VALUES
 ) AS source (id, document_json)
   ON target.id = source.id
 WHEN MATCHED THEN
-  UPDATE SET document_json = source.document_json
+  UPDATE SET target.document_json = source.document_json
 WHEN NOT MATCHED THEN
   INSERT (id, document_json)
   VALUES (source.id, source.document_json)
@@ -73,6 +73,12 @@ for the same not-matched clause. Source ids must be unique within the bounded
 batch; duplicate keys fail closed before any write is staged, avoiding
 order-dependent revisions inside one transaction.
 
+The target document assignment may be written either unqualified
+(`document_json = source.document_json`) or qualified with the target alias
+(`target.document_json = source.document_json`). The qualifier must match the
+simple alias declared by `MERGE`; arbitrary or mismatched target qualifiers
+remain rejected.
+
 ## Rejections
 
 The parser fails closed for source-query inputs, joins, batches over 1,000 rows,
@@ -83,6 +89,7 @@ constraints, named conflict targets, and full `MERGE` semantics remain open.
 ## Evidence
 
 - `parser::tests::product_merge_supports_bounded_update_or_insert`
+- `parser::tests::product_merge_accepts_a_qualified_target_document_assignment`
 - `parser::tests::product_merge_expands_a_bounded_values_batch`
 - `parser::tests::product_merge_supports_bounded_delete_or_insert`
 - `parser::tests::product_merge_supports_bounded_matched_delete`
