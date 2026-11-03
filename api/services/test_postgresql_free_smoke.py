@@ -22,8 +22,8 @@ class Client:
    "/api/v1/lab/saved-queries/00000000-0000-0000-0000-000000000000":{"detail":"not found"},
    "/api/v1/chat/history/-1":{"detail":"not found"},"/api/v1/theme":{"theme_color":"dark"},
    "/api/v1/datasets/7/dlm":{"dataset_id":"7","artifact":{"private":"value"}},"/api/v1/datasets/7/dlm/context":{"ok":True,"context":{"private":"value"}},
-   "/api/v1/dlm/ask":{"ok":True,"answer":"private answer"},"/api/v1/chat":{"route":"dlm","answer":"private answer"}}
-  value=values[path];status=404 if path in {"/api/v1/lab/saved-queries/00000000-0000-0000-0000-000000000000","/api/v1/chat/history/-1"} else 200
+   "/api/v1/dlm/ask":{"ok":True,"answer":"private answer"},"/api/v1/chat":{"detail":"Not Found"}}
+  value=values[path];status=404 if path in {"/api/v1/lab/saved-queries/00000000-0000-0000-0000-000000000000","/api/v1/chat/history/-1","/api/v1/chat"} else 200
   if self.mutate:value,status=self.mutate(path,value,status)
   return Response(value,status)
 class Tests(unittest.TestCase):
@@ -60,8 +60,8 @@ class Tests(unittest.TestCase):
   with self.assertRaisesRegex(RuntimeError,"HTTP 403"):self.collect(Client(forbidden))
   def dlm(path,value,status):return ({"ok":False},status) if path=="/api/v1/dlm/ask" else (value,status)
   with self.assertRaisesRegex(RuntimeError,"DLM ask"):self.collect(Client(dlm))
-  def chat(path,value,status):return ({"route":"no_match"},status) if path=="/api/v1/chat" else (value,status)
-  with self.assertRaisesRegex(RuntimeError,"chat did not serve"):self.collect(Client(chat))
+  def chat(path,value,status):return ({"route":"dlm"},200) if path=="/api/v1/chat" else (value,status)
+  with self.assertRaisesRegex(RuntimeError,"legacy chat endpoint is still served"):self.collect(Client(chat))
  def test_disabled_invalid_identity_and_remote_http_are_rejected(self):
   with patch.dict(os.environ,{},clear=True),self.assertRaisesRegex(RuntimeError,"explicit enablement"):smoke.collect("https://example.test","a@b.test","s","q","7",client=Client())
   with patch.dict(os.environ,{"KAVEON_POSTGRESQL_FREE_SMOKE_ENABLED":"true"}):

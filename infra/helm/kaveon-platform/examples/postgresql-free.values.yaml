@@ -1,4 +1,9 @@
 # Non-secret example for the first PostgreSQL-free restart rehearsal.
+#
+# NOTE: this describes a completed one-time migration step, kept for the
+# record. The chart now defaults to `retirementMode: true`, so a new
+# install does not pass through the rehearsal and does not need this file.
+# Applying it to a retired deployment would move it backwards.
 # Replace every angle-bracket placeholder. Keep credentials in the referenced
 # Secret, never in this file. Use immutable image digests from one release.
 images:

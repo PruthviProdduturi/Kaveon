@@ -529,7 +529,9 @@ const WorldMapRenderer: React.FC<{
   onCrossFilter?: (value: string) => void;
   /** The server returned fewer rows than the query matched. */
   truncated?: boolean;
-}> = ({ rows, columns, advancedOptions, onCrossFilter, truncated }) => {
+  /** `bubble` plots points over the land instead of colouring regions. */
+  plot?: "choropleth" | "bubble" | "flow";
+}> = ({ rows, columns, advancedOptions, onCrossFilter, truncated, plot = "choropleth" }) => {
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = React.useState(0);
@@ -667,6 +669,74 @@ const WorldMapRenderer: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, region, loadAttempt]);
 
+  /**
+   * The centre of each map feature, by lower-cased name.
+   *
+   * A bubble map needs a point, and the common result has a place name rather
+   * than coordinates. The bounding-box centre of the matching feature is close
+   * enough to put a dot on a country or a state, and it costs nothing: the
+   * GeoJSON is already loaded for the land underneath.
+   */
+  const featureCentres = React.useMemo(() => {
+    const centres = new Map<string, [number, number]>();
+    for (const feature of (geoCache[region]?.features || [])) {
+      const name = String(feature?.properties?.name ?? "").trim();
+      if (!name) continue;
+      const box = featureBbox(feature);
+      if (!box) continue;
+      centres.set(name.toLowerCase(), [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]);
+    }
+    return centres;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, region, loadAttempt]);
+
+  /**
+   * Which columns, if any, carry coordinates.
+   *
+   * Explicit latitude and longitude beat a centroid every time -- a centroid
+   * can only ever be the middle of a country -- so they are looked for first,
+   * by name, and only numeric columns qualify so a column called "latitude_band"
+   * holding text cannot be mistaken for one.
+   */
+  const coordColumns = React.useMemo(() => {
+    const index = (patterns: RegExp) => columns.findIndex((name, i) => {
+      const leaf = String(name).split(".").pop() || "";
+      return patterns.test(leaf.toLowerCase())
+        && rows.some((row) => row[i] !== null && row[i] !== "" && !isNaN(Number(row[i])));
+    });
+    const lat = index(/^(lat|latitude|y)$/);
+    const lng = index(/^(lng|lon|long|longitude|x)$/);
+    return lat >= 0 && lng >= 0 ? { lat, lng } : null;
+  }, [columns, rows]);
+
+  /**
+   * Two coordinate pairs, for a flow whose data carries positions.
+   *
+   * A flow needs an origin and a destination, so one pair is not enough. Names
+   * are matched on the prefix a warehouse actually uses -- `pickup_lat` /
+   * `dropoff_lat`, `origin_lng` / `dest_lng`, `start_` / `end_` -- and only
+   * numeric columns qualify, the same rule the single-point detector follows.
+   */
+  const flowCoordColumns = React.useMemo(() => {
+    const numeric = (i: number) =>
+      rows.some((row) => row[i] !== null && row[i] !== "" && !isNaN(Number(row[i])));
+    const find = (side: RegExp, axis: RegExp) => columns.findIndex((name, i) => {
+      const leaf = (String(name).split(".").pop() || "").toLowerCase();
+      return side.test(leaf) && axis.test(leaf) && numeric(i);
+    });
+    const origin = /^(pickup|origin|from|start|src|source)/;
+    const target = /^(dropoff|destination|dest|to|end|target)/;
+    const lat = /(lat|latitude)$/;
+    const lng = /(lng|lon|long|longitude)$/;
+    const fromLat = find(origin, lat);
+    const fromLng = find(origin, lng);
+    const toLat = find(target, lat);
+    const toLng = find(target, lng);
+    return fromLat >= 0 && fromLng >= 0 && toLat >= 0 && toLng >= 0
+      ? { fromLat, fromLng, toLat, toLng }
+      : null;
+  }, [columns, rows]);
+
   const joinKey = React.useCallback((raw: unknown): string => {
     const aliased = REGION.normalize(String(raw ?? "").trim());
     return featureNames.get(aliased.toLowerCase()) ?? aliased;
@@ -752,7 +822,17 @@ const WorldMapRenderer: React.FC<{
     if (!ready || !rows.length || columns.length < 2) return null;
     const nameIdx = columns.findIndex((_, i) => rows.some(r => isNaN(Number(r[i]))));
     if (nameIdx < 0) {
+      // A bubble map with latitude and longitude needs no place name, so
+      // demanding one would refuse a result that draws perfectly.
+      if ((plot === "bubble" && coordColumns) || (plot === "flow" && flowCoordColumns)) {
+        return { kind: "ok", matched: rows.length, unmatched: 0, sample: [] };
+      }
       return { kind: "no-geographic-column", matched: 0, unmatched: 0, sample: [] };
+    }
+    if ((plot === "bubble" && coordColumns) || (plot === "flow" && flowCoordColumns)) {
+      // Coordinates are the join; a name that matches no feature is still a
+      // point, so there is nothing unmatched to report.
+      return { kind: "ok", matched: rows.length, unmatched: 0, sample: [] };
     }
 
     const present = rows
@@ -777,7 +857,7 @@ const WorldMapRenderer: React.FC<{
     // did not match are simply absent from the map, so a result that matched
     // a fifth of its rows looks complete.
     return { kind: "ok", matched, unmatched: missed, sample: unmatched };
-  }, [ready, rows, columns, featureNames, joinKey]);
+  }, [ready, rows, columns, featureNames, joinKey, plot, coordColumns, flowCoordColumns]);
 
   const option = React.useMemo(() => {
     if (!ready || !rows.length || columns.length < 2) return null;
@@ -1006,6 +1086,185 @@ const WorldMapRenderer: React.FC<{
           ?? ctOpts.mapCenter
           ?? [(regionBounds[0] + regionBounds[2]) / 2, (regionBounds[1] + regionBounds[3]) / 2]);
 
+    if (plot === "flow") {
+      // Two place references per row rather than one. They resolve the same two
+      // ways a bubble does, so the ordinary `origin, destination, count` result
+      // works with no coordinate columns: the centroids come from the GeoJSON
+      // already loaded for the land underneath.
+      const place = (raw: unknown): [number, number] | null => {
+        const name = joinKey(raw);
+        if (!name) return null;
+        return featureCentres.get(name.toLowerCase()) ?? null;
+      };
+      const textColumns = columns
+        .map((_, i) => i)
+        .filter((i) => rows.some((row) => isNaN(Number(row[i])) && String(row[i] ?? "").trim()));
+      const fromIdx = textColumns[0] ?? -1;
+      const toIdx = textColumns[1] ?? -1;
+
+      const routes = new Map<string, {
+        from: string; to: string; coords: [number, number][]; value: number;
+      }>();
+      for (const row of rows) {
+        let a: [number, number] | null = null;
+        let b: [number, number] | null = null;
+        let fromLabel = "";
+        let toLabel = "";
+        if (flowCoordColumns) {
+          const fromLng = Number(row[flowCoordColumns.fromLng]);
+          const fromLat = Number(row[flowCoordColumns.fromLat]);
+          const toLng = Number(row[flowCoordColumns.toLng]);
+          const toLat = Number(row[flowCoordColumns.toLat]);
+          const sane = (lng: number, lat: number) =>
+            isFinite(lng) && isFinite(lat) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+          if (!sane(fromLng, fromLat) || !sane(toLng, toLat)) continue;
+          a = [fromLng, fromLat];
+          b = [toLng, toLat];
+          fromLabel = fromIdx >= 0 ? String(row[fromIdx] ?? "") : `${fromLat.toFixed(2)}, ${fromLng.toFixed(2)}`;
+          toLabel = toIdx >= 0 ? String(row[toIdx] ?? "") : `${toLat.toFixed(2)}, ${toLng.toFixed(2)}`;
+        } else {
+          if (fromIdx < 0 || toIdx < 0) continue;
+          a = place(row[fromIdx]);
+          b = place(row[toIdx]);
+          fromLabel = joinKey(row[fromIdx]);
+          toLabel = joinKey(row[toIdx]);
+        }
+        if (!a || !b) continue;
+        // A route that starts and ends in the same place has no line to draw.
+        if (a[0] === b[0] && a[1] === b[1]) continue;
+        const value = Number(row[valIdx] ?? 1);
+        const weight = isNaN(value) ? 1 : value;
+        const key = `${fromLabel}\u0000${toLabel}`;
+        const seen = routes.get(key);
+        // Duplicate routes sum, for the reason duplicate graph edges do:
+        // drawing one twice reads as one route and loses the count.
+        if (seen) seen.value += weight;
+        else routes.set(key, { from: fromLabel, to: toLabel, coords: [a, b], value: weight });
+      }
+
+      const flows = Array.from(routes.values());
+      const busiest = Math.max(1, ...flows.map((f) => Math.abs(f.value)));
+      return {
+        ...titleOpt,
+        tooltip: {
+          ...tooltipStyle,
+          formatter: (p: any) => {
+            const route = p?.data;
+            if (!route?.from) return "";
+            return `<b>${route.from} → ${route.to}</b><br/>${fmtVal(Number(route.value))}`;
+          },
+        },
+        geo: {
+          map: useProjection ? GLOBE_MAP_NAME : REGION.mapName,
+          projection: useProjection ? projection : null,
+          aspectScale: useProjection ? 1 : 0.9,
+          roam: showRoam,
+          zoom,
+          center: centre,
+          scaleLimit: { min: 1, max: useProjection ? 8 : 12 },
+          layoutCenter: fit.layoutCenter,
+          layoutSize: fit.layoutSize,
+          itemStyle: { areaColor: tones.noData, borderColor: tones.border, borderWidth: 0.5 },
+          emphasis: { disabled: true },
+        },
+        series: [{
+          type: "lines",
+          coordinateSystem: "geo",
+          data: flows.map((flow) => ({
+            coords: flow.coords,
+            from: flow.from,
+            to: flow.to,
+            value: flow.value,
+            lineStyle: {
+              // Bounded at both ends: unbounded, the busiest route becomes a
+              // band that hides the map and the quietest becomes invisible.
+              width: 1 + (Math.abs(flow.value) / busiest) * 5,
+              opacity: 0.25 + (Math.abs(flow.value) / busiest) * 0.5,
+            },
+          })),
+          // A curve separates the two directions of the same pair, which a
+          // straight line would draw on top of itself.
+          lineStyle: { color: colorScheme[colorScheme.length - 1], curveness: 0.3 },
+          effect: { show: false },
+          emphasis: { lineStyle: { width: 6, opacity: 1 } },
+          z: 5,
+        }],
+      };
+    }
+
+    if (plot === "bubble") {
+      // Points need coordinates. Explicit columns win; otherwise the centre of
+      // the feature the name resolves to, which lets the choropleth's own
+      // `name, value` result draw as bubbles with no extra columns.
+      const points = rows
+        .map((row) => {
+          const value = Number(row[valIdx] ?? 0);
+          if (isNaN(value)) return null;
+          if (coordColumns) {
+            const lng = Number(row[coordColumns.lng]);
+            const lat = Number(row[coordColumns.lat]);
+            if (!isFinite(lng) || !isFinite(lat)) return null;
+            // Out-of-range coordinates are a column mix-up, not a place.
+            if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+            const label = nameIdx >= 0 ? String(row[nameIdx] ?? "") : "";
+            return { name: label, value: [lng, lat, value] };
+          }
+          const name = joinKey(row[nameIdx]);
+          const centre = name ? featureCentres.get(name.toLowerCase()) : undefined;
+          if (!centre) return null;
+          return { name, value: [centre[0], centre[1], value] };
+        })
+        .filter(Boolean) as { name: string; value: number[] }[];
+
+      const magnitudes = points.map((p) => Math.abs(p.value[2]));
+      const biggest = Math.max(1, ...magnitudes);
+      return {
+        ...titleOpt,
+        tooltip: {
+          ...tooltipStyle,
+          formatter: (p: any) => {
+            const value = Array.isArray(p.value) ? Number(p.value[2]) : Number(p.value);
+            const label = p.name || `${Number(p.value?.[1]).toFixed(3)}, ${Number(p.value?.[0]).toFixed(3)}`;
+            return `<b>${label}</b><br/>${isNaN(value) ? "—" : fmtVal(value)}`;
+          },
+        },
+        geo: {
+          map: useProjection ? GLOBE_MAP_NAME : REGION.mapName,
+          projection: useProjection ? projection : null,
+          aspectScale: useProjection ? 1 : 0.9,
+          roam: showRoam,
+          zoom,
+          center: centre,
+          scaleLimit: { min: 1, max: useProjection ? 8 : 12 },
+          layoutCenter: fit.layoutCenter,
+          layoutSize: fit.layoutSize,
+          // The land is a backdrop here, not an encoding: the value is in the
+          // bubbles, and colouring the regions too would say the same number
+          // twice.
+          itemStyle: { areaColor: tones.noData, borderColor: tones.border, borderWidth: 0.5 },
+          emphasis: { disabled: true },
+        },
+        series: [{
+          type: "scatter",
+          coordinateSystem: "geo",
+          data: points,
+          // Area carries the value. Radius would make a value ten times larger
+          // a hundred times the ink.
+          symbolSize: (value: number[]) =>
+            6 + Math.sqrt(Math.abs(Number(value?.[2]) || 0) / biggest) * 34,
+          itemStyle: {
+            color: colorScheme[colorScheme.length - 1],
+            opacity: 0.72,
+            borderColor: "#ffffff",
+            borderWidth: 1,
+          },
+          emphasis: { itemStyle: { opacity: 0.95, borderWidth: 2 }, scale: 1.1 },
+          // Largest last, so a big bubble never hides a small one behind it.
+          z: 5,
+        }],
+      };
+    }
+
     return {
       ...titleOpt,
       tooltip: tooltipStyle,
@@ -1046,7 +1305,7 @@ const WorldMapRenderer: React.FC<{
       }],
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark, joinKey]);
+  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark, joinKey, plot, coordColumns, flowCoordColumns, featureCentres]);
 
   // The host box stays mounted through every state so it can be measured before
   // the chart that depends on that measurement exists. The parent
@@ -1802,13 +2061,14 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           />
         ) : hasOption && !sqlPreview.isRunning && (chartType === "big_number" || chartType === "big_number_trend") ? (
           <BigNumberKpiCard options={chartOptions} rows={sqlPreview.dataRows} columns={sqlPreview.dataColumns} chartType={chartType} />
-        ) : hasOption && !sqlPreview.isRunning && chartType === "world_map" ? (
+        ) : hasOption && !sqlPreview.isRunning && (chartType === "world_map" || chartType === "bubble_map" || chartType === "flow_map") ? (
           <WorldMapRenderer
             rows={(previewOptions as any)?._rows ?? sqlPreview.dataRows}
             columns={(previewOptions as any)?._columns ?? sqlPreview.dataColumns}
             advancedOptions={advancedOptions}
             onCrossFilter={onCrossFilter}
             truncated={sqlPreview.resultTruncated === true}
+            plot={chartType === "bubble_map" ? "bubble" : chartType === "flow_map" ? "flow" : "choropleth"}
           />
         ) : hasOption && !sqlPreview.isRunning && chartType && getPlugin(chartType)?.Renderer ? (
           (() => {

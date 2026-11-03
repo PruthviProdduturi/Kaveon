@@ -107,6 +107,52 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: pytest -q --tb=short scripts
 
+  chart:
+    name: Helm — lint & render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `helm lint` on bare defaults only reports the values the chart requires
+      # a deployment to supply, so it is run against a complete placeholder set.
+      # Strict, because a chart that renders with warnings renders surprises.
+      - name: Lint (strict)
+        run: |
+          helm lint --strict infra/helm/kaveon-platform \
+            -f infra/helm/kaveon-platform/examples/render-check.values.yaml
+
+      # Rendering is the part that catches a template which produces no
+      # Deployment, or a conditional that silently drops one. The manifest count
+      # is asserted rather than eyeballed: a chart that renders three lines of
+      # nothing exits zero.
+      - name: Render the default mode
+        run: |
+          helm template kaveon infra/helm/kaveon-platform \
+            -f infra/helm/kaveon-platform/examples/render-check.values.yaml \
+            > /tmp/rendered.yaml
+          docs=$(grep -c '^---' /tmp/rendered.yaml || true)
+          echo "rendered $docs manifests"
+          test "$docs" -ge 10
+          grep -q 'name: kaveon-api' /tmp/rendered.yaml
+          grep -q 'name: kaveon-portal' /tmp/rendered.yaml
+
+      # The chart ships one worked example. It describes a completed migration
+      # step, and it still has to render -- a stale example that cannot be
+      # applied is worse than none.
+      - name: Render the shipped example
+        run: |
+          helm template kaveon infra/helm/kaveon-platform \
+            -f infra/helm/kaveon-platform/examples/postgresql-free.values.yaml \
+            > /tmp/example.yaml
+          test "$(grep -c '^---' /tmp/example.yaml || true)" -ge 10
+
+      - name: Reject a manifest that still references PostgreSQL
+        run: |
+          # The product has one system of record. A chart that mounts a
+          # PostgreSQL password or waits on a metadata schema has reintroduced
+          # the second one.
+          ! grep -nE 'POSTGRES_PASSWORD|kaveon-postgres|psycopg2' /tmp/rendered.yaml
+
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest

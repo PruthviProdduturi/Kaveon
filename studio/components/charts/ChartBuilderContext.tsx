@@ -141,6 +141,198 @@ export function applyNumberAbbreviation(option: any): any {
 }
 
 /**
+ * Edges and node degrees from a flat `source, target, [value]` result.
+ *
+ * Duplicate edges are summed rather than drawn twice: two identical lines read
+ * as one and lose the count. Self-edges are kept, because a row saying a thing
+ * relates to itself is data. Degree counts every incident edge, so a hub can be
+ * drawn as one.
+ */
+/**
+ * Actual against target, from `label, actual, target` rows.
+ *
+ * The third column is the target. Without one there is nothing to be behind or
+ * ahead of, so a two-column result is refused rather than drawn as a plain bar
+ * pretending to be a comparison.
+ */
+function readBullet(rows: (string | number | null)[][]) {
+  const items: { label: string; actual: number; target: number }[] = [];
+  for (const row of rows) {
+    const label = String(row[0] ?? "").trim();
+    if (!label) continue;
+    const actual = Number(row[1] ?? 0);
+    const target = Number(row[2] ?? 0);
+    if (!Number.isFinite(actual) || !Number.isFinite(target)) continue;
+    items.push({ label, actual, target });
+  }
+  return items;
+}
+
+/**
+ * Rank per period, from `period, category, value` rows.
+ *
+ * Rank 1 is the largest value in that period. Ties are broken by name so the
+ * same data always ranks the same way -- an arbitrary tiebreak would reorder
+ * rows on a redraw and read as movement that did not happen.
+ *
+ * A category absent from a period gets null, not zero. Absent and zero are
+ * different facts, and a line dropping to the floor invents a measurement
+ * nobody made.
+ */
+function readRibbon(rows: (string | number | null)[][]) {
+  const periods: string[] = [];
+  const categories: string[] = [];
+  const valueAt = new Map<string, number>();
+  for (const row of rows) {
+    const period = String(row[0] ?? "").trim();
+    const category = String(row[1] ?? "").trim();
+    if (!period || !category) continue;
+    const value = Number(row[2] ?? 0);
+    if (!Number.isFinite(value)) continue;
+    if (!periods.includes(period)) periods.push(period);
+    if (!categories.includes(category)) categories.push(category);
+    valueAt.set(`${period}\u0000${category}`, value);
+  }
+
+  const rankAt = new Map<string, number>();
+  for (const period of periods) {
+    const present = categories
+      .filter((category) => valueAt.has(`${period}\u0000${category}`))
+      .sort((a, b) => {
+        const difference = (valueAt.get(`${period}\u0000${b}`) ?? 0)
+          - (valueAt.get(`${period}\u0000${a}`) ?? 0);
+        // Name is the tiebreak, so a redraw cannot reorder equals.
+        return difference !== 0 ? difference : a.localeCompare(b);
+      });
+    present.forEach((category, index) => {
+      rankAt.set(`${period}\u0000${category}`, index + 1);
+    });
+  }
+
+  const series = categories.map((category) => ({
+    name: category,
+    ranks: periods.map((period) => rankAt.get(`${period}\u0000${category}`) ?? null),
+    values: periods.map((period) => valueAt.get(`${period}\u0000${category}`) ?? null),
+  }));
+  return { periods, series, depth: categories.length };
+}
+
+function readGraph(rows: (string | number | null)[][]) {
+  const weights = new Map<string, { source: string; target: string; value: number }>();
+  const degree = new Map<string, number>();
+  for (const row of rows) {
+    const source = String(row[0] ?? "").trim();
+    const target = String(row[1] ?? "").trim();
+    if (!source || !target) continue;
+    const value = row.length > 2 ? Number(row[2] ?? 1) : 1;
+    const weight = Number.isFinite(value) ? value : 1;
+    const key = `${source}\u0000${target}`;
+    const seenEdge = weights.get(key);
+    if (seenEdge) seenEdge.value += weight;
+    else weights.set(key, { source, target, value: weight });
+    degree.set(source, (degree.get(source) ?? 0) + 1);
+    degree.set(target, (degree.get(target) ?? 0) + 1);
+  }
+  const links = Array.from(weights.values());
+  const maxDegree = Math.max(1, ...Array.from(degree.values()));
+  const nodes = Array.from(degree.entries()).map(([name, edges]) => ({
+    name,
+    value: edges,
+    // Area, not radius, carries the degree: a hub with ten times the edges
+    // should not be a hundred times the ink.
+    symbolSize: 12 + Math.sqrt(edges / maxDegree) * 26,
+  }));
+  return { nodes, links };
+}
+
+/**
+ * A tree from flat `child, parent, [value]` rows.
+ *
+ * Two inputs break a naive builder and both arrive from real databases. A
+ * parent that is not itself a row in the result means the child is a root here,
+ * not a row to drop. And a cycle -- which a self-referencing key produces as
+ * soon as the data is wrong -- would recurse forever; it is detected, broken,
+ * and its members are attached at the top so the rows that revealed the problem
+ * stay on screen.
+ */
+function readTree(rows: (string | number | null)[][]) {
+  const parentOf = new Map<string, string>();
+  const valueOf = new Map<string, number>();
+  // A set, not a scan of the other maps: a node is commonly seen as someone's
+  // parent before it appears as its own row, and at that point it is in neither
+  // map -- which appended it twice and turned one root into two.
+  const seen = new Set<string>();
+  const names: string[] = [];
+  const note = (name: string) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    names.push(name);
+  };
+  for (const row of rows) {
+    const child = String(row[0] ?? "").trim();
+    if (!child) continue;
+    const parent = String(row[1] ?? "").trim();
+    note(child);
+    if (parent && parent !== child) {
+      parentOf.set(child, parent);
+      note(parent);
+    }
+    if (row.length > 2) {
+      const value = Number(row[2] ?? 0);
+      if (Number.isFinite(value)) valueOf.set(child, value);
+    } else if (!valueOf.has(child)) {
+      valueOf.set(child, 0);
+    }
+  }
+
+  // Walk each node to its root. A name repeated on one walk is a cycle, so that
+  // edge is cut and the node becomes a root instead of hanging the builder.
+  for (const name of names) {
+    const walked = new Set<string>([name]);
+    let at = name;
+    for (;;) {
+      const parent = parentOf.get(at);
+      if (!parent || !seen.has(parent)) break;
+      if (walked.has(parent)) {
+        parentOf.delete(at);
+        break;
+      }
+      walked.add(parent);
+      at = parent;
+    }
+  }
+
+  const children = new Map<string, string[]>();
+  const roots: string[] = [];
+  for (const name of names) {
+    const parent = parentOf.get(name);
+    if (parent && seen.has(parent)) {
+      children.set(parent, [...(children.get(parent) ?? []), name]);
+    } else {
+      roots.push(name);
+    }
+  }
+
+  const build = (name: string, walked: Set<string>): any => {
+    // Belt and braces: the cycle break above should make this unreachable, and
+    // an unbounded recursion is not a failure worth risking.
+    if (walked.has(name)) return { name, value: valueOf.get(name) ?? 0 };
+    const next = new Set(walked).add(name);
+    const kids = (children.get(name) ?? []).map((child) => build(child, next));
+    return {
+      name,
+      value: valueOf.get(name) ?? 0,
+      ...(kids.length ? { children: kids } : {}),
+    };
+  };
+
+  const built = roots.map((root) => build(root, new Set()));
+  // ECharts draws one tree per series datum. Several roots is normal for a
+  // query, so they hang off one unnamed node rather than being cut to the first.
+  return built.length === 1 ? built : [{ name: "", children: built }];
+}
+
+/**
  * @deprecated No longer needed - dashboards now use ChartBuilderProvider + ChartPreview directly
  */
 export function buildEChartsOptionsFromQueryResult(
@@ -703,6 +895,167 @@ export function buildEChartsOptionsFromQueryResult(
         series: [{ type: "bar", data: counts, barCategoryGap: "2%", itemStyle: { borderRadius: [3, 3, 0, 0] } }],
       };
     }
+    case "network_graph": {
+      if (columns.length < 2) return null;
+      const { nodes, links } = readGraph(rows);
+      if (!nodes.length) return null;
+      return {
+        tooltip: {
+          trigger: "item",
+          formatter: (p: any) => p.dataType === "edge"
+            ? `${p.data.source} — ${p.data.target}: <b>${Number(p.data.value).toLocaleString()}</b>`
+            : `<b>${p.name}</b><br/>${Number(p.value).toLocaleString()} connection${p.value === 1 ? "" : "s"}`,
+        },
+        series: [{
+          type: "graph",
+          layout: "force",
+          // A graph is read by dragging it; without roam a dense one is
+          // unreadable and there is nothing the viewer can do about it.
+          roam: true,
+          draggable: true,
+          data: nodes,
+          links,
+          // Repulsion scales with the node count so a small graph is not
+          // flung apart and a large one does not collapse into a ball.
+          force: { repulsion: Math.max(120, 900 / Math.sqrt(nodes.length)), edgeLength: [40, 120], gravity: 0.08 },
+          emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
+          label: { show: nodes.length <= 40, position: "right", fontSize: 11 },
+          lineStyle: { color: "source", curveness: 0.12, opacity: 0.55 },
+        }],
+      };
+    }
+    case "tree": {
+      if (columns.length < 2) return null;
+      const treeData = readTree(rows);
+      if (!treeData.length) return null;
+      return {
+        tooltip: {
+          trigger: "item",
+          formatter: (p: any) => p.value
+            ? `<b>${p.name}</b><br/>${Number(p.value).toLocaleString()}`
+            : `<b>${p.name}</b>`,
+        },
+        series: [{
+          type: "tree",
+          data: treeData,
+          // Room on the right for the deepest label, which is the one that
+          // gets clipped.
+          left: "6%", right: "18%", top: "4%", bottom: "4%",
+          symbolSize: 8,
+          roam: true,
+          initialTreeDepth: 3,
+          label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 11 },
+          leaves: { label: { position: "right", verticalAlign: "middle", align: "left" } },
+          emphasis: { focus: "descendant" },
+          expandAndCollapse: true,
+        }],
+      };
+    }
+    case "bullet": {
+      if (columns.length < 3) return null;
+      const bullets = readBullet(rows);
+      if (!bullets.length) return null;
+      const reach = Math.max(1, ...bullets.map((b) => Math.max(Math.abs(b.actual), Math.abs(b.target))));
+      return {
+        grid: { left: "3%", right: "6%", top: 30, bottom: 20, containLabel: true },
+        tooltip: {
+          trigger: "item",
+          formatter: (p: any) => {
+            const item = bullets[p.dataIndex];
+            if (!item) return "";
+            const share = item.target ? (item.actual / item.target) * 100 : NaN;
+            return `<b>${item.label}</b><br/>Actual ${item.actual.toLocaleString()}`
+              + `<br/>Target ${item.target.toLocaleString()}`
+              + (isNaN(share) ? "" : `<br/>${share.toFixed(1)}% of target`);
+          },
+        },
+        xAxis: { type: "value", max: Math.ceil(reach * 1.1) },
+        yAxis: { type: "category", data: bullets.map((b) => b.label), inverse: true },
+        series: [
+          {
+            type: "bar",
+            data: bullets.map((b) => ({
+              value: b.actual,
+              // The one fact this chart exists to convey, carried by colour so
+              // the reader does not have to compare two lengths to learn it.
+              itemStyle: { color: b.actual >= b.target ? "#10b981" : "#f59e0b" },
+            })),
+            barWidth: "42%",
+            z: 2,
+          },
+          {
+            // The target as a marker rather than a second bar: one row stays
+            // one bar, and the comparison reads as a threshold crossed or not.
+            type: "bar",
+            barGap: "-100%",
+            barWidth: "72%",
+            itemStyle: { color: "transparent" },
+            data: bullets.map((b) => b.target),
+            z: 3,
+            markLine: {
+              symbol: "none",
+              silent: true,
+              lineStyle: { color: "#334155", width: 2, type: "solid" },
+              data: bullets.map((b, index) => ([
+                { xAxis: b.target, yAxis: index, symbol: "none" },
+                { xAxis: b.target, yAxis: index, symbol: "none" },
+              ])),
+            },
+          },
+        ],
+      };
+    }
+    case "ribbon": {
+      if (columns.length < 3) return null;
+      const { periods, series, depth } = readRibbon(rows);
+      if (!periods.length || !series.length) return null;
+      return {
+        grid: { left: "3%", right: "12%", top: 30, bottom: 20, containLabel: true },
+        tooltip: {
+          trigger: "axis",
+          // Rank is the axis, so the tooltip has to carry the value as well --
+          // "3rd" without "£41,000" is half an answer.
+          formatter: (params: any) => {
+            const list = Array.isArray(params) ? params : [params];
+            if (!list.length) return "";
+            const rows_ = list
+              .filter((p: any) => p.value !== null && p.value !== undefined)
+              .sort((a: any, b: any) => Number(a.value) - Number(b.value))
+              .map((p: any) => {
+                const found = series.find((s) => s.name === p.seriesName);
+                const value = found?.values[p.dataIndex];
+                return `${p.marker}#${p.value} ${p.seriesName}`
+                  + (value === null || value === undefined ? "" : ` — ${Number(value).toLocaleString()}`);
+              });
+            return `<b>${list[0].axisValueLabel}</b><br/>${rows_.join("<br/>")}`;
+          },
+        },
+        legend: { type: "scroll", bottom: 0 },
+        xAxis: { type: "category", data: periods, boundaryGap: false },
+        yAxis: {
+          type: "value",
+          // Rank 1 belongs at the top, and only whole ranks exist.
+          inverse: true,
+          min: 1,
+          max: depth,
+          interval: 1,
+          axisLabel: { formatter: (value: number) => `#${value}` },
+        },
+        series: series.map((s) => ({
+          name: s.name,
+          type: "line",
+          data: s.ranks,
+          // A category absent from a period leaves a gap. Connecting across it
+          // would draw a move between two ranks it never held.
+          connectNulls: false,
+          smooth: 0.35,
+          symbol: "circle",
+          symbolSize: 9,
+          lineStyle: { width: 3 },
+          emphasis: { focus: "series", lineStyle: { width: 5 } },
+        })),
+      };
+    }
     case "sankey": {
       if (columns.length < 3) return null;
       const nodeSet = new Set<string>();
@@ -869,10 +1222,16 @@ export type ChartKind =
   | "waterfall"
   | "nightingale_rose"
   | "sankey"
+  | "network_graph"
+  | "tree"
   | "calendar_heatmap"
   | "histogram"
   | "parallel_coordinates"
-  | "world_map";
+  | "world_map"
+  | "bubble_map"
+  | "flow_map"
+  | "bullet"
+  | "ribbon";
 
 export type TimeRangePreset =
   | "all_time"
@@ -1159,6 +1518,18 @@ export const TEMPLATES: ChartTemplate[] = [
     previewKind: "funnel",
   },
   {
+    id: "bullet",
+    name: "Bullet chart",
+    description: "Compare actual against target. Query needs a label, an actual and a target column.",
+    category: "Bar",
+  },
+  {
+    id: "ribbon",
+    name: "Ribbon chart",
+    description: "Show rank changing over time. Query needs a period, a category and a value column.",
+    category: "Bar",
+  },
+  {
     id: "gauge",
     name: "Gauge",
     description: "Display a single value vs a target.",
@@ -1279,6 +1650,18 @@ export const TEMPLATES: ChartTemplate[] = [
     category: "Flow",
   },
   {
+    id: "network_graph",
+    name: "Network graph",
+    description: "Show how entities connect. Query needs source, target and optionally a weight column.",
+    category: "Flow",
+  },
+  {
+    id: "tree",
+    name: "Tree",
+    description: "Show containment as a hierarchy. Query needs child, parent and optionally a value column.",
+    category: "Flow",
+  },
+  {
     id: "calendar_heatmap",
     name: "Calendar heatmap",
     description: "Daily values plotted in a calendar grid. Query needs date + value columns.",
@@ -1289,6 +1672,18 @@ export const TEMPLATES: ChartTemplate[] = [
     name: "Parallel coordinates",
     description: "Compare multi-dimensional numeric data across parallel axes.",
     category: "Custom",
+  },
+  {
+    id: "flow_map",
+    name: "Flow map",
+    description: "Draw movement between places. Query needs an origin and a destination, or origin and destination coordinate pairs.",
+    category: "Map",
+  },
+  {
+    id: "bubble_map",
+    name: "Bubble map",
+    description: "Plot points on a map, sized by value. Query needs a place name, or latitude and longitude columns.",
+    category: "Map",
   },
   {
     id: "world_map",
@@ -1968,7 +2363,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     return option;
   };
 
-  const buildEchartsOptionFromPreview = (
+
+
+const buildEchartsOptionFromPreview = (
     chartKind: string,
     executeJson: { columns?: string[]; rows?: unknown[][] },
     config: ReturnType<typeof buildQueryConfigForPreview>,
@@ -2988,6 +3385,167 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           xAxis: { type: "category", data: histLabels, name: columns[metricIndex] || "", nameLocation: "center", nameGap: 30 },
           yAxis: { type: "value", name: "Count" },
           series: [{ type: "bar", data: counts, barCategoryGap: "2%", itemStyle: { borderRadius: [3, 3, 0, 0] } }],
+        };
+      }
+      case "network_graph": {
+        if (columns.length < 2) return null;
+        const { nodes, links } = readGraph(rows);
+        if (!nodes.length) return null;
+        return {
+          tooltip: {
+            trigger: "item",
+            formatter: (p: any) => p.dataType === "edge"
+              ? `${p.data.source} — ${p.data.target}: <b>${Number(p.data.value).toLocaleString()}</b>`
+              : `<b>${p.name}</b><br/>${Number(p.value).toLocaleString()} connection${p.value === 1 ? "" : "s"}`,
+          },
+          series: [{
+            type: "graph",
+            layout: "force",
+            // A graph is read by dragging it; without roam a dense one is
+            // unreadable and there is nothing the viewer can do about it.
+            roam: true,
+            draggable: true,
+            data: nodes,
+            links,
+            // Repulsion scales with the node count so a small graph is not
+            // flung apart and a large one does not collapse into a ball.
+            force: { repulsion: Math.max(120, 900 / Math.sqrt(nodes.length)), edgeLength: [40, 120], gravity: 0.08 },
+            emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
+            label: { show: nodes.length <= 40, position: "right", fontSize: 11 },
+            lineStyle: { color: "source", curveness: 0.12, opacity: 0.55 },
+          }],
+        };
+      }
+      case "tree": {
+        if (columns.length < 2) return null;
+        const treeData = readTree(rows);
+        if (!treeData.length) return null;
+        return {
+          tooltip: {
+            trigger: "item",
+            formatter: (p: any) => p.value
+              ? `<b>${p.name}</b><br/>${Number(p.value).toLocaleString()}`
+              : `<b>${p.name}</b>`,
+          },
+          series: [{
+            type: "tree",
+            data: treeData,
+            // Room on the right for the deepest label, which is the one that
+            // gets clipped.
+            left: "6%", right: "18%", top: "4%", bottom: "4%",
+            symbolSize: 8,
+            roam: true,
+            initialTreeDepth: 3,
+            label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 11 },
+            leaves: { label: { position: "right", verticalAlign: "middle", align: "left" } },
+            emphasis: { focus: "descendant" },
+            expandAndCollapse: true,
+          }],
+        };
+      }
+      case "bullet": {
+        if (columns.length < 3) return null;
+        const bullets = readBullet(rows);
+        if (!bullets.length) return null;
+        const reach = Math.max(1, ...bullets.map((b) => Math.max(Math.abs(b.actual), Math.abs(b.target))));
+        return {
+          grid: { left: "3%", right: "6%", top: 30, bottom: 20, containLabel: true },
+          tooltip: {
+            trigger: "item",
+            formatter: (p: any) => {
+              const item = bullets[p.dataIndex];
+              if (!item) return "";
+              const share = item.target ? (item.actual / item.target) * 100 : NaN;
+              return `<b>${item.label}</b><br/>Actual ${item.actual.toLocaleString()}`
+                + `<br/>Target ${item.target.toLocaleString()}`
+                + (isNaN(share) ? "" : `<br/>${share.toFixed(1)}% of target`);
+            },
+          },
+          xAxis: { type: "value", max: Math.ceil(reach * 1.1) },
+          yAxis: { type: "category", data: bullets.map((b) => b.label), inverse: true },
+          series: [
+            {
+              type: "bar",
+              data: bullets.map((b) => ({
+                value: b.actual,
+                // The one fact this chart exists to convey, carried by colour so
+                // the reader does not have to compare two lengths to learn it.
+                itemStyle: { color: b.actual >= b.target ? "#10b981" : "#f59e0b" },
+              })),
+              barWidth: "42%",
+              z: 2,
+            },
+            {
+              // The target as a marker rather than a second bar: one row stays
+              // one bar, and the comparison reads as a threshold crossed or not.
+              type: "bar",
+              barGap: "-100%",
+              barWidth: "72%",
+              itemStyle: { color: "transparent" },
+              data: bullets.map((b) => b.target),
+              z: 3,
+              markLine: {
+                symbol: "none",
+                silent: true,
+                lineStyle: { color: "#334155", width: 2, type: "solid" },
+                data: bullets.map((b, index) => ([
+                  { xAxis: b.target, yAxis: index, symbol: "none" },
+                  { xAxis: b.target, yAxis: index, symbol: "none" },
+                ])),
+              },
+            },
+          ],
+        };
+      }
+      case "ribbon": {
+        if (columns.length < 3) return null;
+        const { periods, series, depth } = readRibbon(rows);
+        if (!periods.length || !series.length) return null;
+        return {
+          grid: { left: "3%", right: "12%", top: 30, bottom: 20, containLabel: true },
+          tooltip: {
+            trigger: "axis",
+            // Rank is the axis, so the tooltip has to carry the value as well --
+            // "3rd" without "£41,000" is half an answer.
+            formatter: (params: any) => {
+              const list = Array.isArray(params) ? params : [params];
+              if (!list.length) return "";
+              const rows_ = list
+                .filter((p: any) => p.value !== null && p.value !== undefined)
+                .sort((a: any, b: any) => Number(a.value) - Number(b.value))
+                .map((p: any) => {
+                  const found = series.find((s) => s.name === p.seriesName);
+                  const value = found?.values[p.dataIndex];
+                  return `${p.marker}#${p.value} ${p.seriesName}`
+                    + (value === null || value === undefined ? "" : ` — ${Number(value).toLocaleString()}`);
+                });
+              return `<b>${list[0].axisValueLabel}</b><br/>${rows_.join("<br/>")}`;
+            },
+          },
+          legend: { type: "scroll", bottom: 0 },
+          xAxis: { type: "category", data: periods, boundaryGap: false },
+          yAxis: {
+            type: "value",
+            // Rank 1 belongs at the top, and only whole ranks exist.
+            inverse: true,
+            min: 1,
+            max: depth,
+            interval: 1,
+            axisLabel: { formatter: (value: number) => `#${value}` },
+          },
+          series: series.map((s) => ({
+            name: s.name,
+            type: "line",
+            data: s.ranks,
+            // A category absent from a period leaves a gap. Connecting across it
+            // would draw a move between two ranks it never held.
+            connectNulls: false,
+            smooth: 0.35,
+            symbol: "circle",
+            symbolSize: 9,
+            lineStyle: { width: 3 },
+            emphasis: { focus: "series", lineStyle: { width: 5 } },
+          })),
         };
       }
       case "sankey": {

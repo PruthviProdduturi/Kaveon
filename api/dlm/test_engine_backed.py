@@ -154,7 +154,8 @@ class GenerationTests(unittest.TestCase):
                                              return_value={"table_id": TABLE_ID, "source_version": VERSION_A,
                                                            "observed_at_ms": 1789808661372}))
             stack.enter_context(patch.object(engine_bridge, "execute", side_effect=execute))
-            stack.enter_context(patch.object(engine.meta, "query_one", return_value=None))
+            stack.enter_context(patch("services.dlm_compiled_artifact.read", return_value=None))
+            stack.enter_context(patch("services.dlm_generation_cutover.publish"))
             stack.enter_context(patch.object(engine.meta, "execute", lambda *a, **k: None))
             transaction = SimpleNamespace(execute=Mock(return_value=1))
             stack.enter_context(patch.object(engine.meta, "transaction", return_value=contextlib.nullcontext(transaction)))
@@ -176,7 +177,7 @@ class GenerationTests(unittest.TestCase):
             # the freshness sweep alike.
             engine._COVERAGE_CACHE.serve(("owner", "Admin"),
                                          lambda _previous: ([], "digest-a"))
-            result = engine.generate_dlm("2", force=True)
+            result = engine.generate_dlm("2", force=True, actor="owner", role="Admin")
 
         self.assertTrue(result["ok"] and result["status"] == "ready", result)
         self.assertEqual(engine._COVERAGE_CACHE.stats()["entries"], 0)

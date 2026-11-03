@@ -246,7 +246,7 @@ def ask(question: str, database: str, sql: Optional[str] = None,
     snapshots = profiler.load_snapshots(database)
     if not snapshots:
         return _with_duration({"route": "query", "source": "live", "context_built": False,
-                "reason": "no context representation built yet — call /context/build",
+                "reason": "no context representation built yet for this database",
                 "sql": sql, "result": _maybe_exec(sql, database) if sql else None})
 
     # 3. map question -> relevant elements
