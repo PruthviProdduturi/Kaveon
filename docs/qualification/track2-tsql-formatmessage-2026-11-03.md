@@ -12,7 +12,8 @@ Evidence:
 
 - `expr_eval::tests::formatmessage_renders_bounded_positional_templates`
   verifies positional text, signed `%i`, unsigned `%u`, and escaped percent
-  substitution, including a negative signed value.
+  substitution, including a negative signed value and NULL propagation for
+  both a template and a substitution argument.
 - `logical_plan` coverage preserves the function for vectorized execution.
 - Case `formatmessage_bounded_template` is included in the versioned
   145-case T-SQL corpus as `planner_qualified` with distributed status
