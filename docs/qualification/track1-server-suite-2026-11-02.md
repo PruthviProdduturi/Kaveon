@@ -1,5 +1,7 @@
 # Server suite qualification — 2026-11-02
 
+Source commit: `e0872192`
+
 ## Result
 
 The current server test suite was run from `engine/` with the long-running
