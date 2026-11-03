@@ -280,7 +280,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   revision/CAS write set. Savepoints are implemented for the product
   transaction session and covered by parser, catalog, and API tests. The
   update-only form is qualified in
-  `docs/qualification/track2-native-dml-merge-2026-10-28.md`.
+  `docs/qualification/track2-native-dml-merge-2026-10-28.md`; matched updates
+  also accept one bounded `document_json` string literal and reuse the same
+  revision/CAS path.
 - [x] Qualify bounded snapshot isolation and transaction-session restart
   behavior for KaveonDB-owned product records; see
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.

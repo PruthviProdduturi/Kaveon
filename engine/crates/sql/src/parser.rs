@@ -2553,22 +2553,32 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         let MergeAction::Update { assignments } = &clauses[0].action else {
             unreachable!("matched_only_update checks the MERGE action");
         };
-        if assignments.len() != 1
+        let document_assignment = if assignments.len() != 1
             || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
                 if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
-            || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
         {
+            None
+        } else {
+            merge_document_assignment(&assignments[0].value, &source_alias)
+        };
+        let Some(document_assignment) = document_assignment else {
             return Err(sql_error(
-                "MERGE WHEN MATCHED must set document_json from source",
+                "MERGE WHEN MATCHED must set document_json from source or a string literal",
             ));
-        }
+        };
         return source_values
             .iter()
             .map(|row| {
+                let document_json = match &document_assignment {
+                    MergeDocumentAssignment::Source => {
+                        string_literal(&row[1], "MERGE source document_json")?
+                    }
+                    MergeDocumentAssignment::Literal(value) => value.clone(),
+                };
                 Ok(ProductDmlCommand::MergeUpdate {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
-                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                    document_json,
                 })
             })
             .collect();
@@ -2624,10 +2634,10 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         if assignments.len() != 1
             || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
                 if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
-            || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
+            || merge_document_assignment(&assignments[0].value, &source_alias).is_none()
         {
             return Err(sql_error(
-                "MERGE WHEN MATCHED must set document_json from source",
+                "MERGE WHEN MATCHED must set document_json from source or a string literal",
             ));
         }
     }
@@ -2653,6 +2663,14 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             "MERGE WHEN NOT MATCHED must insert source id and document_json",
         ));
     }
+    let matched_document_assignment = if matched_delete {
+        None
+    } else {
+        let MergeAction::Update { assignments } = &clauses[0].action else {
+            unreachable!("matched delete was handled above");
+        };
+        Some(merge_document_assignment(&assignments[0].value, &source_alias).unwrap())
+    };
     source_values
         .iter()
         .map(|row| {
@@ -2663,10 +2681,16 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                     document_json: string_literal(&row[1], "MERGE source document_json")?,
                 }
             } else {
+                let document_json = match matched_document_assignment.as_ref().unwrap() {
+                    MergeDocumentAssignment::Source => {
+                        string_literal(&row[1], "MERGE source document_json")?
+                    }
+                    MergeDocumentAssignment::Literal(value) => value.clone(),
+                };
                 ProductDmlCommand::Upsert {
                     kind: kind.clone(),
                     id: string_literal(&row[0], "MERGE source id")?,
-                    document_json: string_literal(&row[1], "MERGE source document_json")?,
+                    document_json,
                 }
             })
         })
@@ -2689,6 +2713,24 @@ fn merge_source_ref(expression: &Expr, alias: &str, column: &str) -> bool {
         if parts.len() == 2
             && parts[0].value.eq_ignore_ascii_case(alias)
             && parts[1].value.eq_ignore_ascii_case(column))
+}
+
+enum MergeDocumentAssignment {
+    Source,
+    Literal(String),
+}
+
+fn merge_document_assignment(
+    expression: &Expr,
+    source_alias: &str,
+) -> Option<MergeDocumentAssignment> {
+    if merge_source_ref(expression, source_alias, "document_json") {
+        Some(MergeDocumentAssignment::Source)
+    } else {
+        string_literal(expression, "MERGE document_json")
+            .ok()
+            .map(MergeDocumentAssignment::Literal)
+    }
 }
 
 fn bounded_product_source_kind(
@@ -4608,6 +4650,32 @@ mod tests {
                     kind: "dataset".into(),
                     id: "ds-2".into(),
                     document_json: "{}".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_literal_matched_update() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = '{\"archived\":true}'",
+        )
+        .expect("bounded literal matched-update MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::MergeUpdate {
+                    kind: "dataset".into(),
+                    id: "ds-1".into(),
+                    document_json: "{\"archived\":true}".into(),
+                },
+                ProductDmlCommand::MergeUpdate {
+                    kind: "dataset".into(),
+                    id: "ds-2".into(),
+                    document_json: "{\"archived\":true}".into(),
                 },
             ]
         );
