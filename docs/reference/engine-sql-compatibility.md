@@ -422,7 +422,9 @@ the supported product families. The `kaveon.product.typed_rows` facade also
 supports revisioned typed-row create/update/delete with owner isolation,
 replay-safe `ON CONFLICT DO NOTHING`, and bounded
 `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` upserts
-that preserve the declared table identity; arbitrary typed schemas and
+that preserve the declared table identity. A bounded literal `document_json`
+assignment (including `CAST(literal AS JSON)`) is accepted on the conflict path;
+new rows still use the `VALUES` document. Arbitrary typed schemas and
 assignments remain outside this contract. Multi-row `VALUES` are expanded into bounded
 typed commands and committed atomically. Unbounded or cross-kind source-backed
 `INSERT ... SELECT`, general `ON CONFLICT` actions, transaction
@@ -468,11 +470,13 @@ form, with an optional conflict target of `id`; a duplicate is a transaction-
 local no-op that can still be committed. `RETURNING id, revision, document_json`
 on this form returns the inserted row and returns an empty result for a
 duplicate. They also support the bounded
-`ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` form;
-an existing owned record is updated with revision CAS, while a missing record
-is created. The conventional `<product_table>_pkey` named target is accepted
-as the same identity target; other named constraints, conflict predicates,
-arbitrary assignments, and arbitrary conflict targets remain rejected.
+`ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` form,
+or the bounded literal/`CAST(literal AS JSON)` conflict assignment; an existing
+owned record is updated with revision CAS, while a missing record is created.
+The conventional `<product_table>_pkey` named target is accepted as the same
+identity target; other named constraints, conflict predicates, arbitrary
+assignments, and arbitrary conflict targets remain rejected. Literal conflict
+assignments are limited to `VALUES` inserts, not source-backed `INSERT ... SELECT`.
 Statement execution and the
 authenticated product transaction endpoint accept typed positional (`$1`, `?`)
 and named (`:name`) scalar or JSON-array parameters through the HTTP API; values
