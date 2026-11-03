@@ -18,8 +18,10 @@ date-only styles use the existing exact date parser and midnight semantics.
   compares ISO styles `20`, `21`, `120`, `121`, and `126`, plus date-only style
   `101`, across three workers.
 - Corpus case: `convert_timestamp_styles_literal`.
-- The versioned corpus records this as `planner_qualified`; distributed
-  qualification is intentionally not claimed for a literal-only planner shape.
+- The versioned corpus records this as `planner_qualified` with distributed
+  status `qualified_for_literal_iso_and_date_only_styles`. The focused
+  differential exercises the literal-only projection through dictionary,
+  plain, multi-file, clustered, partitioned, and three-worker fragment paths.
 
 ## Boundary
 

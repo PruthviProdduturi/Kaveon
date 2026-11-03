@@ -595,6 +595,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_convert_timestamp_literals",
+        "SELECT CONVERT(DATETIME2, '2024-12-31T23:59:59.123', 126) AS iso_timestamp, TRY_CONVERT(DATETIME2, '12/31/2024', 101) AS us_timestamp FROM {T} LIMIT 1",
+        true,
+    ),
+    (
         "tsql_trim_characters",
         "SELECT user_id, TRIM(BOTH 'x' FROM CONCAT('x', region, 'x')) AS trimmed FROM {T} ORDER BY user_id, region LIMIT 12",
         true,
