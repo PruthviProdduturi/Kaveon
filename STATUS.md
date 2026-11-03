@@ -103,8 +103,8 @@
 
 | Source | Status |
 |--------|--------|
-| Fabric SQL | ✅ Done |
-| Azure SQL | ✅ Done |
+| Fabric SQL | ✅ Passthrough qualified | API ODBC routing is qualified; Kaveon Engine execution and cross-source joins are not claimed |
+| Azure SQL | ✅ Passthrough qualified | API ODBC routing is qualified; Kaveon Engine execution and cross-source joins are not claimed |
 | PostgreSQL | 🧭 Legacy / migration only | Not a KaveonDB authority; retained only for explicitly controlled migration or reconciliation windows |
 | MySQL | ✅ Done |
 | StarRocks (MySQL protocol) | ✅ Done |
