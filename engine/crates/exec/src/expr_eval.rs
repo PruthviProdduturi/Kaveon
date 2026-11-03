@@ -8693,6 +8693,37 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
+        "PARSENAME" => {
+            check_arity(name, args, 2)?;
+            let parts = compute::cast(&args[1], &DataType::Int64)?;
+            let parts = parts.as_primitive::<Int64Type>();
+            let mut result = StringBuilder::with_capacity(num_rows, num_rows * 16);
+            for row in 0..num_rows {
+                let Some(value) = text_value(&args[0], row)? else {
+                    result.append_null();
+                    continue;
+                };
+                let Some(part) = (!parts.is_null(row))
+                    .then(|| parts.value(row))
+                    .filter(|part| (1..=4).contains(part))
+                else {
+                    result.append_null();
+                    continue;
+                };
+                let segments = value.split('.').collect::<Vec<_>>();
+                let valid = !segments.is_empty()
+                    && segments.len() <= 4
+                    && segments
+                        .iter()
+                        .all(|segment| !segment.is_empty() && segment.chars().count() <= 128);
+                if !valid {
+                    result.append_null();
+                    continue;
+                }
+                result.append_value(segments[segments.len() - part as usize]);
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "TRIM" => {
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, |value| value.trim().to_owned())
@@ -30227,6 +30258,39 @@ mod tests {
         )
         .expect_err("unsupported delimiters must fail closed");
         assert!(error.to_string().contains("bracket or double-quote"));
+    }
+
+    #[test]
+    fn evaluates_parsename_parts_and_rejects_invalid_shapes() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![
+                    Some("server.database.schema.object"),
+                    Some("schema.object"),
+                    Some("server..object"),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "part",
+                Arc::new(Int64Array::from(vec![Some(4), Some(1), Some(1), Some(1)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "PARSENAME".into(),
+                args: vec![Expr::Column("value".into()), Expr::Column("part".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "server");
+        assert_eq!(values.value(1), "object");
+        assert!(values.is_null(2));
+        assert!(values.is_null(3));
     }
 
     #[test]
