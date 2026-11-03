@@ -311,7 +311,11 @@ surface; the same ordered boundary is enforced in both paths.
   expanded branches. Expansion is bounded at 4,096 aggregate branches so a
   query cannot construct an unbounded UNION plan; CUBE expansions with 16 or
   more keys remain unsupported and are rejected explicitly rather than
-  silently treated as a plain `GROUP BY`;
+  silently treated as a plain `GROUP BY`. SQL Server/ClickHouse modifier
+  spellings `GROUP BY a, b WITH ROLLUP` and `GROUP BY a, b WITH CUBE` lower to
+  the same explicit branches; `WITH TOTALS` and mixed modifier forms remain
+  explicit rejections. See
+  `docs/qualification/track2-tsql-group-by-modifiers-2026-11-02.md`;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
