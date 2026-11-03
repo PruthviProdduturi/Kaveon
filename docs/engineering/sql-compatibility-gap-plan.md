@@ -470,3 +470,9 @@ and cancellation tests, a clean workspace gate, and updated compatibility
 documentation. Claims must identify whether they are Engine execution,
 registered-source passthrough, or KaveonDB transaction behavior.
 
+The current local release-image gate is recorded in
+`docs/qualification/track1-server-suite-2026-11-03.md`: the SQL crate has
+370 passing tests and the server binary has 696 passing tests. This evidence
+does not substitute for the open cloud, external-client, or broader semantic
+qualification boundaries listed above.
+
