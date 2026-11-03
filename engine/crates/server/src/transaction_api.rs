@@ -4662,7 +4662,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "UPDATE product.datasets AS target SET document_json = CAST('{\"name\":\"Orders\"}' AS JSON) OUTPUT inserted.id, inserted.revision WHERE id = 'orders' AND revision = 1".into(),
+                sql: "UPDATE product.datasets AS target SET document_json = CAST('{\"name\":\"Orders\"}' AS JSON) WHERE id = 'orders' AND revision = 1 RETURNING *".into(),
                 transaction_id: Some(update.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -4676,6 +4676,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "orders");
         assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            value["returning"][0]["document_json"],
+            r#"{"name":"Orders"}"#
+        );
         assert_eq!(
             execute_sql_request(
                 &registry,
