@@ -12,16 +12,17 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-118-case count in the scope and tracker, enforced by
+119-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
-- Current corpus: 118 cases. The prior full sweep qualified bounded
+- Current corpus: 119 cases. The prior full sweep qualified bounded
   derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated derived
   `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded `PIVOT`,
   `UNPIVOT`, table-valued/unsupported correlated `APPLY`, `TOP WITH TIES`
   without an order, and runtime-column styled timestamp conversion across local
-  and three-worker execution. The newly added `format_numeric` case has its own
-  exact local/three-worker differential qualification below.
+  and three-worker execution. The newly added `format_numeric` and
+  `date_bucket_subsecond_timestamp` cases have their own exact local/three-worker
+  differential qualifications below.
 - Planner gate: `versioned_tsql_corpus_matches_declared_boundaries` accepts
   every `planner_qualified` case and rejects every `explicit_rejection` case.
 - Distributed gate: the in-process three-worker differential sweep completed
@@ -92,6 +93,10 @@ sizes, not the current corpus total; the authoritative current total is the
   between local and three-worker execution; unsupported culture and arbitrary
   .NET patterns remain fail-closed. See
   [`track2-tsql-format-numeric-2026-11-02.md`](track2-tsql-format-numeric-2026-11-02.md).
+Millisecond and microsecond `DATE_BUCKET` timestamp inputs also match exactly
+between local and three-worker execution; nanosecond input remains an explicit
+rejection. See
+[`track2-tsql-date-bucket-subsecond-2026-11-02.md`](track2-tsql-date-bucket-subsecond-2026-11-02.md).
 
 The bounded `PIVOT`/`UNPIVOT` evidence is retained in
 [`track2-tsql-pivot-unpivot-distributed-2026-10-28.md`](track2-tsql-pivot-unpivot-distributed-2026-10-28.md).
