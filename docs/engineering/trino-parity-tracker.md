@@ -222,7 +222,7 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 ## Track 2 — SQL compatibility and types
 
 The large capability row below contains historical evidence pointers from
-earlier corpus revisions; the authoritative current corpus is 131 cases as
+earlier corpus revisions; the authoritative current corpus is 132 cases as
 stated above and enforced by the tracker validator.
 
 | Capability | State | Current contract | Acceptance evidence still required |
