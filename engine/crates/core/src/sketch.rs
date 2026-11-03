@@ -13,7 +13,7 @@
 //! same registers and merge by element-wise maximum.
 
 use crate::statistics::{StatValue, decimal_text};
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringViewArray};
 use arrow::datatypes::{
     DataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
     Int64Type, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
@@ -966,6 +966,7 @@ pub fn sketchable(data_type: &DataType) -> bool {
             | DataType::Float64
             | DataType::Utf8
             | DataType::LargeUtf8
+            | DataType::Utf8View
             | DataType::Date32
             | DataType::Timestamp(_, _)
             | DataType::Decimal128(_, _)
@@ -978,7 +979,7 @@ pub fn quantile_sketchable(data_type: &DataType) -> bool {
     sketchable(data_type)
         && !matches!(
             logical_type(data_type),
-            DataType::Boolean | DataType::Utf8 | DataType::LargeUtf8
+            DataType::Boolean | DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
         )
 }
 
@@ -1066,6 +1067,15 @@ pub fn fold_distinct(array: &ArrayRef, sketch: &mut HllSketch) -> crate::Result<
                 sketch.insert_hash(pg_hash_bytes_extended(value.as_bytes(), 0));
             }
         }
+        DataType::Utf8View => {
+            let values = array
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .expect("Utf8View array must be a StringViewArray");
+            for value in values.iter().flatten() {
+                sketch.insert_hash(pg_hash_bytes_extended(value.as_bytes(), 0));
+            }
+        }
         other => return Err(unsketchable(other)),
     }
     Ok(())
@@ -1143,6 +1153,12 @@ pub fn fold_distinct_row(
         }
         DataType::Utf8 => array.as_string::<i32>().value(row).as_bytes(),
         DataType::LargeUtf8 => array.as_string::<i64>().value(row).as_bytes(),
+        DataType::Utf8View => array
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("Utf8View array must be a StringViewArray")
+            .value(row)
+            .as_bytes(),
         other => return Err(unsketchable(other)),
     };
     sketch.insert_hash(pg_hash_bytes_extended(bytes, 0));
@@ -1552,6 +1568,10 @@ mod tests {
                 vec!["a".into(), "b".into()],
             ),
             (
+                Arc::new(StringViewArray::from(vec![Some("a"), None, Some("b")])),
+                vec!["a".into(), "b".into()],
+            ),
+            (
                 Arc::new(Date32Array::from(vec![Some(0), Some(20_635)])),
                 vec![
                     StatValue::Date(0).to_hash_text(),
@@ -1624,6 +1644,7 @@ mod tests {
         let text: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
         assert!(fold_quantiles(&text, &mut whole).is_err());
         assert!(sketchable(&DataType::Utf8) && !quantile_sketchable(&DataType::Utf8));
+        assert!(sketchable(&DataType::Utf8View) && !quantile_sketchable(&DataType::Utf8View));
         assert!(quantile_sketchable(&DataType::Decimal128(10, 2)));
         assert!(!sketchable(&DataType::Binary));
 
