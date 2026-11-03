@@ -4819,6 +4819,24 @@ mod tests {
     }
 
     #[test]
+    fn product_merge_supports_bounded_matched_delete_source_filter() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('ds-2', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND s.id = 'ds-1' THEN DELETE",
+        )
+        .expect("bounded matched delete source filter should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![ProductDmlCommand::MergeDelete {
+                kind: "dataset".into(),
+                id: "ds-1".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn product_merge_supports_bounded_unmatched_insert() {
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",

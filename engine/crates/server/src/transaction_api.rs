@@ -4936,7 +4936,7 @@ mod tests {
                 &registry,
                 "alice",
                 SqlTransactionRequest {
-                    sql: "MERGE INTO product.datasets AS target USING (VALUES ('remove-me', '{}'), ('missing', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE".into(),
+                    sql: "MERGE INTO product.datasets AS target USING (VALUES ('remove-me', '{}'), ('keep-me', '{}'), ('missing', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('remove-me') THEN DELETE".into(),
                     transaction_id: Some(merge.transaction_id.clone()),
                     parameters: vec![],
                     named_parameters: HashMap::new(),

@@ -23,7 +23,9 @@ no matching target are no-ops.
 Evidence:
 
 - `engine/crates/sql/src/parser.rs::product_merge_supports_bounded_matched_source_filter`
+- `engine/crates/sql/src/parser.rs::product_merge_supports_bounded_matched_delete_source_filter`
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`
+- `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
 - implementation commit `ce916270`;
 - parser, API transaction, clippy, and formatting gates pass.
 
