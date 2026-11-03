@@ -28,7 +28,7 @@ and arithmetic. Every shape runs locally and, where the stage planner can
 express it, distributed; the coordinator records in `execution.detail` why
 it ran a shape itself.
 
-Coverage records: TPC-H 21 of 22 statements parse, bind, plan and execute
+Coverage records: TPC-H 22 of 22 statements parse, bind, plan and execute
 with a distributed plan (`docs/qualification/tpch/coverage.md`; the gate is
 `cargo test -p kaveon-server tpch`), and every ClickBench statement has run
 on the AKS cluster (`docs/qualification/clickbench-2026-09-16.md`). The
