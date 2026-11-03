@@ -2929,11 +2929,12 @@ async fn execute_sql_request(
                     !matches!(
                         command,
                         kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
                     )
                 })
             {
                 return error_response(RegistryError::Invalid(
-                    "MERGE OUTPUT is supported only for bounded update-or-insert batches; delete and not-matched-by-source actions are rejected".into(),
+                    "MERGE OUTPUT is supported only for bounded update-or-insert and matched-update batches; delete, unmatched-insert, and not-matched-by-source actions are rejected".into(),
                 ));
             }
             let ignored_conflicts = if dml.on_conflict_do_nothing && !returning.is_empty() {
@@ -3084,6 +3085,41 @@ fn product_returning_response(
                 .unwrap_or(false)
         })
         .map(|(command_index, command)| {
+            if let kaveon_sql::parser::ProductDmlCommand::MergeUpdate {
+                kind,
+                id,
+                document_json,
+            } = command
+            {
+                let product_kind = record_kind(kind).map_err(|error| format!("{error:?}"))?;
+                let Some(record) = snapshot
+                    .product_record(product_kind, id)
+                    .map_err(|error| error.to_string())?
+                else {
+                    // An unmatched source row is a MERGE no-op and produces
+                    // no OUTPUT row.
+                    return Ok(None);
+                };
+                let mut row = serde_json::Map::new();
+                for column in columns {
+                    match column.as_str() {
+                        "id" => {
+                            row.insert("id".to_owned(), serde_json::Value::String(id.clone()));
+                        }
+                        "revision" => {
+                            row.insert("revision".to_owned(), serde_json::json!(record.revision));
+                        }
+                        "document_json" => {
+                            row.insert(
+                                "document_json".to_owned(),
+                                serde_json::Value::String(document_json.clone()),
+                            );
+                        }
+                        _ => unreachable!("parser validates product RETURNING columns"),
+                    }
+                }
+                return Ok(Some(serde_json::Value::Object(row)));
+            }
             let (id, revision) = match command {
                 kaveon_sql::parser::ProductDmlCommand::Create { id, .. }
                 | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { id, .. } => (id.clone(), 1),
@@ -3250,9 +3286,12 @@ fn product_returning_response(
                     _ => unreachable!("parser validates product RETURNING columns"),
                 }
             }
-            Ok(serde_json::Value::Object(row))
+            Ok(Some(serde_json::Value::Object(row)))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, String>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     let mut body = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
     body.as_object_mut()
         .ok_or_else(|| "transaction snapshot is not a JSON object".to_owned())?
@@ -4966,6 +5005,67 @@ mod tests {
         assert_eq!(value["returning"][0]["revision"], 2);
         assert_eq!(value["returning"][1]["id"], "new");
         assert_eq!(value["returning"][1]["revision"], 1);
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_matched_update_accepts_inserted_output() {
+        let (registry, _catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('update-me', '{}')".into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('update-me', '{"changed":true}'), ('missing', '{"ignored":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json OUTPUT inserted.id, inserted.revision, inserted.document_json"#.into(),
+                transaction_id: Some(merge.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["returning"][0]["id"], "update-me");
+        assert_eq!(value["returning"][0]["revision"], 2);
+        assert_eq!(
+            value["returning"][0]["document_json"],
+            r#"{"changed":true}"#
+        );
     }
 
     #[tokio::test]

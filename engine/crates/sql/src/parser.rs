@@ -4481,6 +4481,23 @@ mod tests {
     }
 
     #[test]
+    fn sql_server_matched_update_output_lowers_to_inserted_product_returning() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}'), ('missing', '{\"ignored\":true}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json OUTPUT inserted.id, inserted.revision, inserted.document_json";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("matched MERGE OUTPUT should parse")
+        else {
+            panic!("expected MERGE DML");
+        };
+        assert_eq!(dml.returning, ["id", "revision", "document_json"]);
+        let commands = adapt_product_dml_batch(&dml).expect("MERGE should adapt");
+        assert!(
+            commands
+                .iter()
+                .all(|command| matches!(command, ProductDmlCommand::MergeUpdate { .. }))
+        );
+    }
+
+    #[test]
     fn sql_server_merge_output_rejects_delete_actions() {
         let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN DELETE OUTPUT inserted.id";
         let NativeTransactionalStatement::Dml(dml) =
