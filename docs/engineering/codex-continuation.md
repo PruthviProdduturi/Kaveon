@@ -240,7 +240,7 @@ Status on 2026-09-17 of the ten gates listed on 2026-09-04 (evidence in the HAND
 7. Distributed semi/anti joins: done (`b1f190f`); distributed SUM/AVG DISTINCT still fall back locally, open.
 8. AKS fault, concurrency and pressure qualification: done on three workers (2026-09-10 gate); five workers, skew and a sustained soak open; comparative performance: three tiers running, no tier has completed its declared rounds (`docs/qualification/benchmark-program.md`).
 9. Source registry to Engine catalog bridge: done (`POST /api/v1/catalog-sources/{id}/engine-sync`).
-10. Versioned production metadata migrations: superseded by the PostgreSQL retirement program (`postgresql-retirement.md`); PostgreSQL remains the live authority.
+10. Versioned production metadata migrations: superseded by the PostgreSQL retirement program (`postgresql-retirement.md`); **at this historical snapshot** PostgreSQL was still the live authority. The current native profile is KaveonDB-first; verify present deployment evidence before treating this historical gate as active.
 
 Do not call Kaveon Trino-class or production-ready until the relevant gates have measured evidence. Current wording is distributed alpha, measured against Trino on a matched three-worker cluster.
 
