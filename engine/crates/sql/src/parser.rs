@@ -3133,6 +3133,36 @@ fn product_document_literal(expression: &Expr) -> Result<String> {
     }
 }
 
+fn is_conflict_identity_predicate(expression: &Expr) -> bool {
+    let Expr::BinaryOp { left, op, right } = expression else {
+        return false;
+    };
+    if !matches!(op, BinaryOperator::Eq) {
+        return false;
+    }
+
+    fn is_target_id(expression: &Expr) -> bool {
+        match expression {
+            Expr::Identifier(identifier) => identifier.value.eq_ignore_ascii_case("id"),
+            Expr::CompoundIdentifier(parts) => {
+                parts.len() == 1 && parts[0].value.eq_ignore_ascii_case("id")
+            }
+            _ => false,
+        }
+    }
+
+    fn is_excluded_id(expression: &Expr) -> bool {
+        let Expr::CompoundIdentifier(parts) = expression else {
+            return false;
+        };
+        parts.len() == 2
+            && parts[0].value.eq_ignore_ascii_case("excluded")
+            && parts[1].value.eq_ignore_ascii_case("id")
+    }
+
+    (is_target_id(left) && is_excluded_id(right)) || (is_excluded_id(left) && is_target_id(right))
+}
+
 fn integer_literal(expression: &Expr, label: &str) -> Result<u64> {
     match expression {
         Expr::Value(Value::Number(value, false)) => value
@@ -3226,6 +3256,7 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
                             OnConflictAction::DoUpdate(update)
                                 if update.selection.as_ref().is_none_or(|selection| {
                                     matches!(selection, Expr::Value(Value::Boolean(true)))
+                                        || is_conflict_identity_predicate(selection)
                                 })
                                     && update.assignments.len() == 1
                                     && matches!(
@@ -5385,6 +5416,17 @@ mod tests {
             adapt_product_dml(&dml).unwrap(),
             ProductDmlCommand::Upsert { .. }
         ));
+        for sql in [
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE id = excluded.id",
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE excluded.id = id",
+        ] {
+            let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql)
+                .expect("conflict identity predicate should remain bounded")
+            else {
+                panic!("expected product DML");
+            };
+            assert!(dml.on_conflict_do_update);
+        }
         for sql in [
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO UPDATE SET document_json = excluded.document_json",
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE id = 'ds-1'",
