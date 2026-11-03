@@ -138,6 +138,29 @@ for (const variant of variantsOf("StorageType")) {
   if (!connectorsPage.includes(`**${name}`)) failures.push(`docs/reference/connector-capabilities.md: no row for storage type ${variant}`);
 }
 
+// Current product/reference pages must describe the native authority boundary
+// explicitly. Historical migration and research documents are intentionally
+// excluded: they preserve the evidence and comparison context that explains
+// why the boundary changed. This guard prevents a superseded PostgreSQL
+// topology from silently reappearing in the pages users follow today.
+const currentBoundaryDocs = [
+  join(repositoryRoot, "docs", "reference", "configuration.md"),
+  join(repositoryRoot, "docs", "reference", "api.md"),
+  join(repositoryRoot, "docs", "reference", "connector-capabilities.md"),
+  join(repositoryRoot, "docs", "engineering", "azure-deployment-guide.md"),
+  join(repositoryRoot, "docs", "guides", "local-stack.md"),
+];
+for (const file of currentBoundaryDocs) {
+  const relativePath = relative(repositoryRoot, file);
+  const content = readFileSync(file, "utf8");
+  if (!/KaveonDB/i.test(content)) {
+    failures.push(`${relativePath}: current boundary page must name KaveonDB`);
+  }
+  if (/PostgreSQL\s+(?:is|remains|stays)\s+authoritative/i.test(content)) {
+    failures.push(`${relativePath}: current boundary page contains a stale PostgreSQL authority claim`);
+  }
+}
+
 if (failures.length > 0) {
   console.error(`Documentation validation failed (${failures.length}):`);
   failures.forEach((failure) => console.error(`- ${failure}`));
