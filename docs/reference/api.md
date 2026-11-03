@@ -97,6 +97,13 @@ All paths below are relative to the FastAPI origin.
   that fails before any row is retried as any task. Inline delivery keeps
   the collected path: each root task answers once with its whole result.
 
+Result values are converted to JSON before they reach SQL Lab, charts, and
+API clients. Arrow `Utf8`, `LargeUtf8`, and `Utf8View` values are emitted as
+JSON strings (including text nested inside lists, maps, and rows), while Arrow
+nulls remain JSON `null`. This client-facing representation avoids leaking
+Arrow debug formatting into text dimensions and preserves stable key values
+for chart and result consumers.
+
 ### DLM answers and their evidence
 
 `POST /api/v1/dlm/ask` takes `{question, limit?, choices?, frame?}` and answers
