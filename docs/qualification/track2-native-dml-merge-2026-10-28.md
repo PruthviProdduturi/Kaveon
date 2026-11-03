@@ -125,6 +125,7 @@ target is accepted as the same bounded `id` identity target.
 - `cargo test -p kaveon-sql product_merge_accepts_a_typed_source_document_assignment` — 1 passed, 0 failed on 2026-11-03
 - `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically` — 1 passed, 0 failed on 2026-11-03
 - `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_on_conflict_do_nothing_preserves_existing_product` — 1 passed, 0 failed with `datasets_pkey`
+- `cargo test -p kaveon-server --bin kaveon-server sql_endpoint_on_conflict_do_update_revises_owned_product` — 1 passed, 0 failed with `datasets_pkey`
 
 The transaction API matched-update test first commits the source-expression
 form, then commits a literal-assignment form through a second transaction. It
