@@ -226,6 +226,12 @@ one literal fraction, one numeric order key, partition-wide interpolation or
 discrete selection, and NULL omission; dynamic or ambiguous ordered-set forms remain rejected
 (`docs/qualification/track2-tsql-percentile-cont-2026-11-02.md`).
 
+`GREATEST` and `LEAST` now have a bounded SQL Server/Fabric numeric read
+qualification for non-null arguments, with exact local and three-worker
+results. NULL-bearing arguments remain outside this cross-dialect claim because
+SQL Server and Trino differ in their function-level NULL semantics; evidence is
+recorded in `docs/qualification/track2-tsql-greatest-least-2026-11-03.md`.
+
 ### Phase 2 — Transactional SQL surface
 
 - [x] Qualify bounded typed-row DML for KaveonDB-owned tables. The
