@@ -8,6 +8,12 @@ commit `.env`, provider secrets, connection strings, or deployment credentials.
 
 These settings are declared in `api/config.py`.
 
+> **Native deployment boundary.** KaveonDB is the native metadata and product
+> transaction authority. The `METADATA_*` database settings below are retained
+> only for explicitly registered legacy/external-source migration paths; leave
+> them empty for a native KaveonDB deployment. They do not enable PostgreSQL or
+> Fabric SQL as a hidden application dependency.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `API_PORT` | `8080` | Local API listening port |
