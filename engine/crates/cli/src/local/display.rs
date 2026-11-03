@@ -1,4 +1,4 @@
-use arrow::array::{Array, AsArray};
+use arrow::array::{Array, AsArray, StringViewArray};
 use arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type,
     UInt16Type, UInt32Type, UInt64Type,
@@ -104,6 +104,29 @@ fn format_cell(array: &dyn Array, row: usize) -> String {
         DataType::Float64 => format!("{:.4}", array.as_primitive::<Float64Type>().value(row)),
         DataType::Utf8 => array.as_string::<i32>().value(row).to_owned(),
         DataType::LargeUtf8 => array.as_string::<i64>().value(row).to_owned(),
+        DataType::Utf8View => array
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("Utf8View array must be a StringViewArray")
+            .value(row)
+            .to_owned(),
         _ => format!("{:?}", array.slice(row, 1)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::StringViewArray;
+    use std::sync::Arc;
+
+    #[test]
+    fn utf8_view_cells_render_as_text() {
+        let values = StringViewArray::from(vec![Some("east"), None, Some("west")]);
+        let array: Arc<dyn Array> = Arc::new(values);
+
+        assert_eq!(format_cell(array.as_ref(), 0), "east");
+        assert_eq!(format_cell(array.as_ref(), 1), NULL_DISPLAY);
+        assert_eq!(format_cell(array.as_ref(), 2), "west");
     }
 }
