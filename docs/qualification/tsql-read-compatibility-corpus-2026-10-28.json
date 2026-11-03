@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "1b20d2e5",
+  "engine_commit": "74cf644b",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -129,6 +129,8 @@
     {"id": "group_by_grouping_sets", "sql": "SELECT region, platform, COUNT(*) AS n FROM t GROUP BY GROUPING SETS ((region), (platform))", "status": "planner_qualified", "distributed_status": "qualified_against_local_reference"},
     {"id": "grouping_id_rollup", "sql": "SELECT region, industry, GROUPING(region), GROUPING(industry), GROUPING_ID(region, industry), COUNT(*) AS n FROM t GROUP BY ROLLUP (region, industry)", "status": "planner_qualified", "distributed_status": "qualified_against_local_reference"},
     {"id": "grouping_sets_grand_total", "sql": "SELECT COUNT(*) AS n FROM t GROUP BY GROUPING SETS (())", "status": "planner_qualified", "distributed_status": "qualified_against_local_reference"},
-    {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"}
+    {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"},
+    {"id": "json_value_text", "sql": "SELECT JSON_VALUE(payload, '$.customer.id') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_scalar_text_and_null_container_behavior"},
+    {"id": "json_query_text", "sql": "SELECT JSON_QUERY(payload, '$.customer') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_canonical_container_text"}
   ]
 }
