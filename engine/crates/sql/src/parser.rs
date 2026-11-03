@@ -110,9 +110,10 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
 }
 
 /// Lower the bounded SQL Server `TRY_PARSE(value AS type)` spelling to the
-/// Engine's existing safe cast path. Culture-aware `USING` forms are left
-/// untouched and therefore fail closed; parsing those would require a locale
-/// contract rather than silently applying invariant rules.
+/// Engine's existing safe cast path. Numeric and invariant temporal targets
+/// are bounded here. Culture-aware `USING` forms are left untouched and
+/// therefore fail closed; parsing those would require a locale contract
+/// rather than silently applying invariant rules.
 fn normalize_try_parse(sql: &str) -> String {
     let upper = sql.to_ascii_uppercase();
     let Some(position) = find_top_level_keyword(&upper, "TRY_PARSE") else {
@@ -154,7 +155,14 @@ fn normalize_try_parse(sql: &str) -> String {
     .any(|candidate| {
         target_upper == *candidate || target_upper.starts_with(&format!("{candidate}("))
     });
-    if value.is_empty() || target.is_empty() || target_upper.contains(" USING ") || !numeric_target
+    let invariant_temporal_target = matches!(
+        target_upper.as_str(),
+        "DATE" | "DATETIME" | "DATETIME2" | "SMALLDATETIME"
+    );
+    if value.is_empty()
+        || target.is_empty()
+        || target_upper.contains(" USING ")
+        || (!numeric_target && !invariant_temporal_target)
     {
         return sql.to_owned();
     }
