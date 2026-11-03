@@ -5340,7 +5340,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Updated"}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision"#.into(),
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Updated"}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json WHERE TRUE RETURNING id, revision"#.into(),
                 transaction_id: Some(upsert.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),

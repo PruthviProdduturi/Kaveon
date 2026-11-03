@@ -335,8 +335,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   not-matched-by-source-delete batches (up to 1,000 expanded affected rows),
   plus product
   `ON CONFLICT DO NOTHING` and the bounded `ON CONFLICT (id) DO UPDATE SET
-  document_json = excluded.document_json` upsert. Named constraints, conflict
-  predicates, arbitrary assignments, and arbitrary conflict targets remain
+  document_json = excluded.document_json` upsert, with a literal `WHERE TRUE`
+  conflict predicate accepted as a semantic no-op. Named constraints, other
+  conflict predicates, arbitrary assignments, and arbitrary conflict targets remain
   rejected. Product `RETURNING id, revision` and the qualified `RETURNING *`
   expansion are implemented from the staged revision/CAS write set.
   Savepoints are implemented for the product
