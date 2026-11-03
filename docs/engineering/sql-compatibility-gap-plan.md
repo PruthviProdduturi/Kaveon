@@ -459,7 +459,7 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   `docs/qualification/track3-operator-estimate-diagnostics-2026-11-02.md`.
   Finished query rows now also propagate through a directly connected
   `Window`/`Project`/`Sort` chain and attach to the first directly reached
-  `Filter` whose input subtree is row-preserving, with an explicit
+  `Filter` as the output boundary, with an explicit
   `derived_row_preserving` scope; the filter's input is never labeled with
   post-filter rows, and propagation stops at other cardinality-changing
   operators. Evidence:
