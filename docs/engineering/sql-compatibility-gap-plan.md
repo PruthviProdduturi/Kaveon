@@ -317,7 +317,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   update-only form is qualified in
   `docs/qualification/track2-native-dml-merge-2026-10-28.md`; matched updates
   also accept one bounded `document_json` string literal and reuse the same
-  revision/CAS path.
+  revision/CAS path. `MERGE OUTPUT` remains explicitly rejected until the
+  transaction API has a qualified ordered batch-result contract for mixed
+  create/update/delete commands; parser-only acceptance would lose action
+  identity and revision evidence.
 - [x] Qualify bounded snapshot isolation and transaction-session restart
   behavior for KaveonDB-owned product records; see
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
