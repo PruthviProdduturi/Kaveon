@@ -2540,13 +2540,27 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     }
     let matched_source_filter =
         if clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::Matched) {
-            merge_source_filter(clauses[0].predicate.as_ref(), &source_alias)?
-        } else {
-            if clauses.iter().any(|clause| clause.predicate.is_some()) {
-                return Err(sql_error("MERGE clauses cannot have predicates"));
+            if clauses[0].predicate.as_ref().is_some_and(|predicate| {
+                merge_id_predicate(predicate, &target_alias, &source_alias)
+            }) {
+                None
+            } else {
+                merge_source_filter(clauses[0].predicate.as_ref(), &source_alias)?
             }
+        } else {
             None
         };
+    if clauses.iter().enumerate().any(|(index, clause)| {
+        clause.predicate.as_ref().is_some_and(|predicate| {
+            !(index == 0
+                && matches!(clause.clause_kind, MergeClauseKind::Matched)
+                && merge_id_predicate(predicate, &target_alias, &source_alias))
+        })
+    }) {
+        return Err(sql_error(
+            "MERGE clauses support only the redundant target.id = source.id predicate",
+        ));
+    }
     let has_not_matched_by_source_delete = clauses.len() == 3
         && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
         && matches!(clauses[2].action, MergeAction::Delete)
@@ -5667,6 +5681,17 @@ mod tests {
                 document_json: "{\"name\":\"Orders\"}".into(),
             }
         );
+        let NativeTransactionalStatement::Dml(identity_predicate) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("redundant MERGE identity predicate should remain bounded")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert!(matches!(
+            adapt_product_dml(&identity_predicate).unwrap(),
+            ProductDmlCommand::Upsert { .. }
+        ));
     }
 
     #[test]
@@ -5724,7 +5749,7 @@ mod tests {
     fn product_merge_rejects_unbounded_or_ambiguous_shapes() {
         for sql in [
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.owner_principal = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
-            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id AND s.id = 'ds-1' THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("MERGE shape should parse")
