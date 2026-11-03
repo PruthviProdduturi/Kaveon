@@ -297,8 +297,9 @@ source-copy document projections as open; only the bounded ID-filtered form is
 qualified.
 
 Product-record `RETURNING *` is now qualified as the explicit stable
-`id`/`revision`/`document_json` projection; it does not widen the contract to
-arbitrary lake-table schemas. Evidence is recorded in
+`id`/`revision`/`document_json` projection. The same projection is exercised
+for bounded typed-row conflict-upsert and delete; it does not widen the
+contract to arbitrary lake-table schemas. Evidence is recorded in
 `docs/qualification/track2-native-dml-returning-document-2026-10-29.md`.
 
 The T-SQL row above is backed by the versioned 136-case corpus pinned at

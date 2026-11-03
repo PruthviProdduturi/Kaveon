@@ -6316,7 +6316,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "INSERT INTO product.typed_rows (id, document_json) VALUES ('u-1', '{\"table\":\"app.users\",\"primary_key\":\"u-1\",\"revision\":4,\"owner_principal\":\"alice\",\"columns\":{\"email\":{\"type\":\"string\",\"value\":\"alan@example.com\"}},\"unique_keys\":{\"email\":\"alan@example.com\"}}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING id, revision".into(),
+                sql: "INSERT INTO product.typed_rows (id, document_json) VALUES ('u-1', '{\"table\":\"app.users\",\"primary_key\":\"u-1\",\"revision\":4,\"owner_principal\":\"alice\",\"columns\":{\"email\":{\"type\":\"string\",\"value\":\"alan@example.com\"}},\"unique_keys\":{\"email\":\"alan@example.com\"}}') ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json RETURNING *".into(),
                 transaction_id: Some(sql_upsert.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -6331,6 +6331,11 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["returning"][0]["id"], "u-1");
         assert_eq!(value["returning"][0]["revision"], 4);
+        assert!(
+            value["returning"][0]["document_json"]
+                .as_str()
+                .is_some_and(|document| document.contains("owner_principal"))
+        );
         let mut transaction = registry
             .take("alice", &sql_upsert.transaction_id)
             .await
@@ -6345,7 +6350,8 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 4 RETURNING id, revision, document_json".into(),
+                sql: "DELETE FROM product.typed_rows WHERE id = 'u-1' AND revision = 4 RETURNING *"
+                    .into(),
                 transaction_id: Some(delete_returning.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
