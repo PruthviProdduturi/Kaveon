@@ -76,6 +76,16 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     {
         return Ok(statements);
     }
+    // The shared AST models `GROUP BY ... WITH ROLLUP|CUBE|TOTALS` through
+    // ClickHouse's dialect. Keep this retry narrow so the normal DuckDB
+    // grammar remains authoritative for the rest of the SQL surface.
+    if (upper.contains("WITH ROLLUP")
+        || upper.contains("WITH CUBE")
+        || upper.contains("WITH TOTALS"))
+        && let Ok(statements) = Parser::parse_sql(&ClickHouseDialect {}, &normalized)
+    {
+        return Ok(statements);
+    }
     match Parser::parse_sql(&dialect, &normalized) {
         Ok(statements) => Ok(statements),
         Err(primary) if normalized.to_ascii_uppercase().contains("WITH OFFSET") => {

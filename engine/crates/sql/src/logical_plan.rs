@@ -2812,12 +2812,43 @@ fn build_aggregate(
     const MAX_GROUPING_SET_BRANCHES: usize = 4096;
     let (group_by_ast, grouping_sets_ast) = match &select.group_by {
         ast::GroupByExpr::Expressions(exprs, modifiers) => {
+            // The SQL Server spelling `GROUP BY a, b WITH ROLLUP` (and the
+            // equivalent ClickHouse `WITH CUBE`) has the same finite grouping
+            // set semantics as the explicit `ROLLUP(a, b)` / `CUBE(a, b)`
+            // forms handled below.  Lower only a single modifier applied to
+            // ordinary expressions; combinations with an explicit grouping
+            // expression are ambiguous and remain fail-closed. `WITH TOTALS`
+            // has different ClickHouse output semantics and is not implied by
+            // SQL Server ROLLUP/CUBE, so it remains unsupported.
+            let mut group_by_ast = exprs.clone();
             if !modifiers.is_empty() {
-                return Err(sql_err(
-                    "GROUP BY WITH ROLLUP, CUBE, and TOTALS are not supported",
-                ));
+                if modifiers.len() != 1
+                    || exprs.iter().any(|expr| {
+                        matches!(
+                            expr,
+                            ast::Expr::GroupingSets(_) | ast::Expr::Cube(_) | ast::Expr::Rollup(_)
+                        )
+                    })
+                {
+                    return Err(sql_err(
+                        "GROUP BY modifiers require ordinary expressions and one WITH ROLLUP or WITH CUBE",
+                    ));
+                }
+                group_by_ast = match modifiers[0] {
+                    ast::GroupByWithModifier::Rollup => vec![ast::Expr::Rollup(
+                        exprs.iter().cloned().map(|expr| vec![expr]).collect(),
+                    )],
+                    ast::GroupByWithModifier::Cube => vec![ast::Expr::Cube(
+                        exprs.iter().cloned().map(|expr| vec![expr]).collect(),
+                    )],
+                    ast::GroupByWithModifier::Totals => {
+                        return Err(sql_err(
+                            "GROUP BY WITH TOTALS is not supported; use GROUPING SETS or ROLLUP",
+                        ));
+                    }
+                };
             }
-            let sets = exprs.iter().find_map(|expr| match expr {
+            let sets = group_by_ast.iter().find_map(|expr| match expr {
                 ast::Expr::GroupingSets(sets) => Some(sets.clone()),
                 ast::Expr::Cube(keys) => {
                     // CUBE is a finite expansion of every subset. Keep an
@@ -2849,7 +2880,7 @@ fn build_aggregate(
                 }
                 _ => None,
             });
-            (exprs.clone(), sets)
+            (group_by_ast, sets)
         }
         ast::GroupByExpr::All(_) => {
             return Err(sql_err("GROUP BY ALL is not supported"));
@@ -7868,12 +7899,31 @@ mod tests {
     }
 
     #[test]
-    fn grouping_modifiers_fail_closed_until_their_lowering_exists() {
+    fn grouping_modifiers_lower_to_explicit_grouping_sets() {
+        for (sql, marker) in [
+            (
+                "SELECT country, COUNT(*) FROM u GROUP BY country WITH ROLLUP",
+                "Union",
+            ),
+            (
+                "SELECT country, COUNT(*) FROM u GROUP BY country WITH CUBE",
+                "Union",
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            assert!(
+                format!("{plan:?}").contains(marker),
+                "{sql} did not lower: {plan:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_grouping_modifiers_fail_closed() {
         for sql in [
-            "SELECT country, COUNT(*) FROM u GROUP BY country WITH ROLLUP",
-            "SELECT country, COUNT(*) FROM u GROUP BY country WITH CUBE",
             "SELECT country, COUNT(*) FROM u GROUP BY country WITH TOTALS",
             "SELECT country, COUNT(*) FROM u GROUP BY ALL",
+            "SELECT country, COUNT(*) FROM u GROUP BY ROLLUP(country), region WITH CUBE",
         ] {
             assert!(sql_to_logical_plan(sql).is_err(), "{sql} must fail closed");
         }
