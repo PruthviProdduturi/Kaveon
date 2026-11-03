@@ -38,6 +38,11 @@ parity or external-client parity.
   `STRING_AGG`, deterministic `TOP` row limiting, and bracket-quoted
   identifier cases; it reported no worker failures or retained exchange/spill
   files.
+- The complete 113-case differential sweep was rerun on 2026-11-02 after the
+  ordered derived-source PIVOT/UNPIVOT qualification. It completed 1/1 with
+  exact local/layout/three-worker results in 680.25 seconds, with no worker
+  failures or retained exchange/spill files. Ordered cases use total ordering
+  keys; tied rows remain governed by normal SQL ordering semantics.
 - Focused `ISJSON` validity and `VALUE`/`ARRAY`/`OBJECT`/`SCALAR` constraint
   execution passed through the same differential layouts and three-worker
   path (`KAVEON_DIFF_ONLY=tsql_isjson_constraints`).

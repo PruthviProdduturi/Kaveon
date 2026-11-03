@@ -34,3 +34,6 @@ memory reservations.
 The current distributed corpus uses `ORDER BY region` for bounded PIVOT and
 `ORDER BY region, metric, measure` for bounded UNPIVOT; both are total-order
 cases and are marked qualified.
+
+The full 113-case corpus was rerun on 2026-11-02 after this qualification and
+passed exact local/layout/three-worker parity in 680.25 seconds.
