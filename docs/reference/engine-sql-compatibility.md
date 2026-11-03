@@ -186,6 +186,10 @@ The bounded identifier/string aliases also include `QUOTENAME` (square-bracket
 or double-quote delimiters, with the 128-character limit) and
 `STRING_ESCAPE(value, 'json')`; unsupported delimiter and escape-mode forms
 fail closed.
+`FORMATMESSAGE` is qualified for literal templates with positional `%s`, `%d`,
+`%i`, `%u`, and escaped `%%` tokens, with NULL propagation. Width, precision,
+numbered arguments, locale-aware forms, and message-ID lookup remain explicit
+rejections.
 
 `ISNULL` requires exactly two arguments and preserves the first argument's
 type; `LEN`, UTF-8 byte-count `DATALENGTH`, `IIF`, `CHARINDEX`, `STUFF`, and `SPACE` are also qualified on the
