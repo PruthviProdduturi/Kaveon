@@ -385,6 +385,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_charindex_start_location",
+        "SELECT TOP 5 CHARINDEX('a', country, 2) AS position FROM {T} ORDER BY user_id, event_date, actions, country",
+        true,
+    ),
+    (
         "tsql_patindex",
         "SELECT TOP 5 PATINDEX('%a%', country) AS position FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
