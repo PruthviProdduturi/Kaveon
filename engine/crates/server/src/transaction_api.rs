@@ -4362,7 +4362,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: "UPDATE product.datasets SET document_json = '{\"name\":\"Orders\"}' WHERE id = 'orders' AND revision = 1 RETURNING id, revision".into(),
+                sql: "UPDATE product.datasets AS target SET document_json = '{\"name\":\"Orders\"}' WHERE id = 'orders' AND revision = 1 RETURNING id, revision".into(),
                 transaction_id: Some(update.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),

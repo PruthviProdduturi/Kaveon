@@ -3010,14 +3010,19 @@ fn simple_table(table: &TableWithJoins) -> Result<String> {
     match &table.relation {
         TableFactor::Table {
             name,
-            alias: None,
+            alias,
             args: None,
             with_hints,
             version: None,
             with_ordinality: false,
             partitions,
             json_path: None,
-        } if with_hints.is_empty() && partitions.is_empty() => validated_table_name(name),
+        } if with_hints.is_empty()
+            && partitions.is_empty()
+            && alias.as_ref().is_none_or(|alias| alias.columns.is_empty()) =>
+        {
+            validated_table_name(name)
+        }
         _ => Err(sql_error("write target must be an unaliased base table")),
     }
 }
@@ -3938,6 +3943,19 @@ mod tests {
             }
             assert!(adapt_product_dml(&dml).is_ok());
         }
+    }
+
+    #[test]
+    fn product_update_accepts_a_target_alias_without_widening_the_contract() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "UPDATE product.datasets AS target SET document_json = '{\"name\":\"Orders\"}' WHERE id = 'ds-1' AND revision = 1 RETURNING id, revision",
+        )
+        .expect("an unambiguous target alias should parse")
+        else {
+            panic!("expected product UPDATE");
+        };
+        assert_eq!(dml.returning, ["id", "revision"]);
+        assert!(adapt_product_dml(&dml).is_ok());
     }
 
     #[test]
