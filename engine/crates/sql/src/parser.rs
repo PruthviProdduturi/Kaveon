@@ -3274,8 +3274,8 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
 /// Normalize the bounded SQL Server `OUTPUT` projection into the existing
 /// product-record `RETURNING` contract. This handles simple
 /// inserted/deleted column references for INSERT/UPDATE/DELETE; the bounded
-/// update-or-insert MERGE projection is normalized separately so mixed-action
-/// batches remain fail-closed.
+/// update-or-insert and matched-update-only MERGE projections are normalized
+/// separately so mixed-action batches remain fail-closed.
 fn normalize_product_output_with_merge(sql: &str) -> Result<(String, Option<Vec<String>>)> {
     let trimmed = sql.trim();
     let (body, terminator) = match trimmed.strip_suffix(';') {
