@@ -384,7 +384,7 @@ fn logical_agg_to_exec(
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
         AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
-        AggregateExpr::StringAgg { expr, .. } => (AggFunc::StringAgg, expr, false),
+        AggregateExpr::StringAgg { expr, distinct, .. } => (AggFunc::StringAgg, expr, *distinct),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),

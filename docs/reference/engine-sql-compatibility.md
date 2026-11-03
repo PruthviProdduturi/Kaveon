@@ -284,10 +284,14 @@ order is unspecified, matching SQL Server's unordered form. The bounded
 `WITHIN GROUP (ORDER BY value [ASC|DESC])` form is also qualified: workers
 retain value strings, merge them under a 1,000,000-value/16 MiB per-group
 bound, and sort once during finalization. Independent or multiple order keys,
-explicit NULL placement, dynamic separators, and `DISTINCT` remain explicitly
+explicit NULL placement, and dynamic separators remain explicitly rejected.
+`STRING_AGG(DISTINCT value, literal_separator)` is qualified through an exact
+distinct projection over grouping keys and the value before the existing
+mergeable state; mixed aggregate lists and expression-valued forms remain
 rejected. Focused planner, state round-trip, and three-worker differential
 evidence is recorded in
-`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md`.
+`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md` and
+`docs/qualification/track2-tsql-string-agg-distinct-2026-11-03.md`.
 The embedded/local CLI planner uses the same bounded aggregate state and
 separator validation, so local and server execution share this declared
 surface; the same ordered boundary is enforced in both paths.

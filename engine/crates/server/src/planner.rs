@@ -1441,7 +1441,8 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
             let distinct = match aggregate {
                 AggregateExpr::Count { distinct, .. }
                 | AggregateExpr::Sum { distinct, .. }
-                | AggregateExpr::Avg { distinct, .. } => *distinct,
+                | AggregateExpr::Avg { distinct, .. }
+                | AggregateExpr::StringAgg { distinct, .. } => *distinct,
                 _ => false,
             };
             AggregateSpec {
@@ -2801,7 +2802,7 @@ fn logical_agg_to_exec(
         AggregateExpr::Count { expr, distinct } => (AggFunc::Count, expr, *distinct),
         AggregateExpr::Sum { expr, distinct } => (AggFunc::Sum, expr, *distinct),
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
-        AggregateExpr::StringAgg { expr, .. } => (AggFunc::StringAgg, expr, false),
+        AggregateExpr::StringAgg { expr, distinct, .. } => (AggFunc::StringAgg, expr, *distinct),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),

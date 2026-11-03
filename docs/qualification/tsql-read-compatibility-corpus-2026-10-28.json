@@ -31,6 +31,7 @@
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "concat", "sql": "SELECT CONCAT(region, '-', industry, '-', platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "string_agg", "sql": "SELECT STRING_AGG(name, ',') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unordered_literal_separator"},
+    {"id": "string_agg_distinct", "sql": "SELECT STRING_AGG(DISTINCT name, ',') FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_distinct_projection"},
     {"id": "string_agg_filter", "sql": "SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10 AND name = 'Japan') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "string_agg_within_group", "sql": "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_value_ordered_ascending"},
     {"id": "string_agg_within_group_desc", "sql": "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name DESC) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_value_ordered_descending"},

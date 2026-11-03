@@ -30,11 +30,12 @@ pub enum AggregateExpr {
         expr: Expr,
         distinct: bool,
     },
-    /// `STRING_AGG(expr, literal_separator)`, optionally ordered by the same
-    /// value expression through SQL Server's `WITHIN GROUP` clause.
+    /// `STRING_AGG([DISTINCT] expr, literal_separator)`, optionally ordered by
+    /// the same value expression through SQL Server's `WITHIN GROUP` clause.
     StringAgg {
         expr: Expr,
         delimiter: Expr,
+        distinct: bool,
         /// `Some(true)` means descending, `Some(false)` ascending.  The
         /// bounded contract intentionally permits only the aggregate value as
         /// the order key so distributed merges can retain exact semantics.
@@ -3102,6 +3103,52 @@ fn build_aggregate(
                 distinct: false,
             }],
         });
+    }
+
+    // STRING_AGG(DISTINCT value, separator) is lowered through a distinct
+    // projection before the mergeable aggregate.  Keeping the group keys in
+    // that projection makes the rewrite exact for grouped and ungrouped
+    // queries alike, including distributed partial/final aggregation.  The
+    // aggregate itself therefore remains the existing bounded STRING_AGG
+    // state, with no worker-local deduplication that could miss duplicates
+    // crossing an exchange boundary.
+    if let [
+        AggregateExpr::StringAgg {
+            expr: Expr::Column(column),
+            distinct: true,
+            ..
+        },
+    ] = aggregates.as_slice()
+        && group_by.iter().all(|expr| matches!(expr, Expr::Column(_)))
+    {
+        let counted = Expr::Column(column.clone());
+        let mut columns = group_by.clone();
+        if !columns.contains(&counted) {
+            columns.push(counted);
+        }
+        let mut aggregate = aggregates[0].clone();
+        if let AggregateExpr::StringAgg { distinct, .. } = &mut aggregate {
+            *distinct = false;
+        }
+        return Ok(LogicalPlan::Aggregate {
+            input: Box::new(LogicalPlan::Distinct {
+                input: Box::new(LogicalPlan::Project {
+                    input: Box::new(plan),
+                    columns,
+                }),
+            }),
+            group_by,
+            aggregates: vec![aggregate],
+        });
+    }
+
+    if aggregates
+        .iter()
+        .any(|aggregate| matches!(aggregate, AggregateExpr::StringAgg { distinct: true, .. }))
+    {
+        return Err(sql_err(
+            "DISTINCT STRING_AGG requires one column value aggregate and ordinary column grouping",
+        ));
     }
 
     Ok(LogicalPlan::Aggregate {
@@ -6655,10 +6702,8 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                         let ast::FunctionArguments::List(args) = &func.args else {
                             return Err(sql_err("STRING_AGG requires a value and separator"));
                         };
-                        if args.args.len() != 2 || distinct {
-                            return Err(sql_err(
-                                "STRING_AGG requires exactly two arguments and does not support DISTINCT",
-                            ));
+                        if args.args.len() != 2 {
+                            return Err(sql_err("STRING_AGG requires exactly two arguments"));
                         }
                         let delimiter = match &args.args[1] {
                             ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
@@ -6697,6 +6742,7 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                         AggregateExpr::StringAgg {
                             expr: arg,
                             delimiter,
+                            distinct,
                             order_desc,
                         }
                     }
@@ -9793,7 +9839,14 @@ mod tests {
         assert!(rendered.contains("StringAgg"), "{rendered}");
         assert!(rendered.contains("Utf8(\",\")"), "{rendered}");
         assert!(sql_to_logical_plan("SELECT STRING_AGG(name, separator) FROM t").is_err());
-        assert!(sql_to_logical_plan("SELECT STRING_AGG(DISTINCT name, ',') FROM t").is_err());
+        let distinct = sql_to_logical_plan("SELECT STRING_AGG(DISTINCT name, ',') FROM t")
+            .expect("DISTINCT STRING_AGG should lower through a distinct projection");
+        let distinct = format!("{distinct:?}");
+        assert!(distinct.contains("Distinct"), "{distinct}");
+        assert!(distinct.contains("distinct: false"), "{distinct}");
+        assert!(
+            sql_to_logical_plan("SELECT STRING_AGG(DISTINCT name, ','), COUNT(*) FROM t").is_err()
+        );
         let filter_plan =
             sql_to_logical_plan("SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10) FROM t")
                 .expect("STRING_AGG FILTER should lower through the null-preserving argument path");

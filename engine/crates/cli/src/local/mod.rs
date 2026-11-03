@@ -370,7 +370,11 @@ mod tests {
             result.columns,
             vec![("joined".to_owned(), "Utf8".to_owned())]
         );
-        assert_eq!(result.rows, vec![vec![json!("click|view")]]);
+        assert_eq!(result.rows, vec![vec![json!("click|click|view")]]);
+        let distinct = engine
+            .execute("SELECT STRING_AGG(DISTINCT kind, '|') AS joined FROM events")
+            .expect("DISTINCT string aggregation should run locally");
+        assert_eq!(distinct.rows, vec![vec![json!("click|view")]]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
