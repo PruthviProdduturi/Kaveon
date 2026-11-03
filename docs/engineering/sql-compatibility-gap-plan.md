@@ -485,7 +485,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   the output boundary, with an explicit `derived_row_preserving` scope. The
   physical scan boundary now also retains the reader's exact
   `actual_rows_emitted` counter alongside `actual_rows_selected`, so
-  row-group selection and post-filter output are not conflated. Evidence:
+  row-group selection and post-filter output are not conflated. It also
+  exposes exact decoder `actual_filter_rows_examined` and
+  `actual_filter_rows_admitted` counts when a row predicate ran. Evidence:
   `docs/qualification/track3-scan-emitted-row-diagnostics-2026-11-03.md`.
   boundary's input is never labeled with post-operation rows, and propagation
   stops at unrelated operators. Evidence:

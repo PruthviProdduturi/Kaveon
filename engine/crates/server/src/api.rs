@@ -11670,6 +11670,14 @@ fn annotate_actual_scans(
                 scan.rows_emitted.to_string(),
             );
             node.attributes.insert(
+                "actual_filter_rows_examined".to_owned(),
+                scan.row_filter_rows_examined.to_string(),
+            );
+            node.attributes.insert(
+                "actual_filter_rows_admitted".to_owned(),
+                scan.row_filter_rows_admitted.to_string(),
+            );
+            node.attributes.insert(
                 "actual_rows_scope".to_owned(),
                 "scan_selected_rows".to_owned(),
             );
@@ -12011,6 +12019,10 @@ struct ScanEstimateDiagnostic {
     actual_rows_selected: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     actual_rows_emitted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_filter_rows_examined: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_filter_rows_admitted: Option<u64>,
     ratio: f64,
     classification: &'static str,
     estimate_source: Option<String>,
@@ -12025,6 +12037,10 @@ struct OperatorEstimateDiagnostic {
     actual_rows_scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     actual_rows_emitted: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_filter_rows_examined: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_filter_rows_admitted: Option<u64>,
     ratio: f64,
     classification: &'static str,
     estimate_scope: Option<String>,
@@ -12126,6 +12142,14 @@ fn collect_operator_estimate_details(
             actual_rows_emitted: node
                 .attributes
                 .get("actual_rows_emitted")
+                .and_then(|value| value.parse::<u64>().ok()),
+            actual_filter_rows_examined: node
+                .attributes
+                .get("actual_filter_rows_examined")
+                .and_then(|value| value.parse::<u64>().ok()),
+            actual_filter_rows_admitted: node
+                .attributes
+                .get("actual_filter_rows_admitted")
                 .and_then(|value| value.parse::<u64>().ok()),
             ratio,
             classification,
@@ -12235,6 +12259,8 @@ async fn estimate_diagnostics(
                         estimated_rows,
                         actual_rows_selected,
                         actual_rows_emitted: Some(scan.rows_emitted),
+                        actual_filter_rows_examined: Some(scan.row_filter_rows_examined),
+                        actual_filter_rows_admitted: Some(scan.row_filter_rows_admitted),
                         ratio,
                         classification,
                         estimate_source,
@@ -16559,6 +16585,14 @@ mod tests {
         assert_eq!(plan.children[0].attributes["actual_rows_emitted"], "0");
         assert_eq!(plan.children[1].attributes["actual_rows_emitted"], "0");
         assert_eq!(
+            plan.children[0].attributes["actual_filter_rows_examined"],
+            "0"
+        );
+        assert_eq!(
+            plan.children[1].attributes["actual_filter_rows_admitted"],
+            "0"
+        );
+        assert_eq!(
             plan.children[0].attributes["actual_rows_scope"],
             "scan_selected_rows"
         );
@@ -16571,6 +16605,8 @@ mod tests {
             .with_attribute("estimate_source", "source_metadata")
             .with_attribute("actual_rows_selected", "40")
             .with_attribute("actual_rows_emitted", "25")
+            .with_attribute("actual_filter_rows_examined", "40")
+            .with_attribute("actual_filter_rows_admitted", "25")
             .with_attribute("actual_rows_scope", "scan_selected_rows");
         let root = kaveon_core::PlanNode::new(31, kaveon_core::PlanPhase::Physical, "Filter")
             .with_attribute("estimated_output_rows", "80")
@@ -16582,6 +16618,8 @@ mod tests {
         assert_eq!(details[0].operator, "Scan");
         assert_eq!(details[0].actual_rows_scope, "scan_selected_rows");
         assert_eq!(details[0].actual_rows_emitted, Some(25));
+        assert_eq!(details[0].actual_filter_rows_examined, Some(40));
+        assert_eq!(details[0].actual_filter_rows_admitted, Some(25));
         assert_eq!(details[0].classification, "overestimated");
         assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
     }
