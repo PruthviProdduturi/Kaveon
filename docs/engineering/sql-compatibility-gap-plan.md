@@ -176,8 +176,10 @@ contract is microsecond precision.
 Runtime `CONVERT`/`TRY_CONVERT` timestamp inputs qualify the implemented
 date-only styles `0`, `1`, `23`, `101`, `102`, `103`, `104`, `105`, `106`,
 `107`, `110`, `111`, and `112`, producing midnight timestamps, together with
-the ISO timestamp styles `20`, `21`, `120`, `121`, and `126` (fractional
-seconds bounded to the Engine's microsecond timestamp contract). Malformed
+SQL Server style `113` (`dd mon yyyy hh:mi:ss:mmm`) using invariant English
+month abbreviations and preserving milliseconds, and the ISO timestamp styles
+`20`, `21`, `120`, `121`, and `126` (fractional seconds bounded to the
+Engine's microsecond timestamp contract). Malformed
 and NULL inputs preserve `TRY_CONVERT` NULL-on-parse-failure behavior; the
 same parser rejects unsupported style codes rather than guessing. Evidence:
 `docs/qualification/track2-tsql-runtime-timestamp-date-styles-2026-11-03.md`.

@@ -6613,14 +6613,64 @@ fn normalize_tsql_date_literal(value: &str, style: u32) -> Option<String> {
                 value[6..8].parse::<u32>().ok()?,
             )
         }
+        113 => {
+            // SQL Server style 113: `dd mon yyyy hh:mi:ss:mmm`.  DATE
+            // conversion intentionally validates the complete timestamp but
+            // returns only its calendar date, matching SQL Server.
+            let (date, _) = normalize_tsql_style_113(value)?;
+            return Some(date);
+        }
         _ => return None,
     };
     let text = format!("{year:04}-{month:02}-{day:02}");
     parse_date_days(&text).map(|_| text)
 }
 
+fn normalize_tsql_style_113(value: &str) -> Option<(String, String)> {
+    let mut parts = value.split_whitespace();
+    let day = parts.next()?.parse::<u32>().ok()?;
+    let month = match parts.next()?.to_ascii_lowercase().as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
+        _ => return None,
+    };
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let time = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let mut fields = time.split(':');
+    let hour = fields.next()?.parse::<u32>().ok()?;
+    let minute = fields.next()?.parse::<u32>().ok()?;
+    let second = fields.next()?.parse::<u32>().ok()?;
+    let millis = fields.next()?.parse::<u32>().ok()?;
+    if fields.next().is_some() || hour > 23 || minute > 59 || second > 59 || millis > 999 {
+        return None;
+    }
+    let date = format!("{year:04}-{month:02}-{day:02}");
+    parse_date_days(&date)?;
+    Some((
+        date,
+        format!("{hour:02}:{minute:02}:{second:02}.{millis:03}"),
+    ))
+}
+
 fn normalize_tsql_timestamp_literal(value: &str, style: u32) -> Option<String> {
     let value = value.trim();
+    if style == 113 {
+        let (date, time) = normalize_tsql_style_113(value)?;
+        return Some(format!("{date} {time}"));
+    }
     let date = normalize_tsql_date_literal(value, style)?;
     let time = match style {
         20 | 21 | 120 | 121 => value.get(10..)?.strip_prefix(' ')?.trim(),
@@ -10551,6 +10601,10 @@ mod tests {
                 "SELECT TRY_CONVERT(DATE, 'Dec 31, 2024', 107) FROM t",
                 "2024-12-31",
             ),
+            (
+                "SELECT CONVERT(DATE, '31 Dec 2024 23:59:59:123', 113) FROM t",
+                "2024-12-31",
+            ),
         ] {
             let plan = sql_to_logical_plan(sql).expect("styled CONVERT should lower");
             assert!(format!("{plan:?}").contains(expected), "{plan:?}");
@@ -10561,17 +10615,21 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_CONVERT(DATETIME2, value, 126) FROM t")
             .expect("runtime timestamp style should lower through the typed function");
         assert!(format!("{plan:?}").contains("TRY_CONVERT_TIMESTAMP_STYLE_126"));
+        let plan = sql_to_logical_plan("SELECT TRY_CONVERT(DATETIME2, value, 113) FROM t")
+            .expect("style 113 runtime timestamp should lower through the typed function");
+        assert!(format!("{plan:?}").contains("TRY_CONVERT_TIMESTAMP_STYLE_113"));
     }
 
     #[test]
     fn lowers_styled_tsql_timestamp_literals() {
         let plan = sql_to_logical_plan(
-            "SELECT CONVERT(DATETIME2, '2024-12-31T23:59:59.123', 126), TRY_CONVERT(DATETIME2, '12/31/2024', 101) FROM t",
+            "SELECT CONVERT(DATETIME2, '2024-12-31T23:59:59.123', 126), TRY_CONVERT(DATETIME2, '12/31/2024', 101), CONVERT(DATETIME2, '31 Dec 2024 23:59:59:123', 113) FROM t",
         )
         .expect("styled timestamp literals should lower");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("2024-12-31 23:59:59.123"), "{rendered}");
         assert!(rendered.contains("2024-12-31 00:00:00"), "{rendered}");
+        assert!(rendered.contains("2024-12-31 23:59:59.123"), "{rendered}");
         assert!(rendered.contains("TimestampMicros"), "{rendered}");
     }
 
