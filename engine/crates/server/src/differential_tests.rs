@@ -6509,6 +6509,65 @@ fn distributed_runtime_filter_crosses_probe_identity_projection() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// Mixed and empty window scopes must agree with the local executor.
+///
+/// The sweep already compares unpartitioned `OVER (ORDER BY ...)` and single-key
+/// partitioned windows against the reference. These are the scopes it does not
+/// reach: an empty `OVER ()`, which needs every row in one place and the one
+/// result returned to all of them; a partitioned and an unpartitioned window in
+/// the same statement, where repartitioning to satisfy one can break the other;
+/// two different partition keys in one statement, which asks for two
+/// repartitions in a single pass; and a partition key carrying NULLs, which SQL
+/// groups as its own partition.
+#[test]
+fn distributed_mixed_window_scopes_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-window-mixed-scopes-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    for statement in [
+        // An empty OVER (): the same grand total on every row.
+        "SELECT country, actions, SUM(actions) OVER () AS total, COUNT(*) OVER () AS rows_seen FROM events WHERE user_id < 40 ORDER BY country, actions, 3, 4",
+        // Mixed scopes in one statement: one window needs the country
+        // partition, the other needs every row.
+        "SELECT country, actions, SUM(actions) OVER (PARTITION BY country) AS by_country, SUM(actions) OVER () AS overall FROM events WHERE user_id < 40 ORDER BY country, actions, 3, 4",
+        // Two different partition keys: two repartitions in one pass.
+        "SELECT country, region, actions, SUM(actions) OVER (PARTITION BY country) AS by_country, SUM(actions) OVER (PARTITION BY region) AS by_region FROM events WHERE user_id < 40 ORDER BY country, region, actions, 4, 5",
+        // A ranking window partitioned one way beside an ordered-frame
+        // aggregate partitioned another. Over a VALUES table with a unique
+        // `seq` column, because ROW_NUMBER and a ROWS frame are only
+        // determined when their ORDER BY is total -- on tied rows both
+        // executors can be right and still disagree, which is a flaw in the
+        // assertion rather than in the engine.
+        "SELECT g, h, seq, ROW_NUMBER() OVER (PARTITION BY g ORDER BY seq) AS rank_in_g, SUM(seq) OVER (PARTITION BY h ORDER BY seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_in_h FROM (VALUES (CAST('x' AS VARCHAR), CAST('p' AS VARCHAR), 1), ('x', 'q', 2), ('y', 'p', 3), ('y', 'q', 4), ('x', 'p', 5), ('y', 'p', 6)) AS t(g, h, seq) ORDER BY 1, 2, 3, 4, 5",
+        // A partition key with NULLs: SQL makes NULL its own partition, and the
+        // partitioner still has to route those rows somewhere deterministic.
+        "SELECT k, v, SUM(v) OVER (PARTITION BY k) AS by_k, SUM(v) OVER () AS overall FROM (VALUES (CAST('a' AS VARCHAR), 1), ('a', 2), (CAST(NULL AS VARCHAR), 10), (CAST(NULL AS VARCHAR), 20), ('b', 5)) AS t(k, v) ORDER BY 1, 2, 3, 4",
+    ] {
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("distributed-window-mixed-scopes", 256 << 20).unwrap();
+        let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+        let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+        drop(local);
+        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} local pool");
+        let actual = canonical_rows(
+            &execute_distributed(statement, &plan, &manager, 3, &pool)
+                .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+            true,
+        );
+        assert_eq!(actual, expected, "{statement}");
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{statement} distributed pool"
+        );
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Distributed outer joins must agree with the local executor on which rows are
 /// null-extended, in the shapes where partitioning can lose them.
 ///
