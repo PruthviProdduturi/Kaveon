@@ -438,6 +438,7 @@ fn evaluate_window_with_context(
     let mut indices = vec![None; batch.num_rows()];
     let mut ints = vec![0i64; batch.num_rows()];
     let mut floats = vec![0.0f64; batch.num_rows()];
+    let mut percentile_values = vec![None; batch.num_rows()];
     let mut aggregate_results: Vec<(usize, ArrayRef)> = Vec::new();
     let offset = if name == "LAG" || name == "LEAD" {
         literal_offset(args.get(1), 1)?
@@ -454,9 +455,23 @@ fn evaluate_window_with_context(
     } else {
         1
     };
+    let percentile_fraction = if name == "PERCENTILE_CONT" {
+        literal_fraction(args.get(1))?
+    } else {
+        0.0
+    };
     if matches!(
         name.as_str(),
-        "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" | "SUM" | "AVG" | "MIN" | "MAX"
+        "LAG"
+            | "LEAD"
+            | "FIRST_VALUE"
+            | "LAST_VALUE"
+            | "NTH_VALUE"
+            | "SUM"
+            | "AVG"
+            | "MIN"
+            | "MAX"
+            | "PERCENTILE_CONT"
     ) && col.is_none()
     {
         return Err(error(format!("{name} requires a value argument")));
@@ -493,6 +508,30 @@ fn evaluate_window_with_context(
                 "CUME_DIST" => {
                     let peer_end = starts[group[pos] + 1];
                     floats[row] = peer_end as f64 / rows.len() as f64;
+                }
+                "PERCENTILE_CONT" => {
+                    let column = col
+                        .as_ref()
+                        .ok_or_else(|| error("PERCENTILE_CONT requires a value argument"))?;
+                    let values = cast(column, &DataType::Float64)?;
+                    let values = values
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .ok_or_else(|| error("PERCENTILE_CONT requires a numeric value"))?;
+                    let non_null = rows
+                        .iter()
+                        .filter_map(|&index| values.is_valid(index).then(|| values.value(index)))
+                        .collect::<Vec<_>>();
+                    if non_null.is_empty() {
+                        percentile_values[row] = None;
+                    } else {
+                        let rank = percentile_fraction * (non_null.len() - 1) as f64;
+                        let lower = rank.floor() as usize;
+                        let upper = rank.ceil() as usize;
+                        let weight = rank - lower as f64;
+                        percentile_values[row] =
+                            Some(non_null[lower] + (non_null[upper] - non_null[lower]) * weight);
+                    }
                 }
                 "NTILE" => {
                     let large = rows.len() % tiles;
@@ -597,6 +636,7 @@ fn evaluate_window_with_context(
             Ok(Arc::new(Int64Array::from(ints)))
         }
         "PERCENT_RANK" | "CUME_DIST" => Ok(Arc::new(Float64Array::from(floats))),
+        "PERCENTILE_CONT" => Ok(Arc::new(Float64Array::from(percentile_values))),
         "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" | "NTH_VALUE" => {
             let col = col.as_ref().unwrap();
             let output = take(col.as_ref(), &UInt32Array::from(indices.clone()), None)?;
@@ -660,6 +700,18 @@ fn literal_offset(expr: Option<&Expr>, default: usize) -> Result<usize> {
         }
         _ => return Err(error("window offset must be a nonnegative integer literal")),
     };
+    Ok(value)
+}
+
+fn literal_fraction(expr: Option<&Expr>) -> Result<f64> {
+    let value = match expr {
+        Some(Expr::Literal(kaveon_core::predicate::ScalarValue::Float64(value))) => *value,
+        Some(Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(value))) => *value as f64,
+        _ => return Err(error("PERCENTILE_CONT fraction must be a numeric literal")),
+    };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(error("PERCENTILE_CONT fraction must be between 0 and 1"));
+    }
     Ok(value)
 }
 
