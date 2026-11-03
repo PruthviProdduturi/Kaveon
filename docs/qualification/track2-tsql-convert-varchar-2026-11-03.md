@@ -49,7 +49,7 @@ Result:
 
 The sweep compares local execution with the three-worker fragment path across
 dictionary, plain, multi-file, partitioned, hive-ordered, and clustered
-Parquet layouts. The corpus is now 148 cases and is pinned to `a8660664`.
+Parquet layouts. The corpus is now 149 cases and is pinned to `a8660664`.
 
 The explicit rejection boundary is covered by the SQL planner regression
 `rejects_sized_tsql_text_casts_instead_of_dropping_length`, which checks

@@ -107,6 +107,7 @@
     {"id": "try_convert_unstyled", "sql": "SELECT TRY_CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "convert_varchar", "sql": "SELECT CONVERT(VARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
     {"id": "try_convert_varchar", "sql": "SELECT TRY_CONVERT(VARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
+    {"id": "try_convert_nvarchar", "sql": "SELECT TRY_CONVERT(NVARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
     {"id": "try_cast_varchar", "sql": "SELECT TRY_CAST(value AS VARCHAR) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
     {"id": "string_escape_json", "sql": "SELECT STRING_ESCAPE(value, 'json') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_columns"},
     {"id": "formatmessage_bounded_template", "sql": "SELECT FORMATMESSAGE('country=%s signed=%i unsigned=%u %%', country, actions, actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_templates_and_positional_text_or_numeric_arguments"},
