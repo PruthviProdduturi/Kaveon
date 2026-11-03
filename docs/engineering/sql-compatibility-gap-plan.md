@@ -326,7 +326,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   delete-only forms also qualify `deleted.id` and `deleted.revision`. Unmatched
   source rows produce no result row. Delete-or-insert output is action-aware:
   `inserted` returns inserted/update actions and `deleted` returns deleted/update
-  actions from the ordered staged write set. Bounded not-matched-by-source
+  actions from the ordered staged write set. Bounded `$action` output returns
+  the resolved `INSERT`/`UPDATE`/`DELETE` label for each staged action.
+  Bounded not-matched-by-source
   delete forms also qualify `deleted.id` and `deleted.revision`, and mixed
   action batches qualify the corresponding inserted identity/revision/document
   output; deleted documents are captured from the pinned pre-delete snapshot.

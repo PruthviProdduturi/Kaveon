@@ -155,7 +155,8 @@ Delete-or-insert now qualifies action-aware `MERGE OUTPUT`: `inserted` returns
 inserted/update actions and `deleted` returns deleted/update actions from the
 ordered staged write set. Not-matched-by-source delete forms also qualify
 `OUTPUT deleted.id|revision`, and mixed action batches qualify the corresponding
-`inserted.id|revision|document_json`; deleted documents are captured from the
+`inserted.id|revision|document_json`; bounded `$action` output returns the
+resolved `INSERT`/`UPDATE`/`DELETE` label for each staged action. Deleted documents are captured from the
 pinned pre-delete snapshot, including staged replacements, while mixed
 pseudo-table projections remain rejected. Evidence is in
 `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.

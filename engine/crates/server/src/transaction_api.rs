@@ -2998,6 +2998,7 @@ async fn execute_sql_request(
                                 | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched { .. }
                         )
                     }),
+                    Some("action") => false,
                     _ => true,
                 }
             {
@@ -3304,6 +3305,38 @@ fn product_returning_response(
                     }
                     "revision" => {
                         row.insert("revision".to_owned(), serde_json::json!(revision));
+                    }
+                    "action" => {
+                        let action = match command {
+                            kaveon_sql::parser::ProductDmlCommand::Create { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent {
+                                ..
+                            } => "INSERT",
+                            kaveon_sql::parser::ProductDmlCommand::Update { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched {
+                                ..
+                            } => "UPDATE",
+                            kaveon_sql::parser::ProductDmlCommand::Delete { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched {
+                                ..
+                            } => "DELETE",
+                            kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
+                                ..
+                            }
+                            | kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::InsertSelect { .. } => {
+                                return Err(
+                                    "MERGE $action requires resolved action commands".into()
+                                );
+                            }
+                        };
+                        row.insert(
+                            "action".to_owned(),
+                            serde_json::Value::String(action.to_owned()),
+                        );
                     }
                     "document_json" => {
                         let document = match command {
@@ -5485,6 +5518,47 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+
+        let transaction = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('created', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE OUTPUT $action"#.into(),
+                transaction_id: Some(transaction.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["returning"],
+            serde_json::json!([
+                {"action": "INSERT"},
+                {"action": "DELETE"}
+            ])
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(transaction.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
