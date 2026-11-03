@@ -16683,16 +16683,117 @@ fn eval_to_char(source: &ArrayRef, fmt: &ArrayRef, num_rows: usize) -> Result<Ar
             let result = StringArray::from(values);
             Ok(Arc::new(result))
         }
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64 => {
+            let numeric = compute::cast(source, &DataType::Float64)?;
+            let numeric = numeric.as_primitive::<Float64Type>();
+            let values = (0..num_rows)
+                .map(|row| {
+                    if numeric.is_null(row) {
+                        return Ok(None);
+                    }
+                    let pattern = text_value(fmt, row)?.ok_or_else(|| {
+                        KaveonError::Execution(
+                            "FORMAT numeric values require a non-null invariant pattern".into(),
+                        )
+                    })?;
+                    Ok(Some(render_numeric_format(numeric.value(row), pattern)?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(StringArray::from(values)))
+        }
         dt => Err(KaveonError::Execution(format!(
             "TO_CHAR not supported for type {dt}"
         ))),
     }
 }
 
+/// Render the deliberately bounded, culture-independent numeric subset of
+/// SQL Server FORMAT. Standard `N0`..`N6` and `F0`..`F6` patterns are accepted,
+/// as are fixed decimal patterns such as `0.00` and `#,##0.00`. Culture-aware
+/// patterns, scientific notation, and arbitrary .NET custom format strings
+/// remain rejected instead of being silently approximated.
+fn render_numeric_format(value: f64, pattern: &str) -> Result<String> {
+    if !value.is_finite() {
+        return Err(KaveonError::Execution(
+            "FORMAT numeric values must be finite".into(),
+        ));
+    }
+    let pattern = pattern.trim();
+    if pattern.is_empty() || pattern.len() > 32 {
+        return Err(KaveonError::Execution(
+            "FORMAT numeric pattern must be non-empty and at most 32 bytes".into(),
+        ));
+    }
+    let (grouped, decimals) = if pattern.len() == 2
+        && matches!(pattern.as_bytes()[0], b'N' | b'n' | b'F' | b'f')
+        && pattern.as_bytes()[1].is_ascii_digit()
+    {
+        let decimals = usize::from(pattern.as_bytes()[1] - b'0');
+        (matches!(pattern.as_bytes()[0], b'N' | b'n'), decimals)
+    } else {
+        let mut parts = pattern.split('.');
+        let integer = parts.next().unwrap_or_default();
+        let fraction = parts.next();
+        if parts.next().is_some()
+            || integer.is_empty()
+            || !integer
+                .chars()
+                .all(|character| matches!(character, '0' | '#' | ','))
+            || fraction.is_some_and(|digits| {
+                digits.is_empty()
+                    || digits.len() > 6
+                    || !digits
+                        .chars()
+                        .all(|character| character == '0' || character == '#')
+            })
+            || !integer.contains('0')
+        {
+            return Err(KaveonError::Execution(format!(
+                "unsupported numeric FORMAT pattern {pattern:?}"
+            )));
+        }
+        (integer.contains(','), fraction.map_or(0, str::len))
+    };
+
+    let rendered = format!("{value:.decimals$}");
+    let (sign, unsigned) = rendered
+        .strip_prefix('-')
+        .map_or(("", rendered.as_str()), |value| ("-", value));
+    let (integer, fraction) = unsigned
+        .split_once('.')
+        .map_or((unsigned, ""), |(integer, fraction)| (integer, fraction));
+    let integer = if grouped {
+        let mut grouped = String::with_capacity(integer.len() + integer.len() / 3);
+        for (index, character) in integer.chars().enumerate() {
+            if index > 0 && (integer.len() - index) % 3 == 0 {
+                grouped.push(',');
+            }
+            grouped.push(character);
+        }
+        grouped
+    } else {
+        integer.to_owned()
+    };
+    if decimals == 0 {
+        Ok(format!("{sign}{integer}"))
+    } else {
+        Ok(format!("{sign}{integer}.{fraction}"))
+    }
+}
+
 /// Render the bounded format tokens shared by Trino DATE_FORMAT, PostgreSQL
 /// TO_CHAR's common temporal tokens, and SQL Server FORMAT's invariant date
-/// forms. Unknown characters are retained as literals; unsupported culture or
-/// numeric formatting is rejected before reaching this temporal path.
+/// forms. Unknown characters are retained as literals; unsupported culture
+/// formatting is rejected before reaching either formatting path.
 #[derive(Clone, Copy)]
 struct TemporalParts {
     year: i32,
@@ -30167,5 +30268,35 @@ mod tests {
         let result = eval_to_char(&timestamp, &format, 1).unwrap();
         let values = result.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(values.value(0), "2024-03-01 12:34:56");
+    }
+
+    #[test]
+    fn formats_numeric_values_with_bounded_invariant_patterns() {
+        let source =
+            Arc::new(Float64Array::from(vec![Some(1234.5), Some(-12.345), None])) as ArrayRef;
+        let format = Arc::new(StringArray::from(vec![
+            Some("N2"),
+            Some("#,##0.00"),
+            Some("F1"),
+        ])) as ArrayRef;
+        let result = eval_to_char(&source, &format, 3).unwrap();
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "1,234.50");
+        assert_eq!(values.value(1), "-12.35");
+        assert!(values.is_null(2));
+
+        for pattern in ["C2", "0.0000000", "0e+00"] {
+            let error = eval_to_char(
+                &(Arc::new(Float64Array::from(vec![Some(1.25)])) as ArrayRef),
+                &(Arc::new(StringArray::from(vec![Some(pattern)])) as ArrayRef),
+                1,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported numeric FORMAT pattern")
+            );
+        }
     }
 }
