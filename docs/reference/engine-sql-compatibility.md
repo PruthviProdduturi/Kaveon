@@ -420,6 +420,10 @@ The bounded same-kind `UPDATE ... FROM` form also accepts
 existing literal revision/source-id or identity-join boundary is satisfied;
 the cast is syntax-only and arbitrary source expressions remain rejected. See
 [UPDATE FROM qualification](../qualification/track2-native-dml-update-from-2026-11-03.md).
+The bounded source-backed `INSERT ... SELECT` form likewise accepts
+`CAST(document_json AS JSON)` for its direct document projection and retains
+the same source snapshot and conflict/CAS behavior; arbitrary projections
+remain rejected. See [source-copy qualification](../qualification/track2-native-dml-insert-select-source-2026-10-28.md).
 The qualified `MERGE` form is intentionally narrow: one target product table
 with an optional simple alias, one source `VALUES` batch of at most 1,000 rows aliased as
 `(id, document_json)`, an equality
