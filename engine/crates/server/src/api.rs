@@ -25620,7 +25620,7 @@ mod streamed_root_tests {
 
     #[test]
     fn result_rows_encode_utf8_view_values_as_text() {
-        use arrow::array::{ArrayRef, StringViewArray};
+        use arrow::array::{ArrayRef, MapBuilder, StringViewArray, StringViewBuilder};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         let values: ArrayRef = Arc::new(StringViewArray::from(vec!["east", "west"]));
@@ -25642,6 +25642,29 @@ mod streamed_root_tests {
         );
         let nested: ArrayRef = Arc::new(StringViewArray::from(vec!["north"]));
         assert_eq!(array_value_to_json(nested), serde_json::json!("north"));
+
+        let mut map_builder = MapBuilder::new(
+            None,
+            StringViewBuilder::new(),
+            arrow::array::Int64Builder::new(),
+        );
+        map_builder.keys().append_value("north");
+        map_builder.values().append_value(1);
+        map_builder.append(true).unwrap();
+        let map: ArrayRef = Arc::new(map_builder.finish());
+        let map_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "counts",
+                map.data_type().clone(),
+                false,
+            )])),
+            vec![map],
+        )
+        .unwrap();
+        assert_eq!(
+            batches_to_json(&[map_batch]),
+            vec![vec![serde_json::json!({"north": 1})]]
+        );
     }
 
     #[test]
