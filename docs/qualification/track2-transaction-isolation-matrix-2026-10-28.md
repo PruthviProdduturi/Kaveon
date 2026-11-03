@@ -40,6 +40,7 @@ The contract is covered by:
 - `kaveon_catalog::product_transaction::tests::savepoint_restores_staged_snapshot_without_publishing`
 - `kaveon_catalog::product_transaction::tests::concurrent_transactions_conflict_on_the_head`
 - `transaction_api::tests::transaction_sessions_do_not_survive_registry_restart`
+- `transaction_api::tests::committed_product_records_survive_registry_restart`
 - `transaction_api::tests::product_updates_and_deletes_are_record_owner_isolated`
 - `transaction_api::tests::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
 
