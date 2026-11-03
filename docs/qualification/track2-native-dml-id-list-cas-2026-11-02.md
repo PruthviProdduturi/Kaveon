@@ -28,6 +28,10 @@ each record under the same transaction boundary. Arbitrary expressions,
 - The transaction test creates two product records, updates both with one
   revision predicate, commits atomically, and verifies revision `2` plus the
   new documents through the owner-scoped read path.
+- A failed list containing one valid and one missing ID is fail-closed: the
+  session restores its pre-batch staged view, `COMMIT` cannot publish the first
+  command, and the durable record remains at revision `1` with its original
+  document.
 - Duplicate IDs and `revision IN (...)` fail closed before staging.
 
 This is a bounded KaveonDB product-record contract, not general lake-table
