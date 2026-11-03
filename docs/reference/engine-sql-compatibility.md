@@ -470,8 +470,10 @@ on this form returns the inserted row and returns an empty result for a
 duplicate. They also support the bounded
 `ON CONFLICT (id) DO UPDATE SET document_json = excluded.document_json` form;
 an existing owned record is updated with revision CAS, while a missing record
-is created. Conflict predicates, named constraints, arbitrary assignments, and
-arbitrary conflict targets remain rejected. Statement execution and the
+is created. The conventional `<product_table>_pkey` named target is accepted
+as the same identity target; other named constraints, conflict predicates,
+arbitrary assignments, and arbitrary conflict targets remain rejected.
+Statement execution and the
 authenticated product transaction endpoint accept typed positional (`$1`, `?`)
 and named (`:name`) scalar or JSON-array parameters through the HTTP API; values
 are bound before parsing/planning and are never interpolated into SQL. Missing

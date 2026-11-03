@@ -3234,6 +3234,29 @@ fn is_conflict_identity_predicate(expression: &Expr) -> bool {
     (is_target_id(left) && is_excluded_id(right)) || (is_excluded_id(left) && is_target_id(right))
 }
 
+/// Product tables expose one stable identity constraint for `id`. Accept the
+/// conventional `<table>_pkey` named form; arbitrary named constraints could
+/// identify a different uniqueness rule and remain fail-closed until
+/// catalog-backed constraint metadata is available.
+fn conflict_target_is_product_id(
+    target: Option<&sqlparser::ast::ConflictTarget>,
+    table: &str,
+) -> bool {
+    match target {
+        None => true,
+        Some(sqlparser::ast::ConflictTarget::Columns(columns)) => {
+            columns.len() == 1 && columns[0].value.eq_ignore_ascii_case("id")
+        }
+        Some(sqlparser::ast::ConflictTarget::OnConstraint(name)) => {
+            let table_name = table.rsplit('.').next().unwrap_or(table);
+            let Some(constraint) = name.0.last().map(|part| part.value.as_str()) else {
+                return false;
+            };
+            constraint.eq_ignore_ascii_case(&format!("{table_name}_pkey"))
+        }
+    }
+}
+
 fn is_conflict_document_assignment(expression: &Expr) -> bool {
     let direct = matches!(
         expression,
@@ -3322,25 +3345,13 @@ pub fn parse_native_transactional(sql: &str) -> Result<NativeTransactionalStatem
             let (on_conflict_do_nothing, on_conflict_do_update) = match insert.on.as_ref() {
                 None => (false, false),
                 Some(OnInsert::OnConflict(conflict))
-                    if (conflict.conflict_target.is_none()
-                        || matches!(
-                            &conflict.conflict_target,
-                            Some(sqlparser::ast::ConflictTarget::Columns(columns))
-                                if columns.len() == 1
-                                    && columns[0].value.eq_ignore_ascii_case("id")
-                        ))
+                    if conflict_target_is_product_id(conflict.conflict_target.as_ref(), &table)
                         && matches!(conflict.action, OnConflictAction::DoNothing) =>
                 {
                     (true, false)
                 }
                 Some(OnInsert::OnConflict(conflict))
-                    if (conflict.conflict_target.is_none()
-                        || matches!(
-                            &conflict.conflict_target,
-                            Some(sqlparser::ast::ConflictTarget::Columns(columns))
-                                if columns.len() == 1
-                                    && columns[0].value.eq_ignore_ascii_case("id")
-                        ))
+                    if conflict_target_is_product_id(conflict.conflict_target.as_ref(), &table)
                         && matches!(
                             &conflict.action,
                             OnConflictAction::DoUpdate(update)
@@ -5490,6 +5501,14 @@ mod tests {
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT (owner_principal) DO NOTHING"
         )
         .is_err());
+        assert!(parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT ON CONSTRAINT datasets_pkey DO NOTHING"
+        )
+        .is_ok());
+        assert!(parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT ON CONSTRAINT owner_unique DO NOTHING"
+        )
+        .is_err());
     }
 
     #[test]
@@ -5511,6 +5530,14 @@ mod tests {
                 document_json: "{\"name\":\"new\"}".into(),
             }
         );
+        let named = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{}') ON CONFLICT ON CONSTRAINT datasets_pkey DO UPDATE SET document_json = excluded.document_json",
+        )
+        .expect("named primary-key conflict target should remain bounded");
+        let NativeTransactionalStatement::Dml(named) = named else {
+            panic!("expected product DML");
+        };
+        assert!(named.on_conflict_do_update);
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"new\"}') ON CONFLICT (id) DO UPDATE SET document_json = CAST(excluded.document_json AS JSON)",
         )

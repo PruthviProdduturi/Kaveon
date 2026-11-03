@@ -4865,7 +4865,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Changed"}') ON CONFLICT DO NOTHING RETURNING id, revision, document_json"#.into(),
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Changed"}') ON CONFLICT ON CONSTRAINT datasets_pkey DO NOTHING RETURNING id, revision, document_json"#.into(),
                 transaction_id: Some(retry.transaction_id.clone()),
                 parameters: vec![],
                 named_parameters: HashMap::new(),

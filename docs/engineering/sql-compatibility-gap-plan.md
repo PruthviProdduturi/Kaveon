@@ -360,8 +360,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   document_json = excluded.document_json` upsert (or its direct typed
   `CAST(excluded.document_json AS JSON)` spelling), with literal `WHERE TRUE`
   or the equivalent `WHERE id = excluded.id` identity predicate accepted as a
-  semantic no-op. Named constraints, other conflict predicates, arbitrary
-  assignments, and arbitrary conflict targets remain
+  semantic no-op. The conventional `<product_table>_pkey` named target is
+  accepted as the same `id` identity target. Other named constraints, other
+  conflict predicates, arbitrary assignments, and arbitrary conflict targets remain
   rejected. Product `RETURNING id, revision` and the qualified `RETURNING *`
   expansion are implemented from the staged revision/CAS write set.
   Savepoints are implemented for the product
