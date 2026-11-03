@@ -1,9 +1,10 @@
 # Bounded product `UPDATE ... FROM` qualification — 2026-11-03
 
 KaveonDB now qualifies a narrow source-backed SQL Server-style `UPDATE ... FROM`
-form for product records. It copies one source product document from the pinned
-transaction snapshot into one target record and commits the replacement through
-the existing owner-checked revision/CAS path.
+form for product records. It copies a source product document from the pinned
+transaction snapshot into one or more target records and commits each
+replacement through the existing owner-checked revision/CAS path in one atomic
+transaction.
 
 ## Qualified shape
 
@@ -19,11 +20,13 @@ RETURNING id, revision, document_json;
 
 The target and source must be the same supported `kaveon.product` kind. The
 source must be one aliased base table, the assignment must copy exactly
-`source.document_json`, and the predicate must contain exactly one literal
-`target.id`, `target.revision`, and `source.id` equality. Source and target rows
-must be owned by the current principal. The source document is read from the
-transaction snapshot; a document staged earlier in the same transaction is
-used without rereading storage. The target revision advances by one and the
+`source.document_json`, and the predicate must contain a literal
+`target.revision` plus either one literal `source.id` and one or more literal
+target ids (including an `IN` list capped at 1,000 ids), or an identity join
+`target.id = source.id` paired with a literal target-id list. Source and target
+rows must be owned by the current principal. Each source document is read from
+the transaction snapshot; a document staged earlier in the same transaction is
+used without rereading storage. Every target revision advances by one and the
 commit remains atomic and replay-safe.
 
 ## Evidence
@@ -37,9 +40,9 @@ commit remains atomic and replay-safe.
 
 ## Explicit boundary
 
-This does not claim general `UPDATE ... FROM` compatibility. Joins, multiple
-source rows, cross-kind sources, arbitrary expressions or assignments, source
-predicates other than one literal id, per-row revision expressions, lake-table
-mutation, and unbounded scans remain rejected. General typed-table DML and
-broader SQL Server/Fabric/PostgreSQL parity remain open in the compatibility
-tracker.
+This does not claim general `UPDATE ... FROM` compatibility. Arbitrary joins,
+multiple source tables, cross-kind sources, arbitrary expressions or
+assignments, source predicates other than one literal id or the identity join,
+per-row revision expressions, lake-table mutation, and unbounded scans remain
+rejected. General typed-table DML and broader SQL Server/Fabric/PostgreSQL
+parity remain open in the compatibility tracker.

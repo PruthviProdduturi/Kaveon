@@ -2095,8 +2095,9 @@ pub enum ProductDmlCommand {
         document_json: String,
     },
     /// Bounded source-backed UPDATE ... FROM semantics. The parser admits one
-    /// same-kind product source row and the transaction layer resolves its
-    /// document from the pinned snapshot before staging the normal CAS update.
+    /// same-kind product source, a literal source id or identity join, and at
+    /// most 1,000 literal target ids; the transaction layer resolves each
+    /// document from the pinned snapshot before staging normal CAS updates.
     UpdateFrom {
         kind: String,
         id: String,
@@ -2343,18 +2344,23 @@ pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDm
                         "product UPDATE FROM must set target.document_json from source.document_json",
                     ));
                 }
-                let (id, expected_revision, source_id) = product_update_from_predicate(
+                let updates = product_update_from_predicate(
                     selection.as_ref(),
                     &target_alias,
                     &source_alias,
                 )?;
-                return Ok(vec![ProductDmlCommand::UpdateFrom {
-                    kind,
-                    id,
-                    expected_revision,
-                    source_id,
-                    source_kind,
-                }]);
+                return Ok(updates
+                    .into_iter()
+                    .map(
+                        |(id, expected_revision, source_id)| ProductDmlCommand::UpdateFrom {
+                            kind: kind.clone(),
+                            id,
+                            expected_revision,
+                            source_id,
+                            source_kind: source_kind.clone(),
+                        },
+                    )
+                    .collect());
             }
             if assignments.len() != 1 {
                 return Err(sql_error("product UPDATE may set document_json only"));
@@ -3684,7 +3690,7 @@ fn product_update_from_predicate(
     selection: Option<&Expr>,
     target_alias: &str,
     source_alias: &str,
-) -> Result<(String, u64, String)> {
+) -> Result<Vec<(String, u64, String)>> {
     let Some(selection) = selection else {
         return Err(sql_error(
             "product UPDATE FROM requires target id, revision, and source id predicates",
@@ -3705,15 +3711,53 @@ fn product_update_from_predicate(
         }
     }
     flatten(selection, &mut predicates);
-    if predicates.len() != 3 {
+    if !(2..=3).contains(&predicates.len()) {
         return Err(sql_error(
-            "product UPDATE FROM requires exactly target.id, target.revision, and source.id predicates",
+            "product UPDATE FROM requires target.id, target.revision, and an optional source.id predicate",
         ));
     }
-    let mut id = None;
+    let mut ids = None;
     let mut revision = None;
     let mut source_id = None;
+    let mut identity_join = false;
     for expression in predicates {
+        if let Expr::InList {
+            expr,
+            list,
+            negated: false,
+        } = expression
+        {
+            let Expr::CompoundIdentifier(parts) = expr.as_ref() else {
+                return Err(sql_error(
+                    "product UPDATE FROM target.id IN must qualify the target column",
+                ));
+            };
+            if parts.len() != 2
+                || !parts[0].value.eq_ignore_ascii_case(target_alias)
+                || !parts[1].value.eq_ignore_ascii_case("id")
+            {
+                return Err(sql_error(
+                    "product UPDATE FROM target.id IN must qualify the target column",
+                ));
+            }
+            if ids.is_some() || identity_join || list.is_empty() || list.len() > 1000 {
+                return Err(sql_error(
+                    "product UPDATE FROM target.id IN must contain 1 to 1000 literals",
+                ));
+            }
+            let target_ids = list
+                .iter()
+                .map(|value| string_literal(value, "product target ID"))
+                .collect::<Result<Vec<_>>>()?;
+            let mut unique_ids = std::collections::HashSet::with_capacity(target_ids.len());
+            if target_ids.iter().any(|value| !unique_ids.insert(value)) {
+                return Err(sql_error(
+                    "product UPDATE FROM target.id IN values must be unique",
+                ));
+            }
+            ids = Some(target_ids);
+            continue;
+        }
         let Expr::BinaryOp {
             left,
             op: BinaryOperator::Eq,
@@ -3737,12 +3781,36 @@ fn product_update_from_predicate(
         let qualifier = parts[0].value.as_str();
         let column = parts[1].value.as_str();
         if qualifier.eq_ignore_ascii_case(target_alias) && column.eq_ignore_ascii_case("id") {
-            if id.is_some() {
+            if let Expr::CompoundIdentifier(source_parts) = right.as_ref() {
+                if identity_join {
+                    return Err(sql_error(
+                        "product UPDATE FROM may contain one target.id join predicate",
+                    ));
+                }
+                if source_parts.len() != 2
+                    || !source_parts[0].value.eq_ignore_ascii_case(source_alias)
+                    || !source_parts[1].value.eq_ignore_ascii_case("id")
+                {
+                    return Err(sql_error(
+                        "product UPDATE FROM target.id joins must reference source.id",
+                    ));
+                }
+                identity_join = true;
+                continue;
+            }
+            if ids.is_some() || identity_join {
                 return Err(sql_error(
                     "product UPDATE FROM may contain one target.id predicate",
                 ));
             }
-            id = Some(string_literal(right, "product target ID")?);
+            let target_ids = vec![string_literal(right, "product target ID")?];
+            let mut unique_ids = std::collections::HashSet::with_capacity(target_ids.len());
+            if target_ids.iter().any(|value| !unique_ids.insert(value)) {
+                return Err(sql_error(
+                    "product UPDATE FROM target.id IN values must be unique",
+                ));
+            }
+            ids = Some(target_ids);
         } else if qualifier.eq_ignore_ascii_case(target_alias)
             && column.eq_ignore_ascii_case("revision")
         {
@@ -3766,11 +3834,21 @@ fn product_update_from_predicate(
             ));
         }
     }
-    Ok((
-        id.ok_or_else(|| sql_error("product UPDATE FROM requires target.id"))?,
-        revision.ok_or_else(|| sql_error("product UPDATE FROM requires target.revision"))?,
-        source_id.ok_or_else(|| sql_error("product UPDATE FROM requires source.id"))?,
-    ))
+    let revision =
+        revision.ok_or_else(|| sql_error("product UPDATE FROM requires target.revision"))?;
+    let ids = ids.ok_or_else(|| sql_error("product UPDATE FROM requires target.id"))?;
+    if source_id.is_none() && !identity_join {
+        return Err(sql_error(
+            "product UPDATE FROM requires source.id or target.id = source.id",
+        ));
+    }
+    Ok(ids
+        .into_iter()
+        .map(|id| {
+            let source_id = source_id.as_ref().map_or_else(|| id.clone(), Clone::clone);
+            (id, revision, source_id)
+        })
+        .collect())
 }
 
 fn merge_target_table(table: &TableFactor) -> Result<String> {
@@ -4721,10 +4799,61 @@ mod tests {
                 source_kind: "dataset".into(),
             }
         );
+        let sql = "UPDATE product.datasets AS target SET target.document_json = source.document_json FROM product.datasets AS source WHERE target.id IN ('target-1', 'target-2') AND target.revision = 2 AND source.id = 'source-1'";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("bounded batch UPDATE FROM should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::UpdateFrom {
+                    kind: "dataset".into(),
+                    id: "target-1".into(),
+                    expected_revision: 2,
+                    source_id: "source-1".into(),
+                    source_kind: "dataset".into(),
+                },
+                ProductDmlCommand::UpdateFrom {
+                    kind: "dataset".into(),
+                    id: "target-2".into(),
+                    expected_revision: 2,
+                    source_id: "source-1".into(),
+                    source_kind: "dataset".into(),
+                },
+            ]
+        );
+        let sql = "UPDATE product.datasets AS target SET target.document_json = source.document_json FROM product.datasets AS source WHERE target.id IN ('target-1', 'target-2') AND target.revision = 2 AND target.id = source.id";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("identity UPDATE FROM should parse")
+        else {
+            panic!("expected product DML");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::UpdateFrom {
+                    kind: "dataset".into(),
+                    id: "target-1".into(),
+                    expected_revision: 2,
+                    source_id: "target-1".into(),
+                    source_kind: "dataset".into(),
+                },
+                ProductDmlCommand::UpdateFrom {
+                    kind: "dataset".into(),
+                    id: "target-2".into(),
+                    expected_revision: 2,
+                    source_id: "target-2".into(),
+                    source_kind: "dataset".into(),
+                },
+            ]
+        );
         for sql in [
             "UPDATE product.datasets AS target SET document_json = source.document_json FROM product.charts AS source WHERE target.id = 'target-1' AND target.revision = 2 AND source.id = 'source-1'",
             "UPDATE product.datasets AS target SET document_json = '{}' FROM product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 2 AND source.id = 'source-1'",
-            "UPDATE product.datasets AS target SET document_json = source.document_json FROM product.datasets AS source WHERE target.id = 'target-1' AND target.revision = 2 AND target.id = source.id",
+            "UPDATE product.datasets AS target SET document_json = source.document_json FROM product.datasets AS source WHERE target.id IN ('target-1', 'target-1') AND target.revision = 2 AND source.id = 'source-1'",
+            "UPDATE product.datasets AS target SET document_json = source.document_json FROM product.datasets AS source WHERE target.id IN ('target-1', 'target-2') AND target.revision = 2 AND source.id = source.id",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("shape should parse before adaptation")
