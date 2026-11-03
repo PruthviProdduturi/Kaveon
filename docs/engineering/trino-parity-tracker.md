@@ -51,8 +51,9 @@ child upper bound. Joins and set operations expose safe product/sum/minimum/
 left-input caps without estimating predicate selectivity. Evidence:
 `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
 Finished query rows are now also attributed through directly connected
-`Window`/`Project`/`Sort` chains with an explicit `derived_row_preserving`
-scope; propagation stops at filters, limits, aggregates, joins, and set
+`Window`/`Project`/`Sort` chains and the first directly reached `Filter` with an
+explicit `derived_row_preserving` scope; the filter's input is not labeled with
+post-filter rows, and propagation stops at limits, aggregates, joins, and set
 operations. This is bounded diagnostic evidence, not full operator telemetry:
 `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 Live distributed stage publication also preserves the planner's operator and

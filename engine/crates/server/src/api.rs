@@ -11560,6 +11560,19 @@ fn annotate_row_preserving_actuals(node: &mut kaveon_core::PlanNode, actual_rows
     let Some(actual_rows) = actual_rows else {
         return;
     };
+    // Once a row-preserving chain reaches a Filter, the filter's output is the
+    // query result represented by this chain. Attach the measured count to the
+    // filter itself, but never descend into its input: that would incorrectly
+    // label pre-filter rows with the post-filter cardinality.
+    if node.operator.eq_ignore_ascii_case("Filter") {
+        node.attributes
+            .insert("actual_output_rows".to_owned(), actual_rows.to_string());
+        node.attributes.insert(
+            "actual_rows_scope".to_owned(),
+            "derived_row_preserving".to_owned(),
+        );
+        return;
+    }
     if !matches!(
         node.operator.to_ascii_lowercase().as_str(),
         "project" | "sort" | "window"
@@ -16382,10 +16395,19 @@ mod tests {
             "derived_row_preserving"
         );
         assert_eq!(
-            root.children[0].children[0].children[0].children[0]
+            root.children[0].children[0].children[0]
                 .attributes
                 .get("actual_output_rows"),
-            None
+            Some(&"7".to_owned())
+        );
+        assert_eq!(
+            root.children[0].children[0].children[0].attributes["actual_rows_scope"],
+            "derived_row_preserving"
+        );
+        assert!(
+            !root.children[0].children[0].children[0].children[0]
+                .attributes
+                .contains_key("actual_output_rows")
         );
     }
 
