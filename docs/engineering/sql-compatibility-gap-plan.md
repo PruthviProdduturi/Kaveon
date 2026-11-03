@@ -25,6 +25,9 @@ The authoritative capability details remain in:
 - [Connector capabilities](../reference/connector-capabilities.md)
 - [Fabric comparison](../research/kaveon-engine-vs-fabric-sql-analytics-endpoint.md)
 
+The current PostgreSQL/Fabric authority-language audit is recorded in
+[`track0-current-authority-language-audit-2026-11-03.md`](../qualification/track0-current-authority-language-audit-2026-11-03.md).
+
 ## Closure order
 
 ### Phase 1 — T-SQL/Fabric read compatibility
