@@ -630,6 +630,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_try_cast_varchar",
+        "SELECT TOP 5 user_id, TRY_CAST(actions AS VARCHAR) AS actions_text FROM {T} ORDER BY event_date, user_id, actions",
+        true,
+    ),
+    (
         "tsql_convert_date_literals",
         "SELECT CONVERT(DATE, '12/31/2024', 101) AS us_date, CONVERT(DATE, 'Dec 31 2024', 0) AS named_date, CONVERT(DATE, '20241231', 112) AS compact_date FROM {T} LIMIT 1",
         true,
