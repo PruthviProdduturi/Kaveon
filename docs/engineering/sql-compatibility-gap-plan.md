@@ -87,6 +87,10 @@ and three-worker coverage for the declared style set. Literal DATE styles `0`,
 `ISNULL`, `CONCAT`, `CONCAT_WS`, `CHOOSE`, `DATEADD`, `DATEDIFF`, and `DATEPART` now
 pass exact local-vs-three-worker differential checks across dictionary, plain,
 partitioned, clustered, and fragmented Parquet layouts. `TOP PERCENT` and
+The T-SQL `DATEPART(dw|weekday|w, ...)` slice uses the explicit default
+`DATEFIRST 7` numbering (Sunday=1 through Saturday=7) in local and
+three-worker execution; session-level `SET DATEFIRST` remains outside the
+contract (`docs/qualification/track2-tsql-datepart-weekday-2026-11-03.md`).
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
 without a complete tie-breaker, SQL permits different tied rows and the
 qualification is intentionally withheld. Numeric `CONVERT` and
