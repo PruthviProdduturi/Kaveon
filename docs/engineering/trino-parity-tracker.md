@@ -280,6 +280,11 @@ TOTALS` and mixed modifier forms remain explicit rejections. Evidence:
 `docs/qualification/track2-tsql-group-by-modifiers-2026-11-02.md`.
 The capability row's historical corpus pointer is superseded by the 129-case
 corpus and pin above; do not use its older count as current evidence.
+The two newest cases also qualify native SQL Server/Fabric `JSON_VALUE` and
+`JSON_QUERY` text forms: scalar extraction returns text (or NULL for a
+container), while `JSON_QUERY` returns canonical container text. Exact local
+and three-worker evidence is retained in
+`docs/qualification/track2-tsql-json-text-functions-2026-11-02.md`.
 
 Run from `engine/`:
 
