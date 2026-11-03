@@ -36,7 +36,7 @@ The authoritative capability details remain in:
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 118-case corpus has planner coverage and focused exact
+  The current 119-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
@@ -126,8 +126,8 @@ and `docs/qualification/track2-tsql-trim-directional-characters-2026-10-29.md`.
 `TRANSLATE` now has a bounded SQL Server-compatible Unicode scalar mapping
 path, including NULL propagation and first-match/extra-character semantics,
 and is covered by the versioned planner corpus and three-worker differential
-gate. `DATE_BUCKET` buckets for year, quarter, month, week, day, hour, minute, and
-second lower to the existing typed `DATE_TRUNC` path and have exact
+gate. `DATE_BUCKET` buckets for year, quarter, month, week, day, hour, minute,
+second, millisecond, and microsecond lower to the existing typed `DATE_TRUNC` path and have exact
 local/distributed coverage (see `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`); row-local and
 typed-literal custom origins are qualified, while unsupported origin shapes
 and dateparts remain explicitly rejected. Row-local BIGINT widths are guarded
@@ -140,6 +140,10 @@ culture-specific overloads remain rejected. The same evaluator now honors the
 supplied pattern for `DATE_FORMAT`/`TO_CHAR`, with exact local and three-worker
 evidence in `docs/qualification/track2-tsql-format-temporal-2026-10-29.md` and
 `docs/qualification/track2-tsql-format-numeric-2026-11-02.md`.
+Subsecond timestamp buckets have exact local/three-worker evidence in
+`docs/qualification/track2-tsql-date-bucket-subsecond-2026-11-02.md`;
+nanosecond bucket inputs remain rejected because the execution timestamp
+contract is microsecond precision.
 
 `ASCII`, `UNICODE`, and bounded `CHAR` are also qualified: ASCII returns the
 leading ASCII scalar and NULL for a non-ASCII leading scalar, UNICODE returns
