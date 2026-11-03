@@ -60,7 +60,8 @@ The authoritative capability details remain in:
 - [x] Preserve Arrow `Utf8View` text through aggregate grouping, statistics
   metadata, client-facing type labels, and JSON result serialization so chart
   dimensions and text-key consumers receive logical strings. Evidence:
-  `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md`.
+  `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md` and
+  `docs/qualification/track3-utf8view-statistics-2026-11-03.md`.
 - [x] Enforce the versioned corpus as a release gate. The Engine workflow
   validates the corpus count, case IDs, status fields, repository commit pin,
   and tracker synchronization before Rust compilation; changes to the tracker
