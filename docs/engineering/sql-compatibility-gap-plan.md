@@ -316,6 +316,9 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   Distributed fragment roots with an exact operator/estimate now also expose
   bounded `stage_boundaries` output-row diagnostics; the stage-level evidence
   is recorded in `docs/qualification/track3-operator-estimate-diagnostics-2026-11-02.md`.
+  Coordinator aggregate and TopN shortcuts expose the same boundary when the
+  physical root estimate is available, with final merged rows explicitly
+  scoped as `query_result`.
 - [ ] Extend estimate-vs-actual diagnostics to every physical operator and
   selectivity boundary; this remains open. Physical plan display now carries
   conservative child-input lineage for unary operators, joins, semi/anti

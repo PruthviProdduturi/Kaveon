@@ -453,6 +453,8 @@ struct StageTelemetry {
     elapsed_us: u64,
     tasks: Vec<TaskTelemetry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    final_output_rows: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     operator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     estimated_rows: Option<u64>,
@@ -6875,6 +6877,10 @@ async fn run_statement(
         }
     }
 
+    let aggregate_stage_metadata = specialized_stage_metadata(
+        &physical_plan,
+        &["Aggregate", "HashAggregate", "FinalAggregate"],
+    );
     if let Some(distributed) = execute_distributed_aggregate(
         &state,
         &query_id,
@@ -6882,6 +6888,7 @@ async fn run_statement(
         &context,
         &plan,
         query_memory.pool(),
+        aggregate_stage_metadata,
     )
     .await
     {
@@ -7003,8 +7010,16 @@ async fn run_statement(
         }
     }
 
-    if let Some(distributed) =
-        execute_distributed_top_n(&state, &query_id, &sql, &context, &plan).await
+    let top_n_stage_metadata = specialized_stage_metadata(&physical_plan, &["TopN", "Limit"]);
+    if let Some(distributed) = execute_distributed_top_n(
+        &state,
+        &query_id,
+        &sql,
+        &context,
+        &plan,
+        top_n_stage_metadata,
+    )
+    .await
     {
         match distributed {
             Ok((result, stage)) => {
@@ -11931,18 +11946,25 @@ fn collect_stage_estimate_details(stages: &[StageTelemetry]) -> Vec<StageEstimat
         .filter_map(|stage| {
             let operator = stage.operator.as_ref()?;
             let estimated_rows = stage.estimated_rows?;
-            let actual_rows = stage
-                .tasks
-                .iter()
-                .map(|task| task.output_rows as u64)
-                .reduce(u64::saturating_add)?;
+            let (actual_rows, actual_rows_scope) = if let Some(rows) = stage.final_output_rows {
+                (rows, "query_result")
+            } else {
+                (
+                    stage
+                        .tasks
+                        .iter()
+                        .map(|task| task.output_rows as u64)
+                        .reduce(u64::saturating_add)?,
+                    "stage_output_rows",
+                )
+            };
             let (classification, ratio) = estimate_classification(estimated_rows, actual_rows);
             Some(StageEstimateDiagnostic {
                 stage_id: stage.stage_id,
                 operator: operator.clone(),
                 estimated_rows,
                 actual_rows,
-                actual_rows_scope: "stage_output_rows",
+                actual_rows_scope,
                 ratio,
                 classification,
             })
@@ -12260,6 +12282,32 @@ async fn get_cluster(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .count(),
         total_nodes: nodes.len(),
     })
+}
+
+/// Return estimate metadata for a coordinator shortcut only when its physical
+/// root is one of the operators whose final response rows are measured by the
+/// shortcut. Projection wrappers are transparent; all other roots remain
+/// unavailable rather than inheriting a possibly unrelated child estimate.
+fn specialized_stage_metadata(
+    plan: &kaveon_core::PlanNode,
+    operators: &[&str],
+) -> (Option<String>, Option<u64>) {
+    let mut node = plan;
+    while node.operator.eq_ignore_ascii_case("Project") && node.children.len() == 1 {
+        node = &node.children[0];
+    }
+    if !operators
+        .iter()
+        .any(|operator| node.operator.eq_ignore_ascii_case(operator))
+    {
+        return (None, None);
+    }
+    let estimate = node
+        .attributes
+        .get("estimated_output_rows")
+        .or_else(|| node.attributes.get("estimated_rows"))
+        .and_then(|value| value.parse::<u64>().ok());
+    (Some(node.operator.clone()), estimate)
 }
 
 async fn get_node(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -14567,6 +14615,7 @@ async fn execute_distributed_top_n(
     sql: &str,
     context: &QueryContext,
     plan: &LogicalPlan,
+    stage_metadata: (Option<String>, Option<u64>),
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     let (sort_exprs, limit) = top_n_merge_contract(plan)?;
     let worker_selection = compatible_workers_with_wait(state, &context.catalog_snapshot_id).await;
@@ -14732,8 +14781,9 @@ async fn execute_distributed_top_n(
             completed_tasks: task_metrics.len(),
             elapsed_us: total_elapsed_us,
             tasks: task_metrics,
-            operator: None,
-            estimated_rows: None,
+            final_output_rows: Some(batches.iter().map(|batch| batch.num_rows() as u64).sum()),
+            operator: stage_metadata.0,
+            estimated_rows: stage_metadata.1,
         },
     )))
 }
@@ -14848,6 +14898,7 @@ async fn execute_distributed_aggregate(
     context: &QueryContext,
     plan: &LogicalPlan,
     memory: &kaveon_core::QueryMemoryPool,
+    stage_metadata: (Option<String>, Option<u64>),
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     if exact_metadata_count_plan(plan) {
         return None;
@@ -14979,6 +15030,7 @@ async fn execute_distributed_aggregate(
         Some(memory),
     );
     Some(merged.map(|result| {
+        let final_output_rows = Some(result.data.len() as u64);
         (
             result,
             StageTelemetry {
@@ -14988,8 +15040,9 @@ async fn execute_distributed_aggregate(
                 completed_tasks: task_metrics.len(),
                 elapsed_us: total_elapsed_us,
                 tasks: task_metrics,
-                operator: None,
-                estimated_rows: None,
+                final_output_rows,
+                operator: stage_metadata.0,
+                estimated_rows: stage_metadata.1,
             },
         )
     }))
@@ -15795,6 +15848,7 @@ fn record_stage_task(
                     completed_tasks: 0,
                     elapsed_us,
                     tasks: Vec::new(),
+                    final_output_rows: None,
                     operator,
                     estimated_rows,
                 },
@@ -16319,6 +16373,7 @@ mod tests {
                     scan: None,
                 },
             ],
+            final_output_rows: None,
             operator: Some("Filter".into()),
             estimated_rows: Some(100),
         }];
@@ -16329,9 +16384,34 @@ mod tests {
         assert_eq!(details[0].classification, "overestimated");
         assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
 
+        let mut final_rows = stages.clone();
+        final_rows[0].final_output_rows = Some(7);
+        let details = super::collect_stage_estimate_details(&final_rows);
+        assert_eq!(details[0].actual_rows, 7);
+        assert_eq!(details[0].actual_rows_scope, "query_result");
+
         let mut unavailable = stages;
         unavailable[0].operator = None;
         assert!(super::collect_stage_estimate_details(&unavailable).is_empty());
+    }
+
+    #[test]
+    fn specialized_stage_metadata_uses_an_estimated_root_through_projection() {
+        let aggregate =
+            kaveon_core::PlanNode::new(2, kaveon_core::PlanPhase::Physical, "FinalAggregate")
+                .with_attribute("estimated_output_rows", "12");
+        let root = kaveon_core::PlanNode::new(3, kaveon_core::PlanPhase::Physical, "Project")
+            .with_child(aggregate);
+        let metadata = super::specialized_stage_metadata(&root, &["Aggregate", "FinalAggregate"]);
+        assert_eq!(metadata.0.as_deref(), Some("FinalAggregate"));
+        assert_eq!(metadata.1, Some(12));
+
+        let filter = kaveon_core::PlanNode::new(4, kaveon_core::PlanPhase::Physical, "Filter")
+            .with_child(root);
+        assert_eq!(
+            super::specialized_stage_metadata(&filter, &["Aggregate"]),
+            (None, None)
+        );
     }
 
     #[test]
@@ -17132,6 +17212,7 @@ mod tests {
                 execution: None,
                 scan: None,
             }],
+            final_output_rows: None,
             operator: None,
             estimated_rows: None,
         };
@@ -23347,6 +23428,7 @@ mod tests {
             completed_tasks: 2,
             elapsed_us: 1,
             tasks: vec![task(Some(scan(40, 60, 3))), task(Some(scan(30, 50, 2)))],
+            final_output_rows: None,
             operator: None,
             estimated_rows: None,
         }];
