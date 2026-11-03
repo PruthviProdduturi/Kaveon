@@ -51,8 +51,9 @@ operations. This is bounded diagnostic evidence, not full operator telemetry:
 `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 
 The latest SQL compatibility increments are subsecond `DATE_BUCKET` timestamp
-units and literal `CONVERT(DATE, ..., style)`
-styles `0`, `101`, and `112`, plus `CONCAT`, all qualified in the current
+units and the full bounded literal/runtime `CONVERT(DATE, ..., style)` set
+(`0`, `1`, `23`, `101`–`112` where defined, `20`, `21`, `120`, `121`, and
+`126`), plus `CONCAT`, all qualified in the current
 three-worker differential gates. `DATETIME2FROMPARTS` precision 4–6 remains
 qualified in `0e8441d0` with microsecond arithmetic (precision 7 remains an
 explicit rejection because the engine stores microseconds). It follows the
@@ -152,8 +153,9 @@ Unicode `REPEAT` path for non-negative integer-literal or bounded row-local
 BIGINT expressions (including arithmetic and casts); negative counts return
 NULL, while binary and truncation semantics remain outside the contract. Focused evidence is retained in
 `docs/qualification/track2-tsql-replicate-2026-10-29.md`.
-Literal `CONVERT(DATE, ..., style)` styles `0`, `101`, and `112` also have
-exact three-worker evidence in
+Literal `CONVERT(DATE, ..., style)` styles `0`, `1`, `23`, `101`, `102`, `103`,
+`104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`, `120`, `121`, and
+`126` also have exact three-worker evidence in
 `docs/qualification/track2-tsql-convert-date-literals-2026-10-29.md`.
 The `CHOOSE` evidence is retained in
 `docs/qualification/track2-tsql-choose-2026-10-29.md`.
