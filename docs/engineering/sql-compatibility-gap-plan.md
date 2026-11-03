@@ -347,6 +347,11 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   inferred. Evidence:
   `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md` and
   `docs/qualification/track3-operator-estimate-diagnostics-2026-11-02.md`.
+  Finished query rows now also propagate through a directly connected
+  `Window`/`Project`/`Sort` chain with an explicit
+  `derived_row_preserving` scope; the propagation stops at cardinality-changing
+  operators. Evidence:
+  `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 - [x] Qualify result-cache behavior separately from data-cache behavior. The
   result cache is keyed by normalized SQL, parameters, catalog snapshot,
   pinned source versions, and time zone; it reports cache execution mode,

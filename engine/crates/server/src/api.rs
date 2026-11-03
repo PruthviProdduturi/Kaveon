@@ -11544,6 +11544,34 @@ fn annotate_actual_root(plan: &mut Option<kaveon_core::PlanNode>, row_count: Opt
         .insert("actual_rows_scope".to_owned(), "query_result".to_owned());
 }
 
+/// Propagate the query-result cardinality through operators whose SQL
+/// semantics preserve one output row for every input row.  This deliberately
+/// stops at filters, limits, aggregates, joins, and set operations: without
+/// operator-level counters, inferring through those nodes would manufacture
+/// selectivity data and make estimate diagnostics misleading.
+fn annotate_row_preserving_actuals(node: &mut kaveon_core::PlanNode, actual_rows: Option<u64>) {
+    let Some(actual_rows) = actual_rows else {
+        return;
+    };
+    if !matches!(
+        node.operator.to_ascii_lowercase().as_str(),
+        "project" | "sort" | "window"
+    ) {
+        return;
+    }
+    let Some(child) = node.children.first_mut() else {
+        return;
+    };
+    child
+        .attributes
+        .insert("actual_output_rows".to_owned(), actual_rows.to_string());
+    child.attributes.insert(
+        "actual_rows_scope".to_owned(),
+        "derived_row_preserving".to_owned(),
+    );
+    annotate_row_preserving_actuals(child, Some(actual_rows));
+}
+
 fn annotate_actual_scans(
     node: &mut kaveon_core::PlanNode,
     scans: &[ScanTelemetry],
@@ -11574,6 +11602,9 @@ fn count_plan_scans(node: &kaveon_core::PlanNode) -> usize {
 
 async fn commit_query_record(mut record: QueryRecord) -> bool {
     annotate_actual_root(&mut record.plan.physical, record.row_count);
+    if let (Some(plan), Some(row_count)) = (record.plan.physical.as_mut(), record.row_count) {
+        annotate_row_preserving_actuals(plan, Some(row_count));
+    }
     if let Some(plan) = record.plan.physical.as_mut()
         && !record.scans.is_empty()
     {
@@ -16290,6 +16321,38 @@ mod tests {
             !root.children[0]
                 .attributes
                 .contains_key("actual_output_rows")
+        );
+    }
+
+    #[test]
+    fn actual_rows_follow_only_row_preserving_operator_chains() {
+        let scan = kaveon_core::PlanNode::new(40, kaveon_core::PlanPhase::Physical, "Scan");
+        let filter = kaveon_core::PlanNode::new(41, kaveon_core::PlanPhase::Physical, "Filter")
+            .with_child(scan);
+        let sort = kaveon_core::PlanNode::new(42, kaveon_core::PlanPhase::Physical, "Sort")
+            .with_child(filter);
+        let project = kaveon_core::PlanNode::new(43, kaveon_core::PlanPhase::Physical, "Project")
+            .with_child(sort);
+        let mut plan = Some(
+            kaveon_core::PlanNode::new(44, kaveon_core::PlanPhase::Physical, "Window")
+                .with_child(project),
+        );
+
+        super::annotate_actual_root(&mut plan, Some(7));
+        let mut root = plan.unwrap();
+        super::annotate_row_preserving_actuals(&mut root, Some(7));
+
+        assert_eq!(root.attributes["actual_rows_scope"], "query_result");
+        assert_eq!(root.children[0].attributes["actual_output_rows"], "7");
+        assert_eq!(
+            root.children[0].attributes["actual_rows_scope"],
+            "derived_row_preserving"
+        );
+        assert_eq!(
+            root.children[0].children[0].children[0].children[0]
+                .attributes
+                .get("actual_output_rows"),
+            None
         );
     }
 

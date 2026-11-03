@@ -44,6 +44,11 @@ row-preserving `Filter`, `Project`, `Sort`, and `Window` nodes propagate a
 child upper bound. Joins and set operations expose safe product/sum/minimum/
 left-input caps without estimating predicate selectivity. Evidence:
 `docs/qualification/track3-plan-estimate-lineage-2026-10-29.md`.
+Finished query rows are now also attributed through directly connected
+`Window`/`Project`/`Sort` chains with an explicit `derived_row_preserving`
+scope; propagation stops at filters, limits, aggregates, joins, and set
+operations. This is bounded diagnostic evidence, not full operator telemetry:
+`docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
 
 The latest SQL compatibility increments are subsecond `DATE_BUCKET` timestamp
 units and literal `CONVERT(DATE, ..., style)`
