@@ -40,6 +40,10 @@ by the selected database and Kaveon's API guardrails.
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 | `APPROX_COUNT_DISTINCT` (`APPROX_DISTINCT`), `APPROX_PERCENTILE` | Alpha | Sketch-answered estimates with the error stated on the query record; from the table's statistics without a scan when they carry sketches at the pinned version, else computed over the rows. See [Approximate aggregates](#approximate-aggregates) |
 
+`REGEXP_LIKE(value, pattern)` is qualified for literal-pattern text-column
+predicates with SQL NULL propagation and exact local/three-worker results;
+see [`track2-regexp-like-column-2026-11-03.md`](../qualification/track2-regexp-like-column-2026-11-03.md).
+
 Result values preserve logical text at the client boundary: Arrow `Utf8View`
 values serialize as ordinary strings in direct rows and nested values, and
 `Utf8View` map keys retain their string keys. This is qualified separately from
