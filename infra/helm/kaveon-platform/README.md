@@ -1,23 +1,26 @@
 # Kaveon platform Helm chart
 
 This chart is the Kaveon private-cloud release for the existing Engine in the `kaveon`
-namespace. The directory name is retained for backwards compatibility. In normal mode it creates one Studio service (`kaveon-portal:3000`),
-one API service (`kaveon-api:8080`), and one PostgreSQL StatefulSet
-(`kaveon-postgres:5432`) with one `ReadWriteOnce` PVC. PostgreSQL and its init
-Job are omitted in verified restart-rehearsal or final-retirement mode. The
-chart does not create a namespace, secrets, credentials, Ingress, or Engine
-resources.
+namespace. The directory name is retained for backwards compatibility. A
+native install creates one Studio service (`kaveon-portal:3000`) and one API
+service (`kaveon-api:8080`); the chart defaults to PostgreSQL-free
+(`api.cutover.retirementMode: true`). The legacy PostgreSQL StatefulSet
+(`kaveon-postgres:5432`) and schema-init Job are rendered only when both
+retirement and restart-rehearsal modes are disabled. The chart does not create
+a namespace, secrets, credentials, Ingress, or Engine resources.
 
-Every image is required as an immutable `sha256` digest. Supply a values file
-with the three image repositories and digests and the ADLS location for the
-already registered `OpenSource` catalog. The init Job applies `/app/schema_postgresql.sql`, then upserts the
-active native ADLS catalog-source record using `engine_catalog = OpenSource`.
+Every rendered image is required as an immutable `sha256` digest. Supply a
+values file with the API and Studio image repositories and digests plus the
+ADLS location for the
+already registered `OpenSource` catalog. In legacy compatibility mode, the init
+Job applies `/app/schema_postgresql.sql`; the native path instead upserts the
+active ADLS catalog-source record through KaveonDB.
 
 The automated deploy creates the portal Secret and Engine CA ConfigMap; manual Helm installs must provide these same-namespace resources:
 
 | Resource | Required keys / purpose |
 | --- | --- |
-| Secret `kaveon-portal-auth` | `POSTGRES_PASSWORD`, `METADATA_PASSWORD`, `AUTH_SECRET`, `KAVEON_PROXY_SECRET`, `KAVEON_ENGINE_BRIDGE_TOKEN`, `KAVEON_ENGINE_CATALOG_TOKEN`, `KAVEON_CREDENTIAL_ACTIVE_KEY`, `KAVEON_CREDENTIAL_KEYS`, `AUTH_MICROSOFT_ENTRA_ID_ID`, `AUTH_MICROSOFT_ENTRA_ID_ISSUER`, `AUTH_ENTRA_ADMIN_OBJECT_IDS` |
+| Secret `kaveon-portal-auth` | Native mode: `AUTH_SECRET`, `KAVEON_PROXY_SECRET`, `KAVEON_ENGINE_BRIDGE_TOKEN`, `KAVEON_ENGINE_CATALOG_TOKEN`, `KAVEON_CREDENTIAL_ACTIVE_KEY`, `KAVEON_CREDENTIAL_KEYS`, `AUTH_MICROSOFT_ENTRA_ID_ID`, `AUTH_MICROSOFT_ENTRA_ID_ISSUER`, `AUTH_ENTRA_ADMIN_OBJECT_IDS`; legacy PostgreSQL mode additionally requires `POSTGRES_PASSWORD` and `METADATA_PASSWORD` |
 | ConfigMap `kaveon-engine-ca` | `ca.crt`, the CA used to verify `https://kaveon:8080` |
 
 The Auth.js public-client flow uses `KAVEON_ENTRA_PUBLIC_CLIENT=true`; the chart
@@ -35,14 +38,13 @@ confined to read statements. The Engine's half of the posture — the
 per-principal live-read quota — is the Engine chart's `resourceGroups` block;
 set both for a demo cluster and neither for anything else.
 
-The PostgreSQL image must be a digest-pinned mirror of Debian-based PostgreSQL
-17. Its user and database are deliberately fixed to `kaveon` and `kaveonmeta`;
-only the password comes from the existing Secret, and `PGDATA` uses a child of
-the PVC mount. Each workload maps only its required Secret keys: PostgreSQL and
-the init Job receive the database password, the API receives database/proxy/
-Engine/credential keys, and Studio receives Auth.js/proxy/Entra keys. The API
-verifies the Engine with the mounted private CA and only uses the internal HTTPS
-Engine URL.
+If legacy compatibility mode is explicitly selected, the PostgreSQL image must
+be a digest-pinned mirror of Debian-based PostgreSQL 17. Its user and database
+are deliberately fixed to `kaveon` and `kaveonmeta`; only the password comes
+from the existing Secret, and `PGDATA` uses a child of the PVC mount. Native
+PostgreSQL-free installs do not render those workloads or require their
+credentials; the API receives the KaveonDB, Engine, proxy, and credential keys
+it needs, and Studio receives Auth.js/proxy/Entra keys.
 
 Example validation does not contact a cluster:
 
@@ -82,8 +84,9 @@ by default because uninstalling a rehearsal must not delete its evidence. Set
 the same claim name in `cutover.evidencePvc`, `retirementReports.evidencePvc`,
 and `postgresqlFreeSmoke.evidencePvc`.
 
-All cutover switches under `api.cutover` default off. Shadow-read and outbox
-flags may be enabled family by family while PostgreSQL remains authoritative;
+Retirement is enabled by default. Shadow-read and outbox flags may be enabled
+family by family only in an explicitly selected rehearsal/legacy overlay while
+PostgreSQL remains authoritative;
 `productReplay.enabled` controls the replay worker independently. The write
 fence is also explicit and should be activated only for the final live drain.
 
