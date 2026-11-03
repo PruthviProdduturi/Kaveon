@@ -42,8 +42,8 @@ by-source delete batches accept `OUTPUT deleted.id` and
 corresponding `inserted.id`/`inserted.revision` projection. The transaction API
 resolves supported MERGE actions to revision/CAS commands, then filters the
 staged write set by the requested pseudo-table; source rows that are no-ops are
-omitted rather than fabricated. Document projections and broader by-source
-combinations remain rejected.
+omitted rather than fabricated. `deleted.document_json`, mixed pseudo-table
+projections, and broader by-source combinations remain rejected.
 
 ## Evidence
 
