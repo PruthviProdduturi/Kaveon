@@ -7,7 +7,9 @@ August 2026
 > case study for the named datasets, dashboards, database size, and cache state;
 > they are not universal product guarantees. HLL results are approximate, and
 > compiled coverage depends on connector capabilities and the selected curation
-> budget. See [`STATUS.md`](../STATUS.md) for the current capability ledger.
+> budget. PostgreSQL references describe the historical baseline and external
+> connector adapter only; native KaveonDB DLM artifacts are Engine transaction
+> records. See [`STATUS.md`](../STATUS.md) for the current capability ledger.
 
 ---
 
