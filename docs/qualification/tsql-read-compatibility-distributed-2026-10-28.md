@@ -9,7 +9,7 @@ parity or external-client parity.
 
 ## Evidence
 
-- Corpus: 114 cases, including exact local/three-worker qualification for
+- Corpus: 115 cases, including exact local/three-worker qualification for
   bounded derived-source `PIVOT`, `UNPIVOT`, `CROSS APPLY`, and uncorrelated
   derived `OUTER APPLY` lowerings and explicit fail-closed cases for unbounded
   `PIVOT`, `UNPIVOT`,
@@ -47,6 +47,10 @@ parity or external-client parity.
   `CHARINDEX(..., start_location)` and completed 1/1 with exact
   local/layout/three-worker results in 670.03 seconds, with no worker
   failures or retained exchange/spill files.
+- The complete 115-case differential sweep was rerun after adding bounded
+  Unicode-safe `STUFF` and completed 1/1 with exact local/layout/three-worker
+  results in 640.23 seconds, with no worker failures or retained exchange/spill
+  files.
 - Focused `ISJSON` validity and `VALUE`/`ARRAY`/`OBJECT`/`SCALAR` constraint
   execution passed through the same differential layouts and three-worker
   path (`KAVEON_DIFF_ONLY=tsql_isjson_constraints`).
@@ -55,7 +59,8 @@ parity or external-client parity.
 - Qualified additions in this corpus revision: `COUNT_BIG`, `LEN`, `IIF`,
   `CONCAT` with NULL-as-empty arguments, `CONCAT_WS` with NULL-skipping arguments,
   `CHOOSE`, literal `CONVERT(DATE, …, style)` for styles `0`, `101`, and `112`,
-  `CHARINDEX` including its optional one-based start location, bounded `PATINDEX`,
+  `CHARINDEX` including its optional one-based start location, `STUFF` with
+  Unicode scalar positions and NULL propagation, bounded `PATINDEX`,
   `TRANSLATE`, bounded width-one
   `DATE_BUCKET`, `EOMONTH`, `DATEFROMPARTS`, `DATETIMEFROMPARTS`, `DATETIME2FROMPARTS` (precision 0–6), `SMALLDATETIMEFROMPARTS`, `DATENAME`, `ISDATE`, `ISNUMERIC`,
   `TIMEFROMPARTS` (precision 0–6), bounded UTC-normalized
