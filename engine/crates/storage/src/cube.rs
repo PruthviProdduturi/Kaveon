@@ -719,6 +719,7 @@ impl RowReader {
                 Self::Float(compute::cast(&array, &DataType::Float64)?)
             }
             DataType::Utf8 | DataType::LargeUtf8 => Self::Text(array),
+            DataType::Utf8View => Self::Text(compute::cast(&array, &DataType::Utf8)?),
             DataType::Date32 => {
                 Self::Date(array.as_primitive::<arrow::datatypes::Date32Type>().clone())
             }
@@ -800,7 +801,7 @@ impl RowReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Date32Array, Float64Array, Int64Array, StringArray};
+    use arrow::array::{Date32Array, Float64Array, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{Field, Schema};
     use kaveon_core::{CellMeasure, ShapeAxis, TableShape};
     use std::sync::Arc;
@@ -908,6 +909,33 @@ mod tests {
 
     fn table_id() -> TableId {
         TableId::new("table:lake:sales:events").unwrap()
+    }
+
+    #[test]
+    fn row_reader_normalizes_utf8_view_text_for_cube_dimensions() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Utf8View,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("EU"),
+                None,
+                Some("日本"),
+            ]))],
+        )
+        .unwrap();
+        let directory = directory("utf8-view-reader");
+        write_file(&directory.join("view.parquet"), 0, 1);
+        let source = enumerate_source(directory.to_str().unwrap(), DataFormat::Parquet).unwrap();
+        let file = source.files.first().unwrap();
+        let reader = RowReader::new(&batch, "region", file).unwrap();
+        assert_eq!(reader.at(0), Some(StatValue::Text("EU".into())));
+        assert_eq!(reader.at(1), None);
+        assert_eq!(reader.at(2), Some(StatValue::Text("日本".into())));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     /// The cell of `grouping` at `key`.
