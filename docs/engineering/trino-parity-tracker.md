@@ -66,6 +66,11 @@ bounded diagnostic evidence, not full operator telemetry:
 Live distributed stage publication also preserves the planner's operator and
 estimate metadata for the running estimate endpoint, without inferring row
 counts (`docs/qualification/track3-live-stage-estimate-metadata-2026-11-03.md`).
+Scan diagnostics now retain exact reader boundaries for selected rows, emitted
+rows, decoder-filter rows examined/admitted, and optional admitted/ examined
+`filter_selectivity` (`admitted / examined`); this is still scan-only evidence and does not claim
+intermediate join, aggregate, window, or sort rows
+(`docs/qualification/track3-scan-emitted-row-diagnostics-2026-11-03.md`).
 
 The latest SQL compatibility increments are corrected calendar-width and
 custom-origin `DATE_BUCKET` semantics, including typed timestamp origins for
