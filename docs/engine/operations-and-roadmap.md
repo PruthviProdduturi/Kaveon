@@ -4,8 +4,10 @@ The Engine exposes health/readiness, statement (with per-request settings
 and `SET SESSION` prefixes), query history and cancellation, cluster/node
 (memory, admission and result-cache counters), catalog, cache, transaction,
 task/exchange, and `/ui` operational surfaces; the [HTTP API
-reference](../reference/api.md) lists them. Query history is process-local
-(100 records). Metrics remain optional where not measured; Kaveon never
+reference](../reference/api.md) lists them. Terminal query history is retained
+in a bounded, locally durable coordinator journal across restarts; the journal
+restores history without pretending that old plans, task telemetry, or preview
+rows survived. Metrics remain optional where not measured; Kaveon never
 fabricates operator CPU, memory, blocked, network, or spill values.
 
 Internal exchange uses a separate bearer token. The Engine authenticates
