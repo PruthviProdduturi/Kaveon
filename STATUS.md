@@ -8,13 +8,12 @@
 > query history are product records committed through the Engine, not rows in a
 > relational database.
 >
-> ⚠️ A fresh install does not match yet. The runtime reads
-> `KAVEON_POSTGRESQL_RETIREMENT_MODE`, which is false when unset, and the only
-> place in this repo that sets it is `docker-compose.yml` for the local stack.
-> The Helm chart still ships `retirementMode: false`
-> (`infra/helm/kaveon-platform/values.yaml:102`). Until those defaults flip,
-> someone deploying this commit gets the PostgreSQL path the product no longer
-> uses.
+> Native installs default to the PostgreSQL-free path. Docker Compose sets
+> `KAVEON_POSTGRESQL_RETIREMENT_MODE=true` for the default stack, and the Helm
+> chart defaults `api.cutover.retirementMode: true` in
+> `infra/helm/kaveon-platform/values.yaml`. The optional `local-postgres`
+> Compose profile and retirement/reconciliation Jobs remain historical
+> migration and rollback tooling; they are not application authority.
 
 ---
 
@@ -119,7 +118,7 @@
 | Engine CI (`.github/workflows/engine.yml`) — format, Clippy, tests | ✅ Done | Rust warnings are denied |
 | CD — Azure Container Apps and Vercel | ✅ Done | `.github/workflows/deploy.yml` deploys API; `ci.yml` deploys Studio on `dev` pushes after the web job |
 | Vercel app config (`studio/vercel.json`) | ✅ Done |
-| Bicep IaC (ACR, Container Apps, PostgreSQL, Key Vault, Log Analytics) | ✅ Done |
+| Bicep IaC (ACR, Container Apps, Key Vault, Log Analytics) | ✅ Done | The PostgreSQL module is retained only for historical migration/rehearsal resources and is not part of the native application stack |
 | CONTRIBUTING.md · SECURITY.md · LICENSE · ARCHITECTURE.md · DEPLOYMENT.md | ✅ Done |
 | PR template · issue templates (bug/feature) | ✅ Done |
 | `.gitleaksignore` · `.dockerignore` · `.env.example` | ✅ Done |
