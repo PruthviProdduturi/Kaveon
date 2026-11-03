@@ -875,8 +875,11 @@ impl AggregateState {
                     let total = values
                         .iter()
                         .map(String::len)
-                        .try_fold(value.len(), |total, len| total.checked_add(len))
+                        .try_fold(0usize, |total, len| total.checked_add(len))
                         .and_then(|total| total.checked_add(value.len()))
+                        .and_then(|total| {
+                            total.checked_add(values.len().saturating_mul(delimiter.len()))
+                        })
                         .ok_or_else(|| exec_err("STRING_AGG state size overflow"))?;
                     if total > MAX_STRING_AGG_BYTES {
                         return Err(exec_err(format!(
