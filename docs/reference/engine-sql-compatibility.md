@@ -63,6 +63,12 @@ timestamp precision. Exact local/three-worker qualification is recorded in
 floating-point, and text needles. It preserves NULL inputs, returns NULL for
 malformed JSON, and returns `false` for valid non-array JSON values.
 
+The SQL Server/Fabric trigonometric scalar spellings `SIN`, `COS`, `TAN`,
+`ASIN`, `ACOS`, `ATAN`, `DEGREES`, `RADIANS`, and `PI` are qualified for the
+bounded finite numeric contract with NULL propagation; see the
+[`track2-tsql-trigonometric-2026-11-03.md`](../qualification/track2-tsql-trigonometric-2026-11-03.md)
+qualification record.
+
 `JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
 SQL NULL arguments as JSON `null`; its bounded `ABSENT ON NULL` form omits
 NULL elements. `JSON_OBJECT(key : value, ...)` (or the
