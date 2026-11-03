@@ -2564,8 +2564,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             ));
         };
         if assignments.len() != 1
-            || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
-                if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+            || !merge_document_target(&assignments[0].target, &target_alias)
             || !merge_source_ref(&assignments[0].value, &source_alias, "document_json")
         {
             return Err(sql_error(
@@ -2614,8 +2613,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 unreachable!("not-matched-by-source update was checked above");
             };
             if assignments.len() != 1
-                || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
-                    if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+                || !merge_document_target(&assignments[0].target, &target_alias)
             {
                 return Err(sql_error(
                     "MERGE WHEN NOT MATCHED BY SOURCE must set document_json to a string literal",
@@ -2663,8 +2661,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             unreachable!("matched_only_update checks the MERGE action");
         };
         let document_assignment = if assignments.len() != 1
-            || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
-                if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+            || !merge_document_target(&assignments[0].target, &target_alias)
         {
             None
         } else {
@@ -2748,8 +2745,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             return Err(sql_error("MERGE WHEN MATCHED must update or delete"));
         };
         if assignments.len() != 1
-            || !matches!(&assignments[0].target, AssignmentTarget::ColumnName(name)
-                if name.0.len() == 1 && name.0[0].value.eq_ignore_ascii_case("document_json"))
+            || !merge_document_target(&assignments[0].target, &target_alias)
             || merge_document_assignment(&assignments[0].value, &source_alias).is_none()
         {
             return Err(sql_error(
@@ -2876,6 +2872,23 @@ fn merge_source_ref(expression: &Expr, alias: &str, column: &str) -> bool {
         if parts.len() == 2
             && parts[0].value.eq_ignore_ascii_case(alias)
             && parts[1].value.eq_ignore_ascii_case(column))
+}
+
+/// Accept the ordinary SQL Server spelling for a target assignment while
+/// keeping MERGE writes bounded to the one product document column. The
+/// unqualified form remains valid; a two-part name is valid only when its
+/// qualifier is the target alias from the MERGE header.
+fn merge_document_target(target: &AssignmentTarget, target_alias: &str) -> bool {
+    match target {
+        AssignmentTarget::ColumnName(name) if name.0.len() == 1 => {
+            name.0[0].value.eq_ignore_ascii_case("document_json")
+        }
+        AssignmentTarget::ColumnName(name) if name.0.len() == 2 => {
+            name.0[0].value.eq_ignore_ascii_case(target_alias)
+                && name.0[1].value.eq_ignore_ascii_case("document_json")
+        }
+        _ => false,
+    }
 }
 
 enum MergeDocumentAssignment {
@@ -5388,6 +5401,20 @@ mod tests {
                 document_json: "{\"name\":\"Orders\"}".into(),
             }
         );
+    }
+
+    #[test]
+    fn product_merge_accepts_a_qualified_target_document_assignment() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("qualified target assignment should remain bounded MERGE") else {
+            panic!("expected product MERGE DML");
+        };
+        assert!(matches!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::Upsert { .. }
+        ));
     }
 
     #[test]

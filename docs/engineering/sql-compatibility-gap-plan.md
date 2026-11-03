@@ -320,7 +320,9 @@ matched rows use revision-CAS and ownership checks, while unmatched source
 rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   the contract. The target alias is optional for the bounded form; an
   unaliased target derives its qualifier from the base table name, with the
-  same fail-closed clause and source-shape rules.
+  same fail-closed clause and source-shape rules. Matched document assignments
+  may use either the unqualified `document_json` name or the declared target
+  alias (`target.document_json`); mismatched qualifiers remain rejected.
   A matched-only clause may also carry the bounded source filter
   `source.id = 'literal'` or `source.id IN ('literal', ...)`; excluded source
   rows remain no-ops and selected rows use the same revision/CAS path. Target
