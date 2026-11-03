@@ -57,7 +57,7 @@ sizes, not the current corpus total; the authoritative current total is the
   Unicode-safe `STUFF` and completed 1/1 with exact local/layout/three-worker
   results in 640.23 seconds, with no worker failures or retained exchange/spill
   files.
-- The complete 116-case differential sweep was rerun after adding bounded
+- The complete 117-case differential sweep was rerun after adding bounded
   SQL Server `SPACE` with row-local counts and negative-count NULL semantics;
   it completed 1/1 with exact local/layout/three-worker results in 634.13
   seconds, with no worker failures or retained exchange/spill files.
