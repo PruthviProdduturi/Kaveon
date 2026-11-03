@@ -3285,6 +3285,40 @@ fn distributed_json_value_default_on_empty_matches_local() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// SQL Server's native JSON_VALUE/JSON_QUERY text forms must preserve scalar
+/// versus container semantics through local planning and three-worker
+/// execution. JSON_VALUE returns NULL for a non-scalar path, while JSON_QUERY
+/// returns the canonical JSON container text.
+#[test]
+fn distributed_tsql_json_text_functions_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-json-text-functions-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT JSON_VALUE('{\"customer\":{\"id\":42},\"items\":[1,2]}', '$.customer.id') AS customer_id, JSON_VALUE('{\"customer\":{\"id\":42},\"items\":[1,2]}', '$.customer') AS scalar_object, JSON_QUERY('{\"customer\":{\"id\":42},\"items\":[1,2]}', '$.customer') AS customer, JSON_QUERY('{\"customer\":{\"id\":42},\"items\":[1,2]}', '$.items') AS items FROM (VALUES (1), (2), (3)) AS input(id) ORDER BY input.id";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("distributed-tsql-json-text-functions", 16 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    drop(local);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        true,
+    );
+    assert_eq!(
+        expected,
+        vec!["42\u{1f}NULL\u{1f}{\"id\":42}\u{1f}[1,2]"; 3]
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// SQL/JSON DEFAULT ON ERROR must remain distinct from DEFAULT ON EMPTY for
 /// malformed runtime paths in local and three-worker execution.
 #[test]

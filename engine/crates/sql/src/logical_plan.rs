@@ -9986,6 +9986,17 @@ mod tests {
     }
 
     #[test]
+    fn accepts_tsql_json_value_and_json_query_text_forms() {
+        let plan = sql_to_logical_plan(
+            "SELECT JSON_VALUE(payload, '$.customer.id'), JSON_QUERY(payload, '$.customer') FROM t",
+        )
+        .expect("SQL Server JSON_VALUE/JSON_QUERY text forms should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("JSON_VALUE"), "{rendered}");
+        assert!(rendered.contains("JSON_QUERY"), "{rendered}");
+    }
+
+    #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
         let plan =
             sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
