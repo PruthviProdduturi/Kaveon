@@ -483,6 +483,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   cardinality boundary (`Filter`, `Limit`, `Offset`, `TopN`, aggregate
   variants, `Distinct`, joins, `Unnest`, or `Union`/`Intersect`/`Except`) as
   the output boundary, with an explicit `derived_row_preserving` scope. The
+  physical scan boundary now also retains the reader's exact
+  `actual_rows_emitted` counter alongside `actual_rows_selected`, so
+  row-group selection and post-filter output are not conflated. Evidence:
+  `docs/qualification/track3-scan-emitted-row-diagnostics-2026-11-03.md`.
   boundary's input is never labeled with post-operation rows, and propagation
   stops at unrelated operators. Evidence:
   `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.

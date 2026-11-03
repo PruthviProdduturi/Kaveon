@@ -11666,6 +11666,10 @@ fn annotate_actual_scans(
                 scan.rows_selected.to_string(),
             );
             node.attributes.insert(
+                "actual_rows_emitted".to_owned(),
+                scan.rows_emitted.to_string(),
+            );
+            node.attributes.insert(
                 "actual_rows_scope".to_owned(),
                 "scan_selected_rows".to_owned(),
             );
@@ -12005,6 +12009,8 @@ struct ScanEstimateDiagnostic {
     node_id: kaveon_core::PlanNodeId,
     estimated_rows: u64,
     actual_rows_selected: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_rows_emitted: Option<u64>,
     ratio: f64,
     classification: &'static str,
     estimate_source: Option<String>,
@@ -12017,6 +12023,8 @@ struct OperatorEstimateDiagnostic {
     estimated_rows: u64,
     actual_rows: u64,
     actual_rows_scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual_rows_emitted: Option<u64>,
     ratio: f64,
     classification: &'static str,
     estimate_scope: Option<String>,
@@ -12115,6 +12123,10 @@ fn collect_operator_estimate_details(
             estimated_rows,
             actual_rows,
             actual_rows_scope: actual_rows_scope.to_owned(),
+            actual_rows_emitted: node
+                .attributes
+                .get("actual_rows_emitted")
+                .and_then(|value| value.parse::<u64>().ok()),
             ratio,
             classification,
             estimate_scope: node.attributes.get("estimate_scope").cloned(),
@@ -12222,6 +12234,7 @@ async fn estimate_diagnostics(
                         node_id,
                         estimated_rows,
                         actual_rows_selected,
+                        actual_rows_emitted: Some(scan.rows_emitted),
                         ratio,
                         classification,
                         estimate_source,
@@ -16543,6 +16556,8 @@ mod tests {
         super::annotate_actual_scans(&mut plan, &scans, &mut next_scan);
         assert_eq!(plan.children[0].attributes["actual_rows_selected"], "11");
         assert_eq!(plan.children[1].attributes["actual_rows_selected"], "17");
+        assert_eq!(plan.children[0].attributes["actual_rows_emitted"], "0");
+        assert_eq!(plan.children[1].attributes["actual_rows_emitted"], "0");
         assert_eq!(
             plan.children[0].attributes["actual_rows_scope"],
             "scan_selected_rows"
@@ -16555,6 +16570,7 @@ mod tests {
             .with_attribute("estimated_rows", "100")
             .with_attribute("estimate_source", "source_metadata")
             .with_attribute("actual_rows_selected", "40")
+            .with_attribute("actual_rows_emitted", "25")
             .with_attribute("actual_rows_scope", "scan_selected_rows");
         let root = kaveon_core::PlanNode::new(31, kaveon_core::PlanPhase::Physical, "Filter")
             .with_attribute("estimated_output_rows", "80")
@@ -16565,6 +16581,7 @@ mod tests {
         assert_eq!(details[0].node_id, 30);
         assert_eq!(details[0].operator, "Scan");
         assert_eq!(details[0].actual_rows_scope, "scan_selected_rows");
+        assert_eq!(details[0].actual_rows_emitted, Some(25));
         assert_eq!(details[0].classification, "overestimated");
         assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
     }
