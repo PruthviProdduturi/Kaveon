@@ -14,6 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures::{StreamExt, stream};
 use kaveon_catalog::{
     product_commit::{CommitOutcome, OperationResolution, ProductCatalogCommit},
     product_manifest::{
@@ -34,6 +35,7 @@ const MAX_SESSIONS: usize = 64;
 const MAX_SESSIONS_PER_PRINCIPAL: usize = 8;
 const MAX_SESSION_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PRODUCT_INSERT_SELECT_ROWS: usize = 1_000;
+const MAX_PRODUCT_READ_CONCURRENCY: usize = 16;
 const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
 type StagedDocument = (String, Vec<u8>);
 type ProductStage = (CatalogChange, Option<StagedDocument>);
@@ -897,12 +899,14 @@ impl TransactionRegistry {
         id: &str,
     ) -> Result<ProductReadResponse, RegistryError> {
         let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
-        let snapshot = catalog.read_current().await.map_err(|error| match error {
-            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
-                RegistryError::Corrupt
-            }
-            _ => RegistryError::Unavailable,
-        })?;
+        let snapshot = catalog
+            .read_current_shared()
+            .await
+            .map_err(|error| match error {
+                kaveon_storage::CommitErrorKind::Missing
+                | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                _ => RegistryError::Unavailable,
+            })?;
         let record = snapshot
             .product_record(kind, id)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?
@@ -929,7 +933,7 @@ impl TransactionRegistry {
             id: record.id,
             revision: record.revision,
             generation: snapshot.generation,
-            snapshot_id: snapshot.snapshot_id,
+            snapshot_id: snapshot.snapshot_id.clone(),
             document,
         })
     }
@@ -942,12 +946,14 @@ impl TransactionRegistry {
         cursor: Option<&str>,
     ) -> Result<ProductListResponse, RegistryError> {
         let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
-        let snapshot = catalog.read_current().await.map_err(|error| match error {
-            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
-                RegistryError::Corrupt
-            }
-            _ => RegistryError::Unavailable,
-        })?;
+        let snapshot = catalog
+            .read_current_shared()
+            .await
+            .map_err(|error| match error {
+                kaveon_storage::CommitErrorKind::Missing
+                | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                _ => RegistryError::Unavailable,
+            })?;
         let mut records = Vec::with_capacity(limit);
         // Authorization filtering must happen before pagination is exposed to
         // callers. Otherwise a page containing another user's records can
@@ -958,32 +964,56 @@ impl TransactionRegistry {
             let page = snapshot
                 .product_records_page(kind, limit, scan_cursor.as_deref())
                 .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-            for record in page.records {
-                let owner = record.unique_values.get("owner_principal");
-                if identity.role != crate::security::Role::Admin
-                    && owner.map(String::as_str) != Some(identity.principal.as_str())
-                {
-                    continue;
-                }
-                let bytes = catalog
-                    .fetch_product_document_at(&snapshot, kind, &record.id)
-                    .await
-                    .map_err(|error| match error {
-                        kaveon_storage::CommitErrorKind::Missing
-                        | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
-                        _ => RegistryError::Unavailable,
-                    })?
-                    .ok_or(RegistryError::Corrupt)?;
-                let document =
-                    serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
-                records.push(ProductReadResponse {
-                    kind,
-                    id: record.id,
-                    revision: record.revision,
-                    generation: snapshot.generation,
-                    snapshot_id: snapshot.snapshot_id.clone(),
-                    document,
-                });
+            let authorized_records = page
+                .records
+                .into_iter()
+                .filter_map(|record| {
+                    let owner = record.unique_values.get("owner_principal");
+                    if identity.role != crate::security::Role::Admin
+                        && owner.map(String::as_str) != Some(identity.principal.as_str())
+                    {
+                        return None;
+                    }
+                    Some((record.id, record.revision))
+                })
+                .collect::<Vec<_>>();
+            // Product documents are immutable and independently addressed. A
+            // bounded fan-out keeps a page from paying one object-store RTT per
+            // row while preserving the source page order in `buffered` output.
+            let catalog = (*catalog).clone();
+            let page_records = stream::iter(authorized_records)
+                .map(|(id, revision)| {
+                    let catalog = catalog.clone();
+                    let snapshot = snapshot.clone();
+                    async move {
+                        let bytes = catalog
+                            .fetch_product_document_at(&snapshot, kind, &id)
+                            .await
+                            .map_err(|error| match error {
+                                kaveon_storage::CommitErrorKind::Missing
+                                | kaveon_storage::CommitErrorKind::Invalid => {
+                                    RegistryError::Corrupt
+                                }
+                                _ => RegistryError::Unavailable,
+                            })?
+                            .ok_or(RegistryError::Corrupt)?;
+                        let document =
+                            serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
+                        Ok(ProductReadResponse {
+                            kind,
+                            id,
+                            revision,
+                            generation: snapshot.generation,
+                            snapshot_id: snapshot.snapshot_id.clone(),
+                            document,
+                        })
+                    }
+                })
+                .buffered(MAX_PRODUCT_READ_CONCURRENCY)
+                .collect::<Vec<Result<_, RegistryError>>>()
+                .await;
+            for product in page_records {
+                records.push(product?);
             }
             let page_next_cursor = page.next_cursor;
             if records.len() >= limit || page_next_cursor.is_none() {
@@ -993,7 +1023,7 @@ impl TransactionRegistry {
         };
         Ok(ProductListResponse {
             generation: snapshot.generation,
-            snapshot_id: snapshot.snapshot_id,
+            snapshot_id: snapshot.snapshot_id.clone(),
             records,
             next_cursor,
         })
@@ -1012,12 +1042,14 @@ impl TransactionRegistry {
             ));
         }
         let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
-        let snapshot = catalog.read_current().await.map_err(|error| match error {
-            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
-                RegistryError::Corrupt
-            }
-            _ => RegistryError::Unavailable,
-        })?;
+        let snapshot = catalog
+            .read_current_shared()
+            .await
+            .map_err(|error| match error {
+                kaveon_storage::CommitErrorKind::Missing
+                | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                _ => RegistryError::Unavailable,
+            })?;
         let rows = snapshot
             .typed_rows
             .get(table)
@@ -1045,7 +1077,7 @@ impl TransactionRegistry {
         }
         Ok(SystemListResponse {
             generation: snapshot.generation,
-            snapshot_id: snapshot.snapshot_id,
+            snapshot_id: snapshot.snapshot_id.clone(),
             rows: page,
             next_cursor,
         })
@@ -1058,12 +1090,14 @@ impl TransactionRegistry {
     ) -> Result<SystemRowResponse, RegistryError> {
         validate_system_table(table)?;
         let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
-        let snapshot = catalog.read_current().await.map_err(|error| match error {
-            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
-                RegistryError::Corrupt
-            }
-            _ => RegistryError::Unavailable,
-        })?;
+        let snapshot = catalog
+            .read_current_shared()
+            .await
+            .map_err(|error| match error {
+                kaveon_storage::CommitErrorKind::Missing
+                | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                _ => RegistryError::Unavailable,
+            })?;
         let row = snapshot
             .typed_rows
             .get(table)
@@ -1074,7 +1108,7 @@ impl TransactionRegistry {
             id: id.to_owned(),
             revision: row.revision,
             generation: snapshot.generation,
-            snapshot_id: snapshot.snapshot_id,
+            snapshot_id: snapshot.snapshot_id.clone(),
             columns: row.columns.clone(),
         })
     }
@@ -1102,12 +1136,14 @@ impl TransactionRegistry {
             validate_system_column(column)?;
         }
         let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
-        let snapshot = catalog.read_current().await.map_err(|error| match error {
-            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
-                RegistryError::Corrupt
-            }
-            _ => RegistryError::Unavailable,
-        })?;
+        let snapshot = catalog
+            .read_current_shared()
+            .await
+            .map_err(|error| match error {
+                kaveon_storage::CommitErrorKind::Missing
+                | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                _ => RegistryError::Unavailable,
+            })?;
         let rows = snapshot
             .typed_rows
             .get(table)
@@ -1149,7 +1185,7 @@ impl TransactionRegistry {
             .collect();
         Ok(SystemListResponse {
             generation: snapshot.generation,
-            snapshot_id: snapshot.snapshot_id,
+            snapshot_id: snapshot.snapshot_id.clone(),
             rows,
             next_cursor: None,
         })

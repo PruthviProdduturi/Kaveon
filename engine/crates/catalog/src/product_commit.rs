@@ -3594,6 +3594,20 @@ real blob storage. What matters is how the time moves with the shard count."
         );
     }
 
+    #[tokio::test]
+    async fn shared_snapshot_reads_reuse_the_verified_snapshot() {
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage);
+        catalog
+            .initialize(CatalogSnapshot::empty("snapshot-genesis").unwrap())
+            .await;
+
+        let first = catalog.read_current_shared().await.unwrap();
+        let second = catalog.read_current_shared().await.unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
     /// A write set that was valid against a remembered generation must be
     /// judged against the head, and refused on its own precondition once
     /// another writer has moved past it. If a cached snapshot could stand in

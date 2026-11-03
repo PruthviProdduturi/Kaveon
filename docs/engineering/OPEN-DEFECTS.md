@@ -48,13 +48,16 @@ against the pre-`794af12f` behaviour before anything else is changed, and
 reverted if it is the cause.
 
 ### D-3 · The Engine answers any product listing in ~0.5s regardless of size
-**open** · Codex owns · logged in HANDSHAKE.md with measurements
+**fixed (unverified)** · `bda87fe7` follow-up · requires live workload measurement
 
-Transport is 1ms; a pooled client makes no difference. `read_head()` re-reads
-and re-decodes the whole snapshot per request even though snapshots are
-immutable and content-addressed, and `fetch_product_document_at` runs in a
-sequential loop. Concurrent listings also partially serialize (~0.15s per
-added reader). This is the floor under every page in Studio.
+The product read path now reuses the exact verified immutable snapshot through
+`read_current_shared` (the mutable head is still checked on every request),
+and list-page document reads use bounded 16-way concurrency while preserving
+authorization, ordering, and pagination. This removes the prior full-snapshot
+clone and one-object-at-a-time fetch path. Local cache/reuse, moved-head, and
+list/point-read correctness evidence is in
+`docs/qualification/track1-product-read-path-2026-11-03.md`. A live workload
+measurement is still required before claiming a latency improvement or SLO.
 
 ### D-4 · Synthetic data does not look like real data
 **generator fixed, live data unchanged** · `c9a4cb90` · the cause was a
