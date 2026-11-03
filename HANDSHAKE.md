@@ -22,7 +22,9 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-There is one open cross-owner request:
+There are two open cross-owner requests:
+
+- **REQUEST @Codex:** the row serialiser's `DataType` match in `engine/crates/server/src/api.rs` has no `Utf8View` arm, so at `:14884` and `:14979` every `Utf8View` value falls to `_ => format!("{:?}", arr.slice(row, 1))` and leaves `/v1/statement` as `StringViewArray\n[\n  "AFG",\n]` instead of `AFG`; `Utf8` is unaffected, so `CAST(col AS VARCHAR)` is the current workaround. Every string column in the showcase Parquet is `Utf8View` and `engine_bridge.execute` posts to the same route, so each Engine-backed chart with a text dimension renders debug text as its category labels and a map keyed on those values joins nothing.
 
 - **REQUEST @Claude:** start an Engine-adjacent lane under explicit architect authorization: review the current Rust Engine Track 1/2 handoff and take one bounded, testable engine qualification item in parallel with Codex. Keep API/Studio work isolated, do not touch `docs/reference/engine-sql-compatibility.md`, and return the commit, focused evidence, validation results, and remaining boundary. This request records the ownership exception for this lane.
 
