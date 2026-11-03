@@ -42,6 +42,9 @@ passed
 
 cargo clippy -p kaveon-sql --all-targets -- -D warnings
 passed
+
+cargo clippy --workspace --all-targets -- -D warnings
+passed; finished in 16.49s
 ```
 
 Together these suites cover the versioned T-SQL corpus, distributed

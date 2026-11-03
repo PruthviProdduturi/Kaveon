@@ -24,6 +24,8 @@ the SQL crate suite is 374/374 and the latest full server binary suite is
 run in `track1-server-suite-2026-11-02.md` and the 611/611 release-binary
 record remain historical
 (`docs/qualification/server-suite-release-2026-10-20.md`).
+The same qualification record now includes a clean workspace-wide
+`cargo clippy --workspace --all-targets -- -D warnings` run.
 The current cloud start precondition is recorded in
 `docs/qualification/track1-cloud-precondition-2026-10-19.md`.
 The latest subscription-state check is in
