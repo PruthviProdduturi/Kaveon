@@ -127,6 +127,7 @@
     {"id": "group_by_with_rollup", "sql": "SELECT region, industry, COUNT(*) AS n FROM t GROUP BY region, industry WITH ROLLUP", "status": "planner_qualified", "distributed_status": "qualified_against_explicit_rollup"},
     {"id": "group_by_with_cube", "sql": "SELECT region, industry, COUNT(*) AS n FROM t GROUP BY region, industry WITH CUBE", "status": "planner_qualified", "distributed_status": "qualified_against_explicit_cube"},
     {"id": "group_by_grouping_sets", "sql": "SELECT region, platform, COUNT(*) AS n FROM t GROUP BY GROUPING SETS ((region), (platform))", "status": "planner_qualified", "distributed_status": "qualified_against_local_reference"},
+    {"id": "grouping_id_rollup", "sql": "SELECT region, industry, GROUPING(region), GROUPING(industry), GROUPING_ID(region, industry), COUNT(*) AS n FROM t GROUP BY ROLLUP (region, industry)", "status": "planner_qualified", "distributed_status": "qualified_against_local_reference"},
     {"id": "correlated_apply", "sql": "SELECT * FROM t CROSS APPLY f(t.id)", "status": "explicit_rejection"}
   ]
 }
