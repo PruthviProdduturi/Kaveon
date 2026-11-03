@@ -559,9 +559,15 @@ function showDetail(id){
   }else{
     h+=`<div class="qd-plan-note"><strong>Node-local execution.</strong> No distributed stage was scheduled for this query.</div>`;
   }
-  h+=`<div class="qd-label" style="margin-top:20px">Physical operator metrics</div>
-    <div class="qd-plan-note"><strong>Not measured.</strong> Per-operator CPU, memory, blocked time, and spill counters are not yet emitted.</div>
-  </div>`;
+  h+=`<div class="qd-label" style="margin-top:20px">Physical operator metrics</div>`;
+  if(q.per_operator&&q.per_operator.length){
+    h+=`<div class="qd-plan-note">Only operators with an attached runtime row counter are shown. Missing counters are not inferred.</div><div class="qd-data"><table><thead><tr><th>Operator</th><th>Node</th><th>Estimated rows</th><th>Actual rows</th><th>Ratio</th><th>Classification</th><th>Scope</th></tr></thead><tbody>`;
+    q.per_operator.forEach(o=>{h+=`<tr><td>${esc(o.operator)}</td><td>${o.node_id}</td><td>${o.estimated_rows.toLocaleString()}</td><td>${o.actual_rows.toLocaleString()}</td><td>${Number(o.ratio).toFixed(2)}×</td><td>${esc(o.classification)}</td><td>${esc(o.actual_rows_scope)}</td></tr>`});
+    h+=`</tbody></table></div>`;
+  }else{
+    h+=`<div class="qd-plan-note"><strong>Not measured.</strong> No physical operator has both an estimate and an attached runtime row counter.</div>`;
+  }
+  h+=`</div>`;
 
   // Results
   h+=`<div class="qd-pane" id="qdt-results" role="tabpanel">`;
