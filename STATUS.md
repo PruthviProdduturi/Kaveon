@@ -53,7 +53,7 @@
 | Native durable catalog | 🧪 Alpha | SQLite/WAL single-coordinator authority with revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
 | Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker local Docker topology verified on real Delta data |
 | Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, scan throughput, and decoded-cache hit/miss/eviction/single-flight counters |
-| Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; estimate diagnostics are emitted when matching runtime counters exist, while full intermediate attribution remains target |
+| Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; estimate diagnostics are emitted when matching runtime counters exist, including bounded `derived_row_preserving` attribution through `Window`/`Project`/`Sort` chains; full intermediate attribution remains target |
 | Sort and TopN | 🧪 Alpha | Local and distributed execution with fixed-fan-in external merge |
 | Filter-pushdown optimizer pass | 🧪 Alpha | Wired conservative pushdown with residual row-level evaluation |
 | ADLS Gen2 / S3 readers | 🧪 Alpha | ADLS Gen2 Parquet and Delta reads are qualified on the declared datasets; S3 uses the shared object-store path but remains unqualified |
