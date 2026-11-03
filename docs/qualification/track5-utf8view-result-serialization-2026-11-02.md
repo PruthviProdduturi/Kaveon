@@ -35,7 +35,7 @@ distributed partial aggregation.
 - `aggregate::tests::utf8_view_min_max_and_group_keys_use_logical_text_values`
 - `local::rows::tests::utf8_view_rows_use_text_values`
 - `local::display::tests::utf8_view_cells_render_as_text`
-- `cargo test -p kaveon-server result_rows_encode_utf8_view_values_as_text --all-targets --no-default-features -- --nocapture` — passed
+- `cargo test -p kaveon-server --bin kaveon-server utf8_view -- --nocapture` — passed (serializer and grouped-text regression tests)
 - `cargo clippy -p kaveon-server --all-targets --no-default-features -- -D warnings` — passed
 - `cargo test -p kaveon-cli` — 214 passed, 1 ignored
 
