@@ -11,10 +11,11 @@ result; over-limit values fail closed instead of allocating without bound.
 
 ## Why it remains open
 
-Ordered `WITHIN GROUP` forms, dynamic separators, `DISTINCT`, and `FILTER`
-remain fail-closed. Correct support for those forms needs an ordered merge
-state and additional bounded-memory/spill semantics; this qualification does
-not claim them.
+Ordered `WITHIN GROUP` forms, dynamic separators, and `FILTER` remain outside
+this unordered qualification. Exact `DISTINCT` support is qualified separately
+in `track2-tsql-string-agg-distinct-2026-11-03.md`; that rewrite performs the
+deduplication before the mergeable aggregate so it remains correct across
+workers.
 
 ## Evidence
 

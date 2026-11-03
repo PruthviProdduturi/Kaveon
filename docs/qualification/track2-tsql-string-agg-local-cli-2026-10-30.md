@@ -8,8 +8,10 @@ state as the server planner. This record covers the declared local surface:
 - `STRING_AGG(value, literal_separator)` only;
 - NULL input values are omitted;
 - the separator must be a text literal no larger than 64 KiB;
-- ordered `WITHIN GROUP`, `DISTINCT`, `FILTER`, and dynamic separators remain
-  explicitly rejected.
+- ordered `WITHIN GROUP`, `FILTER`, and dynamic separators remain explicitly
+  rejected. `DISTINCT` is qualified separately through the exact
+  distinct-projection rewrite in
+  `track2-tsql-string-agg-distinct-2026-11-03.md`.
 
 This is local execution evidence. Distributed qualification remains the
 server-side record in
@@ -32,7 +34,7 @@ Results on the committed implementation:
 - 213 CLI tests passed, including
   `local::tests::executes_bounded_string_agg_with_literal_separator`.
 
-The regression executes `SELECT STRING_AGG(kind, '|') AS joined FROM events`
-over the local Parquet fixture and verifies the exact result `click|view`, with
-the NULL fixture row omitted and the output type preserved as UTF-8.
+The regression executes both non-distinct and distinct forms over the local
+Parquet fixture. It verifies `click|click|view` for the former and
+`click|view` for the latter, with the output type preserved as UTF-8.
 

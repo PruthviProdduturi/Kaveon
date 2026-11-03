@@ -1600,10 +1600,12 @@ impl Binder<'_> {
             AggregateExpr::StringAgg {
                 expr,
                 delimiter,
+                distinct,
                 order_desc,
             } => AggregateExpr::StringAgg {
                 expr: self.bind_expr(expr, scope, None)?,
                 delimiter,
+                distinct,
                 order_desc,
             },
             AggregateExpr::Min(expr) => AggregateExpr::Min(self.bind_expr(expr, scope, None)?),

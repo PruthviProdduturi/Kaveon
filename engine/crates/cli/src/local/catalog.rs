@@ -164,7 +164,8 @@ pub(crate) mod tests {
     static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
     /// A fresh directory under the system temp dir holding `events.parquet`
-    /// with three rows.
+    /// with three rows (including a duplicate text value for DISTINCT
+    /// aggregate coverage).
     pub(crate) fn parquet_fixture() -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -185,7 +186,11 @@ pub(crate) mod tests {
             schema.clone(),
             vec![
                 Arc::new(Int64Array::from(vec![1, 2, 3])),
-                Arc::new(StringArray::from(vec![Some("click"), None, Some("view")])),
+                Arc::new(StringArray::from(vec![
+                    Some("click"),
+                    Some("click"),
+                    Some("view"),
+                ])),
             ],
         )
         .expect("fixture batch should build");
