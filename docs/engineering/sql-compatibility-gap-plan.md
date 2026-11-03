@@ -297,6 +297,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
 - [x] Qualify bounded snapshot isolation and transaction-session restart
   behavior for KaveonDB-owned product records; see
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
+- [x] Accept a typed JSON literal in bounded product `UPDATE` assignments.
+  `CAST('<json>' AS JSON)` is normalized to the existing document publication
+  path; arbitrary expressions remain rejected. Evidence:
+  `docs/qualification/track2-native-dml-json-typed-update-2026-11-03.md`.
 - [ ] Add a durable journal/recovery qualification for cloud/object-store
   failures and multi-coordinator restart. This remains distinct from the
   bounded snapshot contract above. The local coordinator journal now fsyncs
