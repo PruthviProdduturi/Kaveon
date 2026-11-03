@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "192f8fac",
+  "engine_commit": "f7a2bc86",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -32,6 +32,8 @@
     {"id": "concat", "sql": "SELECT CONCAT(region, '-', industry, '-', platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "string_agg", "sql": "SELECT STRING_AGG(name, ',') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unordered_literal_separator"},
     {"id": "string_agg_filter", "sql": "SELECT STRING_AGG(name, ',') FILTER (WHERE actions > 10 AND name = 'Japan') FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
+    {"id": "string_agg_within_group", "sql": "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_value_ordered_ascending"},
+    {"id": "string_agg_within_group_desc", "sql": "SELECT STRING_AGG(name, ',') WITHIN GROUP (ORDER BY name DESC) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_value_ordered_descending"},
     {"id": "trim_characters", "sql": "SELECT TRIM(BOTH 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_both_mode_character_set"},
     {"id": "trim_leading_characters", "sql": "SELECT TRIM(LEADING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_leading_character_set"},
     {"id": "trim_trailing_characters", "sql": "SELECT TRIM(TRAILING 'x' FROM name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_trailing_character_set"},
