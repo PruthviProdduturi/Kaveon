@@ -73,6 +73,8 @@ qualified unordered literal-separator `STRING_AGG` slice, exact
 `STRING_AGG(DISTINCT ...)` through a distinct projection, the NULL-preserving
 `FILTER (WHERE ...)` form, and ascending/descending value-ordered
 `WITHIN GROUP` forms (`docs/qualification/track2-tsql-string-agg-within-group-2026-11-02.md`);
+the distinct form's exact local/grouped and three-worker differential evidence
+is recorded in `docs/qualification/track2-tsql-string-agg-distinct-2026-11-03.md`;
 the embedded/local CLI planner now uses the same qualified bounded
 `STRING_AGG` state and separator checks as the server path (local evidence:
 `docs/qualification/track2-tsql-string-agg-local-cli-2026-10-30.md`);
