@@ -73,7 +73,7 @@ are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus is the authoritative
 `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`, with the
-corpus pinned at `d9bc46e3`;
+corpus pinned at `a11bbe1f`;
 later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
