@@ -51,6 +51,7 @@ pseudo-table; source rows that are no-ops are omitted rather than fabricated.
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_accepts_deleted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_unmatched_insert_accepts_inserted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_delete_or_insert_output_is_action_aware`
+- `transaction_api::tests::sql_endpoint_merge_by_source_output_remains_fail_closed`
 - `cargo test -p kaveon-sql --lib sql_server_merge_output -- --nocapture` — 2 passed
 - `cargo test -p kaveon-server --bin kaveon-server transaction_api::tests::sql_endpoint_bounded_merge -- --nocapture` — 12 passed
 
