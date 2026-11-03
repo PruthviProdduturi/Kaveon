@@ -7079,7 +7079,10 @@ fn canonical_function_name(func: &ast::Function) -> String {
         // calendar contract as the Engine's DATE_TRUNC path.
         "DATETRUNC" => "DATE_TRUNC".to_owned(),
         "DATEDIFF" | "DATEDIFF_BIG" => "DATE_DIFF".to_owned(),
-        "DATEPART" => "DATE_PART".to_owned(),
+        // Keep SQL Server DATEPART distinct from Trino DATE_PART so its
+        // weekday aliases can use SQL Server's DATEFIRST 7 numbering
+        // (Sunday=1..Saturday=7) without changing generic Trino semantics.
+        "DATEPART" => "DATE_PART_TSQL".to_owned(),
         // SQL Server exposes the common date-part selectors as scalar
         // aliases. Lower them into the same typed DATE_PART evaluator so
         // local and distributed execution share one null/type contract.
@@ -10085,7 +10088,7 @@ mod tests {
         assert!(rendered.contains("ISNULL"), "{rendered}");
         assert!(rendered.contains("DATE_ADD_DAYS"), "{rendered}");
         assert!(rendered.contains("DATE_DIFF"), "{rendered}");
-        assert!(rendered.contains("DATE_PART"), "{rendered}");
+        assert!(rendered.contains("DATE_PART_TSQL"), "{rendered}");
         assert_eq!(rendered.matches("TimestampMicros").count(), 2, "{rendered}");
     }
 

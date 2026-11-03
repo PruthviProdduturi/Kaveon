@@ -2483,13 +2483,13 @@ fn distributed_multi_array_unnest_typed_null_array_pads_rows() {
     let pool = QueryMemoryPool::new("distributed-unnest-null-array", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
-    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
     drop(local);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let actual = canonical_rows(
         &execute_distributed(statement, &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
-        false,
+        true,
     );
     assert_eq!(actual, expected);
     assert_eq!(actual, vec!["1\u{1f}NULL\u{1f}1", "2\u{1f}NULL\u{1f}2"]);
@@ -2512,14 +2512,14 @@ fn distributed_unnest_typed_null_array_is_empty_with_schema() {
     let pool = QueryMemoryPool::new("distributed-unnest-null-array-empty", 16 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
-    let expected = canonical_rows(&drain(local.operator.as_mut()), true);
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
     drop(local);
     assert!(expected.is_empty());
     assert_eq!(pool.snapshot().current_bytes, 0);
     let actual = canonical_rows(
         &execute_distributed(statement, &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
-        true,
+        false,
     );
     assert!(actual.is_empty());
     assert_eq!(actual, expected);
@@ -8354,6 +8354,31 @@ fn distributed_tsql_isdate_matches_local_and_rejects_numeric_coercion() {
             .iter()
             .all(|row| row.contains("true") && row.contains("false"))
     );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_datepart_weekday_uses_default_datefirst_numbering() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-datepart-weekday-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, DATEPART(dw, event_date) AS weekday_number FROM events ORDER BY user_id, event_date LIMIT 20";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-datepart-weekday-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    assert_eq!(expected.len(), 20);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }

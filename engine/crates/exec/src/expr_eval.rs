@@ -363,7 +363,7 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                     if index == 0
                         && matches!(
                             name.to_ascii_uppercase().as_str(),
-                            "DATE_PART" | "DATE_DIFF"
+                            "DATE_PART" | "DATE_PART_TSQL" | "DATE_DIFF"
                         )
                         && let Expr::Column(unit) = a
                         && !unit.contains('.')
@@ -13249,6 +13249,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let source = &args[1];
             eval_date_part(field_arr, source, num_rows)
         }
+        "DATE_PART_TSQL" => {
+            if args.len() != 2 {
+                return Err(KaveonError::Execution(
+                    "DATEPART requires 2 arguments (field, source)".into(),
+                ));
+            }
+            let field_arr = as_string_array(&args[0])?;
+            let source = &args[1];
+            eval_date_part_tsql(field_arr, source, num_rows)
+        }
         "DATE_NAME" => {
             if args.len() != 2 {
                 return Err(KaveonError::Execution(
@@ -15800,6 +15810,17 @@ fn extract_from_micros(micros: i64, field: DateField) -> i64 {
     }
 }
 
+fn extract_date_part(micros: i64, field: DateField, tsql_weekday: bool) -> i64 {
+    let value = extract_from_micros(micros, field);
+    if tsql_weekday && matches!(field, DateField::DayOfWeek) {
+        // The generic extractor is Sunday=0..Saturday=6. SQL Server's
+        // DATEFIRST 7 contract is Sunday=1..Saturday=7.
+        value + 1
+    } else {
+        value
+    }
+}
+
 fn iso_week_number(days: i64) -> i64 {
     let iso_weekday = (days + 3).rem_euclid(7) + 1;
     let thursday = days + (4 - iso_weekday);
@@ -16729,6 +16750,27 @@ fn truncate_micros(us: i64, unit: &str) -> i64 {
 }
 
 fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
+    eval_date_part_mode(field_arr, source, num_rows, false)
+}
+
+/// SQL Server's DATEPART(weekday|dw|w) uses DATEFIRST 7 by default: Sunday is
+/// 1 and Saturday is 7. Kaveon does not expose SET DATEFIRST yet, so the
+/// bounded T-SQL contract is explicit about this default. Generic DATE_PART
+/// retains the Engine/Trino day-of-week numbering.
+fn eval_date_part_tsql(
+    field_arr: &StringArray,
+    source: &ArrayRef,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    eval_date_part_mode(field_arr, source, num_rows, true)
+}
+
+fn eval_date_part_mode(
+    field_arr: &StringArray,
+    source: &ArrayRef,
+    num_rows: usize,
+    tsql_weekday: bool,
+) -> Result<ArrayRef> {
     let result: Vec<Option<i64>> = (0..num_rows)
         .map(|i| {
             if field_arr.is_null(i) {
@@ -16763,7 +16805,7 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if ts.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(ts.value(i), field)))
+                        Ok(Some(extract_date_part(ts.value(i), field, tsql_weekday)))
                     }
                 }
                 DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
@@ -16771,9 +16813,10 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if ts.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(
+                        Ok(Some(extract_date_part(
                             ts.value(i).saturating_mul(1_000_000),
                             field,
+                            tsql_weekday,
                         )))
                     }
                 }
@@ -16782,9 +16825,10 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if ts.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(
+                        Ok(Some(extract_date_part(
                             ts.value(i).saturating_mul(1_000),
                             field,
+                            tsql_weekday,
                         )))
                     }
                 }
@@ -16793,7 +16837,11 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if ts.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(ts.value(i) / 1_000, field)))
+                        Ok(Some(extract_date_part(
+                            ts.value(i) / 1_000,
+                            field,
+                            tsql_weekday,
+                        )))
                     }
                 }
                 DataType::Date32 => {
@@ -16801,9 +16849,10 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if d.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(
+                        Ok(Some(extract_date_part(
                             d.value(i) as i64 * 86_400_000_000,
                             field,
+                            tsql_weekday,
                         )))
                     }
                 }
@@ -16812,9 +16861,10 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if d.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(
+                        Ok(Some(extract_date_part(
                             d.value(i).saturating_mul(1_000),
                             field,
+                            tsql_weekday,
                         )))
                     }
                 }
@@ -16823,9 +16873,10 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if time.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(
+                        Ok(Some(extract_date_part(
                             time.value(i) as i64 * 1_000_000,
                             field,
+                            tsql_weekday,
                         )))
                     }
                 }
@@ -16834,9 +16885,10 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if time.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(
+                        Ok(Some(extract_date_part(
                             time.value(i) as i64 * 1_000,
                             field,
+                            tsql_weekday,
                         )))
                     }
                 }
@@ -16845,7 +16897,7 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if time.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(time.value(i), field)))
+                        Ok(Some(extract_date_part(time.value(i), field, tsql_weekday)))
                     }
                 }
                 DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond) => {
@@ -16853,7 +16905,11 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                     if time.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_from_micros(time.value(i) / 1_000, field)))
+                        Ok(Some(extract_date_part(
+                            time.value(i) / 1_000,
+                            field,
+                            tsql_weekday,
+                        )))
                     }
                 }
                 _ => Err(KaveonError::Execution(format!(
@@ -28085,6 +28141,15 @@ mod tests {
                 .value(0);
             assert_eq!(value, canonical, "weekday alias {alias}");
         }
+        // DATEPART is SQL Server's DATEFIRST 7 contract: Sunday=1 through
+        // Saturday=7. The generic DATE_PART path above intentionally keeps
+        // the Engine/Trino Sunday=0 numbering.
+        let sunday = Arc::new(Date32Array::from(vec![Some(18_994)])) as ArrayRef;
+        let sql_server = eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        assert_eq!(sql_server, 1);
         let canonical = eval_date_part(&StringArray::from(vec![Some("DAYOFYEAR")]), &source, 1)
             .unwrap()
             .as_primitive::<Int64Type>()
