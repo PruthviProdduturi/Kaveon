@@ -8,7 +8,8 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 157 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-current pin is `cfbf13f3`, which includes SQL Server's fixed-offset
+current pin is `5b2d92c7`, which includes SQL Server's default-datefirst week
+numbering and fixed-offset
 `DATEPART(tzoffset, ...)` slice alongside the existing scalar aliases.
 The pin also includes SQL Server's `ATN2` scalar alias
 conversion (`dd mon yyyy hh:mi:ss:mmm`) and the `%i`/`%u` `FORMATMESSAGE`
@@ -24,6 +25,10 @@ The same T-SQL temporal lane now qualifies `DATEPART(tzoffset, value)` for
 fixed-offset timestamp values, returning signed offset minutes and rejecting
 naive or named zones. Evidence:
 `docs/qualification/track2-tsql-datepart-tzoffset-2026-11-03.md`.
+
+The `week|wk|ww` aliases now use SQL Server's Sunday-first week-one rule;
+`SET DATEFIRST` remains outside the contract. Evidence:
+`docs/qualification/track2-tsql-datepart-week-2026-11-03.md`.
 
 The newest bounded numeric read slice qualifies SQL Server/Fabric `LOG`,
 two-argument `LOG`, `LOG10`, and `EXP` over finite numeric inputs in both local
@@ -108,7 +113,7 @@ are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus is the authoritative
 `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`, with the
-corpus pinned at `cfbf13f3`;
+corpus pinned at `5b2d92c7`;
 later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
