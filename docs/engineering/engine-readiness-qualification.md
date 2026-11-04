@@ -5,9 +5,14 @@ It is not an independently certified rating. The separate “90% better than
 Trino” target requires a selected metric and a declared workload; it cannot mean
 every SQL feature, deployment scenario, and performance dimension at once.
 
-## Current status — 2026-10-07
+## Historical status snapshot — 2026-10-07
 
-The historical September 10 table below is a **narrow integrated-direction
+This dated assessment is retained as qualification provenance, not as the
+current deployment or capability status. For current compatibility and
+deployment boundaries, use the [SQL compatibility gap plan](sql-compatibility-gap-plan.md)
+and [Trino parity tracker](trino-parity-tracker.md).
+
+The September/October table below is a **narrow integrated-direction
 estimate**, not a broad production-certification result. The completed six-round
 AKS comparison on the immutable 5M-row fixture measured **2.1254× Kaveon
 throughput versus Trino** (3.8282 versus 1.8012 successful exact-result QPS),
@@ -36,7 +41,7 @@ queries earns evidence for those cases only. Open critical gates cannot be hidde
 by averaging stronger areas. The rubric and benchmark workload must remain
 visible when reporting a rating.
 
-## Current local evidence
+## Historical local evidence
 
 > **Historical note.** The earlier September scoring and diagnostic ratios are
 > retained below for provenance. They are superseded for current performance by
@@ -213,7 +218,7 @@ Claims must therefore stay scoped as follows:
   Trino throughput. It is below the 1.90× target and is not the publication
   workload.
 
-Engine commit `c88f7ed` is deployed from ACR build `ca1u` as immutable digest
+Historical deployment snapshot: Engine commit `c88f7ed` was deployed from ACR build `ca1u` as immutable digest
 `sha256:1b41e38c56cb4fff74f17aa3c67ea599d6c3a6adfa4df55dede984ebc1d8d50a`.
 The coordinator restart removed 15 abandoned valid exchange directories and
 eight chunk files while preserving byte-identical result-named, malformed-name
@@ -223,7 +228,7 @@ the extended matched Trino publication gate; (2) run a sustained mixed-workload
 soak plus backup/upgrade recovery; (3) qualify the declared product-record
 transaction scope separately. Re-score only from those artifacts.
 
-#### Current-image AKS restart and fault evidence — September 10
+#### Historical-image AKS restart and fault evidence — September 10
 
 The credential-free report
 `engine-aks-fault-pressure-validation-2026-09-10-pass-c88f7ed.json` records all
@@ -238,7 +243,7 @@ pod limits. The separate cleanup artifact records the coordinator PVC namespace
 isolation checks. This is bounded failure evidence, not coordinator HA or a
 sustained-load claim.
 
-#### Current-image local fault evidence — September 10
+#### Historical-image local fault evidence — September 10
 
 Commit `819f9777c22131c2727ed33621f00d6757df7ff9` was built in release mode
 from a clean Engine tree. Both runs used binary SHA-256
