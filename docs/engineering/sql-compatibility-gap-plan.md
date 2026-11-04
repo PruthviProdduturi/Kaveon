@@ -17,6 +17,10 @@ T-SQL compatibility layer. Fabric/Azure SQL registered sources are API
 passthrough sources; they are not executed by Kaveon Engine and cannot be
 joined with Engine catalogs in one query today. KaveonDB transactions are a
 bounded product-record contract, not a PostgreSQL wire-compatible row store.
+The native local profile exercises KaveonDB without PostgreSQL, but the current
+API source audit still finds active PostgreSQL-backed metadata call sites in
+the cloud migration path. Therefore “KaveonDB-native” is a qualified profile,
+not evidence that every deployed API authority has already cut over.
 
 The authoritative capability details remain in:
 
