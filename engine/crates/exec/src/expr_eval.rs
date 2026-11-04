@@ -16777,6 +16777,18 @@ fn eval_date_part_mode(
                 return Ok(None);
             }
             let field_str = field_arr.value(i).to_uppercase();
+            if field_str == "TZOFFSET" {
+                let DataType::Timestamp(_, Some(timezone)) = source.data_type() else {
+                    return Err(KaveonError::Execution(
+                        "DATEPART(tzoffset, ...) requires a timestamp with a fixed timezone offset"
+                            .into(),
+                    ));
+                };
+                if source.is_null(i) {
+                    return Ok(None);
+                }
+                return parse_fixed_timezone_offset_minutes(timezone).map(Some);
+            }
             let field = match field_str.as_str() {
                 "YEAR" | "YY" | "YYYY" => DateField::Year,
                 "MONTH" | "MM" | "M" => DateField::Month,
@@ -16920,6 +16932,36 @@ fn eval_date_part_mode(
         })
         .collect::<Result<_>>()?;
     Ok(Arc::new(Int64Array::from(result)))
+}
+
+fn parse_fixed_timezone_offset_minutes(timezone: &str) -> Result<i64> {
+    let timezone = timezone.trim();
+    if timezone.eq_ignore_ascii_case("UTC") || timezone.eq_ignore_ascii_case("Z") {
+        return Ok(0);
+    }
+    let bytes = timezone.as_bytes();
+    if bytes.len() != 6 || !matches!(bytes[0], b'+' | b'-') || bytes[3] != b':' {
+        return Err(KaveonError::Execution(format!(
+            "DATEPART(tzoffset, ...) requires a fixed offset timezone, got '{timezone}'"
+        )));
+    }
+    let hours = timezone[1..3].parse::<i64>().map_err(|_| {
+        KaveonError::Execution(format!(
+            "DATEPART(tzoffset, ...) has an invalid timezone offset '{timezone}'"
+        ))
+    })?;
+    let minutes = timezone[4..6].parse::<i64>().map_err(|_| {
+        KaveonError::Execution(format!(
+            "DATEPART(tzoffset, ...) has an invalid timezone offset '{timezone}'"
+        ))
+    })?;
+    if hours > 14 || minutes > 59 || (hours == 14 && minutes != 0) {
+        return Err(KaveonError::Execution(format!(
+            "DATEPART(tzoffset, ...) timezone offset is out of range: '{timezone}'"
+        )));
+    }
+    let total = hours * 60 + minutes;
+    Ok(if bytes[0] == b'-' { -total } else { total })
 }
 
 /// Return a temporal value as nanoseconds from the Unix epoch.  Keeping the
@@ -28174,6 +28216,34 @@ mod tests {
                 .value(0);
             assert_eq!(value, canonical, "ISO-week alias {alias}");
         }
+    }
+
+    #[test]
+    fn date_part_tzoffset_reads_fixed_timestamp_timezone() {
+        let source =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(0), None]).with_timezone("+05:30"))
+                as ArrayRef;
+        let result = eval_date_part_tsql(
+            &StringArray::from(vec![Some("tzoffset"), Some("tzoffset")]),
+            &source,
+            2,
+        )
+        .unwrap();
+        let values = result.as_primitive::<Int64Type>();
+        assert_eq!(values.value(0), 330);
+        assert!(values.is_null(1));
+
+        let source =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(0)]).with_timezone("-08:00"))
+                as ArrayRef;
+        let result =
+            eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &source, 1).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), -480);
+
+        let naive = Arc::new(TimestampMicrosecondArray::from(vec![Some(0)])) as ArrayRef;
+        let error =
+            eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &naive, 1).unwrap_err();
+        assert!(error.to_string().contains("fixed timezone offset"));
     }
 
     #[test]
