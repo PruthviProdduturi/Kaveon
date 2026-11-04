@@ -435,7 +435,18 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   product-reference enforcement for KaveonDB-owned typed rows. Evidence:
   `docs/qualification/track2-typed-schema-integrity-2026-10-28.md`.
 - [ ] Add general SQL constraint/index DDL and catalog-backed enforcement for
-  arbitrary user tables and lake-table mutation.
+  arbitrary user tables and lake-table mutation. This is intentionally not a
+  parser-only task: the implementation must persist constraint/index metadata
+  in the catalog revision, validate it on every supported writer (including
+  transactional and maintenance rewrites), expose it through `SHOW CREATE
+  TABLE`/metadata, and define behavior for Parquet, Delta, and object-store
+  snapshot replacement. `clustered_by` and Bloom filters are physical layout
+  hints, not uniqueness or referential constraints, and must not be reported
+  as indexes. Acceptance requires exact duplicate/null/foreign-key behavior,
+  atomic rollback on violation, restart/replay recovery, and local plus
+  distributed qualification; until those gates exist, unsupported general
+  `CREATE INDEX`, `ALTER TABLE ... ADD CONSTRAINT`, and arbitrary lake-table
+  mutation remain fail-closed.
 - [x] Publish a supported transaction/isolation matrix rather than claiming
   PostgreSQL equivalence. The bounded product-record contract is recorded in
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
