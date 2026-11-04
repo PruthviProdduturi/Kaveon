@@ -5024,6 +5024,9 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::JSONB => Ok(CastTarget::Utf8),
         ast::DataType::Date => Ok(CastTarget::Date32),
         ast::DataType::Time(_, _) => Ok(CastTarget::TimeMicros),
+        ast::DataType::Datetime(_) => Ok(CastTarget::TimestampMicros {
+            with_timezone: false,
+        }),
         ast::DataType::Timestamp(_, timezone) => Ok(CastTarget::TimestampMicros {
             with_timezone: matches!(
                 timezone,
@@ -5135,8 +5138,10 @@ fn sized_text_cast_spec(dt: &ast::DataType) -> Result<Option<(usize, bool)>> {
 }
 
 fn is_tsql_timestamp_type(dt: &ast::DataType) -> bool {
-    matches!(dt, ast::DataType::Timestamp(..))
-        || matches!(dt, ast::DataType::Custom(name, args) if args.is_empty() && is_tsql_timestamp_name(&name.to_string()))
+    matches!(
+        dt,
+        ast::DataType::Datetime(_) | ast::DataType::Timestamp(..)
+    ) || matches!(dt, ast::DataType::Custom(name, args) if args.is_empty() && is_tsql_timestamp_name(&name.to_string()))
 }
 
 fn is_tsql_timestamp_name(name: &str) -> bool {
@@ -10835,6 +10840,12 @@ mod tests {
         let time = sql_to_logical_plan("SELECT TRY_PARSE(value AS TIME) FROM t")
             .expect("invariant TRY_PARSE TIME should lower");
         assert!(format!("{time:?}").contains("TRY_CAST_TIME"));
+        let datetime = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATETIME) FROM t")
+            .expect("invariant TRY_PARSE DATETIME should lower");
+        assert!(format!("{datetime:?}").contains("TRY_CAST_TIMESTAMP"));
+        let smalldatetime = sql_to_logical_plan("SELECT TRY_PARSE(value AS SMALLDATETIME) FROM t")
+            .expect("invariant TRY_PARSE SMALLDATETIME should lower");
+        assert!(format!("{smalldatetime:?}").contains("TRY_CAST_TIMESTAMP"));
         let try_cast_offset =
             sql_to_logical_plan("SELECT TRY_CAST(value AS DATETIMEOFFSET) FROM t")
                 .expect("TRY_CAST DATETIMEOFFSET should lower");
