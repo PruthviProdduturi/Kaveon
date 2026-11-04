@@ -550,6 +550,11 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
 ### Phase 4 — Distributed completeness
 
 - [ ] Finish adaptive joins and aggregate exchange for high-cardinality data.
+  The final-merge repartition path now streams encoded binary state directly
+  into partition builders instead of materializing per-partition `take` batches;
+  exact skew/replay evidence is in
+  `docs/qualification/track1-final-merge-repartition-streaming-2026-11-03.md`.
+  Adaptive exchange policy and deployed performance qualification remain open.
 - [ ] Distribute remaining window and global-sort shapes.
 - [x] Complete correlated/lateral execution or maintain explicit rejection.
   Bounded correlated and lateral forms are qualified, including residual

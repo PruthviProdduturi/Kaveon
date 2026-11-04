@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayBuilder, BinaryArray, BinaryBuilder, UInt32Array};
-use arrow::compute::take;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
@@ -382,30 +381,44 @@ impl HybridFinalMerge {
                 .as_any()
                 .downcast_ref::<BinaryArray>()
                 .ok_or_else(|| error("grouped-state batch key column is not binary"))?;
-            let mut indices = (0..count).map(|_| Vec::<u32>::new()).collect::<Vec<_>>();
-            for row in 0..batch.num_rows() {
-                if !keys.is_null(row) {
-                    let partition = (crate::exchange::mix(hasher.hash_one(keys.value(row)) ^ salt)
-                        % count as u64) as usize;
-                    indices[partition].push(row as u32);
-                }
-            }
+            let states = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| error("grouped-state batch state column is not binary"))?;
             let reservation = self.memory.reserve(
                 (batch.get_array_memory_size() as u64)
                     .saturating_mul(3)
                     .max(1),
             )?;
-            for (partition, rows) in indices.into_iter().enumerate() {
-                if rows.is_empty() {
-                    continue;
+            let mut builders = (0..count)
+                .map(|_| None::<(BinaryBuilder, BinaryBuilder)>)
+                .collect::<Vec<_>>();
+            for row in 0..batch.num_rows() {
+                if !keys.is_null(row) {
+                    let partition = (crate::exchange::mix(hasher.hash_one(keys.value(row)) ^ salt)
+                        % count as u64) as usize;
+                    let (key_builder, state_builder) = builders[partition]
+                        .get_or_insert_with(|| (BinaryBuilder::new(), BinaryBuilder::new()));
+                    key_builder.append_value(keys.value(row));
+                    if states.is_null(row) {
+                        state_builder.append_null();
+                    } else {
+                        state_builder.append_value(states.value(row));
+                    }
                 }
-                let rows = UInt32Array::from(rows);
-                let columns = batch
-                    .columns()
-                    .iter()
-                    .map(|column| take(column.as_ref(), &rows, None))
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let child = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+            }
+            for (partition, builders) in builders.into_iter().enumerate() {
+                let Some((mut key_builder, mut state_builder)) = builders else {
+                    continue;
+                };
+                let child = RecordBatch::try_new(
+                    Arc::clone(&self.schema),
+                    vec![
+                        Arc::new(key_builder.finish()),
+                        Arc::new(state_builder.finish()),
+                    ],
+                )?;
                 let writer = match &mut writers[partition] {
                     Some(writer) => writer,
                     slot => slot.insert(spill.begin_run(&self.schema)?),
