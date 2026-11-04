@@ -21,8 +21,10 @@ execution on one implementation path rather than duplicating calendar logic.
   `engine/crates/sql/src/logical_plan.rs`.
 - Distributed differential case: `tsql_year_month_day_aliases` in
   `engine/crates/server/src/differential_tests.rs`.
-- The authoritative corpus is now 140 cases in
-  `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`.
+- The qualification was recorded against a 140-case historical corpus
+  revision. The current authoritative corpus is maintained separately in
+  `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json` and
+  currently contains 182 cases.
 
 The qualification is intentionally limited to the typed date-part contract;
 it does not claim general SQL Server temporal or procedural parity.
