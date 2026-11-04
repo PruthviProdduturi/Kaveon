@@ -120,8 +120,9 @@ FROM covid.country_latest LIMIT 10;
 
 The [product catalog assessment](../engineering/product-catalog-migration.md)
 is historical migration evidence. Native deployments use KaveonDB for
-transactional product state; PostgreSQL is not required for this catalog or
-for the OpenSource query path.
+transactional product state and do not require PostgreSQL for this catalog or
+the OpenSource query path. Hosted migration deployments must report any
+remaining legacy PostgreSQL authority until their live cutover gates pass.
 
 ## ADLS is authoritative
 
