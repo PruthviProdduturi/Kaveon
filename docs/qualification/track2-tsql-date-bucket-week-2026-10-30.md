@@ -24,4 +24,7 @@ semantics for every locale or calendar setting.
   ```
   Result: 1/1 case passed with exact grouped rows and counts.
 
-The case is recorded in the authoritative 112-case corpus.
+The case was recorded in the 112-case historical corpus revision. The current
+authoritative corpus is maintained in
+`docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json` and
+currently contains 182 cases.
