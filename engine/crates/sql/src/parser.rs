@@ -4917,6 +4917,9 @@ mod tests {
                 .to_string()
                 .contains("DATEPART_DATEFIRST_1(dw, event_date)")
         );
+        let error = parse_sql("SET DATEFIRST 0; SELECT 1")
+            .expect_err("out-of-range DATEFIRST must remain fail-closed");
+        assert!(error.to_string().contains("1 through 7"));
         let error = parse_sql("SET NOCOUNT OFF; SELECT 1")
             .expect_err("non-default NOCOUNT must remain fail-closed");
         assert!(error.to_string().contains("only the Engine default ON"));
