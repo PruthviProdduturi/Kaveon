@@ -241,9 +241,9 @@ fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
     let bytes = sql.as_bytes();
     let trimmed = trim_leading_sql_comments(sql);
     let upper = trimmed.to_ascii_uppercase();
-    if upper.starts_with("CREATE INDEX ")
-        || upper.starts_with("CREATE UNIQUE INDEX ")
-        || upper.starts_with("DROP INDEX ")
+    if starts_with_sql_words(trimmed, &["CREATE", "INDEX"])
+        || starts_with_sql_words(trimmed, &["CREATE", "UNIQUE", "INDEX"])
+        || starts_with_sql_words(trimmed, &["DROP", "INDEX"])
     {
         return Err(sql_error(
             "index DDL is not implemented for lake tables; use CREATE TABLE clustered_by/bloom layout options",
@@ -276,6 +276,31 @@ fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Match a leading sequence of SQL keywords while allowing any SQL
+/// whitespace between them. This intentionally checks token boundaries so a
+/// table or identifier such as `INDEXED_TABLE` is not treated as index DDL.
+fn starts_with_sql_words(sql: &str, words: &[&str]) -> bool {
+    let bytes = sql.as_bytes();
+    let mut offset = 0usize;
+    for (position, word) in words.iter().enumerate() {
+        while offset < bytes.len() && bytes[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+        if offset + word.len() > bytes.len()
+            || !bytes[offset..offset + word.len()].eq_ignore_ascii_case(word.as_bytes())
+        {
+            return false;
+        }
+        offset += word.len();
+        if position + 1 < words.len()
+            && (offset == bytes.len() || !bytes[offset].is_ascii_whitespace())
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Return the first executable portion of a statement, ignoring whitespace
@@ -4885,10 +4910,19 @@ mod tests {
                 "/* migration step */ ALTER TABLE orders ADD CONSTRAINT orders_id_key UNIQUE (id)",
                 "constraint DDL is not implemented",
             ),
+            (
+                "CREATE\nINDEX orders_customer_idx ON orders (customer_id)",
+                "index DDL is not implemented",
+            ),
+            (
+                "DROP\tINDEX orders_customer_idx",
+                "index DDL is not implemented",
+            ),
         ] {
             let error = parse_sql(sql).expect_err("unsupported lake DDL must fail closed");
             assert!(error.to_string().contains(expected), "{sql}: {error}");
         }
+        assert!(parse_sql("SELECT * FROM indexed_table").is_ok());
     }
 
     #[test]
