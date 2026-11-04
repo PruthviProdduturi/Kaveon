@@ -416,6 +416,13 @@ target-column predicates, `NOT IN`, and multi-clause predicate combinations
 remain outside the contract. Evidence:
 `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
 
+Insert-only `WHEN NOT MATCHED` clauses also accept the bounded source-only
+forms `source.id = 'literal'` and `source.id IN ('literal', ...)`. Kaveon
+filters the source batch before staging idempotent create-if-absent commands;
+`target.id` is rejected because no target row exists in that clause. The
+transaction API idempotence test and parser coverage are recorded in the same
+qualification note.
+
 Bounded `MERGE` matched updates and not-matched inserts also accept the direct
 typed source assignment `CAST(source.document_json AS JSON)`. The insert
 document may also be a bounded literal or `CAST('<json>' AS JSON)`. Matched updates
