@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "21b117e5",
+  "engine_commit": "349fdcb7",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -170,6 +170,7 @@
     {"id": "set_default_read_session_prefixes", "sql": "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_WARNINGS ON; SET NOCOUNT ON; SET DATEFIRST 7; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_default_session_prefix_noops"},
     {"id": "set_datefirst_monday", "sql": "SET DATEFIRST 1; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_datefirst_1"},
     {"id": "set_datefirst_wednesday", "sql": "SET DATEFIRST 3; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_datefirst_3"},
+    {"id": "set_datefirst_week_boundary", "sql": "SET DATEFIRST 1; SELECT DATEPART(week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_datefirst_week_boundary"},
     {"id": "set_datefirst_out_of_range", "sql": "SET DATEFIRST 0; SELECT DATEPART(dw, event_date) FROM t", "status": "explicit_rejection", "distributed_status": "rejected_datefirst_out_of_range"}
   ]
 }
