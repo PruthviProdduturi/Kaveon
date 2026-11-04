@@ -2819,7 +2819,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         return Err(sql_error("MERGE ON must equate target.id with source.id"));
     }
     let matched_filter_allowed = clauses.len() == 1
-        || (clauses.len() == 2 && matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched));
+        || (clauses.len() == 2 && merge_is_not_matched_target(&clauses[1].clause_kind));
     let matched_source_filter = if matched_filter_allowed
         && matches!(
             clauses.first().map(|clause| &clause.clause_kind),
@@ -2838,7 +2838,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         None
     };
     let not_matched_source_filter =
-        if clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::NotMatched) {
+        if clauses.len() == 1 && merge_is_not_matched_target(&clauses[0].clause_kind) {
             clauses[0]
                 .predicate
                 .as_ref()
@@ -2868,7 +2868,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 && merge_id_predicate(predicate, &target_alias, &source_alias))
                 || (index == 0
                     && clauses.len() == 1
-                    && matches!(clause.clause_kind, MergeClauseKind::NotMatched)
+                    && merge_is_not_matched_target(&clause.clause_kind)
                     && not_matched_source_filter.is_some()))
         })
     }) {
@@ -2880,12 +2880,12 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
         && matches!(clauses[2].action, MergeAction::Delete)
         && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
-        && matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched);
+        && merge_is_not_matched_target(&clauses[1].clause_kind);
     let has_not_matched_by_source_update = clauses.len() == 3
         && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
         && matches!(clauses[2].action, MergeAction::Update { .. })
         && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
-        && matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched);
+        && merge_is_not_matched_target(&clauses[1].clause_kind);
     if has_not_matched_by_source_delete || has_not_matched_by_source_update {
         let MergeAction::Update { assignments } = &clauses[0].action else {
             return Err(sql_error(
@@ -3031,7 +3031,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             .collect();
     }
     let not_matched_only_insert =
-        clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::NotMatched);
+        clauses.len() == 1 && merge_is_not_matched_target(&clauses[0].clause_kind);
     if not_matched_only_insert {
         let MergeAction::Insert(insert) = &clauses[0].action else {
             return Err(sql_error(
@@ -3079,7 +3079,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     }
     if clauses.len() != 2
         || !matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
-        || !matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched)
+        || !merge_is_not_matched_target(&clauses[1].clause_kind)
     {
         return Err(sql_error(
             "MERGE requires WHEN MATCHED UPDATE or DELETE followed by WHEN NOT MATCHED INSERT, or matched DELETE only",
@@ -3182,6 +3182,17 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             })
         })
         .collect()
+}
+
+/// SQL Server exposes the target-side insert arm as either `WHEN NOT MATCHED`
+/// or the explicit `WHEN NOT MATCHED BY TARGET`. Both spellings have the same
+/// semantics; keep the native product-DML surface bounded while accepting the
+/// explicit form used by T-SQL clients.
+fn merge_is_not_matched_target(kind: &MergeClauseKind) -> bool {
+    matches!(
+        kind,
+        MergeClauseKind::NotMatched | MergeClauseKind::NotMatchedByTarget
+    )
 }
 
 fn merge_id_predicate(expression: &Expr, target: &str, source: &str) -> bool {
@@ -6417,6 +6428,25 @@ mod tests {
             target_predicate
                 .to_string()
                 .contains("target.id is not available")
+        );
+    }
+
+    #[test]
+    fn product_merge_accepts_explicit_not_matched_by_target() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{\"name\":\"Orders\"}')) AS s (id, document_json) ON t.id = s.id WHEN NOT MATCHED BY TARGET THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("explicit SQL Server target arm should parse")
+        else {
+            panic!("expected native DML");
+        };
+        assert_eq!(
+            adapt_product_dml(&dml).unwrap(),
+            ProductDmlCommand::MergeCreateIfAbsent {
+                kind: "dataset".to_owned(),
+                id: "ds-1".to_owned(),
+                document_json: "{\"name\":\"Orders\"}".to_owned(),
+            }
         );
     }
 
