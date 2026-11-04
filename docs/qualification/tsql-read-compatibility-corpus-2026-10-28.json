@@ -97,7 +97,7 @@
     {"id": "datepart_subsecond_aliases", "sql": "SELECT DATEPART(ms, event_ts), DATEPART(mcs, event_ts), DATEPART(ns, event_ts) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_subsecond_aliases"},
     {"id": "datepart_tzoffset_fixed_offset", "sql": "SELECT DATEPART(tzoffset, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_fixed_offset_timestamp_values"},
     {"id": "datename_iso_week_alias", "sql": "SELECT DATENAME(isowk, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
-    {"id": "datename_week_full_name", "sql": "SELECT DATENAME(week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_sql_server_week_number_name"},
+    {"id": "datename_week_full_name", "sql": "SELECT DATENAME(week, event_date), DATENAME(weekday, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_sql_server_week_and_weekday_names"},
     {"id": "datename_dayofyear_alias", "sql": "SELECT DATENAME(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},
     {"id": "date_bucket_width_one", "sql": "SELECT DATE_BUCKET(month, 1, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "date_bucket_wider_width", "sql": "SELECT DATE_BUCKET(month, 3, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
