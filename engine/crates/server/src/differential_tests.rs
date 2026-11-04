@@ -560,6 +560,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datename_week_full_name",
+        "SELECT TOP 5 DATENAME(week, event_date) AS event_week FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datepart_weekday_alias",
         "SELECT TOP 5 DATEPART(dw, event_date) AS weekday_number FROM {T} ORDER BY event_date",
         true,
