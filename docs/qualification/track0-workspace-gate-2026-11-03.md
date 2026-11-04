@@ -3,8 +3,8 @@
 ## Boundary
 
 This record covers the source-level release gate for the current `dev`
-branch after the deterministic T-SQL qualification-ordering correction in
-`39fe66a3`. It is a
+branch after the strict invariant T-SQL `PARSE` qualification in
+`5c2b670b` (and the deterministic ordering correction in `39fe66a3`). It is a
 correctness and build gate, not a claim of cloud deployment qualification or
 complete Trino/Fabric/PostgreSQL parity.
 
@@ -31,6 +31,9 @@ Observed results:
 The corrected qualification query uses a complete ordering key
 (`user_id, event_date, actions, country`) so ties cannot be mistaken for a
 distributed semantic mismatch. The full run completed with exit code 0.
+
+The strict invariant `PARSE` differential was also included in the server
+suite and passed against the local reference and three-worker execution.
 
 The release-pressure benchmark was also run independently:
 
