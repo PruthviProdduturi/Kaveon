@@ -89,8 +89,10 @@ two-argument arctangent path; `ATAN2` remains the generic Trino-compatible
 name. See [`track2-tsql-atn2-2026-11-03.md`](../qualification/track2-tsql-atn2-2026-11-03.md).
 
 `DATEPART(week|wk|ww, value)` uses SQL Server's default `DATEFIRST 7`
-Sunday-first week-one numbering; session-level `SET DATEFIRST` is not
-supported. Evidence is in
+Sunday-first week-one numbering unless a bounded `SET DATEFIRST 1..7`
+prefix is supplied. The selected value is encoded in the immutable plan so
+local and distributed workers share the same weekday/week semantics; invalid
+values remain explicitly rejected. Evidence is in
 [`track2-tsql-datepart-week-2026-11-03.md`](../qualification/track2-tsql-datepart-week-2026-11-03.md).
 
 `DATEPART(tzoffset, value)` is qualified for timestamp values carrying a
