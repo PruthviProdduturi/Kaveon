@@ -264,8 +264,9 @@ The corpus also qualifies `STRING_ESCAPE(value, 'json')` and bounded
 `docs/qualification/track2-tsql-string-escape-2026-10-29.md` and
 `docs/qualification/track2-tsql-quotename-2026-10-29.md`.
 The result boundary also preserves Arrow `Utf8View` as logical text for direct
-rows, nested values, and map keys; this is required for chart dimensions and
-keyed consumers and is qualified in
+rows, nested values, and map keys; the hash-join path likewise matches
+`Utf8View` keys while retaining SQL NULL non-matching semantics. This is
+required for chart dimensions and keyed consumers and is qualified in
 `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md`.
 The SQL Server `REPLICATE` spelling is also qualified through the bounded
 Unicode `REPEAT` path for non-negative integer-literal or bounded row-local
