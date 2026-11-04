@@ -6648,6 +6648,43 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&unchanged_document).unwrap(),
             serde_json::json!({"keep": true})
         );
+
+        let actions = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-existing', '{"ignored":true}'), ('action-new', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('keep-existing') THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) OUTPUT $action"#.into(),
+                transaction_id: Some(actions.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["returning"],
+            serde_json::json!([{"action": "DELETE"}, {"action": "INSERT"}])
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(actions.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]

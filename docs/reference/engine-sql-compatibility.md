@@ -496,7 +496,9 @@ server or a general row-store protocol.
 The bounded `MERGE` surface also qualifies a literal source-id filter on a
 matched `DELETE` paired with `WHEN NOT MATCHED THEN INSERT`; selected existing
 rows delete, excluded rows no-op, and absent source rows insert through the
-same pinned revision/CAS path. See [filtered delete-or-insert qualification](../qualification/track2-tsql-merge-filtered-delete-insert-2026-11-04.md).
+same pinned revision/CAS path. Its `OUTPUT deleted.*` and bounded `OUTPUT
+$action` projections are also qualified. See [filtered delete-or-insert
+qualification](../qualification/track2-tsql-merge-filtered-delete-insert-2026-11-04.md).
 | `COMMIT` / `COMMIT TRAN` / `COMMIT TRANSACTION` | Publishes a prepared immutable catalog snapshot through the configured product store |
 | `ROLLBACK` / `ROLLBACK TRAN` / `ROLLBACK TRANSACTION` | Discards the session without publishing its staged changes |
 | `SAVEPOINT name` | Captures the staged product write set inside the transaction |
