@@ -92,6 +92,11 @@ def main() -> int:
         re.IGNORECASE,
     )
     authoritative_count_patterns = (
+        re.compile(
+            r"authoritative\s+(?:current\s+)?(?:T-SQL\s+)?corpus"
+            r"(?:\s+now)?\s+contains\s+(\d+)\s+cases",
+            re.IGNORECASE,
+        ),
         re.compile(r"authoritative\s+current\s+corpus\s+is\s+(\d+)\s+cases", re.IGNORECASE),
         re.compile(r"authoritative\s+current\s+total\s+is\s+the\s+(\d+)-case\s+count", re.IGNORECASE),
         re.compile(r"current\s+T-SQL\s+corpus\s+is\s+(\d+)\s+cases", re.IGNORECASE),
