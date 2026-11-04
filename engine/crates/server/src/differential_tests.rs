@@ -665,6 +665,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datename_subsecond_parts",
+        "SELECT TOP 5 DATENAME(millisecond, CAST(event_date AS TIMESTAMP)) AS millisecond_name, DATENAME(microsecond, CAST(event_date AS TIMESTAMP)) AS microsecond_name, DATENAME(nanosecond, CAST(event_date AS TIMESTAMP)) AS nanosecond_name FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_dateadd_weekday_alias",
         "SELECT TOP 5 DATEADD(dw, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,

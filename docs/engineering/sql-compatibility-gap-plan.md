@@ -43,7 +43,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 186-case corpus has planner coverage and focused exact
+  The current 187-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -134,9 +134,12 @@ unbounded ordered state remain rejected. Evidence is retained in
 `DATEFROMPARTS` now builds validated `DATE` values from integer parts with
 NULL propagation and distributed differential coverage.
 `DATENAME` now returns deterministic English calendar names or textual numeric
-parts and is covered by the distributed differential sweep; locale-specific
-formatting remains outside the contract. The complete bounded corpus and its
-distributed evidence are recorded in
+parts and is covered by the distributed differential sweep. Millisecond,
+microsecond, and nanosecond parts over typed timestamps are separately
+qualified in `docs/qualification/track2-tsql-datename-subsecond-2026-11-04.md`;
+the nanosecond value is the microsecond execution value scaled by 1,000, not a
+claim of 100-nanosecond storage precision. Locale-specific formatting remains
+outside the contract. The complete bounded corpus and its distributed evidence are recorded in
 `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`.
 SQL Server `CONVERT`/`TRY_CONVERT` to `TIME` also qualify styles `8`/`108`
 (`HH:MM:SS`) and `114` (`HH:MM:SS:mmm`) with strict-error and safe-NULL
