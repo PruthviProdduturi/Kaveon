@@ -20,6 +20,9 @@ bound allocation and output expansion.
   `sized_text_casts_truncate_and_pad_unicode_scalars`
 - Three-worker differential: `distributed_tsql_sized_text_cast_matches_local`
 - Corpus case: `sized_text_cast`
+- Full layout differential sweep: `the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`
+  passed with the sized-text case included and a complete deterministic
+  `ORDER BY event_date, country, industry` tie-breaker.
 
 Focused commands:
 
@@ -27,6 +30,8 @@ Focused commands:
 cargo test -p kaveon-sql lowers_bounded_tsql_sized_text_casts_without_dropping_length -- --nocapture
 cargo test -p kaveon-exec sized_text_casts_truncate_and_pad_unicode_scalars -- --nocapture
 cargo test -p kaveon-server distributed_tsql_sized_text_cast_matches_local -- --nocapture
+KAVEON_DIFF_ONLY=tsql_sized_text_cast cargo test -p kaveon-server \
+  the_differential_sweep_matches_across_parquet_encodings_and_execution_paths -- --nocapture
 ```
 
 The qualification is limited to bounded UTF-8 text and does not claim general
