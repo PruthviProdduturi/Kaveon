@@ -2357,6 +2357,9 @@ fn eval_in_list(
 
 fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<ArrayRef> {
     let arr = evaluate(expr, batch)?;
+    if matches!(target, CastTarget::TimeMicros) {
+        return cast_to_time_microseconds(&arr, false);
+    }
     if matches!(
         target,
         CastTarget::TimestampMicros {
@@ -8598,6 +8601,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             "FLOAT64" => CastTarget::Float64,
             "UTF8" => CastTarget::Utf8,
             "DATE32" => CastTarget::Date32,
+            "TIME" => CastTarget::TimeMicros,
             "TIMESTAMP" => CastTarget::TimestampMicros {
                 with_timezone: false,
             },
@@ -8625,6 +8629,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 )));
             }
         };
+        if matches!(target, CastTarget::TimeMicros) {
+            return cast_to_time_microseconds(&args[0], true);
+        }
         if matches!(
             target,
             CastTarget::TimestampMicros {
@@ -16002,6 +16009,35 @@ fn parse_time_literal(text: &str) -> Option<i64> {
     Some(((hour * 3600 + minute * 60 + second) * 1_000_000) + micros)
 }
 
+fn cast_to_time_microseconds(array: &ArrayRef, safe: bool) -> Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let values = (0..array.len())
+                .map(|row| match text_value(array, row)? {
+                    None => Ok(None),
+                    Some(text) => match parse_time_literal(text) {
+                        Some(value) => Ok(Some(value)),
+                        None if safe => Ok(None),
+                        None => Err(KaveonError::Execution(format!(
+                            "invalid TIME value at row {row}: '{text}'"
+                        ))),
+                    },
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(Time64MicrosecondArray::from(values)))
+        }
+        DataType::Time64(TimeUnit::Microsecond) => Ok(array.clone()),
+        _ => Ok(compute::cast_with_options(
+            array,
+            &DataType::Time64(TimeUnit::Microsecond),
+            &compute::CastOptions {
+                safe,
+                ..Default::default()
+            },
+        )?),
+    }
+}
+
 fn eval_time_from_parts(
     hour: &ArrayRef,
     minute: &ArrayRef,
@@ -18905,6 +18941,59 @@ mod tests {
                     ],
                 },
                 &invalid,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn time_casts_parse_text_and_try_cast_nulls_invalid_values() {
+        let input = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("12:34:56.789"),
+                Some("not-a-time"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let strict_input = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![Some("12:34:56.789"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let cast = evaluate(
+            &Expr::Cast {
+                expr: Box::new(Expr::Column("value".into())),
+                data_type: CastTarget::TimeMicros,
+            },
+            &strict_input,
+        )
+        .unwrap();
+        let cast = cast.as_primitive::<arrow::datatypes::Time64MicrosecondType>();
+        assert_eq!(cast.value(0), 45_296_789_000);
+        assert!(cast.is_null(1));
+
+        let tried = evaluate(
+            &Expr::Function {
+                name: "TRY_CAST_TIME".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let tried = tried.as_primitive::<arrow::datatypes::Time64MicrosecondType>();
+        assert_eq!(tried.value(0), 45_296_789_000);
+        assert!(tried.is_null(1));
+        assert!(tried.is_null(2));
+
+        assert!(
+            evaluate(
+                &Expr::Cast {
+                    expr: Box::new(Expr::Column("value".into())),
+                    data_type: CastTarget::TimeMicros,
+                },
+                &input,
             )
             .is_err()
         );
