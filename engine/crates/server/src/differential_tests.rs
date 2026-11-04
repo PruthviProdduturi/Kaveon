@@ -650,6 +650,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datename_time_parts",
+        "SELECT TOP 5 DATENAME(quarter, event_date) AS quarter_name, DATENAME(hour, CAST(event_date AS TIMESTAMP)) AS hour_name, DATENAME(minute, CAST(event_date AS TIMESTAMP)) AS minute_name, DATENAME(second, CAST(event_date AS TIMESTAMP)) AS second_name FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_dateadd_weekday_alias",
         "SELECT TOP 5 DATEADD(dw, 1, event_date) AS next_day FROM {T} ORDER BY event_date",
         true,
