@@ -585,6 +585,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datepart_tzoffset_fixed_offset",
+        "SELECT TOP 5 DATEPART(tzoffset, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30') AS offset_minutes FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datename_iso_week_alias",
         "SELECT TOP 5 DATENAME(isowk, event_date) AS iso_week_number FROM {T} ORDER BY event_date",
         true,
