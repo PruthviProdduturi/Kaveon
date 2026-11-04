@@ -22,6 +22,8 @@ qualification, not a claim of session mutation or general T-SQL parity.
   ```
 
 - Result: one focused test passed with zero failures.
+- The evaluator regression also covers all seven literal DATEFIRST values and
+  verifies SQL Server's Monday-through-Sunday numbering (`1` through `7`).
 
 ## Limits
 
