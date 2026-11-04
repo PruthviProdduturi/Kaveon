@@ -301,6 +301,10 @@ The SQL Server time-text styles `8`/`108` (`HH:MM:SS`) and `114`
 malformed values rejected or nulled respectively; other time styles remain
 unsupported. See
 [`TIME conversion styles`](../qualification/track2-tsql-convert-time-styles-2026-11-03.md).
+`DATEADD` over microsecond `TIME` values is qualified for fixed-duration
+hour, minute, second, millisecond, and microsecond units with modulo-day
+wrapping; calendar and nanosecond units remain unsupported. See
+[`TIME DATEADD`](../qualification/track2-tsql-time-dateadd-2026-11-03.md).
 `DATENAME` is qualified for calendar parts and returns deterministic English
 month/weekday names or textual numeric parts; its bounded `tzoffset` form is
 qualified for timestamps carrying a fixed timezone offset and returns the
