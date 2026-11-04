@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "349fdcb7",
+  "engine_commit": "b827340f",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -98,6 +98,7 @@
     {"id": "datepart_week_quarter_alias", "sql": "SELECT DATEPART(wk, event_date), DATEPART(qq, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_sql_server_default_datefirst_week_and_quarter_aliases"},
     {"id": "datepart_subsecond_aliases", "sql": "SELECT DATEPART(ms, event_ts), DATEPART(mcs, event_ts), DATEPART(ns, event_ts) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_subsecond_aliases"},
     {"id": "datepart_tzoffset_fixed_offset", "sql": "SELECT DATEPART(tzoffset, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_fixed_offset_timestamp_values"},
+    {"id": "datename_tzoffset_fixed_offset", "sql": "SELECT DATENAME(tzoffset, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_fixed_offset_timestamp_values"},
     {"id": "datename_iso_week_alias", "sql": "SELECT DATENAME(isowk, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
     {"id": "datename_week_full_name", "sql": "SELECT DATENAME(week, event_date), DATENAME(weekday, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_sql_server_week_and_weekday_names"},
     {"id": "datename_dayofyear_alias", "sql": "SELECT DATENAME(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},

@@ -14,8 +14,7 @@ timezone expressions.
 
 ## Evidence
 
-Implementation revision: recorded in the corpus `engine_commit` after the
-implementation commit lands.
+Implementation revision: `b827340f` (the corpus `engine_commit` pin).
 
 Focused executor regression:
 

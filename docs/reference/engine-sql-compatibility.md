@@ -283,8 +283,12 @@ typed `DATE_TRUNC` path, with the identical supported datepart and precision
 boundary. See
 [`track2-tsql-datetrunc-2026-10-30.md`](../qualification/track2-tsql-datetrunc-2026-10-30.md).
 `DATENAME` is qualified for calendar parts and returns deterministic English
-month/weekday names or textual numeric parts; locale/session-language
-formatting is intentionally not claimed.
+month/weekday names or textual numeric parts; its bounded `tzoffset` form is
+qualified for timestamps carrying a fixed timezone offset and returns the
+SQL Server-shaped signed `+HH:MM`/`-HH:MM` text. NULL timestamps propagate
+to NULL, while naive timestamps and named zones are rejected explicitly;
+locale/session-language formatting is intentionally not claimed. See
+[`DATENAME(tzoffset)` qualification](../qualification/track2-tsql-datename-tzoffset-2026-11-03.md).
 `ISDATE` returns a non-null boolean validity result for text and temporal
 inputs; numeric values are not interpreted as epoch dates.
 `ISNUMERIC` returns a non-null boolean result for native numeric values and
