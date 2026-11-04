@@ -52,6 +52,31 @@ class RegisteredSourceExecutorTests(unittest.TestCase):
         self.assertEqual(execute.call_args.args[1], "warehouse")
         self.assertEqual(execute.call_args.args[0].count(" JOIN "), 1)
 
+    def test_source_failure_propagates_without_retry_or_fanout(self):
+        failure = TimeoutError("warehouse statement timed out")
+        with patch(
+            "database.connectors.pool.execute_query", side_effect=failure
+        ) as execute:
+            with self.assertRaises(TimeoutError) as raised:
+                execute_registered_source(
+                    "SELECT id FROM orders",
+                    "warehouse",
+                    timeout_seconds=5,
+                    actor="analyst@example.com",
+                    role="Analyst",
+                )
+
+        self.assertIs(raised.exception, failure)
+        execute.assert_called_once_with(
+            "SELECT id FROM orders",
+            "warehouse",
+            params=None,
+            timeout_seconds=5,
+            max_rows=None,
+            actor="analyst@example.com",
+            role="Analyst",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
