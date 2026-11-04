@@ -420,6 +420,10 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
   source rows insert through the same pinned snapshot and CAS path. Evidence:
   `docs/qualification/track2-tsql-merge-filtered-update-insert-2026-11-04.md`
   and `docs/qualification/track2-tsql-merge-filtered-delete-insert-2026-11-04.md`.
+  The not-matched-by-source action also accepts a bounded target-id equality or
+  `IN` filter during snapshot expansion; rows outside that literal set remain
+  untouched. Evidence is recorded in
+  `docs/qualification/track2-native-dml-merge-2026-10-28.md`.
 - [ ] Expand `MERGE` and broader conflict handling beyond the qualified bounded
   product surface only with explicit revision/CAS semantics. The current
   contract covers update-or-insert, delete-or-insert, matched-update-only,

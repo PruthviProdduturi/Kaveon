@@ -476,6 +476,7 @@ impl TransactionRegistry {
                 } else if let kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched {
                     kind,
                     source_ids,
+                    target_ids,
                 } = command
                 {
                     let target = record_kind(&kind)?;
@@ -486,6 +487,12 @@ impl TransactionRegistry {
                             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
                         for record in page.records {
                             if source_ids.iter().any(|id| id == &record.id) {
+                                continue;
+                            }
+                            if target_ids
+                                .as_ref()
+                                .is_some_and(|ids| !ids.iter().any(|id| id == &record.id))
+                            {
                                 continue;
                             }
                             if record
@@ -512,6 +519,7 @@ impl TransactionRegistry {
                 } else if let kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched {
                     kind,
                     source_ids,
+                    target_ids,
                     document_json,
                 } = command
                 {
@@ -523,6 +531,12 @@ impl TransactionRegistry {
                             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
                         for record in page.records {
                             if source_ids.iter().any(|id| id == &record.id) {
+                                continue;
+                            }
+                            if target_ids
+                                .as_ref()
+                                .is_some_and(|ids| !ids.iter().any(|id| id == &record.id))
+                            {
                                 continue;
                             }
                             if record
@@ -6167,7 +6181,7 @@ mod tests {
                 &registry,
                 "alice",
                 SqlTransactionRequest {
-                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE"#.into(),
+                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE AND target.id IN ('remove-me') THEN DELETE"#.into(),
                     transaction_id: Some(merge.transaction_id.clone()),
                     parameters: vec![],
                     named_parameters: HashMap::new(),
@@ -6198,14 +6212,18 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(keep.revision, 2);
-        for id in ["remove-me", "also-remove"] {
-            assert!(
-                snapshot
-                    .product_record(ProductRecordKind::Dataset, id)
-                    .unwrap()
-                    .is_none()
-            );
-        }
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "remove-me")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            snapshot
+                .product_record(ProductRecordKind::Dataset, "also-remove")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]
