@@ -1,4 +1,4 @@
-# Current authority and connector-language audit — 2026-11-03
+# Current authority and connector-language audit — 2026-11-04
 
 ## Scope
 
@@ -8,7 +8,9 @@ and guide documentation outside `docs/archive/`.
 
 ## Current contract
 
-- Native deployments use KaveonDB for product metadata and transactional state.
+- The qualified native profile uses KaveonDB for product metadata and
+  transactional state; a live cloud deployment must still pass the runtime
+  authority and restart gates before it can make the same claim.
 - PostgreSQL is a legacy migration/rollback connector, not a native metadata
   authority.
 - Fabric SQL/Azure SQL are registered passthrough sources. Kaveon executes the
@@ -35,9 +37,10 @@ The historical records are explicitly labeled at their document headers in:
 - `docs/engineering/codex-continuation.md`
 
 The audit search found no current, unlabeled claim that PostgreSQL is the
-native metadata authority or that Engine performs cross-source Fabric
+qualified native metadata authority or that Engine performs cross-source Fabric
 federation. Historical mentions are retained for migration provenance and are
-not deployment instructions.
+not deployment instructions. This language result does not override the
+static dependency inventory or prove that a deployed API has cut over.
 
 This language audit is not a PostgreSQL-retirement proof. The current static
 dependency check (`python scripts/check-postgresql-dependencies.py`) still
