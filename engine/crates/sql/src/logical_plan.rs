@@ -10693,6 +10693,24 @@ mod tests {
     }
 
     #[test]
+    fn lowers_partitioned_percent_rank_and_cume_dist_windows() {
+        for (sql, marker) in [
+            (
+                "SELECT PERCENT_RANK() OVER (PARTITION BY region ORDER BY value) FROM t",
+                "PERCENT_RANK",
+            ),
+            (
+                "SELECT CUME_DIST() OVER (PARTITION BY region ORDER BY value) FROM t",
+                "CUME_DIST",
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql)
+                .expect("partitioned ranking window should lower through the window path");
+            assert!(format!("{plan:?}").contains(marker));
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_tsql_percentile_cont_shapes() {
         for sql in [
             "SELECT PERCENTILE_CONT(fraction) WITHIN GROUP (ORDER BY value) OVER () FROM t",
