@@ -57,6 +57,19 @@ const PREPAID_BATCHES: u64 = 4;
 const FINAL_REPARTITION_FACTOR: usize = 16;
 const FINAL_REPARTITION_MAX_LEVEL: u8 = 8;
 
+#[inline]
+fn selected_prepaid_batches(batch_bytes: u64, workers: usize, limit_bytes: u64) -> u64 {
+    let workers = workers.max(1) as u64;
+    let full = batch_bytes
+        .saturating_mul(PREPAID_BATCHES)
+        .saturating_mul(workers);
+    if full > limit_bytes {
+        PREPAID_BATCHES.saturating_div(workers).max(1)
+    } else {
+        PREPAID_BATCHES
+    }
+}
+
 /// What the merge spilled, for the record.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FinalMergeSpill {
@@ -126,19 +139,11 @@ impl HybridFinalMerge {
         let Some((selector, _)) = &self.selection else {
             return PREPAID_BATCHES;
         };
-        let workers = selector.workers() as u64;
-        let full = batch_bytes
-            .saturating_mul(PREPAID_BATCHES)
-            .saturating_mul(workers);
-        // Preserve the four-batch progress window for small inputs (which is
-        // important for source-pressure tests), but divide it when several
-        // broadcast workers would otherwise reserve most of the shared
-        // query budget before spilling can respond.
-        if full > self.memory.query().snapshot().limit_bytes {
-            PREPAID_BATCHES.saturating_div(workers).max(1)
-        } else {
-            PREPAID_BATCHES
-        }
+        selected_prepaid_batches(
+            batch_bytes,
+            selector.workers(),
+            self.memory.query().snapshot().limit_bytes,
+        )
     }
 
     /// Over a grouped-state input. With `spill`, a budget refusal moves
@@ -864,7 +869,9 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use kaveon_core::{BatchOperator, KaveonError, QueryMemoryPool, Result};
 
-    use super::{FINAL_REPARTITION_MAX_LEVEL, HybridFinalMerge};
+    use super::{
+        FINAL_REPARTITION_MAX_LEVEL, HybridFinalMerge, PREPAID_BATCHES, selected_prepaid_batches,
+    };
     use crate::aggregate::{
         AggregateState, AggregateValue, GroupedAggregateState,
         grouped_aggregate_states_to_typed_batch,
@@ -1293,6 +1300,16 @@ mod tests {
         (0..batch.num_rows())
             .map(|row| (a.value(row), b.value(row)))
             .collect()
+    }
+
+    #[test]
+    fn selected_prepaid_batches_preserves_small_inputs_and_shares_large_budget() {
+        assert_eq!(
+            selected_prepaid_batches(1 << 20, 3, 64 << 20),
+            PREPAID_BATCHES
+        );
+        assert_eq!(selected_prepaid_batches(128 << 20, 3, 640 << 20), 1);
+        assert_eq!(selected_prepaid_batches(u64::MAX, 0, 1), 4);
     }
 
     #[test]
