@@ -53,7 +53,7 @@ The historical release-readiness snapshot is in
 The fast bounded server suite remains 470/470 with the long-running
 `differential_tests` module excluded. At qualification commit `ce7c58c6`,
 the SQL crate all-targets suite was 378/378. The latest full server binary
-suite is 701/701 including that module at `989f0576`; the complete run is recorded in
+suite is 705/705 including that module at `ea434e73`; the complete run is recorded in
 `docs/qualification/track1-server-suite-2026-11-03.md`. The earlier 675/675
 run in `track1-server-suite-2026-11-02.md` and the 611/611 release-binary
 record remain historical
