@@ -296,6 +296,11 @@ qualified for UTF-8 text and existing Arrow time values at microsecond
 precision. Strict casts reject malformed values; safe forms return typed NULL
 for malformed or NULL input. Other
 numeric and timestamp-to-time coercions remain outside this bounded contract.
+The SQL Server time-text styles `8`/`108` (`HH:MM:SS`) and `114`
+(`HH:MM:SS:mmm`) are also qualified for strict and safe conversion, with
+malformed values rejected or nulled respectively; other time styles remain
+unsupported. See
+[`TIME conversion styles`](../qualification/track2-tsql-convert-time-styles-2026-11-03.md).
 `DATENAME` is qualified for calendar parts and returns deterministic English
 month/weekday names or textual numeric parts; its bounded `tzoffset` form is
 qualified for timestamps carrying a fixed timezone offset and returns the
