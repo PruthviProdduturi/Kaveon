@@ -229,8 +229,9 @@ path for numeric and bounded DATE, DATETIME2, and fixed-offset DATETIMEOFFSET
 targets, with exact local/three-worker evidence in
 `docs/qualification/track2-tsql-try-parse-2026-10-29.md`; culture-aware `USING`
 forms remain explicitly rejected.
-Direct SQL Server `TRY_CAST` DATE and DATETIME2 targets now have exact
-local/three-worker evidence, including NULL-on-invalid-text behavior; the
+Direct SQL Server `TRY_CAST` DATE, DATETIME2, and fixed-offset DATETIMEOFFSET
+targets now have exact local/three-worker evidence, including
+NULL-on-invalid-text behavior; the
 qualified read corpus records this as a separate temporal target boundary.
 `SQUARE(value)` lowers to the existing vectorized `POWER(value, 2)` path with
 exact local/three-worker evidence in
