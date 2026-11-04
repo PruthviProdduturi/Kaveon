@@ -32,6 +32,11 @@ The existing cube/statistics regression
 `cube_answers_equal_the_scanned_answers_refuse_a_changed_source_and_refresh`
 also passes, preserving the broader context-answer boundary.
 
+The server-level `analyze_with_distinct_counts_exact_values_and_keeps_them_for_the_same_source`
+regression now exercises the profiled text column as Arrow `Utf8View`, proving
+that the exact distinct metadata and context answer retain logical text values
+through the representation used by Engine-backed tables.
+
 Validation run on 2026-11-03:
 
 ```text

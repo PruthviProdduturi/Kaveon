@@ -20763,10 +20763,10 @@ mod tests {
 
     #[tokio::test]
     async fn analyze_with_distinct_counts_exact_values_and_keeps_them_for_the_same_source() {
-        use arrow::array::Float64Array;
+        use arrow::array::{Float64Array, StringViewArray};
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int64, true),
-            Field::new("region", DataType::Utf8, false),
+            Field::new("region", DataType::Utf8View, false),
             Field::new("amount", DataType::Float64, true),
         ]));
         let batch = RecordBatch::try_new(
@@ -20779,7 +20779,7 @@ mod tests {
                     Some(3),
                     None,
                 ])),
-                Arc::new(StringArray::from(vec![
+                Arc::new(StringViewArray::from(vec![
                     "east", "west", "east", "west", "east",
                 ])),
                 Arc::new(Float64Array::from(vec![
