@@ -6476,7 +6476,7 @@ mod tests {
                 &registry,
                 "alice",
                 SqlTransactionRequest {
-                    sql: "MERGE INTO product.datasets AS target USING (VALUES ('existing', '{\"changed\":true}'), ('new', '{\"n\":1}')) AS source (id, document_json) ON target.id = source.id WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)".into(),
+                    sql: "MERGE INTO product.datasets AS target USING (VALUES ('existing', '{\"changed\":true}'), ('new', '{\"n\":1}')) AS source (id, document_json) ON target.id = source.id WHEN NOT MATCHED AND source.id = 'new' THEN INSERT (id, document_json) VALUES (source.id, source.document_json)".into(),
                     transaction_id: Some(merge.transaction_id.clone()),
                     parameters: vec![],
                     named_parameters: HashMap::new(),

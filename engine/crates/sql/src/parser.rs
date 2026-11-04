@@ -2678,6 +2678,19 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         } else {
             None
         };
+    let not_matched_source_filter =
+        if clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::NotMatched) {
+            clauses[0]
+                .predicate
+                .as_ref()
+                .map(|predicate| {
+                    merge_insert_source_filter(Some(predicate), &target_alias, &source_alias)
+                })
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
     let single_matched_clause =
         clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::Matched);
     if clauses.iter().enumerate().any(|(index, clause)| {
@@ -2685,9 +2698,13 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             if single_matched_clause && index == 0 {
                 return false;
             }
-            !(index == 0
+            !((index == 0
                 && matches!(clause.clause_kind, MergeClauseKind::Matched)
                 && merge_id_predicate(predicate, &target_alias, &source_alias))
+                || (index == 0
+                    && clauses.len() == 1
+                    && matches!(clause.clause_kind, MergeClauseKind::NotMatched)
+                    && not_matched_source_filter.is_some()))
         })
     }) {
         return Err(sql_error(
@@ -2875,6 +2892,13 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         }
         return source_values
             .iter()
+            .filter(|row| {
+                not_matched_source_filter.as_ref().is_none_or(|ids| {
+                    string_literal(&row[0], "MERGE source id")
+                        .map(|id| ids.contains(&id))
+                        .unwrap_or(false)
+                })
+            })
             .map(|row| {
                 Ok(ProductDmlCommand::MergeCreateIfAbsent {
                     kind: kind.clone(),
@@ -3032,6 +3056,33 @@ fn merge_source_filter(
     Err(sql_error(
         "MERGE matched predicates support only source.id/target.id = 'literal' or an IN list",
     ))
+}
+
+/// The insert-only `WHEN NOT MATCHED` form has no target row, so its bounded
+/// predicate must select source rows only.  Keep this stricter than the
+/// matched-clause helper, which also permits the equivalent target-id filter.
+fn merge_insert_source_filter(
+    predicate: Option<&Expr>,
+    target_alias: &str,
+    source_alias: &str,
+) -> Result<Option<HashSet<String>>> {
+    let Some(predicate) = predicate else {
+        return Ok(None);
+    };
+    let references_target = match predicate {
+        Expr::BinaryOp { left, right, .. } => {
+            merge_source_ref(left, target_alias, "id")
+                || merge_source_ref(right, target_alias, "id")
+        }
+        Expr::InList { expr, .. } => merge_source_ref(expr, target_alias, "id"),
+        _ => false,
+    };
+    if references_target {
+        return Err(sql_error(
+            "MERGE insert-only predicates must filter source.id; target.id is not available for WHEN NOT MATCHED",
+        ));
+    }
+    merge_source_filter(Some(predicate), target_alias, source_alias)
 }
 
 fn merge_source_ref(expression: &Expr, alias: &str, column: &str) -> bool {
@@ -6139,6 +6190,36 @@ mod tests {
             adapt_product_dml(&identity_predicate).unwrap(),
             ProductDmlCommand::Upsert { .. }
         ));
+
+        let NativeTransactionalStatement::Dml(filtered) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('skip', '{}'), ('keep', '{\"name\":\"Kept\"}')) AS s (id, document_json) ON t.id = s.id WHEN NOT MATCHED AND s.id = 'keep' THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("bounded unmatched-insert source filter should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&filtered).unwrap(),
+            vec![ProductDmlCommand::MergeCreateIfAbsent {
+                kind: "dataset".into(),
+                id: "keep".into(),
+                document_json: "{\"name\":\"Kept\"}".into(),
+            }]
+        );
+        let NativeTransactionalStatement::Dml(target_predicate) = parse_native_transactional(
+            "MERGE INTO product.datasets AS t USING (VALUES ('keep', '{}')) AS s (id, document_json) ON t.id = s.id WHEN NOT MATCHED AND t.id = 'keep' THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+        )
+        .expect("target predicate should parse before bounded adaptation")
+        else {
+            panic!("expected product MERGE");
+        };
+        let target_predicate = adapt_product_dml(&target_predicate)
+            .expect_err("insert-only MERGE must not expose a target row");
+        assert!(
+            target_predicate
+                .to_string()
+                .contains("target.id is not available")
+        );
     }
 
     #[test]

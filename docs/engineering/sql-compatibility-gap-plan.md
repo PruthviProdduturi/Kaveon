@@ -363,7 +363,9 @@ unsupported tokens, and unbounded output remain explicitly rejected.
   and bounded not-matched-by-source updates with one literal replacement
   document:
 matched rows use revision-CAS and ownership checks, while unmatched source
-rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
+rows are no-ops. Insert-only `WHEN NOT MATCHED` clauses may carry a bounded
+`source.id` equality or `IN` filter; the source batch is filtered before the
+same idempotent create-if-absent commands are staged. General MERGE clauses and typed lake-table DML remain outside
   the contract. The target alias is optional for the bounded form; an
   unaliased target derives its qualifier from the base table name, with the
   same fail-closed clause and source-shape rules. Matched document assignments

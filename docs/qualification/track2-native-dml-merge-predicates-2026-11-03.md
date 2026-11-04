@@ -25,6 +25,11 @@ resolves each target against the pinned snapshot, and commits the selected rows
 atomically. Rows excluded by a source filter and source IDs with no matching
 target are no-ops.
 
+Insert-only `WHEN NOT MATCHED` clauses may also carry the same bounded
+`source.id = 'literal'` or `source.id IN (...)` predicate. Because no matched
+action exists in that form, filtering the source batch is equivalent to the
+SQL clause and preserves the normal idempotent create-if-absent behavior.
+
 When the target alias is declared, the equivalent target-side forms
 `target.id = 'literal'` and `target.id IN ('literal', ...)` are also supported.
 Because the required `ON target.id = source.id` condition is an identity
@@ -41,6 +46,7 @@ Evidence:
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` (target-side filter)
+- `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_unmatched_insert_is_idempotent`
 - implementation commit `2daaab6e`;
 - parser, API transaction, clippy, and formatting gates pass.
 
