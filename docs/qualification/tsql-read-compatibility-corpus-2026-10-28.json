@@ -31,6 +31,8 @@
     {"id": "greatest_numeric", "sql": "SELECT GREATEST(actions, sessions, duration_sec) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "least_numeric", "sql": "SELECT LEAST(actions, sessions, errors) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_non_null_numeric_inputs"},
     {"id": "string_scalar_compatibility", "sql": "SELECT UPPER(name), LOWER(name), REPLACE(name, 'a', 'A') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
+    {"id": "soundex", "sql": "SELECT SOUNDEX(name) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_ascii_inputs"},
+    {"id": "difference", "sql": "SELECT DIFFERENCE(name, region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_ascii_inputs"},
     {"id": "substring_scalar_compatibility", "sql": "SELECT SUBSTRING(name, 1, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "try_parse_numeric", "sql": "SELECT TRY_PARSE(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_numeric_parsing"},
     {"id": "try_parse_invariant_date", "sql": "SELECT TRY_PARSE(value AS DATE) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_temporal_inputs"},

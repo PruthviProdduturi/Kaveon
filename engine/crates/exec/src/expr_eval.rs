@@ -9025,6 +9025,56 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
+        // SQL Server's SOUNDEX/DIFFERENCE helpers are intentionally bounded
+        // to ASCII alphabetic input.  We do not silently transliterate
+        // Unicode or apply a locale/code-page rule that the Engine cannot
+        // reproduce on every worker; non-ASCII words therefore return NULL.
+        "SOUNDEX" => {
+            check_arity(name, args, 1)?;
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, num_rows * 4);
+                for row in 0..num_rows {
+                    match text_value(&args[0], row)?.and_then(soundex_code) {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, num_rows * 4);
+                for row in 0..num_rows {
+                    match text_value(&args[0], row)?.and_then(soundex_code) {
+                        Some(value) => result.append_value(value),
+                        None => result.append_null(),
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
+        }
+        "DIFFERENCE" => {
+            check_arity(name, args, 2)?;
+            let mut result = Int32Builder::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let (Some(left), Some(right)) =
+                    (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                else {
+                    result.append_null();
+                    continue;
+                };
+                let (Some(left), Some(right)) = (soundex_code(left), soundex_code(right)) else {
+                    result.append_null();
+                    continue;
+                };
+                let score = left
+                    .chars()
+                    .zip(right.chars())
+                    .take(4)
+                    .filter(|(a, b)| a == b)
+                    .count() as i32;
+                result.append_value(score);
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "TRIM" => {
             check_arity(name, args, 1)?;
             map_text_array(&args[0], num_rows, |value| value.trim().to_owned())
@@ -17746,6 +17796,60 @@ fn check_arity(name: &str, args: &[ArrayRef], expected: usize) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Compute the bounded, invariant ASCII Soundex code used by the SQL Server
+/// `SOUNDEX`/`DIFFERENCE` compatibility lane.  The first alphabetic letter is
+/// retained; adjacent letters with the same code are collapsed, and vowels
+/// (plus H/W/Y) reset the duplicate boundary.  Unicode input is rejected
+/// rather than transliterated so local and distributed workers agree exactly.
+fn soundex_code(value: &str) -> Option<String> {
+    let mut letters = value.chars();
+    let first = letters.next()?.to_ascii_uppercase();
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut code = String::with_capacity(4);
+    code.push(first);
+    let mut previous = soundex_digit(first);
+    for character in letters {
+        if !character.is_ascii() {
+            return None;
+        }
+        let upper = character.to_ascii_uppercase();
+        if !upper.is_ascii_alphabetic() {
+            continue;
+        }
+        let digit = soundex_digit(upper);
+        if let Some(digit) = digit {
+            if previous != Some(digit) {
+                code.push(digit);
+            }
+            previous = Some(digit);
+        } else if !matches!(upper, 'H' | 'W') {
+            previous = None;
+        }
+        if code.len() == 4 {
+            break;
+        }
+    }
+    while code.len() < 4 {
+        code.push('0');
+    }
+    Some(code)
+}
+
+fn soundex_digit(character: char) -> Option<char> {
+    match character {
+        'B' | 'F' | 'P' | 'V' => Some('1'),
+        'C' | 'G' | 'J' | 'K' | 'Q' | 'S' | 'X' | 'Z' => Some('2'),
+        'D' | 'T' => Some('3'),
+        'L' => Some('4'),
+        'M' | 'N' => Some('5'),
+        'R' => Some('6'),
+        'A' | 'E' | 'I' | 'O' | 'U' | 'H' | 'W' | 'Y' => None,
+        _ => None,
+    }
 }
 
 /// Render the bounded literal-template form of SQL Server FORMATMESSAGE.
@@ -31353,6 +31457,49 @@ mod tests {
         )
         .expect_err("unsupported delimiters must fail closed");
         assert!(error.to_string().contains("bracket or double-quote"));
+    }
+
+    #[test]
+    fn soundex_and_difference_preserve_nulls_and_reject_unicode() {
+        let values = Arc::new(StringArray::from(vec![
+            Some("Robert"),
+            Some("Rupert"),
+            Some("Ashcraft"),
+            Some("Tymczak"),
+            Some("東京"),
+            None,
+            Some("Ashcraft"),
+        ])) as ArrayRef;
+        let soundex = eval_scalar_function("SOUNDEX", std::slice::from_ref(&values), 7)
+            .expect("SOUNDEX should evaluate");
+        let soundex = soundex.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(soundex.value(0), "R163");
+        assert_eq!(soundex.value(1), "R163");
+        assert_eq!(soundex.value(2), "A261");
+        assert_eq!(soundex.value(3), "T522");
+        assert!(soundex.is_null(4));
+        assert!(soundex.is_null(5));
+        assert_eq!(soundex.value(6), "A261");
+
+        let right = Arc::new(StringArray::from(vec![
+            Some("Rupert"),
+            Some("Rubin"),
+            Some("東京"),
+            None,
+            Some("Robert"),
+            None,
+            Some("Ashcraft"),
+        ])) as ArrayRef;
+        let difference = eval_scalar_function("DIFFERENCE", &[values, right], 7)
+            .expect("DIFFERENCE should evaluate");
+        let difference = difference.as_primitive::<Int32Type>();
+        assert_eq!(difference.value(0), 4);
+        assert_eq!(difference.value(1), 2);
+        assert!(difference.is_null(2));
+        assert!(difference.is_null(3));
+        assert!(difference.is_null(4));
+        assert!(difference.is_null(5));
+        assert_eq!(difference.value(6), 4);
     }
 
     #[test]
