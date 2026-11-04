@@ -10733,6 +10733,36 @@ mod tests {
     }
 
     #[test]
+    fn lowers_partitioned_value_windows() {
+        for (sql, marker) in [
+            (
+                "SELECT LAG(value, 1) OVER (PARTITION BY region ORDER BY value) FROM t",
+                "LAG",
+            ),
+            (
+                "SELECT LEAD(value, 1) OVER (PARTITION BY region ORDER BY value) FROM t",
+                "LEAD",
+            ),
+            (
+                "SELECT FIRST_VALUE(value) OVER (PARTITION BY region ORDER BY value) FROM t",
+                "FIRST_VALUE",
+            ),
+            (
+                "SELECT LAST_VALUE(value) OVER (PARTITION BY region ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t",
+                "LAST_VALUE",
+            ),
+            (
+                "SELECT NTH_VALUE(value, 2) OVER (PARTITION BY region ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t",
+                "NTH_VALUE",
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql)
+                .expect("partitioned value window should lower through the window path");
+            assert!(format!("{plan:?}").contains(marker));
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_tsql_percentile_cont_shapes() {
         for sql in [
             "SELECT PERCENTILE_CONT(fraction) WITHIN GROUP (ORDER BY value) OVER () FROM t",

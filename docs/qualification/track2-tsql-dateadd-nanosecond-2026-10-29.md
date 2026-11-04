@@ -9,7 +9,7 @@ explicitly rather than rounded or widened with false precision.
 ## Evidence
 
 - Planner lowering was covered by the versioned 51-case historical T-SQL
-  corpus revision; the current authoritative corpus contains 192 cases.
+  corpus revision; the current authoritative corpus contains 197 cases.
 - Executor regression: `date_add_nanoseconds_preserves_nanosecond_precision_and_nulls`.
 - Formatting, focused SQL tests, corpus validation, strict Clippy, and
   documentation validation pass.

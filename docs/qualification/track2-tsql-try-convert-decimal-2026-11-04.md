@@ -36,7 +36,7 @@ exact local/distributed result gate. A separate planner regression confirms
 that malformed strict decimal input remains an execution error rather than
 silently becoming NULL.
 
-The authoritative T-SQL corpus now contains 192 cases. Cloud deployment,
+The authoritative T-SQL corpus now contains 197 cases. Cloud deployment,
 locale-sensitive conversion, and unbounded arbitrary-precision decimal
 behavior remain outside this evidence.
 
