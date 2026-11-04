@@ -8,7 +8,7 @@ not an AKS, object-store fault-injection, or external-client qualification.
 
 ## Commands and results
 
-From `engine/` at commit `da484fda`:
+From `engine/` at commit `ea434e73`:
 
 ```text
 cargo test -p kaveon-sql --all-targets -- --quiet
@@ -16,7 +16,7 @@ cargo test -p kaveon-sql --all-targets -- --quiet
 
 cargo test -p kaveon-server --bin kaveon-server -- --quiet
 705 passed; 0 failed; 0 ignored
-finished in 694.37s
+finished in 715.20s
 
 cargo test -p kaveon-exec --lib
 632 passed; 0 failed; 4 ignored
