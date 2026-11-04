@@ -47,7 +47,8 @@ Evidence:
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` (target-side filter)
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_unmatched_insert_is_idempotent`
-- implementation commit `2daaab6e`;
+- initial matched-predicate implementation commit `2daaab6e`; insert-only
+  source-filter qualification commit `da484fda`;
 - parser, API transaction, clippy, and formatting gates pass.
 
 Predicates other than the bounded source/target `id` filters and the redundant
