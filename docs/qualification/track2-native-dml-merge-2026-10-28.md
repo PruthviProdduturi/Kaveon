@@ -78,6 +78,14 @@ for the same not-matched clause. Source ids must be unique within the bounded
 batch; duplicate keys fail closed before any write is staged, avoiding
 order-dependent revisions inside one transaction.
 
+## 2026-11-04 qualification evidence
+
+The explicit target-arm spelling is covered by
+`product_merge_accepts_explicit_not_matched_by_target` in the SQL parser test
+suite. The test lowers the statement to the same `MergeCreateIfAbsent` command
+as the unqualified spelling. The focused SQL crate gate passed with 389 library
+tests and clippy `-D warnings`; implementation commit: `1bb320cb`.
+
 The target document assignment may be written either unqualified
 (`document_json = source.document_json`) or qualified with the target alias
 (`target.document_json = source.document_json`). The qualifier must match the
