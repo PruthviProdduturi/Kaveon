@@ -561,7 +561,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_datename_week_full_name",
-        "SELECT TOP 5 DATENAME(week, event_date) AS event_week FROM {T} ORDER BY event_date",
+        "SELECT TOP 5 DATENAME(week, event_date) AS event_week, DATENAME(weekday, event_date) AS event_weekday FROM {T} ORDER BY event_date",
         true,
     ),
     (
