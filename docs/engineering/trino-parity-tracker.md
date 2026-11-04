@@ -253,6 +253,10 @@ The bounded update-or-insert MERGE form also accepts a literal matched
 `source.id`/qualified `target.id` equality or `IN` filter: existing rows
 outside the filter are no-ops while absent source rows still insert. Evidence:
 `docs/qualification/track2-tsql-merge-filtered-update-insert-2026-11-04.md`.
+The same bounded matched filter now qualifies delete-or-insert: selected
+existing rows are revision-CAS deleted, excluded existing rows are no-ops, and
+absent source rows are created. Evidence:
+`docs/qualification/track2-tsql-merge-filtered-delete-insert-2026-11-04.md`.
 
 The current T-SQL corpus is 182 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
