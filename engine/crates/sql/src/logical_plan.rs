@@ -10711,6 +10711,28 @@ mod tests {
     }
 
     #[test]
+    fn lowers_partitioned_rank_dense_rank_and_ntile_windows() {
+        for (sql, marker) in [
+            (
+                "SELECT RANK() OVER (PARTITION BY region ORDER BY value) FROM t",
+                "RANK",
+            ),
+            (
+                "SELECT DENSE_RANK() OVER (PARTITION BY region ORDER BY value) FROM t",
+                "DENSE_RANK",
+            ),
+            (
+                "SELECT NTILE(4) OVER (PARTITION BY region ORDER BY value) FROM t",
+                "NTILE",
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql)
+                .expect("partitioned ranking window should lower through the window path");
+            assert!(format!("{plan:?}").contains(marker));
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_tsql_percentile_cont_shapes() {
         for sql in [
             "SELECT PERCENTILE_CONT(fraction) WITHIN GROUP (ORDER BY value) OVER () FROM t",

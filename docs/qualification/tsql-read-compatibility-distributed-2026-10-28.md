@@ -12,7 +12,7 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-189-case count in the scope and tracker, enforced by
+192-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
 - Historical corpus at this qualification: 119 cases. The prior full sweep qualified bounded
