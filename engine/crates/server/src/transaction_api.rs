@@ -6235,7 +6235,7 @@ mod tests {
                 &registry,
                 "alice",
                 SqlTransactionRequest {
-                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('keep-me', '{}'), ('archive-me', '{}')".into(),
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('keep-me', '{}'), ('archive-me', '{}'), ('leave-me', '{}')".into(),
                     transaction_id: Some(first.transaction_id.clone()),
                     parameters: vec![],
                     named_parameters: HashMap::new(),
@@ -6267,7 +6267,7 @@ mod tests {
                 &registry,
                 "alice",
                 SqlTransactionRequest {
-                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, CAST('{"created":true}' AS JSON)) WHEN NOT MATCHED BY SOURCE THEN UPDATE SET document_json = CAST('{"archived":true}' AS JSON)"#.into(),
+                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, CAST('{"created":true}' AS JSON)) WHEN NOT MATCHED BY SOURCE AND target.id IN ('archive-me') THEN UPDATE SET document_json = CAST('{"archived":true}' AS JSON)"#.into(),
                     transaction_id: Some(merge.transaction_id.clone()),
                     parameters: vec![],
                     named_parameters: HashMap::new(),
@@ -6312,6 +6312,17 @@ mod tests {
             String::from_utf8(archived_document).unwrap(),
             r#"{"archived":true}"#
         );
+        let untouched = snapshot
+            .product_record(ProductRecordKind::Dataset, "leave-me")
+            .unwrap()
+            .unwrap();
+        assert_eq!(untouched.revision, 1);
+        let untouched_document = catalog
+            .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, "leave-me")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(String::from_utf8(untouched_document).unwrap(), "{}");
     }
 
     #[tokio::test]

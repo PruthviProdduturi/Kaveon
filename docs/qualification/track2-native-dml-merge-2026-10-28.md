@@ -79,14 +79,15 @@ batch; duplicate keys fail closed before any write is staged, avoiding
 order-dependent revisions inside one transaction.
 
 The `WHEN NOT MATCHED BY SOURCE` arm also accepts a bounded target-side
-`target.id = 'literal'` or `target.id IN ('literal', ...)` predicate. The
-transaction layer applies that filter while expanding the pinned snapshot,
-before owner checks and revision/CAS staging; rows outside the list remain
-untouched. Arbitrary predicates and source references in this arm remain
-rejected. Parser coverage is
-`product_merge_supports_bounded_not_matched_by_source_target_filter`, and the
-transaction API coverage exercises the filtered delete path; both are covered
-by the server and SQL crate gates.
+`target.id = 'literal'` or `target.id IN ('literal', ...)` predicate for both
+`DELETE` and literal-document `UPDATE` actions. The transaction layer applies
+that filter while expanding the pinned snapshot, before owner checks and
+revision/CAS staging; rows outside the list remain untouched. Arbitrary
+predicates and source references in this arm remain rejected. Parser coverage
+is provided by `product_merge_supports_bounded_not_matched_by_source_target_filter`
+and `product_merge_supports_bounded_not_matched_by_source_target_update_filter`;
+the transaction API covers both filtered delete and update paths, including an
+untouched out-of-filter row, under the server and SQL crate gates.
 
 ## 2026-11-04 qualification evidence
 

@@ -6588,6 +6588,24 @@ mod tests {
     }
 
     #[test]
+    fn product_merge_supports_bounded_not_matched_by_source_target_update_filter() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('keep', '{\"name\":\"kept\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE AND t.id = 'stale' THEN UPDATE SET document_json = '{\"archived\":true}'";
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql)
+            .expect("bounded target-filtered not-matched-by-source update should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert!(matches!(
+            adapt_product_dml_batch(&dml).unwrap().last(),
+            Some(ProductDmlCommand::MergeUpdateNotMatched {
+                target_ids: Some(ids),
+                document_json,
+                ..
+            }) if ids == &vec!["stale".to_owned()] && document_json == "{\"archived\":true}"
+        ));
+    }
+
+    #[test]
     fn product_merge_supports_filtered_matched_update_with_insert_fallback() {
         let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
             "MERGE INTO product.datasets AS target USING (VALUES ('update-me', '{\"changed\":true}'), ('new-row', '{\"created\":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('update-me') THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)",
