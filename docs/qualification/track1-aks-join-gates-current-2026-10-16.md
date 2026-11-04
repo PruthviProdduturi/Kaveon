@@ -21,11 +21,13 @@ finish with byte-identical result data.
 | Case | Run 1 | Run 2 | Exact repeat |
 | --- | ---: | ---: | --- |
 | Left outer self-join grouped by region | 2,484 ms | 2,141 ms | Pass |
-| Full outer cross-source join | 2,167 ms | 2,364 ms | Pass |
+| Full outer cross-table join | 2,167 ms | 2,364 ms | Pass |
 | Skewed grouped self-join | 2,223 ms | 2,330 ms | Pass |
 
 All six requests finished, all three workers were catalog-compatible, and the
-gate passed. The raw report was written to the local qualification workspace
+gate passed. The full outer case joins two relations in the Engine catalog; it
+is not a registered-connector or external federation test. The raw report was
+written to the local qualification workspace
 (`tmp/track1-aks-join-gates-current.json`) and is intentionally not committed.
 
 This evidence qualifies exact-result execution for the declared bounded cases;
