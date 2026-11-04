@@ -42,6 +42,8 @@ and timestamp text use the Engine's microsecond-precision representation;
 `USING` forms remain rejected. See
 [TRY_PARSE qualification](../qualification/track2-tsql-try-parse-2026-10-29.md)
 and [TIME qualification](../qualification/track2-tsql-try-parse-time-2026-11-03.md).
+Bounded `TRY_CAST(... AS DECIMAL(p,s))` is also qualified with typed NULL on
+malformed or overflowing input; see the [decimal `TRY_CAST` qualification](../qualification/track2-tsql-try-cast-decimal-2026-11-04.md).
 Strict invariant `PARSE` targets use the same typed cast boundary and are
 qualified locally and across three workers; culture-aware `USING` forms remain
 rejected. See the [PARSE qualification](../qualification/track2-tsql-parse-invariant-2026-11-04.md).
