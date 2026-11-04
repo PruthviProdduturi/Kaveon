@@ -29,6 +29,8 @@ snapshot, checks ownership, and stages ordinary revision/CAS `DELETE` or
 qualified for this form. It returns only selected delete actions, including
 the document captured from the pinned pre-delete snapshot; inserted and
 excluded no-op source rows do not appear in the deleted projection.
+Bounded `OUTPUT $action` is qualified as well and returns the ordered
+`DELETE`/`INSERT` actions after the filtered command resolves.
 
 General predicates, `NOT IN`, arbitrary assignments, unbounded source scans,
 and filtered `WHEN NOT MATCHED BY SOURCE` combinations remain rejected.
@@ -41,6 +43,7 @@ and filtered `WHEN NOT MATCHED BY SOURCE` combinations remain rejected.
   existing row is unchanged, and an absent source row is created at revision 1.
 - The same API test verifies the deleted identity, revision, and pre-delete
   document in the SQL response.
+- It also verifies ordered `$action` output for a subsequent filtered batch.
 - SQL library suite: 386 passed; bounded server MERGE suite: 14 passed.
 - Focused clippy passes with `-D warnings`.
 
