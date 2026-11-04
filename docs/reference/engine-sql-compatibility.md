@@ -199,8 +199,10 @@ aliases under Kaveon's deterministic calendar convention. `DATEPART` and
 `DATENAME` also accept `iso_week`/`isowk`/`isoww` with ISO-8601 numbering;
 the existing non-ISO `WEEK` contract remains separate. This is a
 read-compatibility layer, not a claim of general T-SQL parity. The common
-`SET DATEFIRST 7;` prefix is accepted as a no-op over the fixed default
-weekday contract; session-specific values remain unsupported. `ISNULL`, `DATEADD` (including microsecond offsets on
+default read-session prefixes `SET ANSI_NULLS ON`, `SET QUOTED_IDENTIFIER ON`,
+`SET ANSI_WARNINGS ON`, `SET NOCOUNT ON`, and `SET DATEFIRST 7;` are accepted
+as no-ops over the fixed Engine semantics; non-default values remain
+unsupported. `ISNULL`, `DATEADD` (including microsecond offsets on
 microsecond-or-finer timestamps and nanosecond offsets on nanosecond
 timestamps), `DATEDIFF`, `DATEDIFF_BIG`, and `DATEPART` are
 qualified across the local and three-worker Parquet differential paths. The
