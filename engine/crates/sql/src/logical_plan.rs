@@ -4588,10 +4588,15 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 return Err(sql_err("CONVERT accepts at most one style code"));
             };
             let inner = if let Some(style) = style {
-                if matches!(data_type, ast::DataType::Date) || is_tsql_timestamp_type(data_type) {
+                if matches!(data_type, ast::DataType::Date)
+                    || is_tsql_timestamp_type(data_type)
+                    || is_tsql_time_type(data_type)
+                {
                     if let ast::Expr::Value(ast::Value::SingleQuotedString(value)) = expr.as_ref() {
                         let normalized = if is_tsql_timestamp_type(data_type) {
                             normalize_tsql_timestamp_literal(value, style)
+                        } else if is_tsql_time_type(data_type) {
+                            normalize_tsql_time_literal(value, style)
                         } else {
                             normalize_tsql_date_literal(value, style)
                         }
@@ -4608,6 +4613,8 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                                 if *is_try { "TRY_CONVERT_" } else { "CONVERT_" },
                                 if is_tsql_timestamp_type(data_type) {
                                     "TIMESTAMP"
+                                } else if is_tsql_time_type(data_type) {
+                                    "TIME"
                                 } else {
                                     "DATE"
                                 }
@@ -5142,6 +5149,11 @@ fn is_tsql_timestamp_type(dt: &ast::DataType) -> bool {
         dt,
         ast::DataType::Datetime(_) | ast::DataType::Timestamp(..)
     ) || matches!(dt, ast::DataType::Custom(name, args) if args.is_empty() && is_tsql_timestamp_name(&name.to_string()))
+}
+
+fn is_tsql_time_type(dt: &ast::DataType) -> bool {
+    matches!(dt, ast::DataType::Time(_, _))
+        || matches!(dt, ast::DataType::Custom(name, args) if args.is_empty() && name.to_string().trim().eq_ignore_ascii_case("TIME"))
 }
 
 fn is_tsql_timestamp_name(name: &str) -> bool {
@@ -6790,6 +6802,35 @@ fn normalize_tsql_timestamp_literal(value: &str, style: u32) -> Option<String> {
         return None;
     }
     Some(format!("{date} {time}"))
+}
+
+/// Normalize the bounded SQL Server TIME conversion styles into the
+/// microsecond parser's canonical `HH:MM:SS[.mmm]` text.
+fn normalize_tsql_time_literal(value: &str, style: u32) -> Option<String> {
+    let value = value.trim();
+    let (clock, fraction) = match style {
+        8 | 108 => (value, None),
+        114 => {
+            let (clock, millis) = value.rsplit_once(':')?;
+            (clock, Some(millis))
+        }
+        _ => return None,
+    };
+    let mut parts = clock.split(':');
+    let hour = parts.next()?.parse::<u32>().ok()?;
+    let minute = parts.next()?.parse::<u32>().ok()?;
+    let second = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let fraction = match fraction {
+        None => String::new(),
+        Some(millis) if millis.len() == 3 && millis.bytes().all(|byte| byte.is_ascii_digit()) => {
+            format!(".{millis}")
+        }
+        Some(_) => return None,
+    };
+    Some(format!("{hour:02}:{minute:02}:{second:02}{fraction}"))
 }
 
 /// Lower a supported aggregate `FILTER (WHERE predicate)` into the existing
@@ -10805,6 +10846,35 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_CONVERT(DATETIME2, value, 113) FROM t")
             .expect("style 113 runtime timestamp should lower through the typed function");
         assert!(format!("{plan:?}").contains("TRY_CONVERT_TIMESTAMP_STYLE_113"));
+    }
+
+    #[test]
+    fn lowers_tsql_time_convert_styles() {
+        for (sql, expected) in [
+            ("SELECT CONVERT(TIME, '12:34:56', 8) FROM t", "12:34:56"),
+            (
+                "SELECT TRY_CONVERT(TIME, '12:34:56', 108) FROM t",
+                "12:34:56",
+            ),
+            (
+                "SELECT CONVERT(TIME, '12:34:56:789', 114) FROM t",
+                "12:34:56.789",
+            ),
+        ] {
+            let plan =
+                sql_to_logical_plan(sql).expect("bounded TIME conversion styles should lower");
+            let rendered = format!("{plan:?}");
+            assert!(rendered.contains(expected), "{sql}: {rendered}");
+        }
+        for sql in [
+            "SELECT CONVERT(TIME, '12:34:56', 101) FROM t",
+            "SELECT CONVERT(TIME, '12:34:56.789', 114) FROM t",
+        ] {
+            assert!(
+                sql_to_logical_plan(sql).is_err(),
+                "unsupported TIME style must fail closed: {sql}"
+            );
+        }
     }
 
     #[test]

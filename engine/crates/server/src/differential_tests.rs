@@ -560,6 +560,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_time_convert_styles",
+        "SELECT TOP 5 TRY_CONVERT(TIME, CASE WHEN user_id % 2 = 0 THEN '12:34:56' ELSE 'bad' END, 108) AS hms, TRY_CONVERT(TIME, CASE WHEN user_id % 2 = 0 THEN '12:34:56:789' ELSE 'bad' END, 114) AS millis, CONVERT(TIME, '12:34:56', 8) AS literal_hms FROM {T} ORDER BY user_id, event_date",
+        true,
+    ),
+    (
         "tsql_sized_text_cast",
         "SELECT TOP 5 CAST(country AS VARCHAR(4)) AS short_name, CAST(country AS CHAR(8)) AS fixed_name, TRY_CONVERT(NVARCHAR(3), industry) AS short_industry FROM {T} ORDER BY event_date, country, industry",
         true,
@@ -9103,6 +9108,31 @@ fn distributed_tsql_time_cast_matches_local() {
             .iter()
             .all(|row| { row.matches("12:34:56.789").count() == 2 })
     );
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_time_convert_styles_match_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-time-convert-styles-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, TRY_CONVERT(TIME, CASE WHEN user_id % 2 = 0 THEN '12:34:56' ELSE 'bad' END, 108) AS hms, TRY_CONVERT(TIME, CASE WHEN user_id % 2 = 0 THEN '12:34:56:789' ELSE 'bad' END, 114) AS millis, CONVERT(TIME, '12:34:56', 8) AS literal_hms FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-time-convert-styles-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(actual.iter().all(|row| row.contains("12:34:56")));
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
