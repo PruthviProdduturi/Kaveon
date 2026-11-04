@@ -371,7 +371,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   `docs/qualification/track2-native-dml-merge-json-typed-source-2026-11-03.md`.
   A matched-only clause may also carry the bounded source filter
   `source.id = 'literal'` or `source.id IN ('literal', ...)`; excluded source
-  rows remain no-ops and selected rows use the same revision/CAS path. Target
+  rows remain no-ops and selected rows use the same revision/CAS path. When a
+  target alias is declared, the equivalent `target.id = 'literal'` or
+  `target.id IN ('literal', ...)` filter is also accepted; the `ON` equality
+  makes it a deterministic filter over the same source batch. Other target
   columns, arbitrary expressions, `NOT IN`, and compound predicates remain
   rejected. The first matched clause may additionally carry the redundant
   identity predicate `target.id = source.id` (or the reversed operand order),

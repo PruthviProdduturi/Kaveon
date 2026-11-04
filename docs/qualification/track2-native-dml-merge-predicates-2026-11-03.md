@@ -25,6 +25,14 @@ resolves each target against the pinned snapshot, and commits the selected rows
 atomically. Rows excluded by a source filter and source IDs with no matching
 target are no-ops.
 
+When the target alias is declared, the equivalent target-side forms
+`target.id = 'literal'` and `target.id IN ('literal', ...)` are also supported.
+Because the required `ON target.id = source.id` condition is an identity
+equality, the target-side form selects the same bounded source rows; it does
+not introduce a general target search predicate or a second mutation path.
+Selected rows still use the normal owner, pinned-snapshot, and revision/CAS
+checks.
+
 Evidence:
 
 - `engine/crates/sql/src/parser.rs::product_merge_supports_bounded_matched_source_filter`
@@ -32,11 +40,13 @@ Evidence:
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_batch_updates_and_inserts_atomically`
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop`
 - `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_delete_is_atomic_and_unmatched_is_noop`
-- implementation commit `ce916270`;
+- `engine/crates/server/src/transaction_api.rs::sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop` (target-side filter)
+- implementation commit `2daaab6e`;
 - parser, API transaction, clippy, and formatting gates pass.
 
-Predicates other than the redundant identity predicate on the first matched
-clause, target filters combined with other conditions, arbitrary expressions,
-`NOT IN`, and general `MERGE` search conditions remain explicitly rejected.
+Predicates other than the bounded source/target `id` filters and the redundant
+identity predicate on the first matched clause, target filters combined with
+other conditions, arbitrary expressions, `NOT IN`, and general `MERGE` search
+conditions remain explicitly rejected.
 This is a bounded KaveonDB transaction qualification, not unrestricted SQL
 Server, PostgreSQL, or Fabric `MERGE` compatibility.
