@@ -1,4 +1,7 @@
 {
+  "record_type": "historical_validation_snapshot",
+  "recorded_at": "2026-09-09",
+  "current_runtime_authority": "KaveonDB",
   "environment": {
     "cluster": "kaveon-test-aks",
     "namespace": "kaveon",
