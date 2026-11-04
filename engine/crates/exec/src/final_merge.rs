@@ -117,6 +117,30 @@ pub struct HybridFinalMerge {
 }
 
 impl HybridFinalMerge {
+    /// Prepay only the share of the input pipeline owned by this merge.  A
+    /// broadcast final stage has one merge per worker, all sharing the query
+    /// budget; reserving four complete batches in every worker can consume
+    /// the budget before the spill path gets a chance to react.
+    #[inline]
+    fn prepaid_batches(&self, batch_bytes: u64) -> u64 {
+        let Some((selector, _)) = &self.selection else {
+            return PREPAID_BATCHES;
+        };
+        let workers = selector.workers() as u64;
+        let full = batch_bytes
+            .saturating_mul(PREPAID_BATCHES)
+            .saturating_mul(workers);
+        // Preserve the four-batch progress window for small inputs (which is
+        // important for source-pressure tests), but divide it when several
+        // broadcast workers would otherwise reserve most of the shared
+        // query budget before spilling can respond.
+        if full > self.memory.query().snapshot().limit_bytes {
+            PREPAID_BATCHES.saturating_div(workers).max(1)
+        } else {
+            PREPAID_BATCHES
+        }
+    }
+
     /// Over a grouped-state input. With `spill`, a budget refusal moves
     /// the groups held so far to the disk in that many sub-partitions;
     /// without, it is the query's error.
@@ -559,7 +583,8 @@ impl HybridFinalMerge {
         }
         if self.merger_memory.is_none() {
             let prepaid = if self.spill.is_some() {
-                (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
+                (batch.get_array_memory_size() as u64)
+                    .saturating_mul(self.prepaid_batches(batch.get_array_memory_size() as u64))
             } else {
                 0
             };
@@ -598,7 +623,8 @@ impl HybridFinalMerge {
     fn push_selected(&mut self, batch: &RecordBatch, selected: &[u32]) -> Result<()> {
         if self.merger_memory.is_none() {
             let prepaid = if self.spill.is_some() {
-                (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
+                (batch.get_array_memory_size() as u64)
+                    .saturating_mul(self.prepaid_batches(batch.get_array_memory_size() as u64))
             } else {
                 0
             };
