@@ -16,7 +16,7 @@ cargo test -p kaveon-sql --all-targets -- --quiet
 
 cargo test -p kaveon-server --bin kaveon-server -- --quiet
 705 passed; 0 failed; 0 ignored
-finished in 717.40s
+finished in 694.37s
 
 cargo test -p kaveon-exec --lib
 632 passed; 0 failed; 4 ignored
