@@ -566,7 +566,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_time_dateadd",
-        "SELECT TOP 5 DATEADD(hour, user_id, CAST('23:30:00' AS TIME)) AS shifted_hours, DATEADD(millisecond, actions, CAST('23:59:59.999000' AS TIME)) AS shifted_millis, DATEADD(microsecond, user_id, CAST('23:59:59.999999' AS TIME)) AS shifted_micros FROM {T} ORDER BY user_id, event_date",
+        "SELECT TOP 5 DATEADD(hour, user_id, CAST('23:30:00' AS TIME)) AS shifted_hours, DATEADD(millisecond, actions, CAST('23:59:59.999000' AS TIME)) AS shifted_millis, DATEADD(microsecond, user_id, CAST('23:59:59.999999' AS TIME)) AS shifted_micros FROM {T} ORDER BY user_id, event_date, actions, country",
         true,
     ),
     (
