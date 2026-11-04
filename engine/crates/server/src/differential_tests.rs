@@ -290,6 +290,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_soundex_difference",
+        "SELECT user_id, SOUNDEX(country), DIFFERENCE(country, region) FROM {T} ORDER BY user_id, country, actions LIMIT 20",
+        true,
+    ),
+    (
         "regexp_like_column_predicate",
         "SELECT user_id, REGEXP_LIKE(country, 'a') AS has_a FROM {T} ORDER BY user_id, country, actions LIMIT 20",
         true,

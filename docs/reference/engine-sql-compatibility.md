@@ -234,6 +234,12 @@ The bounded identifier/string aliases also include `QUOTENAME` (square-bracket
 or double-quote delimiters, with the 128-character limit) and
 `STRING_ESCAPE(value, 'json')`; unsupported delimiter and escape-mode forms
 fail closed.
+SQL Server `SOUNDEX` and `DIFFERENCE` are also qualified for bounded ASCII
+alphabetic text. `SOUNDEX` returns the invariant four-character code and
+`DIFFERENCE` returns the number of matching code positions, with NULL
+propagation. Non-ASCII input returns NULL rather than being transliterated or
+silently interpreted under a worker-local code page; arbitrary locale-aware
+phonetic behavior is outside this contract.
 `FORMATMESSAGE` is qualified for literal templates with positional `%s`, `%d`,
 `%i`, `%u`, and escaped `%%` tokens, with NULL propagation. `%i`/`%d` use
 signed decimal text and `%u` accepts unsigned integer inputs. Width, precision,
