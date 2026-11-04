@@ -8,15 +8,15 @@ not an AKS, object-store fault-injection, or external-client qualification.
 
 ## Commands and results
 
-From `engine/` at commit `ea434e73`:
+From `engine/` at commit `6b15ac7d`:
 
 ```text
 cargo test -p kaveon-sql --all-targets -- --quiet
 381 passed; 0 failed; 0 ignored
 
-cargo test -p kaveon-server --bin kaveon-server -- --quiet
+cargo test -p kaveon-server
 705 passed; 0 failed; 0 ignored
-finished in 715.20s
+finished in 696.36s
 
 cargo test -p kaveon-exec --lib
 632 passed; 0 failed; 4 ignored
@@ -44,7 +44,7 @@ cargo clippy -p kaveon-sql --all-targets -- -D warnings
 passed
 
 cargo clippy --workspace --all-targets -- -D warnings
-passed; finished in 16.49s
+passed; finished in 14.75s
 ```
 
 Together these suites cover the versioned T-SQL corpus, distributed
