@@ -2748,6 +2748,41 @@ mod tests {
     }
 
     #[test]
+    fn utf8_view_join_keys_match_and_skip_nulls() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Utf8View,
+            true,
+        )]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("alpha"),
+                Some("missing"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringViewArray::from(vec![Some("alpha"), None]))],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("key".into(), "key".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        assert_eq!(
+            concat_batches(join.schema(), &batches).unwrap().num_rows(),
+            1
+        );
+    }
+
+    #[test]
     fn integer_fast_path_matches_composite_path_with_nulls_duplicates_and_outer_rows() {
         let left_ids = (0..79)
             .map(|i| {
