@@ -5055,7 +5055,7 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
             if args.is_empty() && is_tsql_timestamp_name(&name.to_string()) =>
         {
             Ok(CastTarget::TimestampMicros {
-                with_timezone: false,
+                with_timezone: name.to_string().eq_ignore_ascii_case("DATETIMEOFFSET"),
             })
         }
         other => Err(sql_err(format!("unsupported CAST target type: {other}"))),
@@ -10712,6 +10712,9 @@ mod tests {
         let timestamp = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATETIME2) FROM t")
             .expect("invariant TRY_PARSE DATETIME2 should lower");
         assert!(format!("{timestamp:?}").contains("TRY_CAST_TIMESTAMP"));
+        let offset = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATETIMEOFFSET) FROM t")
+            .expect("invariant TRY_PARSE DATETIMEOFFSET should lower");
+        assert!(format!("{offset:?}").contains("TRY_CAST_TIMESTAMP_TZ"));
     }
 
     #[test]

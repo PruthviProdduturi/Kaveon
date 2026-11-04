@@ -2367,7 +2367,26 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
         // named zones such as UTC. Parse the instant as a naive timestamp,
         // then attach the Engine's canonical UTC metadata without changing
         // the microsecond value.
-        let naive = compute::cast(&arr, &DataType::Timestamp(TimeUnit::Microsecond, None))?;
+        // Arrow's timestamp parser does not accept Utf8View directly on all
+        // supported builds; materialize only this cast boundary to ordinary
+        // UTF-8 while preserving nulls. This keeps text dimensions view-backed
+        // everywhere else and makes row-local CASE/TRY_PARSE timezone casts
+        // deterministic.
+        let cast_input = if arr.data_type() == &DataType::Utf8View {
+            let values = arr
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
+            Arc::new(StringArray::from_iter(
+                (0..values.len()).map(|row| (!values.is_null(row)).then(|| values.value(row))),
+            )) as ArrayRef
+        } else {
+            arr.clone()
+        };
+        let naive = compute::cast(
+            &cast_input,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )?;
         let values = naive
             .as_any()
             .downcast_ref::<TimestampMicrosecondArray>()
@@ -8568,6 +8587,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 )));
             }
         };
+        if matches!(
+            target,
+            CastTarget::TimestampMicros {
+                with_timezone: true
+            }
+        ) {
+            // Arrow's safe cast path does not accept Utf8View input when the
+            // target carries timezone metadata. Normalize the view only at
+            // this boundary, parse as a timezone-less instant with safe
+            // NULL-on-error semantics, then attach Kaveon's canonical UTC
+            // metadata. Offset-bearing text is normalized by Arrow before
+            // the metadata is attached.
+            let cast_input = if args[0].data_type() == &DataType::Utf8View {
+                let values = args[0]
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
+                Arc::new(StringArray::from_iter(
+                    (0..values.len()).map(|row| (!values.is_null(row)).then(|| values.value(row))),
+                )) as ArrayRef
+            } else {
+                args[0].clone()
+            };
+            let naive = compute::cast_with_options(
+                &cast_input,
+                &DataType::Timestamp(TimeUnit::Microsecond, None),
+                &compute::CastOptions {
+                    safe: true,
+                    ..Default::default()
+                },
+            )?;
+            let values = naive
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("timestamp cast produced an invalid array".into())
+                })?
+                .clone()
+                .with_timezone("+00:00");
+            return Ok(Arc::new(values));
+        }
         return Ok(compute::cast_with_options(
             &args[0],
             &target.to_arrow_type(),

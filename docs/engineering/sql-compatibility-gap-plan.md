@@ -39,7 +39,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 163-case corpus has planner coverage and focused exact
+  The current 164-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -225,7 +225,8 @@ SQL Server `ROUND` now accepts the bounded third `operation` argument (`0` for
 rounding and `1` for truncation toward zero), including row-local integer
 expressions; other operation values fail closed.
 `TRY_PARSE(value AS type)` now lowers to the existing invariant `TRY_CAST`
-path for numeric and bounded temporal targets, with exact local/three-worker evidence in
+path for numeric and bounded DATE, DATETIME2, and fixed-offset DATETIMEOFFSET
+targets, with exact local/three-worker evidence in
 `docs/qualification/track2-tsql-try-parse-2026-10-29.md`; culture-aware `USING`
 forms remain explicitly rejected.
 Direct SQL Server `TRY_CAST` DATE and DATETIME2 targets now have exact
