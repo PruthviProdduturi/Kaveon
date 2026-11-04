@@ -473,6 +473,14 @@ impl ThreadSelector {
         (crate::exchange::mix(self.hasher.hash_one(key) ^ crate::exchange::THREAD_PARTITION_SALT)
             % self.workers as u64) as usize
     }
+
+    /// Number of sibling workers sharing the same input stream.  Final
+    /// merge memory admission uses this to divide its batch prepayment across
+    /// selected workers instead of reserving the full batch budget per worker.
+    #[inline]
+    pub fn workers(&self) -> usize {
+        self.workers
+    }
 }
 
 /// One operator run on several threads within a task: rows go to the
