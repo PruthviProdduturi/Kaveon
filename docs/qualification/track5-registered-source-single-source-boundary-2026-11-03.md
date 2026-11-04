@@ -18,6 +18,9 @@ semantics contract for federation.
 
 - `api/database/test_connectors.py::RegisteredSourceExecutorTests::test_registered_source_execution_never_fans_out_to_multiple_sources`
   asserts one pool invocation and one selected source for a joined statement.
+- `api/database/test_connectors.py::RegisteredSourceExecutorTests::test_source_failure_propagates_without_retry_or_fanout`
+  preserves the source timeout/error and proves the connector makes one pool
+  invocation with no implicit retry or secondary-source execution.
 - `api/database/connectors.py` documents the seam as single-source pushdown.
 - `api/routers/test_sql_retirement_routing.py` verifies Engine catalogs are
   routed to the Engine path and non-Engine names to the registered-source
