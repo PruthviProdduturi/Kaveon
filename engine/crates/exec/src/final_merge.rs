@@ -54,8 +54,32 @@ const PREPAID_BATCHES: u64 = 4;
 /// because one hash bucket is larger than the query budget.  The child salt
 /// changes the bucket layout at every level, so adversarial keys cannot keep
 /// selecting the same child.
-const FINAL_REPARTITION_FACTOR: usize = 16;
+const FINAL_REPARTITION_MIN_FACTOR: usize = 16;
+const FINAL_REPARTITION_MAX_FACTOR: usize = 256;
 const FINAL_REPARTITION_MAX_LEVEL: u8 = 8;
+
+/// Keep each recursively repartitioned child comfortably below the query
+/// memory budget.  The estimate is encoded spill bytes, which includes the
+/// grouped key/state payload and IPC framing, rather than an uncompressed row
+/// guess.  The fanout is bounded so a pathological input cannot create an
+/// unbounded number of writers or pending child partitions.
+#[inline]
+fn adaptive_repartition_factor(runs: &[SpillRun], limit_bytes: u64) -> usize {
+    let encoded_bytes = runs
+        .iter()
+        .fold(0_u64, |total, run| total.saturating_add(run.bytes()));
+    adaptive_repartition_factor_for_bytes(encoded_bytes, limit_bytes)
+}
+
+#[inline]
+fn adaptive_repartition_factor_for_bytes(encoded_bytes: u64, limit_bytes: u64) -> usize {
+    let target_bytes = (limit_bytes / 4).max(1);
+    let estimated = encoded_bytes
+        .div_ceil(target_bytes)
+        .try_into()
+        .unwrap_or(FINAL_REPARTITION_MAX_FACTOR);
+    estimated.clamp(FINAL_REPARTITION_MIN_FACTOR, FINAL_REPARTITION_MAX_FACTOR)
+}
 
 #[inline]
 fn selected_prepaid_batches(batch_bytes: u64, workers: usize, limit_bytes: u64) -> u64 {
@@ -345,11 +369,15 @@ impl HybridFinalMerge {
                     // bounded working set.
                     drop(merger);
                     drop(source);
+                    let fanout = adaptive_repartition_factor(
+                        &runs,
+                        self.memory.query().snapshot().limit_bytes,
+                    );
                     let children = self
-                        .repartition_runs(runs, FINAL_REPARTITION_FACTOR, level)
+                        .repartition_runs(runs, fanout, level)
                         .map_err(|error| {
                             KaveonError::MemoryLimit(format!(
-                                "final aggregate sub-partition {} of {} does not fit the budget after {} repartition levels: {error}",
+                                "final aggregate sub-partition {} of {} does not fit the budget after {} repartition levels (fanout {fanout}): {error}",
                                 partition + 1,
                                 self.runs.len(),
                                 level
@@ -870,7 +898,8 @@ mod tests {
     use kaveon_core::{BatchOperator, KaveonError, QueryMemoryPool, Result};
 
     use super::{
-        FINAL_REPARTITION_MAX_LEVEL, HybridFinalMerge, PREPAID_BATCHES, selected_prepaid_batches,
+        FINAL_REPARTITION_MAX_LEVEL, HybridFinalMerge, PREPAID_BATCHES,
+        adaptive_repartition_factor_for_bytes, selected_prepaid_batches,
     };
     use crate::aggregate::{
         AggregateState, AggregateValue, GroupedAggregateState,
@@ -1310,6 +1339,24 @@ mod tests {
         );
         assert_eq!(selected_prepaid_batches(128 << 20, 3, 640 << 20), 1);
         assert_eq!(selected_prepaid_batches(u64::MAX, 0, 1), 4);
+    }
+
+    #[test]
+    fn adaptive_repartition_factor_scales_with_encoded_spill_bytes() {
+        // Small and moderate buckets retain the minimum fanout, while a
+        // large encoded bucket gets more children under the same budget.
+        assert_eq!(adaptive_repartition_factor_for_bytes(1, 64 << 20), 16);
+        assert_eq!(
+            adaptive_repartition_factor_for_bytes(64 << 20, 64 << 20),
+            16
+        );
+        assert_eq!(
+            adaptive_repartition_factor_for_bytes(512 << 20, 64 << 20),
+            32
+        );
+        // The policy is bounded even when a corrupt/hostile run advertises an
+        // enormous byte count or an extremely small memory budget.
+        assert_eq!(adaptive_repartition_factor_for_bytes(u64::MAX, 1), 256);
     }
 
     #[test]
