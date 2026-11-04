@@ -30,8 +30,8 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     let json_unique_normalized = normalize_json_object_unique_keys(&json_clauses_normalized)?;
     let json_returning_normalized = normalize_json_returning(&json_unique_normalized);
     let try_parse_normalized = normalize_try_parse(&json_returning_normalized);
-    let datefirst_normalized = normalize_default_datefirst(&try_parse_normalized)?;
-    let normalized = normalize_lateral_unnest(&datefirst_normalized);
+    let session_normalized = normalize_default_tsql_session_prefixes(&try_parse_normalized)?;
+    let normalized = normalize_lateral_unnest(&session_normalized);
     // Lower the one recursive shape that has a finite, deterministic
     // equivalent in the existing UNNEST/SEQUENCE execution path.  More
     // general recursive graphs remain explicitly unsupported in the logical
@@ -122,39 +122,49 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     }
 }
 
-/// SQL Server clients often prepend the session's default `DATEFIRST` value.
-/// The Engine's bounded weekday contract is permanently equivalent to
-/// `DATEFIRST 7` (Sunday=1), so strip that explicit default before parsing.
-/// Other values remain fail-closed because honoring them requires carrying
-/// session state through planning and every distributed worker.
-fn normalize_default_datefirst(sql: &str) -> Result<String> {
-    let trimmed = sql.trim_start();
-    let upper = trimmed.to_ascii_uppercase();
-    let prefix = "SET DATEFIRST";
-    if !upper.starts_with(prefix)
-        || upper
-            .as_bytes()
-            .get(prefix.len())
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-    {
-        return Ok(sql.to_owned());
+/// SQL Server clients often prepend session prologues before a read. These
+/// values are the Engine's fixed semantics, so strip only the explicit
+/// defaults. Other values remain fail-closed because honoring mutable session
+/// state requires carrying it through planning and every distributed worker.
+fn normalize_default_tsql_session_prefixes(sql: &str) -> Result<String> {
+    const DEFAULTS: [(&str, &str); 5] = [
+        ("SET DATEFIRST", "7"),
+        ("SET ANSI_NULLS", "ON"),
+        ("SET QUOTED_IDENTIFIER", "ON"),
+        ("SET ANSI_WARNINGS", "ON"),
+        ("SET NOCOUNT", "ON"),
+    ];
+    let mut remaining = sql.trim_start().to_owned();
+    loop {
+        let upper = remaining.to_ascii_uppercase();
+        let Some((prefix, expected)) = DEFAULTS.iter().find(|(prefix, _)| {
+            upper.starts_with(*prefix)
+                && !upper
+                    .as_bytes()
+                    .get(prefix.len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        }) else {
+            break;
+        };
+        let Some(separator) = remaining.find(';') else {
+            return Err(sql_error(&format!(
+                "{prefix} requires a statement terminator before the query"
+            )));
+        };
+        let value = remaining[prefix.len()..separator].trim();
+        if !value.eq_ignore_ascii_case(expected) {
+            return Err(sql_error(&format!(
+                "{prefix} supports only the Engine default {expected}; session-specific values are not supported"
+            )));
+        }
+        remaining = remaining[separator + 1..].trim_start().to_owned();
+        if remaining.is_empty() {
+            return Err(sql_error(&format!(
+                "{prefix} {expected} must be followed by a query"
+            )));
+        }
     }
-    let Some(separator) = trimmed.find(';') else {
-        return Err(sql_error(
-            "SET DATEFIRST requires a statement terminator before the query",
-        ));
-    };
-    let value = trimmed[prefix.len()..separator].trim();
-    if value != "7" {
-        return Err(sql_error(
-            "SET DATEFIRST supports only the Engine default 7; session-specific values are not supported",
-        ));
-    }
-    let remainder = trimmed[separator + 1..].trim_start();
-    if remainder.is_empty() {
-        return Err(sql_error("SET DATEFIRST 7 must be followed by a query"));
-    }
-    Ok(remainder.to_owned())
+    Ok(remaining)
 }
 
 /// Lower the bounded SQL Server `TRY_PARSE(value AS type)` spelling to the
@@ -4698,15 +4708,20 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_default_tsql_datefirst_prefix() {
-        let statements = parse_sql("SET DATEFIRST 7; SELECT DATEPART(dw, event_date) FROM t")
-            .expect("the Engine default DATEFIRST should be a no-op");
+    fn accepts_only_default_tsql_read_session_prefixes() {
+        let statements = parse_sql(
+            "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_WARNINGS ON; SET NOCOUNT ON; SET DATEFIRST 7; SELECT DATEPART(dw, event_date) FROM t",
+        )
+        .expect("Engine-default session prefixes should be no-ops");
         assert_eq!(statements.len(), 1);
         assert!(statements[0].to_string().contains("DATEPART"));
 
         let error = parse_sql("SET DATEFIRST 1; SELECT DATEPART(dw, event_date) FROM t")
             .expect_err("session-specific DATEFIRST must remain fail-closed");
         assert!(error.to_string().contains("only the Engine default 7"));
+        let error = parse_sql("SET NOCOUNT OFF; SELECT 1")
+            .expect_err("non-default NOCOUNT must remain fail-closed");
+        assert!(error.to_string().contains("only the Engine default ON"));
     }
 
     #[test]
