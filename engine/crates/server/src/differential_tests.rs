@@ -551,7 +551,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_time_cast",
-        "SELECT TOP 5 CAST('12:34:56.789' AS TIME) AS parsed_time, TRY_CAST(country AS TIME) AS maybe_time FROM {T} ORDER BY event_date",
+        "SELECT TOP 5 CAST('12:34:56.789' AS TIME) AS parsed_time, TRY_CAST(country AS TIME) AS maybe_time, CONVERT(TIME, '12:34:56.789') AS converted_time, TRY_CONVERT(TIME, country) AS maybe_converted FROM {T} ORDER BY event_date",
         true,
     ),
     (
@@ -9021,7 +9021,7 @@ fn distributed_tsql_time_cast_matches_local() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-tsql-time-cast-{}", uuid::Uuid::new_v4()));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, CAST('12:34:56.789' AS TIME) AS parsed_time, TRY_CAST(country AS TIME) AS maybe_time FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
+    let statement = "SELECT user_id, CAST('12:34:56.789' AS TIME) AS parsed_time, TRY_CAST(country AS TIME) AS maybe_time, CONVERT(TIME, '12:34:56.789') AS converted_time, TRY_CONVERT(TIME, country) AS maybe_converted FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-time-cast-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
@@ -9034,7 +9034,11 @@ fn distributed_tsql_time_cast_matches_local() {
         false,
     );
     assert_eq!(actual, expected);
-    assert!(actual.iter().all(|row| row.contains("12:34:56.789")));
+    assert!(
+        actual
+            .iter()
+            .all(|row| { row.matches("12:34:56.789").count() == 2 })
+    );
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }

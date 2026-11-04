@@ -73,6 +73,7 @@
     {"id": "smalldatetimefromparts", "sql": "SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29, 12, 34)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "timefromparts", "sql": "SELECT TIMEFROMPARTS(12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_6"},
     {"id": "time_cast", "sql": "SELECT CAST(time_text AS TIME), TRY_CAST(time_text AS TIME) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_text_time_cast_and_safe_nulls"},
+    {"id": "convert_time", "sql": "SELECT CONVERT(TIME, time_text), TRY_CONVERT(TIME, time_text) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_text_time_conversion_and_safe_nulls"},
     {"id": "datetimeoffsetfromparts", "sql": "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 5, 30)", "status": "planner_qualified", "distributed_status": "qualified_for_utc_normalized_offsets_and_precision_0_to_6"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},

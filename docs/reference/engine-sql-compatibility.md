@@ -282,9 +282,10 @@ rejection of invalid calendar dates or unsupported arities.
 typed `DATE_TRUNC` path, with the identical supported datepart and precision
 boundary. See
 [`track2-tsql-datetrunc-2026-10-30.md`](../qualification/track2-tsql-datetrunc-2026-10-30.md).
-SQL `CAST` and `TRY_CAST` to `TIME` are qualified for UTF-8 text and existing
-Arrow time values at microsecond precision. Strict casts reject malformed
-values; `TRY_CAST` returns typed NULL for malformed or NULL input. Other
+SQL `CAST`/`TRY_CAST` and SQL Server `CONVERT`/`TRY_CONVERT` to `TIME` are
+qualified for UTF-8 text and existing Arrow time values at microsecond
+precision. Strict casts reject malformed values; safe forms return typed NULL
+for malformed or NULL input. Other
 numeric and timestamp-to-time coercions remain outside this bounded contract.
 `DATENAME` is qualified for calendar parts and returns deterministic English
 month/weekday names or textual numeric parts; its bounded `tzoffset` form is
