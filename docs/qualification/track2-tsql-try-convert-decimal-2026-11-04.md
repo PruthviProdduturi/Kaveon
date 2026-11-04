@@ -30,7 +30,7 @@ The case mixes valid numeric input with non-numeric text, orders by a complete
 source key, and compares canonical local and distributed rows. It passed across
 the differential Parquet layouts and the three-worker execution path.
 
-The authoritative T-SQL corpus now contains 183 cases. Cloud deployment,
+The authoritative T-SQL corpus now contains 184 cases. Cloud deployment,
 locale-sensitive conversion, and unbounded arbitrary-precision decimal
 behavior remain outside this evidence.
 
