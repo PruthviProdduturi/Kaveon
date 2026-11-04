@@ -6326,6 +6326,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_endpoint_filtered_merge_not_matched_by_source_update_outputs_inserted_row() {
+        let (registry, catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "INSERT INTO product.datasets (id, document_json) VALUES ('archive-me', '{}'), ('leave-me', '{}')".into(),
+                    transaction_id: Some(seed.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let transaction = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('keep-me', '{"kept":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) WHEN NOT MATCHED BY SOURCE AND target.id IN ('archive-me') THEN UPDATE SET document_json = CAST('{"archived":true}' AS JSON) OUTPUT inserted.id, inserted.revision, inserted.document_json"#.into(),
+                transaction_id: Some(transaction.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["returning"],
+            serde_json::json!([
+                {
+                    "id": "keep-me",
+                    "revision": 1,
+                    "document_json": r#"{"kept":true}"#
+                },
+                {
+                    "id": "archive-me",
+                    "revision": 2,
+                    "document_json": r#"{"archived":true}"#
+                }
+            ])
+        );
+
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(transaction.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let snapshot = catalog.read_current().await.unwrap();
+        let untouched = snapshot
+            .product_record(ProductRecordKind::Dataset, "leave-me")
+            .unwrap()
+            .unwrap();
+        assert_eq!(untouched.revision, 1);
+    }
+
+    #[tokio::test]
     async fn sql_endpoint_bounded_merge_matched_update_is_cas_checked_and_unmatched_is_noop() {
         let (registry, catalog) = registry().await;
         let first = registry.begin("alice").await.unwrap();
