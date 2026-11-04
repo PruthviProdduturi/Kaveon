@@ -81,7 +81,7 @@ The fast bounded server suite remains 470/470 with the long-running
 `differential_tests` module excluded. At qualification commit `ce7c58c6`,
 the SQL crate all-targets suite was 378/378. The superseded scoped server
 record at `6b15ac7d` reported 705/705; the current workspace-wide run at
-`a558da65` reports 708/708 and is authoritative. The complete current run is
+`39fe66a3` reports 712/712 and is authoritative. The complete current run is
 recorded in `docs/qualification/track0-workspace-gate-2026-11-03.md`; the
 scoped provenance remains in
 `docs/qualification/track1-server-suite-2026-11-03.md`. The earlier 675/675
