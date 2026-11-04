@@ -19,3 +19,10 @@ Evidence:
 
 This qualification does not claim arbitrary locale formats, date-time values
 in a TIME target, or precision beyond the Engine's microsecond contract.
+
+The same invariant path is qualified for `DATETIME` and `SMALLDATETIME`.
+Both targets use the Engine's microsecond timestamp representation; the
+`SMALLDATETIME` name does not imply SQL Server's minute-rounding storage model.
+The three-worker regression
+`distributed_tsql_try_parse_invariant_datetime_targets_match_local` covers
+valid and malformed values for both targets.
