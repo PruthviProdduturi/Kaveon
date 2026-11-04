@@ -239,6 +239,24 @@ fn normalize_try_parse(sql: &str) -> String {
 /// not trigger it.
 fn reject_unsupported_tsql_relational_forms(sql: &str) -> Result<()> {
     let bytes = sql.as_bytes();
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_ascii_uppercase();
+    if upper.starts_with("CREATE INDEX ")
+        || upper.starts_with("CREATE UNIQUE INDEX ")
+        || upper.starts_with("DROP INDEX ")
+    {
+        return Err(sql_error(
+            "index DDL is not implemented for lake tables; use CREATE TABLE clustered_by/bloom layout options",
+        ));
+    }
+    if upper.starts_with("ALTER TABLE ")
+        && contains_sql_word(bytes, b"ADD")
+        && contains_sql_word(bytes, b"CONSTRAINT")
+    {
+        return Err(sql_error(
+            "constraint DDL is not implemented for lake tables; use the qualified KaveonDB typed-row integrity contract",
+        ));
+    }
     for (word, guidance) in [
         (
             b"PIVOT".as_slice(),
@@ -4813,6 +4831,31 @@ mod tests {
             assert!(error.to_string().contains(message), "{sql}: {error}");
         }
         assert!(parse_sql("SELECT pivot_value FROM t").is_ok());
+    }
+
+    #[test]
+    fn unsupported_lake_index_and_constraint_ddl_fails_closed() {
+        for (sql, expected) in [
+            (
+                "CREATE INDEX orders_customer_idx ON orders (customer_id)",
+                "index DDL is not implemented",
+            ),
+            (
+                "CREATE UNIQUE INDEX orders_id_idx ON orders (id)",
+                "index DDL is not implemented",
+            ),
+            (
+                "DROP INDEX orders_customer_idx",
+                "index DDL is not implemented",
+            ),
+            (
+                "ALTER TABLE orders ADD CONSTRAINT orders_id_key UNIQUE (id)",
+                "constraint DDL is not implemented",
+            ),
+        ] {
+            let error = parse_sql(sql).expect_err("unsupported lake DDL must fail closed");
+            assert!(error.to_string().contains(expected), "{sql}: {error}");
+        }
     }
 
     #[test]
