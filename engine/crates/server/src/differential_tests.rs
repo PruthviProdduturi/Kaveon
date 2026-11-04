@@ -580,6 +580,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datepart_week_full_name",
+        "SELECT TOP 5 DATEPART(week, event_date) AS week_number FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datepart_subsecond_aliases",
         "SELECT TOP 5 DATEPART(ms, CAST(event_date AS TIMESTAMP)) AS milliseconds, DATEPART(mcs, CAST(event_date AS TIMESTAMP)) AS microseconds, DATEPART(ns, CAST(event_date AS TIMESTAMP)) AS nanoseconds FROM {T} ORDER BY event_date",
         true,
