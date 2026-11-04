@@ -1,9 +1,10 @@
-# Engine workspace gate — 2026-11-03
+# Engine workspace gate — 2026-11-04
 
 ## Boundary
 
 This record covers the source-level release gate for the current `dev`
-branch after the bounded final-merge memory-admission change. It is a
+branch after the deterministic T-SQL qualification-ordering correction in
+`39fe66a3`. It is a
 correctness and build gate, not a claim of cloud deployment qualification or
 complete Trino/Fabric/PostgreSQL parity.
 
@@ -19,14 +20,17 @@ Observed results:
 
 - catalog: 93 passed, 4 ignored;
 - CLI/server and related workspace targets: all reported tests passed;
-- execution: 638 passed, 4 ignored (latest `cargo test -p kaveon-exec --lib`
-  rerun after the `Utf8View` join regression);
+- execution: 644 passed, 4 ignored;
 - optimizer: 86 passed;
-- SQL: 382 passed;
+- SQL: 383 passed;
 - storage: 158 passed, 3 ignored;
-- server differential suite: 708 passed, 0 failed, 0 ignored;
+- server differential suite: 712 passed, 0 failed, 0 ignored;
 - the 173-case T-SQL distributed differential sweep completed successfully;
 - workspace benchmark targets completed successfully.
+
+The corrected qualification query uses a complete ordering key
+(`user_id, event_date, actions, country`) so ties cannot be mistaken for a
+distributed semantic mismatch. The full run completed with exit code 0.
 
 The release-pressure benchmark was also run independently:
 
@@ -41,6 +45,15 @@ passed:
 
 ```text
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+The lint gate passed with `-D warnings`. Repository validators also passed:
+
+```text
+python scripts/validate-tsql-compatibility-tracker.py
+PASS: 181 unique T-SQL compatibility cases, engine pin 7b509256, tracker count synchronized
+node scripts/validate-docs.mjs
+Documentation validation passed: 727 Markdown files, 39 routes, 9 SVGs.
 ```
 
 ## Boundary that remains open
