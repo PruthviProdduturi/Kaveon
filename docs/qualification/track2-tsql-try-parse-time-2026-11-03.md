@@ -26,3 +26,8 @@ Both targets use the Engine's microsecond timestamp representation; the
 The three-worker regression
 `distributed_tsql_try_parse_invariant_datetime_targets_match_local` covers
 valid and malformed values for both targets.
+
+The same temporal qualification run also includes `DATENAME` calendar and
+clock parts (`quarter`, `hour`, `minute`, and `second`) over DATE and timestamp
+columns; these return the documented locale-independent English/numeric text
+contract.
