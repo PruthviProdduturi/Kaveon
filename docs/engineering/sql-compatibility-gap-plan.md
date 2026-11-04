@@ -39,7 +39,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 166-case corpus has planner coverage and focused exact
+  The current 167-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -94,8 +94,9 @@ The T-SQL `DATEPART(dw|weekday|w, ...)` slice uses the explicit default
 `DATEFIRST 7` numbering (Sunday=1 through Saturday=7) in local and
 three-worker execution. The common default read-session prefixes `SET
 ANSI_NULLS ON`, `SET QUOTED_IDENTIFIER ON`, `SET ANSI_WARNINGS ON`, `SET
-NOCOUNT ON`, and `SET DATEFIRST 7;` are accepted as semantics-preserving
-no-ops, while other session-specific values remain rejected; evidence is in
+NOCOUNT ON`, and `SET DATEFIRST 1..7;` are accepted as semantics-preserving
+read prefixes, with the selected first weekday lowered into the immutable
+distributed plan; evidence is in
 `docs/qualification/track2-tsql-datefirst-default-2026-11-03.md` and
 `docs/qualification/track2-tsql-datepart-weekday-2026-11-03.md`.
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
