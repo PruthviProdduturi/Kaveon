@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="ua-title ua-desc">
   <title id="ua-title">Kaveon unified data intelligence architecture</title>
-  <desc id="ua-desc">One front door, two execution paths, one governed lake. Solid components are implemented on dev and verified on AKS; components marked Target name the gate that lands them. Assessed September 12, 2026.</desc>
+  <desc id="ua-desc">One front door, two execution paths, one governed lake. Solid components are implemented on dev; components marked Target name the qualification gate that lands them.</desc>
   <defs>
     <style>
       text { font-family: Inter, -apple-system, "Segoe UI", Roboto, sans-serif; fill: #0f172a; }
@@ -200,10 +200,10 @@
   <g transform="translate(964 470)" filter="url(#shadow)">
     <rect width="480" height="108" rx="12" fill="url(#pill-t)" stroke="#f3cdb8"/>
     <text class="path" x="18" y="26" fill="#c2410c">Transactional path</text>
-    <text class="pathb" x="18" y="48">save a chart or dataset → validate → PostgreSQL + outbox</text>
-    <text class="pathb" x="18" y="66">→ typed record → revision check → digest</text>
-    <text class="pathb" x="18" y="84">→ conditional head publication on ADLS → audit</text>
-    <text class="s" x="18" y="100">Product records only. PostgreSQL stays authoritative until reconciliation and fencing evidence exist</text>
+    <text class="pathb" x="18" y="48">save a chart or dataset → validate → KaveonDB revision CAS</text>
+    <text class="pathb" x="18" y="66">→ typed record → digest → immutable head</text>
+    <text class="pathb" x="18" y="84">→ conditional publication on ADLS → audit</text>
+    <text class="s" x="18" y="100">Product records only. KaveonDB is the native transactional authority</text>
   </g>
 
   <!-- ─── Right: experiences ─────────────────────────────────────────── -->
