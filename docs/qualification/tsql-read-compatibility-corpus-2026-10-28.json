@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "b827340f",
+  "engine_commit": "694b25ce",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -72,6 +72,7 @@
     {"id": "datetime2fromparts", "sql": "SELECT DATETIME2FROMPARTS(2024, 2, 29, 12, 34, 56, 789123, 6)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_6"},
     {"id": "smalldatetimefromparts", "sql": "SELECT SMALLDATETIMEFROMPARTS(2024, 2, 29, 12, 34)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts"},
     {"id": "timefromparts", "sql": "SELECT TIMEFROMPARTS(12, 34, 56, 789, 3)", "status": "planner_qualified", "distributed_status": "qualified_for_valid_parts_and_precision_0_to_6"},
+    {"id": "time_cast", "sql": "SELECT CAST(time_text AS TIME), TRY_CAST(time_text AS TIME) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_text_time_cast_and_safe_nulls"},
     {"id": "datetimeoffsetfromparts", "sql": "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 5, 30)", "status": "planner_qualified", "distributed_status": "qualified_for_utc_normalized_offsets_and_precision_0_to_6"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
