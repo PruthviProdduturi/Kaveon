@@ -8,7 +8,7 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 176 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-current pin is `c49f4a2d`, which includes SQL Server's configurable-datefirst week
+current pin is `2a80320a`, which includes SQL Server's configurable-datefirst week
 numbering and fixed-offset
 `DATEPART(tzoffset, ...)` slice alongside the existing scalar aliases.
 The pin also includes SQL Server's `ATN2` scalar alias
