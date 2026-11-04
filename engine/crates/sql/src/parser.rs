@@ -2333,6 +2333,7 @@ pub enum ProductDmlCommand {
     MergeDeleteNotMatched {
         kind: String,
         source_ids: Vec<String>,
+        target_ids: Option<Vec<String>>,
     },
     /// Bounded MERGE semantics: update target rows owned by the actor whose
     /// ids are absent from the source VALUES batch. The transaction layer
@@ -2340,6 +2341,7 @@ pub enum ProductDmlCommand {
     MergeUpdateNotMatched {
         kind: String,
         source_ids: Vec<String>,
+        target_ids: Option<Vec<String>>,
         document_json: String,
     },
     /// Copy product records from another product table in the pinned
@@ -2852,6 +2854,22 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         };
     let single_matched_clause =
         clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::Matched);
+    let has_not_matched_by_source_delete = clauses.len() == 3
+        && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
+        && matches!(clauses[2].action, MergeAction::Delete)
+        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
+        && merge_is_not_matched_target(&clauses[1].clause_kind);
+    let has_not_matched_by_source_update = clauses.len() == 3
+        && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
+        && matches!(clauses[2].action, MergeAction::Update { .. })
+        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
+        && merge_is_not_matched_target(&clauses[1].clause_kind);
+    let not_matched_by_source_target_filter =
+        if has_not_matched_by_source_delete || has_not_matched_by_source_update {
+            merge_target_filter(clauses[2].predicate.as_ref(), &target_alias)?
+        } else {
+            None
+        };
     if clauses.iter().enumerate().any(|(index, clause)| {
         clause.predicate.as_ref().is_some_and(|predicate| {
             if single_matched_clause && index == 0 {
@@ -2860,6 +2878,12 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             if index == 0
                 && matches!(clause.clause_kind, MergeClauseKind::Matched)
                 && matched_source_filter.is_some()
+            {
+                return false;
+            }
+            if index == 2
+                && (has_not_matched_by_source_delete || has_not_matched_by_source_update)
+                && not_matched_by_source_target_filter.is_some()
             {
                 return false;
             }
@@ -2876,16 +2900,6 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             "MERGE clauses support only the redundant target.id = source.id predicate",
         ));
     }
-    let has_not_matched_by_source_delete = clauses.len() == 3
-        && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
-        && matches!(clauses[2].action, MergeAction::Delete)
-        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
-        && merge_is_not_matched_target(&clauses[1].clause_kind);
-    let has_not_matched_by_source_update = clauses.len() == 3
-        && matches!(clauses[2].clause_kind, MergeClauseKind::NotMatchedBySource)
-        && matches!(clauses[2].action, MergeAction::Update { .. })
-        && matches!(clauses[0].clause_kind, MergeClauseKind::Matched)
-        && merge_is_not_matched_target(&clauses[1].clause_kind);
     if has_not_matched_by_source_delete || has_not_matched_by_source_update {
         let MergeAction::Update { assignments } = &clauses[0].action else {
             return Err(sql_error(
@@ -2940,6 +2954,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             commands.push(ProductDmlCommand::MergeDeleteNotMatched {
                 kind: kind.clone(),
                 source_ids,
+                target_ids: not_matched_by_source_target_filter.clone(),
             });
         } else {
             let MergeAction::Update { assignments } = &clauses[2].action else {
@@ -2960,6 +2975,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
             commands.push(ProductDmlCommand::MergeUpdateNotMatched {
                 kind: kind.clone(),
                 source_ids,
+                target_ids: not_matched_by_source_target_filter.clone(),
                 document_json,
             });
         }
@@ -3257,6 +3273,56 @@ fn merge_source_filter(
     }
     Err(sql_error(
         "MERGE matched predicates support only source.id/target.id = 'literal' or an IN list",
+    ))
+}
+
+/// Return the target ids selected by a bounded `WHEN NOT MATCHED BY SOURCE`
+/// predicate. Unlike matched-clause filters, this arm cannot reference a
+/// source row, so only the declared target alias and literal string ids are
+/// accepted.
+fn merge_target_filter(
+    predicate: Option<&Expr>,
+    target_alias: &str,
+) -> Result<Option<Vec<String>>> {
+    let Some(predicate) = predicate else {
+        return Ok(None);
+    };
+    if let Expr::BinaryOp { left, op, right } = predicate
+        && *op == BinaryOperator::Eq
+    {
+        let value = if merge_source_ref(left, target_alias, "id") {
+            string_literal(right, "MERGE target id")?
+        } else if merge_source_ref(right, target_alias, "id") {
+            string_literal(left, "MERGE target id")?
+        } else {
+            return Err(sql_error(
+                "MERGE NOT MATCHED BY SOURCE predicates must filter target.id by a string literal or IN list",
+            ));
+        };
+        return Ok(Some(vec![value]));
+    }
+    if let Expr::InList {
+        expr,
+        list,
+        negated: false,
+    } = predicate
+    {
+        if !merge_source_ref(expr, target_alias, "id") {
+            return Err(sql_error(
+                "MERGE NOT MATCHED BY SOURCE IN predicates must reference target.id",
+            ));
+        }
+        let mut ids = Vec::with_capacity(list.len());
+        for value in list {
+            let id = string_literal(value, "MERGE target id")?;
+            if !ids.iter().any(|known| known == &id) {
+                ids.push(id);
+            }
+        }
+        return Ok(Some(ids));
+    }
+    Err(sql_error(
+        "MERGE NOT MATCHED BY SOURCE predicates support only target.id = 'literal' or an IN list",
     ))
 }
 
@@ -6156,6 +6222,7 @@ mod tests {
             Some(&ProductDmlCommand::MergeUpdateNotMatched {
                 kind: "dataset".into(),
                 source_ids: vec!["keep".into()],
+                target_ids: None,
                 document_json: "{\"archived\":true}".into(),
             })
         );
@@ -6470,6 +6537,7 @@ mod tests {
                 ProductDmlCommand::MergeDeleteNotMatched {
                     kind: "dataset".into(),
                     source_ids: vec!["keep".into()],
+                    target_ids: None,
                 },
             ]
         );
@@ -6495,10 +6563,28 @@ mod tests {
                 ProductDmlCommand::MergeUpdateNotMatched {
                     kind: "dataset".into(),
                     source_ids: vec!["keep".into()],
+                    target_ids: None,
                     document_json: "{\"archived\":true}".into(),
                 },
             ]
         );
+    }
+
+    #[test]
+    fn product_merge_supports_bounded_not_matched_by_source_target_filter() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('keep', '{\"name\":\"kept\"}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE AND t.id IN ('stale-1', 'stale-2') THEN DELETE";
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(sql)
+            .expect("bounded target-filtered not-matched-by-source MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert!(matches!(
+            adapt_product_dml_batch(&dml).unwrap().last(),
+            Some(ProductDmlCommand::MergeDeleteNotMatched {
+                target_ids: Some(ids),
+                ..
+            }) if ids == &vec!["stale-1".to_owned(), "stale-2".to_owned()]
+        ));
     }
 
     #[test]
