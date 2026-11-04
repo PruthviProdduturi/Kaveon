@@ -21,6 +21,10 @@ signal, not a guarantee of balanced keys or a deployed latency improvement.
   the two input sides after a secondary split.
 - `a_skewed_partition_repartitions_to_the_depth_limit_and_names_it` verifies
   the existing depth cap and fail-closed error remain intact.
+- The full server differential sweep
+  `the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`
+  completed with `1 passed; 0 failed; 707 filtered` in 683.46 seconds after
+  this change.
 
 ## Qualification status
 
