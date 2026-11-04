@@ -1,5 +1,9 @@
 # Server and SQL compatibility suite — 2026-11-03
 
+> **Superseded for current counts.** This earlier scoped run is retained for
+> provenance; the authoritative workspace-wide rerun is recorded in
+> [`track0-workspace-gate-2026-11-03.md`](track0-workspace-gate-2026-11-03.md).
+
 ## Scope
 
 This qualification records the local release-image test gates for the current
