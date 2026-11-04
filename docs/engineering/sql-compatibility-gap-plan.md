@@ -630,8 +630,8 @@ registered-source passthrough, or KaveonDB transaction behavior.
 
 The current local workspace gate is recorded in
 `docs/qualification/track0-workspace-gate-2026-11-03.md`: the SQL crate has
-382 passing tests, the execution crate has 638, the optimizer has 86, storage
-has 158, and the server binary has 708 passing tests, including the complete
+388 passing tests, the execution crate has 638, the optimizer has 86, storage
+has 158, and the server binary has 716 passing tests, including the complete
 distributed differential sweep. This evidence does not substitute for the
 open cloud, external-client, or broader semantic qualification boundaries
 listed above.
