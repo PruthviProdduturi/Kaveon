@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "e3cf4576",
+  "engine_commit": "93d0e706",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
