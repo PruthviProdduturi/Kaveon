@@ -16725,6 +16725,9 @@ fn eval_date_add_seconds(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -
                 tz.clone(),
             )
         }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            add_time_microseconds(source, delta, num_rows, 1_000_000)
+        }
         other => Err(KaveonError::Execution(format!(
             "DATE_ADD_SECONDS requires a timestamp input, got {other}"
         ))),
@@ -16767,6 +16770,9 @@ fn eval_date_add_milliseconds(
         DataType::Timestamp(TimeUnit::Second, _) => Err(KaveonError::Execution(
             "DATE_ADD_MILLISECONDS requires a timestamp with millisecond precision or finer".into(),
         )),
+        DataType::Time64(TimeUnit::Microsecond) => {
+            add_time_microseconds(source, delta, num_rows, 1_000)
+        }
         other => Err(KaveonError::Execution(format!(
             "DATE_ADD_MILLISECONDS requires a timestamp input, got {other}"
         ))),
@@ -16801,6 +16807,9 @@ fn eval_date_add_microseconds(
         | DataType::Timestamp(TimeUnit::Second, _) => Err(KaveonError::Execution(
             "DATE_ADD_MICROSECONDS requires a timestamp with microsecond precision or finer".into(),
         )),
+        DataType::Time64(TimeUnit::Microsecond) => {
+            add_time_microseconds(source, delta, num_rows, 1)
+        }
         other => Err(KaveonError::Execution(format!(
             "DATE_ADD_MICROSECONDS requires a timestamp input, got {other}"
         ))),
@@ -16826,6 +16835,33 @@ fn eval_date_add_nanoseconds(
             "DATE_ADD_NANOSECONDS requires a nanosecond timestamp input, got {other}"
         ))),
     }
+}
+
+/// Add a fixed-duration offset to a SQL TIME value, wrapping at midnight.
+/// Kaveon stores TIME at microsecond precision, so sub-microsecond offsets
+/// remain explicitly unsupported rather than being silently rounded.
+fn add_time_microseconds(
+    source: &ArrayRef,
+    delta: &Int64Array,
+    num_rows: usize,
+    scale: i64,
+) -> Result<ArrayRef> {
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    let values = source.as_primitive::<Time64MicrosecondType>();
+    let result = (0..num_rows)
+        .map(|row| {
+            if values.is_null(row) || delta.is_null(row) {
+                None
+            } else {
+                delta
+                    .value(row)
+                    .checked_mul(scale)
+                    .and_then(|offset| values.value(row).checked_add(offset))
+                    .map(|value| value.rem_euclid(MICROS_PER_DAY))
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(Time64MicrosecondArray::from(result)))
 }
 
 fn add_timestamp_seconds<T, A>(
@@ -19094,6 +19130,42 @@ mod tests {
             19_753_i64 * 86_400_000 + time_of_day + 7_200_000
         );
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn date_add_time_wraps_at_midnight_and_preserves_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("time", DataType::Time64(TimeUnit::Microsecond), true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Time64MicrosecondArray::from(vec![
+                Some(23 * 3_600_000_000 + 59 * 60_000_000 + 59 * 1_000_000 + 999_999),
+                None,
+            ]))],
+        )
+        .unwrap();
+
+        for (name, delta, expected) in [
+            ("DATE_ADD_SECONDS", 2_i64, 1_999_999_i64),
+            ("DATE_ADD_MILLISECONDS", 2, 1_999),
+            ("DATE_ADD_MICROSECONDS", 2, 1),
+        ] {
+            let values = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![
+                        Expr::Column("time".into()),
+                        Expr::Literal(ScalarValue::Int64(delta)),
+                    ],
+                },
+                &input,
+            )
+            .unwrap();
+            let values = values.as_primitive::<Time64MicrosecondType>();
+            assert_eq!(values.value(0), expected, "{name}");
+            assert!(values.is_null(1), "{name}");
+        }
     }
 
     #[test]
