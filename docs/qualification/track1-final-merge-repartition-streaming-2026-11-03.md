@@ -26,6 +26,8 @@ universal latency or allocation improvement on a deployed image.
   `HybridFinalMerge::repartition_runs`.
 - Exact skew/depth-cap regression:
   `final_merge::tests::hybrid_merge_fails_closed_when_a_sub_partition_does_not_fit`.
+- Admission policy regression:
+  `final_merge::tests::selected_prepaid_batches_preserves_small_inputs_and_shares_large_budget`.
 - Exact duplicate DISTINCT spill/replay regression:
   `final_merge::tests::hybrid_merge_spill_unions_duplicate_distinct_values_across_runs`.
 - Release pressure benchmark:
