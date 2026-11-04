@@ -30,7 +30,9 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     let json_unique_normalized = normalize_json_object_unique_keys(&json_clauses_normalized)?;
     let json_returning_normalized = normalize_json_returning(&json_unique_normalized);
     let try_parse_normalized = normalize_try_parse(&json_returning_normalized);
-    let session_normalized = normalize_default_tsql_session_prefixes(&try_parse_normalized)?;
+    let (session_normalized, datefirst) =
+        normalize_default_tsql_session_prefixes(&try_parse_normalized)?;
+    let session_normalized = rewrite_tsql_datepart_datefirst(&session_normalized, datefirst)?;
     let normalized = normalize_lateral_unnest(&session_normalized);
     // Lower the one recursive shape that has a finite, deterministic
     // equivalent in the existing UNNEST/SEQUENCE execution path.  More
@@ -126,7 +128,7 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
 /// values are the Engine's fixed semantics, so strip only the explicit
 /// defaults. Other values remain fail-closed because honoring mutable session
 /// state requires carrying it through planning and every distributed worker.
-fn normalize_default_tsql_session_prefixes(sql: &str) -> Result<String> {
+fn normalize_default_tsql_session_prefixes(sql: &str) -> Result<(String, u8)> {
     const DEFAULTS: [(&str, &str); 5] = [
         ("SET DATEFIRST", "7"),
         ("SET ANSI_NULLS", "ON"),
@@ -135,6 +137,7 @@ fn normalize_default_tsql_session_prefixes(sql: &str) -> Result<String> {
         ("SET NOCOUNT", "ON"),
     ];
     let mut remaining = sql.trim_start().to_owned();
+    let mut datefirst = 7u8;
     loop {
         let upper = remaining.to_ascii_uppercase();
         let Some((prefix, expected)) = DEFAULTS.iter().find(|(prefix, _)| {
@@ -152,7 +155,17 @@ fn normalize_default_tsql_session_prefixes(sql: &str) -> Result<String> {
             )));
         };
         let value = remaining[prefix.len()..separator].trim();
-        if !value.eq_ignore_ascii_case(expected) {
+        if *prefix == "SET DATEFIRST" {
+            let parsed = value
+                .parse::<u8>()
+                .map_err(|_| sql_error("SET DATEFIRST requires an integer from 1 through 7"))?;
+            if !(1..=7).contains(&parsed) {
+                return Err(sql_error(
+                    "SET DATEFIRST requires an integer from 1 through 7",
+                ));
+            }
+            datefirst = parsed;
+        } else if !value.eq_ignore_ascii_case(expected) {
             return Err(sql_error(&format!(
                 "{prefix} supports only the Engine default {expected}; session-specific values are not supported"
             )));
@@ -164,7 +177,62 @@ fn normalize_default_tsql_session_prefixes(sql: &str) -> Result<String> {
             )));
         }
     }
-    Ok(remaining)
+    Ok((remaining, datefirst))
+}
+
+/// Attach the session's DATEFIRST value to each SQL Server DATEPART call.
+/// The planner keeps the value as a literal argument, so workers receive the
+/// same immutable semantics without relying on coordinator session state.
+fn rewrite_tsql_datepart_datefirst(sql: &str, datefirst: u8) -> Result<String> {
+    if datefirst == 7 {
+        return Ok(sql.to_owned());
+    }
+    let bytes = sql.as_bytes();
+    let keyword = b"DATEPART";
+    let mut output = String::with_capacity(sql.len() + 16);
+    let mut cursor = 0usize;
+    let mut scan = 0usize;
+    while scan < bytes.len() {
+        if matches!(bytes[scan], b'\'' | b'"' | b'`') {
+            let end = quoted_sql_end(sql, scan);
+            scan = end;
+            continue;
+        }
+        if scan + keyword.len() <= bytes.len()
+            && bytes[scan..scan + keyword.len()].eq_ignore_ascii_case(keyword)
+            && (scan == 0 || !is_sql_word_byte(bytes[scan - 1]))
+            && (scan + keyword.len() == bytes.len()
+                || !is_sql_word_byte(bytes[scan + keyword.len()]))
+        {
+            let mut open = scan + keyword.len();
+            while open < bytes.len() && bytes[open].is_ascii_whitespace() {
+                open += 1;
+            }
+            if open < bytes.len()
+                && bytes[open] == b'('
+                && let Some(close) = matching_paren(sql, open)
+            {
+                let args = split_top_level_commas(&sql[open + 1..close])?;
+                if args.len() != 2 {
+                    return Err(sql_error(
+                        "SET DATEFIRST supports only two-argument DATEPART calls",
+                    ));
+                }
+                output.push_str(&sql[cursor..scan]);
+                output.push_str("DATEPART_DATEFIRST_");
+                output.push_str(&datefirst.to_string());
+                output.push_str(&sql[scan + keyword.len()..open + 1]);
+                output.push_str(&sql[open + 1..close]);
+                output.push(')');
+                cursor = close + 1;
+                scan = close + 1;
+                continue;
+            }
+        }
+        scan += 1;
+    }
+    output.push_str(&sql[cursor..]);
+    Ok(output)
 }
 
 /// Lower the bounded SQL Server `TRY_PARSE(value AS type)` spelling to the
@@ -4842,9 +4910,13 @@ mod tests {
         assert_eq!(statements.len(), 1);
         assert!(statements[0].to_string().contains("DATEPART"));
 
-        let error = parse_sql("SET DATEFIRST 1; SELECT DATEPART(dw, event_date) FROM t")
-            .expect_err("session-specific DATEFIRST must remain fail-closed");
-        assert!(error.to_string().contains("only the Engine default 7"));
+        let statements = parse_sql("SET DATEFIRST 1; SELECT DATEPART(dw, event_date) FROM t")
+            .expect("DATEFIRST 1 should lower to an immutable DATEPART function");
+        assert!(
+            statements[0]
+                .to_string()
+                .contains("DATEPART_DATEFIRST_1(dw, event_date)")
+        );
         let error = parse_sql("SET NOCOUNT OFF; SELECT 1")
             .expect_err("non-default NOCOUNT must remain fail-closed");
         assert!(error.to_string().contains("only the Engine default ON"));

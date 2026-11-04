@@ -6109,6 +6109,30 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    // DATEPART's unquoted datepart token is parsed as an identifier. Preserve
+    // that normalization for DATEFIRST-specialized internal names as well as
+    // the default spelling, so rewriting the session prefix never turns `dw`
+    // into a source-column lookup.
+    if name == "DATE_PART_TSQL" || name.starts_with("DATE_PART_TSQL_") {
+        if args.len() != 2 {
+            return Err(sql_err(
+                "DATEPART requires a datepart and date or timestamp",
+            ));
+        }
+        let unit = match &args[0] {
+            Expr::Literal(ScalarValue::Utf8(unit)) => unit.clone(),
+            Expr::Column(unit) if !unit.contains('.') => unit.clone(),
+            _ => return Err(sql_err("DATEPART datepart must be a literal or identifier")),
+        };
+        return Ok(Expr::Function {
+            name,
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8(normalize_tsql_date_unit(&unit))),
+                args[1].clone(),
+            ],
+        });
+    }
+
     // DATENAME uses the same datepart vocabulary as DATEPART but returns the
     // locale-independent English name/number as text. Normalize SQL Server's
     // unquoted datepart identifier before it reaches the vectorized executor.
@@ -7093,6 +7117,13 @@ fn canonical_function_name(func: &ast::Function) -> String {
         // weekday aliases can use SQL Server's DATEFIRST 7 numbering
         // (Sunday=1..Saturday=7) without changing generic Trino semantics.
         "DATEPART" => "DATE_PART_TSQL".to_owned(),
+        "DATEPART_DATEFIRST_1" => "DATE_PART_TSQL_1".to_owned(),
+        "DATEPART_DATEFIRST_2" => "DATE_PART_TSQL_2".to_owned(),
+        "DATEPART_DATEFIRST_3" => "DATE_PART_TSQL_3".to_owned(),
+        "DATEPART_DATEFIRST_4" => "DATE_PART_TSQL_4".to_owned(),
+        "DATEPART_DATEFIRST_5" => "DATE_PART_TSQL_5".to_owned(),
+        "DATEPART_DATEFIRST_6" => "DATE_PART_TSQL_6".to_owned(),
+        "DATEPART_DATEFIRST_7" => "DATE_PART_TSQL_7".to_owned(),
         // SQL Server exposes the common date-part selectors as scalar
         // aliases. Lower them into the same typed DATE_PART evaluator so
         // local and distributed execution share one null/type contract.

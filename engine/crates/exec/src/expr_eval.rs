@@ -13347,7 +13347,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let source = &args[1];
             eval_date_part(field_arr, source, num_rows)
         }
-        "DATE_PART_TSQL" => {
+        name if name == "DATE_PART_TSQL" || name.starts_with("DATE_PART_TSQL_") => {
             if args.len() != 2 {
                 return Err(KaveonError::Execution(
                     "DATEPART requires 2 arguments (field, source)".into(),
@@ -13355,7 +13355,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             let field_arr = as_string_array(&args[0])?;
             let source = &args[1];
-            eval_date_part_tsql(field_arr, source, num_rows)
+            let datefirst = name
+                .strip_prefix("DATE_PART_TSQL_")
+                .map(|value| value.parse::<u8>())
+                .transpose()
+                .map_err(|_| KaveonError::Execution("invalid DATEFIRST lowering".into()))?
+                .unwrap_or(7);
+            if !(1..=7).contains(&datefirst) {
+                return Err(KaveonError::Execution(
+                    "DATEFIRST must be from 1 through 7".into(),
+                ));
+            }
+            eval_date_part_tsql(field_arr, source, num_rows, datefirst)
         }
         "DATE_NAME" => {
             if args.len() != 2 {
@@ -15908,21 +15919,23 @@ fn extract_from_micros(micros: i64, field: DateField) -> i64 {
     }
 }
 
-fn extract_date_part(micros: i64, field: DateField, tsql_weekday: bool) -> i64 {
+fn extract_date_part(micros: i64, field: DateField, tsql_weekday: bool, datefirst: u8) -> i64 {
     let value = extract_from_micros(micros, field);
     if tsql_weekday && matches!(field, DateField::DayOfWeek) {
-        // The generic extractor is Sunday=0..Saturday=6. SQL Server's
-        // DATEFIRST 7 contract is Sunday=1..Saturday=7.
-        value + 1
+        // The generic extractor is Sunday=0..Saturday=6. DATEFIRST selects
+        // which weekday is numbered 1.
+        let first_zero = (i64::from(datefirst) + 6).rem_euclid(7);
+        (value - first_zero).rem_euclid(7) + 1
     } else if tsql_weekday && matches!(field, DateField::Week) {
-        // SQL Server's default DATEFIRST 7 numbers weeks from Sunday and
-        // assigns the week containing January 1 to week 1.
+        // SQL Server numbers the week containing January 1 as week 1; the
+        // first weekday is controlled by DATEFIRST.
         let days = micros.div_euclid(86_400_000_000);
         let (year, _, _) = days_to_ymd(days);
         let jan1 = ymd_to_days(year, 1, 1);
         let jan1_sunday_zero = (jan1 + 4).rem_euclid(7);
+        let first_zero = (i64::from(datefirst) + 6).rem_euclid(7);
         let day_of_year = days - jan1;
-        (day_of_year + jan1_sunday_zero) / 7 + 1
+        (day_of_year + (jan1_sunday_zero - first_zero).rem_euclid(7)) / 7 + 1
     } else {
         value
     }
@@ -16857,19 +16870,20 @@ fn truncate_micros(us: i64, unit: &str) -> i64 {
 }
 
 fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
-    eval_date_part_mode(field_arr, source, num_rows, false)
+    eval_date_part_mode(field_arr, source, num_rows, false, 7)
 }
 
 /// SQL Server's DATEPART(weekday|dw|w) uses DATEFIRST 7 by default: Sunday is
-/// 1 and Saturday is 7. Kaveon does not expose SET DATEFIRST yet, so the
-/// bounded T-SQL contract is explicit about this default. Generic DATE_PART
-/// retains the Engine/Trino day-of-week numbering.
+/// 1 and Saturday is 7. The parser carries an explicit DATEFIRST literal into
+/// this evaluator when a read session selects another value. Generic
+/// DATE_PART retains the Engine/Trino day-of-week numbering.
 fn eval_date_part_tsql(
     field_arr: &StringArray,
     source: &ArrayRef,
     num_rows: usize,
+    datefirst: u8,
 ) -> Result<ArrayRef> {
-    eval_date_part_mode(field_arr, source, num_rows, true)
+    eval_date_part_mode(field_arr, source, num_rows, true, datefirst)
 }
 
 fn eval_date_part_mode(
@@ -16877,6 +16891,7 @@ fn eval_date_part_mode(
     source: &ArrayRef,
     num_rows: usize,
     tsql_weekday: bool,
+    datefirst: u8,
 ) -> Result<ArrayRef> {
     let result: Vec<Option<i64>> = (0..num_rows)
         .map(|i| {
@@ -16924,7 +16939,12 @@ fn eval_date_part_mode(
                     if ts.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_date_part(ts.value(i), field, tsql_weekday)))
+                        Ok(Some(extract_date_part(
+                            ts.value(i),
+                            field,
+                            tsql_weekday,
+                            datefirst,
+                        )))
                     }
                 }
                 DataType::Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
@@ -16936,6 +16956,7 @@ fn eval_date_part_mode(
                             ts.value(i).saturating_mul(1_000_000),
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -16948,6 +16969,7 @@ fn eval_date_part_mode(
                             ts.value(i).saturating_mul(1_000),
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -16960,6 +16982,7 @@ fn eval_date_part_mode(
                             ts.value(i) / 1_000,
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -16972,6 +16995,7 @@ fn eval_date_part_mode(
                             d.value(i) as i64 * 86_400_000_000,
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -16984,6 +17008,7 @@ fn eval_date_part_mode(
                             d.value(i).saturating_mul(1_000),
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -16996,6 +17021,7 @@ fn eval_date_part_mode(
                             time.value(i) as i64 * 1_000_000,
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -17008,6 +17034,7 @@ fn eval_date_part_mode(
                             time.value(i) as i64 * 1_000,
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -17016,7 +17043,12 @@ fn eval_date_part_mode(
                     if time.is_null(i) {
                         Ok(None)
                     } else {
-                        Ok(Some(extract_date_part(time.value(i), field, tsql_weekday)))
+                        Ok(Some(extract_date_part(
+                            time.value(i),
+                            field,
+                            tsql_weekday,
+                            datefirst,
+                        )))
                     }
                 }
                 DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond) => {
@@ -17028,6 +17060,7 @@ fn eval_date_part_mode(
                             time.value(i) / 1_000,
                             field,
                             tsql_weekday,
+                            datefirst,
                         )))
                     }
                 }
@@ -28326,11 +28359,16 @@ mod tests {
         // Saturday=7. The generic DATE_PART path above intentionally keeps
         // the Engine/Trino Sunday=0 numbering.
         let sunday = Arc::new(Date32Array::from(vec![Some(18_994)])) as ArrayRef;
-        let sql_server = eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1)
+        let sql_server = eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1, 7)
             .unwrap()
             .as_primitive::<Int64Type>()
             .value(0);
         assert_eq!(sql_server, 1);
+        let monday_first = eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1, 1)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+        assert_eq!(monday_first, 7);
         let canonical = eval_date_part(&StringArray::from(vec![Some("DAYOFYEAR")]), &source, 1)
             .unwrap()
             .as_primitive::<Int64Type>()
@@ -28366,6 +28404,7 @@ mod tests {
             &StringArray::from(vec![Some("tzoffset"), Some("tzoffset")]),
             &source,
             2,
+            7,
         )
         .unwrap();
         let values = result.as_primitive::<Int64Type>();
@@ -28376,12 +28415,12 @@ mod tests {
             Arc::new(TimestampMicrosecondArray::from(vec![Some(0)]).with_timezone("-08:00"))
                 as ArrayRef;
         let result =
-            eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &source, 1).unwrap();
+            eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &source, 1, 7).unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), -480);
 
         let naive = Arc::new(TimestampMicrosecondArray::from(vec![Some(0)])) as ArrayRef;
-        let error =
-            eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &naive, 1).unwrap_err();
+        let error = eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &naive, 1, 7)
+            .unwrap_err();
         assert!(error.to_string().contains("fixed timezone offset"));
     }
 
@@ -28396,6 +28435,7 @@ mod tests {
             &StringArray::from(vec![Some("week"), Some("wk"), Some("ww")]),
             &source,
             3,
+            7,
         )
         .unwrap();
         let values = result.as_primitive::<Int64Type>();
