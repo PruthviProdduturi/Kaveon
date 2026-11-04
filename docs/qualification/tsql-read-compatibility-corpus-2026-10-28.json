@@ -34,6 +34,7 @@
     {"id": "substring_scalar_compatibility", "sql": "SELECT SUBSTRING(name, 1, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "try_parse_numeric", "sql": "SELECT TRY_PARSE(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_numeric_parsing"},
     {"id": "try_parse_invariant_date", "sql": "SELECT TRY_PARSE(value AS DATE) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_temporal_inputs"},
+    {"id": "try_parse_invariant_datetime2", "sql": "SELECT TRY_PARSE(value AS DATETIME2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_temporal_inputs"},
     {"id": "square", "sql": "SELECT SQUARE(actions) FROM t", "status": "planner_qualified", "distributed_status": "qualified_via_power_lowering"},
     {"id": "concat_ws", "sql": "SELECT CONCAT_WS('-', region, industry, platform) FROM t", "status": "planner_qualified", "distributed_status": "qualified_with_null_arguments"},
     {"id": "regexp_like_column_predicate", "sql": "SELECT REGEXP_LIKE(country, 'a') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_column_predicates_and_distributed_execution"},
