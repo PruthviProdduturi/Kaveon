@@ -16,7 +16,7 @@ Evidence:
   both a template and a substitution argument.
 - `logical_plan` coverage preserves the function for vectorized execution.
 - Case `formatmessage_bounded_template` is included in the versioned
-  145-case T-SQL corpus as `planner_qualified` with distributed status
+  159-case T-SQL corpus as `planner_qualified` with distributed status
   `qualified_for_literal_templates_and_positional_text_or_numeric_arguments`.
 - The focused differential case
   `tsql_formatmessage_scalar_compatibility` compares dictionary, plain,

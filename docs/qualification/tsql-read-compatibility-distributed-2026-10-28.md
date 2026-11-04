@@ -12,7 +12,7 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-152-case count in the scope and tracker, enforced by
+159-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
 - Historical corpus at this qualification: 119 cases. The prior full sweep qualified bounded
@@ -67,7 +67,7 @@ sizes, not the current corpus total; the authoritative current total is the
   SQL Server `SPACE` with row-local counts and negative-count NULL semantics;
   it completed 1/1 with exact local/layout/three-worker results in 634.13
   seconds, with no worker failures or retained exchange/spill files.
-- The current 152-case differential sweep was rerun on 2026-11-03 from
+- A dated 152-case differential sweep was rerun on 2026-11-03 from
   Engine commit `07bc8c47` and completed 1/1 with exact local/layout/
   three-worker results in 661.92 seconds. No worker failures or retained
   exchange/spill files were reported. This rerun contains no new SQL
