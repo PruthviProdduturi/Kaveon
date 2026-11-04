@@ -19,7 +19,8 @@ Observed results:
 
 - catalog: 93 passed, 4 ignored;
 - CLI/server and related workspace targets: all reported tests passed;
-- execution: 636 passed, 4 ignored;
+- execution: 638 passed, 4 ignored (latest `cargo test -p kaveon-exec --lib`
+  rerun after the `Utf8View` join regression);
 - optimizer: 86 passed;
 - SQL: 382 passed;
 - storage: 158 passed, 3 ignored;
