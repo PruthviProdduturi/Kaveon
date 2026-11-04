@@ -307,11 +307,13 @@ NULL inputs remain NULL. See
 also qualified, as is `TRY_CAST(expression AS VARCHAR)`; unbounded
 `NVARCHAR` uses the same Engine UTF-8 text representation at the planner
 boundary. Sized
-`VARCHAR(n)`, `CHAR(n)`, and equivalent text casts are explicitly rejected
-until truncation/padding and code-page semantics are implemented; the Engine
-does not silently discard the requested length. Length, code-page,
-binary-style, and locale-sensitive formatting semantics remain outside this
-boundary. See
+`VARCHAR(n)`, `NVARCHAR(n)`, `CHAR(n)`, and equivalent text casts are qualified
+for a bounded UTF-8 contract: the width counts Unicode scalars, variable-width
+forms truncate without padding, and `CHAR(n)` truncates then pads with U+0020.
+The contract is deliberately not a SQL Server code-page or UTF-16 storage
+emulation; binary-style, locale-sensitive, and unbounded expansion semantics
+remain outside the boundary. Lengths above 1,000,000 scalars and sized text
+`CONVERT` style codes fail closed. See
 [`track2-tsql-convert-varchar-2026-11-03.md`](../qualification/track2-tsql-convert-varchar-2026-11-03.md).
 Unstyled `TRY_CONVERT(DATETIMEOFFSET, expression)` is qualified for invariant
 fixed-offset text inputs, with malformed and NULL values returning NULL through

@@ -2413,6 +2413,44 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
     Ok(compute::cast(&arr, &arrow_type)?)
 }
 
+/// Evaluate the bounded SQL Server/Fabric sized-text contract lowered by the
+/// planner. Kaveon keeps text as UTF-8, so the declared width counts Unicode
+/// scalars; CHAR additionally pads the truncated value with U+0020. The
+/// conversion is safe for TRY_CAST/TRY_CONVERT callers and preserves NULLs.
+fn eval_sized_text_cast(input: &ArrayRef, length: usize, fixed_width: bool) -> Result<ArrayRef> {
+    let text = if matches!(
+        input.data_type(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        Arc::clone(input)
+    } else {
+        compute::cast_with_options(
+            input,
+            &DataType::Utf8,
+            &compute::CastOptions {
+                safe: true,
+                ..Default::default()
+            },
+        )?
+    };
+    let mut output = StringBuilder::with_capacity(text.len(), 0);
+    for row in 0..text.len() {
+        let Some(value) = text_value(&text, row)? else {
+            output.append_null();
+            continue;
+        };
+        let mut rendered = value.chars().take(length).collect::<String>();
+        if fixed_width {
+            let current = rendered.chars().count();
+            if current < length {
+                rendered.extend(std::iter::repeat_n(' ', length - current));
+            }
+        }
+        output.append_value(rendered);
+    }
+    Ok(Arc::new(output.finish()))
+}
+
 fn cast_nested_container(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
     // A typed NULL container has no child buffers to downcast.  Construct the
     // target-typed null array directly so CAST(NULL AS ARRAY<...>) and
@@ -6779,6 +6817,25 @@ fn null_safe_equal_value(left: &ArrayRef, right: &ArrayRef) -> Result<bool> {
 
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
+    if let Some(spec) = upper.strip_prefix("KAVEON_CAST_TEXT_") {
+        let (length, kind) = spec.rsplit_once('_').ok_or_else(|| {
+            KaveonError::Execution(format!("invalid sized text cast target: {name}"))
+        })?;
+        let length = length.parse::<usize>().map_err(|_| {
+            KaveonError::Execution(format!("invalid sized text cast length: {length}"))
+        })?;
+        let fixed_width = match kind {
+            "CHAR" => true,
+            "VARCHAR" => false,
+            _ => {
+                return Err(KaveonError::Execution(format!(
+                    "invalid sized text cast kind: {kind}"
+                )));
+            }
+        };
+        check_arity(name, args, 1)?;
+        return eval_sized_text_cast(&args[0], length, fixed_width);
+    }
     if matches!(
         upper.as_str(),
         "KAVEON_IS_NOT_DISTINCT_FROM" | "KAVEON_IS_DISTINCT_FROM"
@@ -18997,6 +19054,48 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn sized_text_casts_truncate_and_pad_unicode_scalars() {
+        let input = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("Ångström"),
+                Some("ab"),
+                Some("😀xy"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+
+        let varchar = evaluate(
+            &Expr::Function {
+                name: "KAVEON_CAST_TEXT_4_VARCHAR".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let varchar = varchar.as_string::<i32>();
+        assert_eq!(varchar.value(0), "Ångs");
+        assert_eq!(varchar.value(1), "ab");
+        assert_eq!(varchar.value(2), "😀xy");
+        assert!(varchar.is_null(3));
+
+        let char_value = evaluate(
+            &Expr::Function {
+                name: "KAVEON_CAST_TEXT_4_CHAR".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let char_value = char_value.as_string::<i32>();
+        assert_eq!(char_value.value(0), "Ångs");
+        assert_eq!(char_value.value(1), "ab  ");
+        assert_eq!(char_value.value(2), "😀xy ");
+        assert!(char_value.is_null(3));
     }
 
     #[test]
