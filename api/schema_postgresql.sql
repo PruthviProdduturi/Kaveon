@@ -1,7 +1,8 @@
 -- ============================================================
--- Lens Production Database Schema — PostgreSQL
+-- Legacy migration database schema — PostgreSQL
 -- ============================================================
--- Run this script once against your metadata database.
+-- Run this script only for the explicit legacy/rehearsal overlay. Native
+-- KaveonDB deployments do not use PostgreSQL as their metadata authority.
 -- All statements are idempotent (safe to re-run).
 -- ============================================================
 
@@ -306,7 +307,8 @@ CREATE INDEX IF NOT EXISTS idx_user_recents_email ON user_recents(user_email);
 
 -- ── KaveonDB migration outbox ────────────────────────────────────────────────
 -- Written in the same PostgreSQL transaction as its product-family mutation.
--- PostgreSQL stays authoritative until replay, reconciliation and fencing pass.
+-- This outbox belongs to the legacy migration path; KaveonDB is the native
+-- authority after replay, reconciliation, and fencing have qualified.
 CREATE TABLE IF NOT EXISTS product_migration_outbox (
     source_sequence BIGSERIAL    PRIMARY KEY,
     event_id        UUID         NOT NULL UNIQUE,
