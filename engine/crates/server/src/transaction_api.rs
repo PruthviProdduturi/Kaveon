@@ -5721,7 +5721,7 @@ mod tests {
             &registry,
             "alice",
             SqlTransactionRequest {
-                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('remove-me', '{}'), ('missing', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE OUTPUT deleted.id, deleted.revision"#.into(),
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('remove-me', '{}'), ('missing', '{}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED THEN DELETE OUTPUT deleted.id, deleted.revision, deleted.document_json"#.into(),
                 transaction_id: Some(merge.transaction_id),
                 parameters: vec![],
                 named_parameters: HashMap::new(),
@@ -5736,6 +5736,7 @@ mod tests {
         assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
         assert_eq!(value["returning"][0]["id"], "remove-me");
         assert_eq!(value["returning"][0]["revision"], 1);
+        assert_eq!(value["returning"][0]["document_json"], "{}");
     }
 
     #[tokio::test]

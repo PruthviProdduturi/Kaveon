@@ -442,7 +442,8 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
   revision/CAS path. `MERGE OUTPUT` is qualified for update-or-insert,
   delete-or-insert, matched-update-only, and unmatched-insert-only forms when the projection is `inserted.id`,
   `inserted.revision`, `inserted.document_json`, or `inserted.*`; matched-
-  delete-only forms also qualify `deleted.id` and `deleted.revision`. Unmatched
+  delete-only forms also qualify `deleted.id`, `deleted.revision`, and the
+  pre-delete `deleted.document_json` snapshot. Unmatched
   source rows produce no result row. Delete-or-insert output is action-aware:
   `inserted` returns inserted/update actions and `deleted` returns deleted/update
   actions from the ordered staged write set. Bounded `$action` output returns

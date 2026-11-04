@@ -21,7 +21,8 @@ OUTPUT inserted.*
 
 `inserted.id`, `inserted.revision`, `inserted.document_json`, and
 `inserted.*` are accepted. Matched-delete-only and delete-or-insert batches
-also accept `deleted.id` and `deleted.revision`. Unmatched-insert-only batches
+also accept `deleted.id`, `deleted.revision`, and the pre-delete
+`deleted.document_json` snapshot. Unmatched-insert-only batches
 also accept the `inserted` projections; source rows that already match are
 no-ops and produce no output row. For delete-or-insert, `inserted` returns only
 inserted/update actions and `deleted` returns only deleted/update actions. Rows
@@ -31,7 +32,8 @@ updates report the incremented revision and inserts report revision one.
 For matched-update-only batches, unmatched source rows are no-ops and produce
 no output row; matched rows return the staged replacement document and
 incremented revision. For matched-delete-only batches, unmatched source rows
-are no-ops and matched rows return the deleted identity and prior revision.
+are no-ops and matched rows return the deleted identity, prior revision, and
+pre-delete document snapshot.
 
 ## Safety boundary
 
