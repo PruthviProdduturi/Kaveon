@@ -8345,6 +8345,13 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{micros:?}").contains("DATE_ADD_MICROSECONDS"));
+        let time = sql_to_logical_plan(
+            "SELECT DATEADD(hour, 1, CAST('23:00:00' AS TIME)), DATEADD(millisecond, 1, CAST('23:59:59.999999' AS TIME)) FROM t",
+        )
+        .unwrap();
+        let time = format!("{time:?}");
+        assert!(time.contains("DATE_ADD_SECONDS"), "{time}");
+        assert!(time.contains("DATE_ADD_MILLISECONDS"), "{time}");
     }
 
     #[test]
