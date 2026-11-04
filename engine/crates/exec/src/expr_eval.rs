@@ -17311,6 +17311,25 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 return Ok(None);
             }
             let field = field_arr.value(row).to_ascii_uppercase();
+            if field == "TZOFFSET" {
+                let DataType::Timestamp(_, Some(timezone)) = source.data_type() else {
+                    return Err(KaveonError::Execution(
+                        "DATENAME(tzoffset, ...) requires a timestamp with a fixed timezone offset"
+                            .into(),
+                    ));
+                };
+                if source.is_null(row) {
+                    return Ok(None);
+                }
+                let minutes = parse_fixed_timezone_offset_minutes(timezone)?;
+                let sign = if minutes < 0 { '-' } else { '+' };
+                let absolute = minutes.unsigned_abs();
+                return Ok(Some(format!(
+                    "{sign}{:02}:{:02}",
+                    absolute / 60,
+                    absolute % 60
+                )));
+            }
             let Some((year, month, day, remainder)) = temporal_calendar_position(source, row)?
             else {
                 return Ok(None);
@@ -18345,6 +18364,30 @@ mod tests {
                 .to_owned();
             assert_eq!(values, canonical, "DATENAME day-of-year alias {alias}");
         }
+    }
+
+    #[test]
+    fn date_name_reads_fixed_timestamp_timezone_offset() {
+        let source =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(0), None]).with_timezone("+05:30"))
+                as ArrayRef;
+        let values = eval_date_name(
+            &StringArray::from(vec![Some("tzoffset"), Some("tzoffset")]),
+            &source,
+            2,
+        )
+        .unwrap();
+        let values = values.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(values.value(0), "+05:30");
+        assert!(values.is_null(1));
+
+        let naive = Arc::new(TimestampMicrosecondArray::from(vec![Some(0)])) as ArrayRef;
+        let error =
+            eval_date_name(&StringArray::from(vec![Some("tzoffset")]), &naive, 1).unwrap_err();
+        assert!(
+            error.to_string().contains("fixed timezone offset"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -28363,16 +28406,16 @@ mod tests {
         // the Engine/Trino Sunday=0 numbering.
         let sunday = Arc::new(Date32Array::from(vec![Some(18_994)])) as ArrayRef;
         for datefirst in 1..=7 {
-            let sql_server = eval_date_part_tsql(
-                &StringArray::from(vec![Some("dw")]),
-                &sunday,
-                1,
-                datefirst,
-            )
-            .unwrap()
-            .as_primitive::<Int64Type>()
-            .value(0);
-            assert_eq!(sql_server, i64::from(8 - datefirst), "DATEFIRST {datefirst}");
+            let sql_server =
+                eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1, datefirst)
+                    .unwrap()
+                    .as_primitive::<Int64Type>()
+                    .value(0);
+            assert_eq!(
+                sql_server,
+                i64::from(8 - datefirst),
+                "DATEFIRST {datefirst}"
+            );
         }
         let sunday_after_new_year = Arc::new(Date32Array::from(vec![Some(18_994)])) as ArrayRef;
         for datefirst in 1..=7 {

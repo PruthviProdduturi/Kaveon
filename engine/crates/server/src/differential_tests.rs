@@ -620,6 +620,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_datename_tzoffset_fixed_offset",
+        "SELECT TOP 5 DATENAME(tzoffset, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30') AS offset_text FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datename_iso_week_alias",
         "SELECT TOP 5 DATENAME(isowk, event_date) AS iso_week_number FROM {T} ORDER BY event_date",
         true,
@@ -8977,6 +8982,31 @@ fn distributed_tsql_at_time_zone_fixed_offset_matches_local() {
         false,
     );
     assert_eq!(actual, expected);
+    assert_eq!(pool.snapshot().current_bytes, 0);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn distributed_tsql_datename_tzoffset_matches_local() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-tsql-datename-tzoffset-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, DATENAME(tzoffset, CAST(event_date AS TIMESTAMP) AT TIME ZONE '+05:30') AS offset_text FROM events ORDER BY user_id, event_date, actions, country LIMIT 12";
+    let plan = bound_plan(statement, &manager);
+    let pool = QueryMemoryPool::new("tsql-datename-tzoffset-differential", 64 << 20).unwrap();
+    let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+        .unwrap_or_else(|error| panic!("{statement} local: {error}"));
+    let expected = canonical_rows(&drain(local.operator.as_mut()), false);
+    drop(local);
+    let actual = canonical_rows(
+        &execute_distributed(statement, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} distributed: {error}")),
+        false,
+    );
+    assert_eq!(actual, expected);
+    assert!(actual.iter().all(|row| row.contains("+05:30")));
     assert_eq!(pool.snapshot().current_bytes, 0);
     let _ = std::fs::remove_dir_all(directory);
 }
