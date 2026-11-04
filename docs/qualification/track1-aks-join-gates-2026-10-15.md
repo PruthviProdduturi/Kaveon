@@ -12,7 +12,7 @@ stages and tasks across all three workers.
 | Shape | Result | Stages / tasks |
 |---|---:|---:|
 | Left outer self-join by `user_id`, grouped by region | `EU=12`, `NA=12` | 5 / 13 |
-| Full outer cross-source join on `region = borough` | `29` rows | 4 / 10 |
+| Full outer cross-table join on `region = borough` | `29` rows | 4 / 10 |
 | Skewed grouped self-join on `region` | `EU=144`, `NA=144` | 5 / 13 |
 
 All repeated result digests matched, all responses were HTTP 200 and
@@ -32,7 +32,8 @@ All three workers reported the pinned catalog snapshot
 `sha256:652742525737d79eb579cdef4a8386b6fa6c9f3feedc60b197bd3406ab73d1f3`.
 The three shapes again finished twice with exact repeated results: `EU=12,
 NA=12` for the left outer self-join, `29` rows for the full outer
-cross-source join, and `EU=144, NA=144` for the skewed grouped join. The raw
+cross-table join, and `EU=144, NA=144` for the skewed grouped join. These are
+relations inside the Engine catalog, not registered-connector federation. The raw
 rerun is retained in
 [`track1-aks-join-gates-rerun-2026-10-15.json`](./track1-aks-join-gates-rerun-2026-10-15.json).
 
