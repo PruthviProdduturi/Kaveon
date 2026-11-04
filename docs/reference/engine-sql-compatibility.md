@@ -73,6 +73,11 @@ SQL Server's `ATN2(y, x)` spelling is also qualified through the same typed
 two-argument arctangent path; `ATAN2` remains the generic Trino-compatible
 name. See [`track2-tsql-atn2-2026-11-03.md`](../qualification/track2-tsql-atn2-2026-11-03.md).
 
+`DATEPART(tzoffset, value)` is qualified for timestamp values carrying a
+fixed `UTC`, `Z`, or `±HH:MM` offset and returns signed minutes. Naive values,
+named zones, and malformed or out-of-range offsets fail closed; see
+[`track2-tsql-datepart-tzoffset-2026-11-03.md`](../qualification/track2-tsql-datepart-tzoffset-2026-11-03.md).
+
 `JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
 SQL NULL arguments as JSON `null`; its bounded `ABSENT ON NULL` form omits
 NULL elements. `JSON_OBJECT(key : value, ...)` (or the
