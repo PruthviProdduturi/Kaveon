@@ -8,7 +8,8 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 182 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-current pin is `5c2b670b`, which includes strict invariant SQL Server `PARSE`
+corpus qualification pin is `5c2b670b` (an ancestor of the current branch),
+which includes strict invariant SQL Server `PARSE`
 and SQL Server's configurable-datefirst week
 numbering and fixed-offset
 `DATEPART(tzoffset, ...)` slice alongside the existing scalar aliases.
