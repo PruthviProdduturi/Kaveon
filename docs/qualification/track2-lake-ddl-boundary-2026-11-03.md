@@ -24,14 +24,16 @@ transactional indexes.
 
 The parser regression
 `parser::tests::unsupported_lake_index_and_constraint_ddl_fails_closed`
-covers each statement family and asserts the actionable diagnostic. The full
-SQL crate suite passed with 380 tests:
+covers each statement family, including `--` and `/* ... */` comment prefixes,
+and asserts the actionable diagnostic. The full SQL crate suite passed with
+380 tests:
 
 ```text
 cargo test -p kaveon-sql --lib
 ```
 
-The implementation is in commit `856ccc61`.
+The original boundary is in commit `856ccc61`; comment-prefix hardening is in
+the follow-up commit `dad97d3c`.
 
 ## Promotion gate
 
