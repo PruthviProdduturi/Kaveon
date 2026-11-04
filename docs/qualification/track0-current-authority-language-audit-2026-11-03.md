@@ -39,11 +39,22 @@ native metadata authority or that Engine performs cross-source Fabric
 federation. Historical mentions are retained for migration provenance and are
 not deployment instructions.
 
+This language audit is not a PostgreSQL-retirement proof. The current static
+dependency check (`python scripts/check-postgresql-dependencies.py`) still
+reports active API call sites for catalog sources, data sources, datasets and
+dataset semantics, charts, dashboards, favorites, saved queries, themes,
+recents, query history, activity, context cache, DLM generation, and chat
+history. Those paths include both legacy backfill readers and active
+read/write services. They must be migrated or explicitly fenced before a
+PostgreSQL-unavailable restart can be claimed.
+
 ## Verification
 
 - `node scripts/validate-docs.mjs` — passed.
 - `git diff --check` — passed.
 - `python scripts/validate-tsql-compatibility-tracker.py` — passed.
+- `python scripts/check-postgresql-dependencies.py` — completed; 16 authority
+  families reported, with the active call sites listed above.
 
 This audit does not claim cloud deployment state; live authority remains a
 runtime configuration and evidence question.
