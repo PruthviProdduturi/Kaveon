@@ -31,6 +31,11 @@ The bounded `TRY_PARSE` lane now also qualifies invariant fixed-offset
 timezone marker; invalid and NULL inputs remain NULL. Evidence:
 `docs/qualification/track2-tsql-try-parse-2026-10-29.md`.
 
+The strict unstyled `CONVERT(DATETIMEOFFSET, value)` lane uses the same
+fixed-offset parser, rejects malformed non-NULL values, and has local and
+three-worker evidence in
+`docs/qualification/track2-tsql-convert-datetimeoffset-2026-11-03.md`.
+
 The `week|wk|ww` aliases now use SQL Server's Sunday-first week-one rule;
 `SET DATEFIRST` remains outside the contract. Evidence:
 `docs/qualification/track2-tsql-datepart-week-2026-11-03.md`.

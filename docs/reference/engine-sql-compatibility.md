@@ -313,6 +313,8 @@ have local vectorized evaluator coverage for ISO styles `20`, `21`, `120`,
 `TRY_CONVERT` NULL/error behavior. Styles `20`, `21`, `120`, `121`, `126`,
 `101`, and `113` are qualified across the local and three-worker differential. See
 [`track2-tsql-convert-timestamp-literals-2026-10-29.md`](../qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md).
+See the dedicated strict conversion qualification for the unstyled form:
+[`track2-tsql-convert-datetimeoffset-2026-11-03.md`](../qualification/track2-tsql-convert-datetimeoffset-2026-11-03.md).
 `LEFT` and `RIGHT` are qualified for bounded Unicode scalar text lengths and
 preserve NULLs across local and three-worker execution.
 `REVERSE` is qualified for the same Unicode scalar and NULL-preserving path.
