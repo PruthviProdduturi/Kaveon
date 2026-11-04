@@ -93,9 +93,9 @@ On the previous digest (`6f33810b…`) a worker retained memory across statement
 
 **Why 5.** Three readers on one cloud, no writes, no S3, no Delta checkpoints. The read side is precise where it exists (exact statistics are better than Trino's estimates for broadcast decisions), but the surface is a fraction of Trino's.
 
-### 1.5 Federation and connectors — **1 / 10**
+### 1.5 Federation and connectors — **2 / 10**
 
-Trino's reason to exist is querying many systems as one: 40+ connectors, cross-catalog joins, pushdown into JDBC sources, Kafka, Elasticsearch, MongoDB, and system tables. KaveonDB has no connector concept: it reads lake files. Kaveon *the product* federates through the API's connection pool (Fabric SQL, Azure SQL, PostgreSQL, MySQL, StarRocks) — but that is the API executing SQL on those systems, not the Engine joining across them. This is a category KaveonDB has chosen not to enter; it is scored so the reader knows that.
+Trino's reason to exist is querying many systems as one: 40+ connectors, cross-catalog joins, pushdown into JDBC sources, Kafka, Elasticsearch, MongoDB, and system tables. KaveonDB now has an explicit registered-source connector abstraction and a qualified single-source pushdown path through the API (Fabric SQL, Azure SQL, PostgreSQL, MySQL, and StarRocks). The API executes the bounded statement on the selected source; Kaveon Engine still does not join lake catalogs with external sources, and cross-source planning, snapshot coordination, and failure semantics remain open. This is therefore an early connector boundary, not Trino-style federation.
 
 ### 1.6 Distributed execution and fault tolerance — **6 / 10**
 
