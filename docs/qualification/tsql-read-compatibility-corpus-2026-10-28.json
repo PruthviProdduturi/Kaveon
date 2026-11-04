@@ -181,6 +181,8 @@
     {"id": "json_query_text", "sql": "SELECT JSON_QUERY(payload, '$.customer') FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_canonical_container_text"},
     {"id": "percentile_cont_window", "sql": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_numeric_interpolation"},
     {"id": "percentile_disc_window", "sql": "SELECT PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_discrete_selection"},
+    {"id": "percent_rank_window", "sql": "SELECT PERCENT_RANK() OVER (PARTITION BY region ORDER BY value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_numeric_ranking"},
+    {"id": "cume_dist_window", "sql": "SELECT CUME_DIST() OVER (PARTITION BY region ORDER BY value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_partitioned_cumulative_distribution"},
     {"id": "year_month_day_aliases", "sql": "SELECT YEAR(event_date), MONTH(event_date), DAY(event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_typed_date_inputs"},
     {"id": "datepart_weekday_default_datefirst", "sql": "SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_sql_server_default_datefirst_7_numbering"},
     {"id": "set_datefirst_default", "sql": "SET DATEFIRST 7; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_default_datefirst_noop"},

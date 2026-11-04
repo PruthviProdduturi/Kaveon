@@ -12,7 +12,7 @@ parity or external-client parity.
 The sweep-count bullets below are retained as dated evidence for the corpus
 revision that existed when each run was executed. They are historical run
 sizes, not the current corpus total; the authoritative current total is the
-187-case count in the scope and tracker, enforced by
+189-case count in the scope and tracker, enforced by
 `scripts/validate-tsql-compatibility-tracker.py`.
 
 - Historical corpus at this qualification: 119 cases. The prior full sweep qualified bounded
@@ -36,6 +36,12 @@ sizes, not the current corpus total; the authoritative current total is the
   NULL-preserving input path and passes the same exact local/three-worker gate.
   Expression
   forms preserve SQL NULL-counting semantics.
+- The partitioned `PERCENT_RANK()` and `CUME_DIST()` window forms are backed by
+  the existing exact local/three-worker differential
+  `distributed_partitioned_window_percent_rank_and_cume_dist_match_local`.
+  They are now included as planner-qualified cases in the authoritative corpus;
+  the bounded contract is one partition/order specification with no dynamic
+  frame or unsupported argument clauses.
 - The SQL Server pagination case `ORDER BY ... OFFSET 1 ROWS FETCH NEXT 2
   ROWS ONLY` is included in the differential sweep and matches local results
   across the supported layouts and three-worker execution. It requires an

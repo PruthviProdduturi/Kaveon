@@ -6,7 +6,7 @@ Implementation history lives in Git; reproducible measurements live under
 `docs/qualification/`. A row is **Qualified** only when its stated acceptance
 evidence passes against exact-result references.
 
-The authoritative T-SQL read corpus currently contains 187 unique cases; the
+The authoritative T-SQL read corpus currently contains 189 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
 corpus qualification pin is `93d0e706` (the qualification commit),
 which includes strict invariant SQL Server `PARSE`
@@ -22,6 +22,12 @@ The newest bounded T-SQL temporal slice qualifies SQL Server's
 three-worker execution. The selected value is lowered into the immutable
 plan; invalid values remain fail-closed. Evidence:
 `docs/qualification/track2-tsql-datefirst-custom-2026-11-03.md`.
+
+The authoritative corpus also includes the partitioned `PERCENT_RANK()` and
+`CUME_DIST()` window forms. Their exact local/three-worker evidence is the
+existing `distributed_partitioned_window_percent_rank_and_cume_dist_match_local`
+gate; dynamic frames and unsupported argument clauses remain outside the
+bounded contract.
 
 The same T-SQL temporal lane now qualifies `DATEPART(tzoffset, value)` for
 fixed-offset timestamp values, returning signed offset minutes and rejecting
@@ -175,7 +181,7 @@ Planner, executor, and focused three-worker differential evidence are recorded i
 `docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`,
 `docs/qualification/track2-tsql-eomonth-offset-2026-11-03.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 187-case corpus. The bounded date-construction qualifications
+the versioned 189-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
@@ -190,7 +196,7 @@ The width/origin qualification supersedes the earlier date-bucket note for
 calendar normalization; `docs/qualification/track2-tsql-date-bucket-week-2026-10-30.md`
 remains the record for the added week unit.
 
-The corpus currently contains 187 bounded T-SQL read cases, including the
+The corpus currently contains 189 bounded T-SQL read cases, including the
 SQL Server `OFFSET ... FETCH NEXT` pagination form with deterministic ordering,
 the qualified unordered literal-separator `STRING_AGG` slice, exact
 `STRING_AGG(DISTINCT ...)` through a distinct projection, the NULL-preserving
@@ -283,7 +289,7 @@ existing rows are revision-CAS deleted, excluded existing rows are no-ops, and
 absent source rows are created. Evidence:
 `docs/qualification/track2-tsql-merge-filtered-delete-insert-2026-11-04.md`.
 
-The current T-SQL corpus is 187 cases (the implementation pin is updated after
+The current T-SQL corpus is 189 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with
 SQL Server NULL-skipping separator semantics, `CONCAT` with NULL-as-empty
 arguments, directional/BOTH-mode `TRIM` character sets, and `CHOOSE` lowered to a
@@ -397,7 +403,7 @@ local alignment and depth-cap evidence is recorded in
 | Capability | State | Current contract | Acceptance evidence still required |
 |---|---|---|---|
 | Final-merge repartition materialization | Implemented (bounded) | Recursive high-cardinality aggregate repartition now streams the two binary grouped-state columns directly into per-partition Arrow builders instead of materializing row-index `take` batches. It preserves null state values, partition hashing, spill cleanup, and the existing depth cap. Broadcast final merges divide prepaid input-batch admission across selected sibling workers, so tight shared budgets reach the spill path instead of failing during per-worker prepayment. Exact skew/replay and release pressure evidence are recorded in `docs/qualification/track1-final-merge-repartition-streaming-2026-11-03.md`. | Measure allocation/CPU reduction on representative high-cardinality workloads and qualify the deployed image; this does not close the broader adaptive aggregate-exchange boundary. |
-| Corpus update note | Evidence | The authoritative T-SQL corpus is now 187 cases; the historical long-form capability row below still contains older evidence pointers and is superseded by the current corpus/header above. | Keep the corpus count, implementation pin, and qualification links synchronized. |
+| Corpus update note | Evidence | The authoritative T-SQL corpus is now 189 cases; the historical long-form capability row below still contains older evidence pointers and is superseded by the current corpus/header above. | Keep the corpus count, implementation pin, and qualification links synchronized. |
 | Worker discovery and scheduling | Qualified (bounded) | Coordinator assigns fragments and retries tasks across compatible workers; task dispatch now carries the coordinator's concrete file/row-group split assignment into the worker fragment, so a worker consumes pinned splits instead of re-enumerating a changed local table. Fragments without that optional metadata retain the local fallback for rolling compatibility. The declared three-worker Docker/AKS topology has exact skew, forced-loss, repeated-pressure, and graceful node-drain evidence. A current release-binary two-worker smoke rerun passed all six distributed cases (paging, scan, filtered count, grouped count, join count, and TopN) with exact rows and distributed stages (`docs/qualification/distributed-smoke-release-2026-10-20.md`). Focused local evidence: `docs/qualification/track1-task-split-consumption-2026-10-18.md`. | Additional supported topologies and endurance qualification; remote object-store split assignment remains a separate cloud qualification. |
 | Hash exchange and repartition | Qualified (bounded) | Authenticated Arrow exchange, stable partitioning (including nested array, map, and row keys), bounded payloads, replayable spools, fail-closed live quota rejection, cleanup, and direct in-memory store insertions applying the same chunk bounds as wire decoding (`docs/qualification/track1-exchange-store-insertion-bounds-2026-10-18.md`), 900-second ADLS soak, and a qualified AKS object-store fault/retry run with zero retained files (`docs/qualification/track1-aks-storage-fault-current-2026-10-16.md`). Nested map/row keys use a canonical fallback because Arrow RowConverter does not support Map values. Coordinator disk exchange chunks are now synced before indexing, with local restart/reclaim and failed-write cleanup evidence in `docs/qualification/track1-disk-exchange-durable-chunks-2026-10-18.md`. In-memory coordinator assembly reserves one exact payload buffer after chunk validation, avoiding repeated growth copies (`docs/qualification/track1-exchange-assembly-buffer-2026-10-18.md`). Streaming producers start at one configured chunk capacity, avoiding first-chunk growth churn (`docs/qualification/track1-streaming-exchange-buffer-2026-10-18.md`). | Longer mixed-workload endurance, broader topologies, and cross-region/object-store qualification. |
 | Distributed joins | Partial | Coordinator cancellation now fans out cancellation requests concurrently to all active workers so one slow worker cannot delay cleanup on the others (`docs/qualification/track1-cancellation-worker-fanout-2026-10-18.md`). Join build costing now ceilings positive filtered row/byte estimates to avoid zero-cardinality broadcast choices (`track1-join-cost-upper-bound-2026-10-18.md`). DISTINCT subqueries now retain conservative source bounds for safe small-build broadcast costing, with exact optimizer evidence in `track1-join-distinct-bound-2026-10-18.md`. Partitioned and broadcast hash joins (including safe right-side broadcast for left outer joins), residuals, outer joins, semi/anti joins, measured local join spill, and spilled partitioned inner joins retain non-equi residual semantics with exact local evidence in `track1-join-residual-spill-2026-10-18.md`). Empty filtered build partitions now emit typed zero-row batches, preserving LEFT JOIN NULL extension and output schema in local/three-worker execution (`docs/qualification/track1-join-empty-build-null-extension-2026-10-18.md`). Fail-closed spill-device quota handling with cleanup coverage, bounded AKS outer-join/skew evidence (`docs/qualification/track1-aks-join-gates-current-2026-10-16.md`), a clean-baseline AKS fault/pressure rerun with forced worker-loss retry and exact recovery, and an exact-repeat bounded high-cardinality self-join over the 504M-row table (`docs/qualification/track1-aks-high-cardinality-join-2026-10-15.md`). UInt32 equality keys now widen losslessly through the hash representation (`docs/qualification/track1-join-uint32-key-2026-10-18.md`). Float32/REAL join keys now retain exact typed identity through build-side runtime filtering, including the precision-boundary differential in `docs/qualification/track1-runtime-filter-float32-2026-10-18.md`. Decimal128 single-key joins now use a typed i128 runtime-filter index and exact storage IN literals, with local and partitioned evidence in `docs/qualification/track1-runtime-filter-decimal128-join-index-2026-10-18.md`. Date64 single-key joins now use a typed i64 runtime-filter index and exact storage literals, with local and partitioned evidence in `docs/qualification/track1-runtime-filter-date64-join-index-2026-10-18.md`. | AKS disk-exhaustion, larger high-cardinality joins, sustained mixed-workload qualification, and broader adaptive filter exchange/cloud qualification. |
@@ -439,13 +445,13 @@ with 12/12 exact cases (`docs/qualification/trino-differential-docker-current-2w
 ## Track 2 — SQL compatibility and types
 
 The large capability row below contains historical evidence pointers from
-earlier corpus revisions; the authoritative current corpus is 187 cases as
+earlier corpus revisions; the authoritative current corpus is 189 cases as
 stated above and enforced by the tracker validator.
 
 The T-SQL capability row below includes an older short description of
 `PARSENAME`; the current contract supersedes that wording: plain,
 bracket-delimited, and double-quoted dotted names are qualified, including
-escaped closing delimiters inside delimited segments. See the 187-case corpus
+escaped closing delimiters inside delimited segments. See the 189-case corpus
 and `track2-tsql-parsename-2026-11-03.md` for the authoritative boundary.
 
 | Capability | State | Current contract | Acceptance evidence still required |
@@ -548,7 +554,7 @@ for bounded typed-row conflict-upsert and delete; it does not widen the
 contract to arbitrary lake-table schemas. Evidence is recorded in
 `docs/qualification/track2-native-dml-returning-document-2026-10-29.md`.
 
-The T-SQL row above is backed by the versioned 187-case corpus in
+The T-SQL row above is backed by the versioned 189-case corpus in
 `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`;
 the distributed evidence is recorded in the linked qualification documents.
 The latest ten cases are bounded `ASCII`, `UNICODE`, `CHAR`, `NCHAR`,
@@ -574,7 +580,7 @@ The two newest cases qualify SQL Server/ClickHouse-compatible
 three-worker results with the existing explicit grouping-set forms; `WITH
 TOTALS` and mixed modifier forms remain explicit rejections. Evidence:
 `docs/qualification/track2-tsql-group-by-modifiers-2026-11-02.md`.
-The capability row's historical corpus pointer is superseded by the 187-case
+The capability row's historical corpus pointer is superseded by the 189-case
 corpus and pin above; do not use its older count as current evidence.
 The two newest cases also qualify native SQL Server/Fabric `JSON_VALUE` and
 `JSON_QUERY` text forms: scalar extraction returns text (or NULL for a
