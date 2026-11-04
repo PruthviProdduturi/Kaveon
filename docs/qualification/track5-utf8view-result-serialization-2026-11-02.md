@@ -19,10 +19,11 @@ actual category labels, and clients that key or join result values do not see
 Arrow debug representations such as `StringViewArray(...)`. Null handling and
 all other data-type serialization behavior are unchanged.
 
-The execution aggregate path also accepts `Utf8View` grouping keys and text
-extrema, normalizing finalized output to the Engine's stable logical `Utf8`
-type. This covers local grouped execution and the key preparation used before
-distributed partial aggregation.
+The execution aggregate and hash-join paths also accept `Utf8View` grouping
+and join keys, normalizing finalized output to the Engine's stable logical
+`Utf8` type. This covers local grouped execution, key preparation before
+distributed partial aggregation, and inner-join matching with SQL NULL
+non-matching semantics.
 
 ## Evidence
 
@@ -33,6 +34,7 @@ distributed partial aggregation.
 - `api::tests::statistics_statements_read_the_stored_statistics`
 - `streamed_root_tests::presented_type_uses_client_facing_nested_names`
 - `aggregate::tests::utf8_view_min_max_and_group_keys_use_logical_text_values`
+- `join::tests::utf8_view_join_keys_match_and_skip_nulls`
 - `local::rows::tests::utf8_view_rows_use_text_values`
 - `local::display::tests::utf8_view_cells_render_as_text`
 - `cargo test -p kaveon-server --bin kaveon-server utf8_view -- --nocapture` — passed (serializer and grouped-text regression tests)
