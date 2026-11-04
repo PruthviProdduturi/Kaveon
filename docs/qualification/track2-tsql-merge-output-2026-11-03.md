@@ -40,10 +40,12 @@ pre-delete document snapshot.
 The parser and endpoint reject expressions, `OUTPUT INTO`, mixed pseudo-table
 projections, and unsupported columns. The bounded `$action` form returns the
 resolved `INSERT`, `UPDATE`, or `DELETE` action label for each staged action.
-Bounded
-by-source delete batches accept `OUTPUT deleted.id` and
+Bounded by-source delete batches accept `OUTPUT deleted.id` and
 `OUTPUT deleted.revision`; mixed by-source action batches also accept the
-corresponding `inserted.id`/`inserted.revision` projection. The transaction API
+corresponding `inserted.id`/`inserted.revision` projection. A target-filtered
+by-source update also returns the matched update and selected by-source update
+rows through `inserted.id`, `inserted.revision`, and `inserted.document_json`;
+rows outside the target filter remain absent from the staged write set. The transaction API
 resolves supported MERGE actions to revision/CAS commands, then filters the
 staged write set by the requested pseudo-table; source rows that are no-ops are
 omitted rather than fabricated. Deleted documents are captured before the
@@ -56,6 +58,7 @@ for earlier staged updates. Broader by-source combinations remain rejected.
 - `parser::tests::sql_server_matched_update_output_lowers_to_inserted_product_returning`
 - `parser::tests::sql_server_merge_output_rejects_unsupported_projections`
 - `transaction_api::tests::sql_endpoint_merge_by_source_output_returns_deleted_identity`
+- `transaction_api::tests::sql_endpoint_filtered_merge_not_matched_by_source_update_outputs_inserted_row`
 - `transaction_api::tests::sql_endpoint_bounded_merge_accepts_inserted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_update_accepts_inserted_output`
 - `transaction_api::tests::sql_endpoint_bounded_merge_matched_delete_accepts_deleted_output`
