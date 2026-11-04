@@ -2291,6 +2291,15 @@ pub enum ProductDmlCommand {
         id: String,
         document_json: String,
     },
+    /// Bounded MERGE delete-or-insert semantics with a literal source-id
+    /// predicate on the matched clause. Existing rows are deleted only when
+    /// their ids satisfy `matched_ids`; absent source rows still insert.
+    MergeDeleteOrCreateFiltered {
+        kind: String,
+        id: String,
+        document_json: String,
+        matched_ids: Vec<String>,
+    },
     /// Bounded MERGE semantics: delete a matched product row.  An unmatched
     /// source row is a transactional no-op, matching SQL MERGE semantics.
     MergeDelete { kind: String, id: String },
@@ -3088,10 +3097,6 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 "MERGE WHEN MATCHED must set document_json from source or a string literal",
             ));
         }
-    } else if matched_source_filter.is_some() {
-        return Err(sql_error(
-            "MERGE filtered matched DELETE with NOT MATCHED INSERT is not supported",
-        ));
     }
     let MergeAction::Insert(insert) = &clauses[1].action else {
         return Err(sql_error(
@@ -3128,14 +3133,27 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         .iter()
         .map(|row| {
             Ok(if matched_delete {
-                ProductDmlCommand::MergeDeleteOrInsert {
-                    kind: kind.clone(),
-                    id: string_literal(&row[0], "MERGE source id")?,
-                    document_json: merge_document_value(
-                        &values.rows[0][1],
-                        &source_alias,
-                        &row[1],
-                    )?,
+                if let Some(matched_ids) = &matched_ids {
+                    ProductDmlCommand::MergeDeleteOrCreateFiltered {
+                        kind: kind.clone(),
+                        id: string_literal(&row[0], "MERGE source id")?,
+                        document_json: merge_document_value(
+                            &values.rows[0][1],
+                            &source_alias,
+                            &row[1],
+                        )?,
+                        matched_ids: matched_ids.clone(),
+                    }
+                } else {
+                    ProductDmlCommand::MergeDeleteOrInsert {
+                        kind: kind.clone(),
+                        id: string_literal(&row[0], "MERGE source id")?,
+                        document_json: merge_document_value(
+                            &values.rows[0][1],
+                            &source_alias,
+                            &row[1],
+                        )?,
+                    }
                 }
             } else if let Some(matched_ids) = &matched_ids {
                 ProductDmlCommand::MergeUpdateOrCreateFiltered {
@@ -6476,6 +6494,40 @@ mod tests {
                     id: "new-row".into(),
                     document_json: "{\"created\":true}".into(),
                     matched_ids: vec!["update-me".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn product_merge_supports_filtered_matched_delete_with_insert_fallback() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS target USING (VALUES ('delete-me', '{\"deleted\":true}'), ('keep-existing', '{\"keep\":true}'), ('new-row', '{\"created\":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('delete-me') THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)",
+        )
+        .expect("filtered matched DELETE MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::MergeDeleteOrCreateFiltered {
+                    kind: "dataset".into(),
+                    id: "delete-me".into(),
+                    document_json: "{\"deleted\":true}".into(),
+                    matched_ids: vec!["delete-me".into()],
+                },
+                ProductDmlCommand::MergeDeleteOrCreateFiltered {
+                    kind: "dataset".into(),
+                    id: "keep-existing".into(),
+                    document_json: "{\"keep\":true}".into(),
+                    matched_ids: vec!["delete-me".into()],
+                },
+                ProductDmlCommand::MergeDeleteOrCreateFiltered {
+                    kind: "dataset".into(),
+                    id: "new-row".into(),
+                    document_json: "{\"created\":true}".into(),
+                    matched_ids: vec!["delete-me".into()],
                 },
             ]
         );

@@ -3,7 +3,7 @@
 ## Boundary
 
 This record covers the source-level release gate for the current `dev`
-branch after the bounded filtered `MERGE` update-or-insert qualification in
+branch after the bounded filtered `MERGE` delete-or-insert qualification in
 the current commit. It is a
 correctness and build gate, not a claim of cloud deployment qualification or
 complete Trino/Fabric/PostgreSQL parity.
@@ -22,9 +22,9 @@ Observed results:
 - CLI/server and related workspace targets: all reported tests passed;
 - execution: 644 passed, 4 ignored;
 - optimizer: 86 passed;
-- SQL: 385 passed;
+- SQL: 386 passed;
 - storage: 158 passed, 3 ignored;
-- server differential suite: 715 passed, 0 failed, 0 ignored;
+- server differential suite: 716 passed, 0 failed, 0 ignored;
 - the 173-case T-SQL distributed differential sweep completed successfully;
 - workspace benchmark targets completed successfully.
 
@@ -58,7 +58,7 @@ The lint gate passed with `-D warnings`. Repository validators also passed:
 python scripts/validate-tsql-compatibility-tracker.py
 PASS: 182 unique T-SQL compatibility cases, engine pin 5c2b670b, tracker count synchronized
 node scripts/validate-docs.mjs
-Documentation validation passed: 729 Markdown files, 39 routes, 9 SVGs.
+Documentation validation passed: 730 Markdown files, 39 routes, 9 SVGs.
 ```
 
 ## Boundary that remains open
