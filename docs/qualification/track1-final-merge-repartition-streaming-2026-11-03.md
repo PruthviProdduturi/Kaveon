@@ -37,6 +37,11 @@ universal latency or allocation improvement on a deployed image.
   with 9 source spill tables and no memory-limit failure; the prior four-batch
   per-worker admission failed before the first tight broadcast round.
 - Formatting and focused execution tests passed on 2026-11-03.
+- Release rerun from `ea88d8b2` also passed all 18 tight/roomy rounds on
+  2026-11-03: tight partitioned rounds completed in 1.98–2.09 s, tight
+  broadcast rounds in 1.34–1.39 s, and roomy partitioned/reserving rounds
+  without spill in 0.54–1.25 s. The three pre-change refusal/replay rounds
+  remained bounded at 12.24–12.73 s with cleanup complete; no round failed.
 
 ## Remaining gate
 
