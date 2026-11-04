@@ -4,10 +4,13 @@ For the current production-shaped resource naming, autoscaling and GitHub
 Actions path, start with [Azure production deployment](../guides/azure-production-deployment.md).
 This document remains the detailed qualification and troubleshooting runbook
 for the historical test chart; it deliberately uses the `kaveon-test` names and
-should not be used as the production naming guide. Current deployments use the
-KaveonDB-native catalog and transaction store; PostgreSQL is not a required
-service. PostgreSQL references below describe the retired migration rehearsal,
-not a production dependency.
+should not be used as the production naming guide. The qualified native
+profile uses the KaveonDB catalog and transaction store; PostgreSQL is not a
+required service for that profile. Before describing a live cloud deployment
+as PostgreSQL-free, run the current authority audit
+(`scripts/check-postgresql-dependencies.py`) and archive its result. The
+PostgreSQL references below describe the retired migration rehearsal and do
+not override live deployment evidence.
 
 Use **Part A** if Kaveon is already deployed. Use **Part B** once to create a new
 test environment. Commands below are for PowerShell. The Engine UI uses port
