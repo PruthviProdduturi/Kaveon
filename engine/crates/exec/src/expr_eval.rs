@@ -17615,9 +17615,9 @@ fn eval_date_name(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
                 "HOUR" | "HH" => (remainder / 3_600_000_000_000).to_string(),
                 "MINUTE" | "MI" | "N" => ((remainder / 60_000_000_000) % 60).to_string(),
                 "SECOND" | "SS" | "S" => ((remainder / 1_000_000_000) % 60).to_string(),
-                "MILLISECOND" | "MILLI" | "MS" => ((remainder / 1_000_000_000) % 1_000).to_string(),
+                "MILLISECOND" | "MILLI" | "MS" => ((remainder / 1_000_000) % 1_000).to_string(),
                 "MICROSECOND" | "MICRO" | "MCS" | "US" => {
-                    ((remainder / 1_000_000) % 1_000_000).to_string()
+                    ((remainder / 1_000) % 1_000_000).to_string()
                 }
                 "NANOSECOND" | "NANO" | "NS" => (remainder % 1_000_000_000).to_string(),
                 _ => {
@@ -18682,6 +18682,29 @@ mod tests {
                 .to_owned();
             assert_eq!(values, canonical, "DATENAME day-of-year alias {alias}");
         }
+    }
+
+    #[test]
+    fn date_name_preserves_subsecond_components_at_engine_precision() {
+        let source =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(1_234_567); 3])) as ArrayRef;
+        let values = eval_date_name(
+            &StringArray::from(vec![
+                Some("millisecond"),
+                Some("microsecond"),
+                Some("nanosecond"),
+            ]),
+            &source,
+            3,
+        )
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .iter()
+        .map(|value| value.unwrap().to_owned())
+        .collect::<Vec<_>>();
+        assert_eq!(values, ["234", "234567", "234567000"]);
     }
 
     #[test]

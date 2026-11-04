@@ -30,6 +30,11 @@ The case runs the same statement through local execution and the in-process
 three-worker fragment path over the standard dictionary, plain, fragmented,
 partitioned, and clustered Parquet layouts. Exact canonical rows match.
 
+The executor unit regression also checks a non-zero microsecond timestamp:
+`DATENAME(millisecond, 00:00:01.234567)` returns `234`, the microsecond part
+returns `234567`, and the Engine-precision nanosecond rendering returns
+`234567000`.
+
 ## Boundary
 
 This qualifies the bounded scalar read shape only. It does not expand
