@@ -39,7 +39,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 172-case corpus has planner coverage and focused exact
+  The current 173-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -434,6 +434,12 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
   `CAST('<json>' AS JSON)` is normalized to the existing document publication
   path; arbitrary expressions remain rejected. Evidence:
   `docs/qualification/track2-native-dml-json-typed-update-2026-11-03.md`.
+- [x] Qualify bounded sized SQL Server/Fabric text casts. `VARCHAR(n)`,
+  `NVARCHAR(n)`, and `CHAR(n)` use the Engine's explicit UTF-8 scalar contract
+  (truncate, or truncate and U+0020-pad for `CHAR`), preserve NULLs, and cap
+  lengths at 1,000,000 scalars. Binary/code-page semantics and styled sized
+  text `CONVERT` remain rejected. Evidence:
+  `docs/qualification/track2-tsql-sized-text-casts-2026-11-03.md`.
 - [ ] Add a durable journal/recovery qualification for cloud/object-store
   failures and multi-coordinator restart. This remains distinct from the
   bounded snapshot contract above. The local coordinator journal now fsyncs

@@ -174,6 +174,7 @@
     {"id": "set_datefirst_monday", "sql": "SET DATEFIRST 1; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_datefirst_1"},
     {"id": "set_datefirst_wednesday", "sql": "SET DATEFIRST 3; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_datefirst_3"},
     {"id": "set_datefirst_week_boundary", "sql": "SET DATEFIRST 1; SELECT DATEPART(week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_datefirst_week_boundary"},
-    {"id": "set_datefirst_out_of_range", "sql": "SET DATEFIRST 0; SELECT DATEPART(dw, event_date) FROM t", "status": "explicit_rejection", "distributed_status": "rejected_datefirst_out_of_range"}
+    {"id": "set_datefirst_out_of_range", "sql": "SET DATEFIRST 0; SELECT DATEPART(dw, event_date) FROM t", "status": "explicit_rejection", "distributed_status": "rejected_datefirst_out_of_range"},
+    {"id": "sized_text_cast", "sql": "SELECT CAST(value AS VARCHAR(12)), CAST(value AS CHAR(4)), TRY_CONVERT(NVARCHAR(8), value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_unicode_scalar_truncation_and_char_padding"}
   ]
 }

@@ -4498,7 +4498,16 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             ..
         } => {
             let inner = ast_expr_to_expr(expr)?;
-            reject_unsupported_text_cast_length(data_type)?;
+            if let Some((length, fixed_width)) = sized_text_cast_spec(data_type)? {
+                return Ok(Expr::Function {
+                    name: format!(
+                        "KAVEON_CAST_TEXT_{}_{}",
+                        length,
+                        if fixed_width { "CHAR" } else { "VARCHAR" }
+                    ),
+                    args: vec![inner],
+                });
+            }
             // JSON is represented as validated UTF-8 text in Arrow.  Lower
             // the cast to a dedicated function so invalid documents fail at
             // execution (and TRY_CAST can preserve SQL's NULL-on-error rule)
@@ -4548,7 +4557,20 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             let data_type = data_type
                 .as_ref()
                 .ok_or_else(|| sql_err("CONVERT requires a target data type"))?;
-            reject_unsupported_text_cast_length(data_type)?;
+            if let Some((length, fixed_width)) = sized_text_cast_spec(data_type)? {
+                if !styles.is_empty() {
+                    return Err(sql_err("sized text CONVERT does not accept a style code"));
+                }
+                let inner = ast_expr_to_expr(expr)?;
+                return Ok(Expr::Function {
+                    name: format!(
+                        "KAVEON_CAST_TEXT_{}_{}",
+                        length,
+                        if fixed_width { "CHAR" } else { "VARCHAR" }
+                    ),
+                    args: vec![inner],
+                });
+            }
             let style = if styles.is_empty() {
                 None
             } else if styles.len() == 1 {
@@ -5074,26 +5096,42 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
     }
 }
 
-/// The Engine's text contract is unbounded UTF-8.  SQL Server's sized
-/// VARCHAR/CHAR/NVARCHAR forms require truncation, padding, and code-page
-/// rules that are not represented by `CastTarget::Utf8`; accepting the AST
-/// and silently dropping the length would produce incorrect results.  Keep
-/// this boundary explicit for CAST, CONVERT, and their TRY variants.
-fn reject_unsupported_text_cast_length(dt: &ast::DataType) -> Result<()> {
-    let sized = match dt {
+/// Return the bounded text-cast contract for SQL Server/Fabric text types.
+/// Kaveon deliberately uses Unicode scalar length rather than pretending to
+/// emulate a server-specific code page.  Fixed-width CHAR is padded with
+/// U+0020 after truncation; VARCHAR/NVARCHAR are only truncated.
+fn sized_text_cast_spec(dt: &ast::DataType) -> Result<Option<(usize, bool)>> {
+    let (length, fixed_width) = match dt {
         ast::DataType::Varchar(length)
         | ast::DataType::Nvarchar(length)
-        | ast::DataType::CharVarying(length) => length.is_some(),
-        ast::DataType::String(length) => length.is_some(),
-        ast::DataType::Char(length) => length.is_some(),
-        _ => false,
+        | ast::DataType::CharVarying(length) => (
+            match length.as_ref() {
+                Some(ast::CharacterLength::IntegerLength { length, .. }) => Some(*length),
+                Some(ast::CharacterLength::Max) | None => None,
+            },
+            false,
+        ),
+        ast::DataType::String(length) => (length.as_ref().copied(), false),
+        ast::DataType::Char(length) => (
+            match length.as_ref() {
+                Some(ast::CharacterLength::IntegerLength { length, .. }) => Some(*length),
+                Some(ast::CharacterLength::Max) | None => None,
+            },
+            true,
+        ),
+        _ => return Ok(None),
     };
-    if sized {
+    let Some(length) = length else {
+        return Ok(None);
+    };
+    let length = usize::try_from(length)
+        .map_err(|_| sql_err("sized text cast length exceeds the supported bound"))?;
+    if length > 1_000_000 {
         return Err(sql_err(
-            "sized text casts are not supported; use unbounded VARCHAR/CHAR for UTF-8 text",
+            "sized text cast length must be at most 1000000 Unicode scalars",
         ));
     }
-    Ok(())
+    Ok(Some((length, fixed_width)))
 }
 
 fn is_tsql_timestamp_type(dt: &ast::DataType) -> bool {
@@ -10630,24 +10668,44 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sized_tsql_text_casts_instead_of_dropping_length() {
-        for sql in [
-            "SELECT CAST(value AS VARCHAR(12)) FROM t",
-            "SELECT TRY_CAST(value AS CHAR(4)) FROM t",
-            "SELECT CONVERT(VARCHAR(8), value) FROM t",
-            "SELECT TRY_CONVERT(CHAR(2), value) FROM t",
-            "SELECT CAST(value AS NVARCHAR(12)) FROM t",
-            "SELECT TRY_CONVERT(NVARCHAR(8), value) FROM t",
+    fn lowers_bounded_tsql_sized_text_casts_without_dropping_length() {
+        for (sql, marker) in [
+            (
+                "SELECT CAST(value AS VARCHAR(12)) FROM t",
+                "KAVEON_CAST_TEXT_12_VARCHAR",
+            ),
+            (
+                "SELECT TRY_CAST(value AS CHAR(4)) FROM t",
+                "KAVEON_CAST_TEXT_4_CHAR",
+            ),
+            (
+                "SELECT CONVERT(VARCHAR(8), value) FROM t",
+                "KAVEON_CAST_TEXT_8_VARCHAR",
+            ),
+            (
+                "SELECT TRY_CONVERT(CHAR(2), value) FROM t",
+                "KAVEON_CAST_TEXT_2_CHAR",
+            ),
+            (
+                "SELECT CAST(value AS NVARCHAR(12)) FROM t",
+                "KAVEON_CAST_TEXT_12_VARCHAR",
+            ),
+            (
+                "SELECT TRY_CONVERT(NVARCHAR(8), value) FROM t",
+                "KAVEON_CAST_TEXT_8_VARCHAR",
+            ),
         ] {
-            let error = sql_to_logical_plan(sql)
-                .expect_err("sized text casts must fail closed until length semantics exist");
-            assert!(
-                error
-                    .to_string()
-                    .contains("sized text casts are not supported"),
-                "{sql}: {error}"
-            );
+            let plan = sql_to_logical_plan(sql)
+                .expect("sized text casts should lower through the bounded UTF-8 contract");
+            assert!(format!("{plan:?}").contains(marker), "{sql}: {plan:?}");
         }
+
+        let error = sql_to_logical_plan("SELECT CONVERT(VARCHAR(8), value, 101) FROM t")
+            .expect_err("sized text CONVERT styles must remain explicit");
+        assert!(
+            error.to_string().contains("does not accept a style"),
+            "{error}"
+        );
     }
 
     #[test]
