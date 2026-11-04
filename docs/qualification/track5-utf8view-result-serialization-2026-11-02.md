@@ -37,7 +37,7 @@ non-matching semantics.
 - `join::tests::utf8_view_join_keys_match_and_skip_nulls`
 - `local::rows::tests::utf8_view_rows_use_text_values`
 - `local::display::tests::utf8_view_cells_render_as_text`
-- `cargo test -p kaveon-server --bin kaveon-server utf8_view -- --nocapture` — passed (serializer and grouped-text regression tests)
+- `cargo test -p kaveon-server --bin kaveon-server result_rows_encode_utf8_view_values_as_text -- --nocapture` — passed (direct, nested, and `Map<Utf8View, Int64>` serializer regression)
 - `cargo clippy -p kaveon-server --all-targets --no-default-features -- -D warnings` — passed
 - `cargo test -p kaveon-cli` — 214 passed, 1 ignored
 
