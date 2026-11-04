@@ -559,7 +559,11 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
   policy. Exact skew/replay, release-pressure, and fanout-policy evidence is in
   `docs/qualification/track1-final-merge-repartition-streaming-2026-11-03.md`
   and `docs/qualification/track1-adaptive-final-merge-fanout-2026-11-03.md`.
-  Adaptive join exchange and deployed performance qualification remain open.
+  Join secondary hot-bucket splits now also choose a bounded 16–256-way
+  fanout from measured encoded bytes while preserving hash alignment; evidence
+  is in `docs/qualification/track1-adaptive-join-fanout-2026-11-03.md`.
+  Larger-scale adaptive exchange and deployed performance qualification remain
+  open.
 - [ ] Distribute remaining window and global-sort shapes.
 - [x] Complete correlated/lateral execution or maintain explicit rejection.
   Bounded correlated and lateral forms are qualified, including residual

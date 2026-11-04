@@ -335,6 +335,11 @@ path in `docs/qualification/track1-adaptive-final-merge-fanout-2026-11-03.md`;
 deployed high-cardinality workload and cloud endurance qualification remain
 open.
 
+Join secondary splits use the same bounded byte-aware approach for measured
+multi-key hot buckets, preserving the same salt and fanout on both inputs;
+local alignment and depth-cap evidence is recorded in
+`docs/qualification/track1-adaptive-join-fanout-2026-11-03.md`.
+
 | Capability | State | Current contract | Acceptance evidence still required |
 |---|---|---|---|
 | Final-merge repartition materialization | Implemented (bounded) | Recursive high-cardinality aggregate repartition now streams the two binary grouped-state columns directly into per-partition Arrow builders instead of materializing row-index `take` batches. It preserves null state values, partition hashing, spill cleanup, and the existing depth cap. Broadcast final merges divide prepaid input-batch admission across selected sibling workers, so tight shared budgets reach the spill path instead of failing during per-worker prepayment. Exact skew/replay and release pressure evidence are recorded in `docs/qualification/track1-final-merge-repartition-streaming-2026-11-03.md`. | Measure allocation/CPU reduction on representative high-cardinality workloads and qualify the deployed image; this does not close the broader adaptive aggregate-exchange boundary. |
