@@ -85,6 +85,11 @@ and decimal overflow. It reuses the typed decimal safe-cast path and returns
 typed NULL on conversion failure in local and three-worker execution. Evidence:
 `docs/qualification/track2-tsql-try-convert-decimal-2026-11-04.md`.
 
+The equivalent SQL Server `TRY_CAST(expression AS DECIMAL(p,s))` spelling is
+also qualified on the same typed safe-cast path, including malformed and
+overflowing values returning typed NULL. Evidence:
+`docs/qualification/track2-tsql-try-cast-decimal-2026-11-04.md`.
+
 The strict companion `CONVERT(DECIMAL(p,s), expression)` qualifies the same
 bounded precision/scale path for valid inputs and preserves statement failure
 on malformed values. It is covered by the same local and three-worker

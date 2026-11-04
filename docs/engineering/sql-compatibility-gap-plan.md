@@ -105,10 +105,13 @@ distributed plan; evidence is in
 `docs/qualification/track2-tsql-datepart-weekday-2026-11-03.md`.
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
 without a complete tie-breaker, SQL permits different tied rows and the
-qualification is intentionally withheld. Numeric `CONVERT` and
-`TRY_CONVERT` casts are also qualified across those layouts, including bounded
-`DECIMAL(p,s)` safe casts that return typed NULL on malformed or overflowing
-input, and unstyled
+qualification is intentionally withheld. Numeric `CONVERT`, `TRY_CONVERT`,
+and `TRY_CAST` casts are also qualified across those layouts, including
+bounded `DECIMAL(p,s)` safe casts that return typed NULL on malformed or
+overflowing input; strict decimal conversion preserves statement errors.
+Evidence is recorded in
+`docs/qualification/track2-tsql-try-convert-decimal-2026-11-04.md` and
+`docs/qualification/track2-tsql-try-cast-decimal-2026-11-04.md`. Unstyled
 fixed-offset `DATETIMEOFFSET` inputs; strict `CONVERT(DATETIMEOFFSET, ...)`
 uses the same parser and fails closed on malformed non-NULL values. SQL Server `COUNT_BIG`
 now canonicalizes to the Engine's mergeable 64-bit `COUNT` state; it shares
