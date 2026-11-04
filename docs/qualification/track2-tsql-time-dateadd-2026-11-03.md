@@ -22,7 +22,9 @@ microsecond precision.
 - The distributed differential test
   `distributed_tsql_time_dateadd_matches_local` compares the local result
   with three worker fragments over row-local offsets and deterministic
-  ordering.
+  ordering. The cross-encoding sweep uses `user_id, event_date, actions,
+  country` as a complete ordering key; ties on a partial `ORDER BY` are not
+  treated as a semantic mismatch.
 
 This is a bounded T-SQL temporal contract, not general SQL Server datepart or
 sub-microsecond precision parity.
