@@ -25,6 +25,11 @@ insert action. The transaction layer resolves each command against the pinned
 snapshot, checks ownership, and stages ordinary revision/CAS `DELETE` or
 `CREATE` commands. The existing 1,000-source-row limit remains in force.
 
+`OUTPUT deleted.id, deleted.revision, deleted.document_json` is also
+qualified for this form. It returns only selected delete actions, including
+the document captured from the pinned pre-delete snapshot; inserted and
+excluded no-op source rows do not appear in the deleted projection.
+
 General predicates, `NOT IN`, arbitrary assignments, unbounded source scans,
 and filtered `WHEN NOT MATCHED BY SOURCE` combinations remain rejected.
 
@@ -34,6 +39,8 @@ and filtered `WHEN NOT MATCHED BY SOURCE` combinations remain rejected.
 - Transaction/API: `sql_endpoint_bounded_merge_filtered_match_deletes_and_inserts`.
 - The test verifies that the selected existing row is deleted, the excluded
   existing row is unchanged, and an absent source row is created at revision 1.
+- The same API test verifies the deleted identity, revision, and pre-delete
+  document in the SQL response.
 - SQL library suite: 386 passed; bounded server MERGE suite: 14 passed.
 - Focused clippy passes with `-D warnings`.
 
