@@ -446,7 +446,8 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   atomic rollback on violation, restart/replay recovery, and local plus
   distributed qualification; until those gates exist, unsupported general
   `CREATE INDEX`, `ALTER TABLE ... ADD CONSTRAINT`, and arbitrary lake-table
-  mutation remain fail-closed.
+  mutation remain fail-closed. The current rejection boundary is qualified in
+  `docs/qualification/track2-lake-ddl-boundary-2026-11-03.md`.
 - [x] Publish a supported transaction/isolation matrix rather than claiming
   PostgreSQL equivalence. The bounded product-record contract is recorded in
   `docs/qualification/track2-transaction-isolation-matrix-2026-10-28.md`.
