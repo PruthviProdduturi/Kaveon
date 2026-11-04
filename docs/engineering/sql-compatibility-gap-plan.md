@@ -39,7 +39,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 182-case corpus has planner coverage and focused exact
+  The current 183-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -102,7 +102,9 @@ distributed plan; evidence is in
 `TOP WITH TIES` also pass that sweep when their order keys are deterministic;
 without a complete tie-breaker, SQL permits different tied rows and the
 qualification is intentionally withheld. Numeric `CONVERT` and
-`TRY_CONVERT` casts are also qualified across those layouts, including unstyled
+`TRY_CONVERT` casts are also qualified across those layouts, including bounded
+`DECIMAL(p,s)` safe casts that return typed NULL on malformed or overflowing
+input, and unstyled
 fixed-offset `DATETIMEOFFSET` inputs; strict `CONVERT(DATETIMEOFFSET, ...)`
 uses the same parser and fails closed on malformed non-NULL values. SQL Server `COUNT_BIG`
 now canonicalizes to the Engine's mergeable 64-bit `COUNT` state; it shares

@@ -47,7 +47,7 @@ That case compares strict `DATE` and `DATETIME2` parses of a source-backed
 date column across the same three-worker path.
 
 The authoritative corpus case is `parse_invariant_numeric`, and the
-compatibility tracker is synchronized at 182 cases.
+compatibility tracker is synchronized at 183 cases.
 
 ## Explicit boundary
 
