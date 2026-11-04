@@ -647,6 +647,38 @@ impl TransactionRegistry {
                             }
                         }
                     }
+                    kaveon_sql::parser::ProductDmlCommand::MergeUpdateOrCreateFiltered {
+                        kind,
+                        id: row_id,
+                        document_json,
+                        matched_ids,
+                    } => {
+                        let product_kind = record_kind(&kind)?;
+                        let current = session
+                            .transaction
+                            .snapshot()
+                            .product_record(product_kind, &row_id)
+                            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+                        if let Some(current) = current {
+                            require_product_owner(current, owner)?;
+                            if !matched_ids.iter().any(|id| id == &row_id) {
+                                session.transaction.mark_noop();
+                                continue;
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::Update {
+                                kind,
+                                id: row_id,
+                                expected_revision: current.revision,
+                                document_json,
+                            }
+                        } else {
+                            kaveon_sql::parser::ProductDmlCommand::Create {
+                                kind,
+                                id: row_id,
+                                document_json,
+                            }
+                        }
+                    }
                     kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert {
                         kind,
                         id: row_id,
@@ -1488,6 +1520,9 @@ fn product_change(
         )),
         ProductDmlCommand::MergeUpdate { .. } => Err(RegistryError::Invalid(
             "MERGE matched-update must be resolved before staging".into(),
+        )),
+        ProductDmlCommand::MergeUpdateOrCreateFiltered { .. } => Err(RegistryError::Invalid(
+            "MERGE filtered update-or-insert must be resolved before staging".into(),
         )),
         ProductDmlCommand::MergeCreateIfAbsent { .. } => Err(RegistryError::Invalid(
             "MERGE unmatched-insert must be resolved before staging".into(),
@@ -3045,6 +3080,7 @@ async fn execute_sql_request(
                             command,
                             kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeUpdateOrCreateFiltered { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
@@ -3353,6 +3389,12 @@ fn product_returning_response(
                 kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. } => {
                     return Err("MERGE matched-update must be resolved before RETURNING".to_owned());
                 }
+                kaveon_sql::parser::ProductDmlCommand::MergeUpdateOrCreateFiltered { .. } => {
+                    return Err(
+                        "MERGE filtered update-or-insert must be resolved before RETURNING"
+                            .to_owned(),
+                    );
+                }
                 kaveon_sql::parser::ProductDmlCommand::MergeCreateIfAbsent { .. } => {
                     return Err(
                         "MERGE unmatched-insert must be resolved before RETURNING".to_owned()
@@ -3390,6 +3432,9 @@ fn product_returning_response(
                             kaveon_sql::parser::ProductDmlCommand::Update { .. }
                             | kaveon_sql::parser::ProductDmlCommand::UpdateFrom { .. }
                             | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
+                            | kaveon_sql::parser::ProductDmlCommand::MergeUpdateOrCreateFiltered {
+                                ..
+                            }
                             | kaveon_sql::parser::ProductDmlCommand::MergeUpdateNotMatched {
                                 ..
                             } => "UPDATE",
@@ -3460,6 +3505,14 @@ fn product_returning_response(
                                 );
                             }
                             kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. } => {
+                                return Err(
+                                    "document_json RETURNING is unavailable for this command"
+                                        .to_owned(),
+                                );
+                            }
+                            kaveon_sql::parser::ProductDmlCommand::MergeUpdateOrCreateFiltered {
+                                ..
+                            } => {
                                 return Err(
                                     "document_json RETURNING is unavailable for this command"
                                         .to_owned(),
@@ -6431,6 +6484,116 @@ mod tests {
                 .product_record(ProductRecordKind::Dataset, "missing-target")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_bounded_merge_filtered_match_updates_and_inserts() {
+        let (registry, catalog) = registry().await;
+        let seed = registry.begin("alice").await.unwrap();
+        for (id, document) in [
+            ("update-me", "{\"old\":true}"),
+            ("keep-existing", "{\"keep\":true}"),
+        ] {
+            assert_eq!(
+                execute_sql_request(
+                    &registry,
+                    "alice",
+                    SqlTransactionRequest {
+                        sql: format!(
+                            "INSERT INTO product.datasets (id, document_json) VALUES ('{id}', '{document}')"
+                        ),
+                        transaction_id: Some(seed.transaction_id.clone()),
+                        parameters: vec![],
+                        named_parameters: HashMap::new(),
+                    },
+                )
+                .await
+                .status(),
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(seed.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let merge = registry.begin("alice").await.unwrap();
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('update-me', '{"changed":true}'), ('keep-existing', '{"must_not_change":true}'), ('new-row', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('update-me') THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)"#.into(),
+                    transaction_id: Some(merge.transaction_id.clone()),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            execute_sql_request(
+                &registry,
+                "alice",
+                SqlTransactionRequest {
+                    sql: "COMMIT".into(),
+                    transaction_id: Some(merge.transaction_id),
+                    parameters: vec![],
+                    named_parameters: HashMap::new(),
+                },
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let snapshot = catalog.read_current().await.unwrap();
+        let updated = snapshot
+            .product_record(ProductRecordKind::Dataset, "update-me")
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.revision, 2);
+        let unchanged = snapshot
+            .product_record(ProductRecordKind::Dataset, "keep-existing")
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.revision, 1);
+        let created = snapshot
+            .product_record(ProductRecordKind::Dataset, "new-row")
+            .unwrap()
+            .unwrap();
+        assert_eq!(created.revision, 1);
+        let updated_document = catalog
+            .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, "update-me")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&updated_document).unwrap(),
+            serde_json::json!({"changed": true})
+        );
+        let unchanged_document = catalog
+            .fetch_product_document_at(&snapshot, ProductRecordKind::Dataset, "keep-existing")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&unchanged_document).unwrap(),
+            serde_json::json!({"keep": true})
         );
     }
 

@@ -3,8 +3,8 @@
 ## Boundary
 
 This record covers the source-level release gate for the current `dev`
-branch after the strict invariant T-SQL `PARSE` qualification in
-`289d664e` (and the deterministic ordering correction in `39fe66a3`). It is a
+branch after the bounded filtered `MERGE` update-or-insert qualification in
+the current commit. It is a
 correctness and build gate, not a claim of cloud deployment qualification or
 complete Trino/Fabric/PostgreSQL parity.
 
@@ -22,9 +22,9 @@ Observed results:
 - CLI/server and related workspace targets: all reported tests passed;
 - execution: 644 passed, 4 ignored;
 - optimizer: 86 passed;
-- SQL: 384 passed;
+- SQL: 385 passed;
 - storage: 158 passed, 3 ignored;
-- server differential suite: 714 passed, 0 failed, 0 ignored;
+- server differential suite: 715 passed, 0 failed, 0 ignored;
 - the 173-case T-SQL distributed differential sweep completed successfully;
 - workspace benchmark targets completed successfully.
 
@@ -32,9 +32,10 @@ The corrected qualification query uses a complete ordering key
 (`user_id, event_date, actions, country`) so ties cannot be mistaken for a
 distributed semantic mismatch. The full run completed with exit code 0.
 
-The strict invariant `PARSE` numeric and temporal differentials were included
-in the server suite and passed against the local reference and three-worker
-execution.
+The strict invariant `PARSE` numeric and temporal differentials and the
+filtered `MERGE` parser/transaction tests were included in the SQL/server
+suites and passed against the local reference and three-worker execution where
+applicable.
 
 The release-pressure benchmark was also run independently:
 
@@ -55,9 +56,9 @@ The lint gate passed with `-D warnings`. Repository validators also passed:
 
 ```text
 python scripts/validate-tsql-compatibility-tracker.py
-PASS: 181 unique T-SQL compatibility cases, engine pin 7b509256, tracker count synchronized
+PASS: 182 unique T-SQL compatibility cases, engine pin 5c2b670b, tracker count synchronized
 node scripts/validate-docs.mjs
-Documentation validation passed: 727 Markdown files, 39 routes, 9 SVGs.
+Documentation validation passed: 729 Markdown files, 39 routes, 9 SVGs.
 ```
 
 ## Boundary that remains open

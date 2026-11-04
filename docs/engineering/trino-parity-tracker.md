@@ -249,6 +249,10 @@ resolved `INSERT`/`UPDATE`/`DELETE` label for each staged action. Deleted docume
 pinned pre-delete snapshot, including staged replacements, while mixed
 pseudo-table projections remain rejected. Evidence is in
 `docs/qualification/track2-tsql-merge-output-2026-11-03.md`.
+The bounded update-or-insert MERGE form also accepts a literal matched
+`source.id`/qualified `target.id` equality or `IN` filter: existing rows
+outside the filter are no-ops while absent source rows still insert. Evidence:
+`docs/qualification/track2-tsql-merge-filtered-update-insert-2026-11-04.md`.
 
 The current T-SQL corpus is 182 cases (the implementation pin is updated after
 the qualification commit): the latest additions are `CONCAT_WS` with

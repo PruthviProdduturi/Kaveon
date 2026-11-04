@@ -399,6 +399,12 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
   identity predicate `target.id = source.id` (or the reversed operand order),
   including bounded update-or-insert and not-matched-by-source forms; the
   `ON` equality makes it a deterministic no-op. Evidence: `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
+  A two-clause update-or-insert MERGE may also use the bounded matched
+  source/target ID filter: existing rows outside the filter are no-ops while
+  absent source rows still insert. The transaction layer resolves this form
+  against the pinned snapshot before staging ordinary revision/CAS commands.
+  Filtered matched DELETE paired with an insert clause remains rejected.
+  Evidence: `docs/qualification/track2-tsql-merge-filtered-update-insert-2026-11-04.md`.
 - [ ] Expand `MERGE` and broader conflict handling beyond the qualified bounded
   product surface only with explicit revision/CAS semantics. The current
   contract covers update-or-insert, delete-or-insert, matched-update-only,
