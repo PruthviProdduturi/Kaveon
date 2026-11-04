@@ -1,8 +1,9 @@
 """Typed client for KaveonDB's durable product-record transaction API.
 
-PostgreSQL remains authoritative.  This module is the narrow application-side
-boundary used by backfill, shadow reads, and a later repository cutover; it
-does not enable dual writes by itself.
+KaveonDB is authoritative in native and retirement mode. This module is the
+application-side boundary used by current product writes and reads, while the
+legacy backfill, shadow-read, and reconciliation callers remain available only
+for controlled migration or external-source compatibility work.
 """
 
 import json
