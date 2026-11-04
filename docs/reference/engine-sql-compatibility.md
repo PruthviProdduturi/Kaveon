@@ -303,7 +303,8 @@ boundary. See
 [`track2-tsql-convert-varchar-2026-11-03.md`](../qualification/track2-tsql-convert-varchar-2026-11-03.md).
 Unstyled `TRY_CONVERT(DATETIMEOFFSET, expression)` is qualified for invariant
 fixed-offset text inputs, with malformed and NULL values returning NULL through
-the safe-cast path. Styled literal `CONVERT`/`TRY_CONVERT` to the T-SQL timestamp family is also
+the safe-cast path. Strict `CONVERT(DATETIMEOFFSET, expression)` uses the same
+parser and fails the statement for malformed non-NULL input. Styled literal `CONVERT`/`TRY_CONVERT` to the T-SQL timestamp family is also
 planner-qualified: ISO date-time styles preserve the supplied time, while
 date-only styles produce midnight. Runtime text-column timestamp styles now
 have local vectorized evaluator coverage for ISO styles `20`, `21`, `120`,

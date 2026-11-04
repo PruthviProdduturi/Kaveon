@@ -4617,6 +4617,16 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                     name: format!("TRY_CAST_{}", cast_target_name(target)),
                     args: vec![inner],
                 })
+            } else if matches!(
+                target,
+                CastTarget::TimestampMicros {
+                    with_timezone: true
+                }
+            ) {
+                Ok(Expr::Function {
+                    name: "CONVERT_TIMESTAMP_TZ".into(),
+                    args: vec![inner],
+                })
             } else {
                 Ok(Expr::Cast {
                     expr: Box::new(inner),
@@ -10563,13 +10573,14 @@ mod tests {
     #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
         let plan = sql_to_logical_plan(
-            "SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value), TRY_CONVERT(DATETIMEOFFSET, value) FROM t",
+            "SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value), TRY_CONVERT(DATETIMEOFFSET, value), CONVERT(DATETIMEOFFSET, value) FROM t",
         )
         .expect("unstyled CONVERT should lower through CAST");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("Cast"), "{rendered}");
         assert!(rendered.contains("TRY_CAST_DATE32"), "{rendered}");
         assert!(rendered.contains("TRY_CAST_TIMESTAMP_TZ"), "{rendered}");
+        assert!(rendered.contains("CONVERT_TIMESTAMP_TZ"), "{rendered}");
     }
 
     #[test]

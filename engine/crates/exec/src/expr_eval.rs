@@ -8544,6 +8544,44 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             None,
         )?);
     }
+    if upper == "CONVERT_TIMESTAMP_TZ" {
+        check_arity(name, args, 1)?;
+        let cast_input = if args[0].data_type() == &DataType::Utf8View {
+            let values = args[0]
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .ok_or_else(|| KaveonError::Execution("expected string view array".into()))?;
+            Arc::new(StringArray::from_iter(
+                (0..values.len()).map(|row| (!values.is_null(row)).then(|| values.value(row))),
+            )) as ArrayRef
+        } else {
+            args[0].clone()
+        };
+        let naive = compute::cast_with_options(
+            &cast_input,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            &compute::CastOptions {
+                safe: true,
+                ..Default::default()
+            },
+        )?;
+        for row in 0..args[0].len() {
+            if !args[0].is_null(row) && naive.is_null(row) {
+                return Err(KaveonError::Execution(format!(
+                    "{name} could not parse row {row} as DATETIMEOFFSET"
+                )));
+            }
+        }
+        let values = naive
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .ok_or_else(|| {
+                KaveonError::Execution("timestamp conversion produced an invalid array".into())
+            })?
+            .clone()
+            .with_timezone("+00:00");
+        return Ok(Arc::new(values));
+    }
     if let Some(target) = upper.strip_prefix("TRY_CAST_") {
         check_arity(name, args, 1)?;
         let target = match target {
@@ -27508,6 +27546,38 @@ mod tests {
         assert_eq!(result.value(0), 1_735_560_000_123_000);
         assert!(result.is_null(1));
         assert!(result.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_strict_datetimeoffset_conversion_and_rejects_invalid_text() {
+        let expression = Expr::Function {
+            name: "CONVERT_TIMESTAMP_TZ".into(),
+            args: vec![Expr::Column("value".into())],
+        };
+        let valid = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("2024-12-30T12:34:56+05:30"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(&expression, &valid).unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00")))
+        );
+        let values = result.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(values.value(0), 1_735_542_296_000_000);
+        assert!(values.is_null(1));
+
+        let invalid = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![Some("bad")])) as ArrayRef,
+        )])
+        .unwrap();
+        let error = evaluate(&expression, &invalid).expect_err("strict conversion must fail");
+        assert!(error.to_string().contains("could not parse row 0"));
     }
 
     #[test]
