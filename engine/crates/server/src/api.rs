@@ -3988,6 +3988,7 @@ fn trino_expr_type(expression: &Expr) -> String {
             kaveon_core::CastTarget::Float64 => "double",
             kaveon_core::CastTarget::Utf8 => "varchar",
             kaveon_core::CastTarget::Date32 => "date",
+            kaveon_core::CastTarget::TimeMicros => "time",
             kaveon_core::CastTarget::TimestampMicros {
                 with_timezone: true,
             } => "timestamp with time zone",
@@ -4138,6 +4139,7 @@ fn trino_cast_target_type(target: &kaveon_core::CastTarget) -> String {
         kaveon_core::CastTarget::Float64 => "double".into(),
         kaveon_core::CastTarget::Utf8 => "varchar".into(),
         kaveon_core::CastTarget::Date32 => "date".into(),
+        kaveon_core::CastTarget::TimeMicros => "time".into(),
         kaveon_core::CastTarget::TimestampMicros { with_timezone } => if *with_timezone {
             "timestamp with time zone"
         } else {

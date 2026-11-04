@@ -207,6 +207,9 @@ pub enum CastTarget {
     Float64,
     Utf8,
     Date32,
+    /// SQL TIME values are represented at microsecond precision, matching
+    /// the Engine's temporal constructor and literal execution paths.
+    TimeMicros,
     TimestampMicros {
         with_timezone: bool,
     },
@@ -280,6 +283,9 @@ impl CastTarget {
             Self::Float64 => arrow::datatypes::DataType::Float64,
             Self::Utf8 => arrow::datatypes::DataType::Utf8,
             Self::Date32 => arrow::datatypes::DataType::Date32,
+            Self::TimeMicros => {
+                arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
+            }
             Self::TimestampMicros { with_timezone } => arrow::datatypes::DataType::Timestamp(
                 arrow::datatypes::TimeUnit::Microsecond,
                 with_timezone.then(|| "UTC".into()),

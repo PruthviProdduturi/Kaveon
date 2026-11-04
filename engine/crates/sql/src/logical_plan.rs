@@ -4775,6 +4775,7 @@ fn cast_target_name(target: CastTarget) -> String {
         CastTarget::Float64 => "FLOAT64".into(),
         CastTarget::Utf8 => "UTF8".into(),
         CastTarget::Date32 => "DATE32".into(),
+        CastTarget::TimeMicros => "TIME".into(),
         CastTarget::TimestampMicros {
             with_timezone: false,
         } => "TIMESTAMP".into(),
@@ -5000,6 +5001,7 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::JSON
         | ast::DataType::JSONB => Ok(CastTarget::Utf8),
         ast::DataType::Date => Ok(CastTarget::Date32),
+        ast::DataType::Time(_, _) => Ok(CastTarget::TimeMicros),
         ast::DataType::Timestamp(_, timezone) => Ok(CastTarget::TimestampMicros {
             with_timezone: matches!(
                 timezone,
@@ -5117,6 +5119,7 @@ fn custom_cast_target(name: &str) -> Result<CastTarget> {
         "FLOAT" | "DOUBLE" | "DOUBLE PRECISION" => Ok(CastTarget::Float64),
         "VARCHAR" | "TEXT" | "STRING" => Ok(CastTarget::Utf8),
         "DATE" => Ok(CastTarget::Date32),
+        "TIME" => Ok(CastTarget::TimeMicros),
         "TIMESTAMP" => Ok(CastTarget::TimestampMicros {
             with_timezone: false,
         }),
@@ -10409,6 +10412,18 @@ mod tests {
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("TIME_FROM_PARTS"), "{rendered}");
         assert!(sql_to_logical_plan("SELECT TIMEFROMPARTS(12, 34, 56) FROM t").is_err());
+    }
+
+    #[test]
+    fn lowers_time_casts_to_microsecond_time_targets() {
+        let cast = sql_to_logical_plan("SELECT CAST(value AS TIME) FROM t")
+            .expect("TIME casts should lower");
+        let rendered = format!("{cast:?}");
+        assert!(rendered.contains("TimeMicros"), "{rendered}");
+
+        let try_cast = sql_to_logical_plan("SELECT TRY_CAST(value AS TIME) FROM t")
+            .expect("TRY_CAST TIME should lower");
+        assert!(format!("{try_cast:?}").contains("TRY_CAST_TIME"));
     }
 
     #[test]
