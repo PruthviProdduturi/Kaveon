@@ -12,9 +12,10 @@ SQL Server style, locale, or arbitrary target-type parity.
 
 ## Evidence
 
-The versioned read corpus adds `try_convert_decimal` with planner status
+The versioned read corpus adds `try_convert_decimal` and `convert_decimal` with planner status
 `planner_qualified` and distributed status
-`qualified_for_bounded_decimal_casts_and_null_on_error`.
+`qualified_for_bounded_decimal_casts_and_null_on_error` or
+`qualified_for_bounded_decimal_casts_and_strict_errors`, respectively.
 
 Focused local-versus-three-worker differential:
 
@@ -30,7 +31,12 @@ The case mixes valid numeric input with non-numeric text, orders by a complete
 source key, and compares canonical local and distributed rows. It passed across
 the differential Parquet layouts and the three-worker execution path.
 
-The authoritative T-SQL corpus now contains 184 cases. Cloud deployment,
+The strict companion uses only valid row-local numeric text and has the same
+exact local/distributed result gate. A separate planner regression confirms
+that malformed strict decimal input remains an execution error rather than
+silently becoming NULL.
+
+The authoritative T-SQL corpus now contains 185 cases. Cloud deployment,
 locale-sensitive conversion, and unbounded arbitrary-precision decimal
 behavior remain outside this evidence.
 
