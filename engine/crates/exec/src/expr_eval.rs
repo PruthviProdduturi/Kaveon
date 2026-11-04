@@ -1949,6 +1949,62 @@ fn normalize_tsql_runtime_timestamp_style(value: &str, style: u32) -> Option<Str
     ))
 }
 
+/// Parse the bounded SQL Server TIME styles used by CONVERT/TRY_CONVERT.
+/// Styles 8/108 are `HH:MM:SS`; style 114 is `HH:MM:SS:mmm`.
+fn normalize_tsql_runtime_time_style(value: &str, style: u32) -> Option<String> {
+    let value = value.trim();
+    let (clock, fraction) = match style {
+        8 | 108 => (value, None),
+        114 => {
+            let (clock, millis) = value.rsplit_once(':')?;
+            (clock, Some(millis))
+        }
+        _ => return None,
+    };
+    let mut parts = clock.split(':');
+    let hour = parts.next()?.parse::<u32>().ok()?;
+    let minute = parts.next()?.parse::<u32>().ok()?;
+    let second = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let fraction = match fraction {
+        None => String::new(),
+        Some(millis) if millis.len() == 3 && millis.bytes().all(|byte| byte.is_ascii_digit()) => {
+            format!(".{millis}")
+        }
+        Some(_) => return None,
+    };
+    Some(format!("{hour:02}:{minute:02}:{second:02}{fraction}"))
+}
+
+fn eval_tsql_runtime_time_style(
+    name: &str,
+    source: &ArrayRef,
+    style: u32,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let try_mode = name.starts_with("TRY_");
+    let mut result = StringBuilder::with_capacity(num_rows, num_rows * 12);
+    for row in 0..num_rows {
+        let Some(value) = text_value(source, row)? else {
+            result.append_null();
+            continue;
+        };
+        match normalize_tsql_runtime_time_style(value, style) {
+            Some(value) => result.append_value(value),
+            None if try_mode => result.append_null(),
+            None => {
+                return Err(KaveonError::Execution(format!(
+                    "{name} could not parse row {row} with style {style}"
+                )));
+            }
+        }
+    }
+    let values: ArrayRef = Arc::new(result.finish());
+    cast_to_time_microseconds(&values, !try_mode)
+}
+
 fn eval_tsql_runtime_timestamp_style(
     name: &str,
     source: &ArrayRef,
@@ -8752,6 +8808,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         })?;
         check_arity(name, args, 1)?;
         return eval_tsql_runtime_date_style(name, &args[0], style, num_rows);
+    }
+    if let Some(style) = upper.strip_prefix("TRY_CONVERT_TIME_STYLE_") {
+        let style = style.parse::<u32>().map_err(|_| {
+            KaveonError::Execution(format!("unsupported TRY_CONVERT TIME style: {style}"))
+        })?;
+        check_arity(name, args, 1)?;
+        return eval_tsql_runtime_time_style(name, &args[0], style, num_rows);
+    }
+    if let Some(style) = upper.strip_prefix("CONVERT_TIME_STYLE_") {
+        let style = style.parse::<u32>().map_err(|_| {
+            KaveonError::Execution(format!("unsupported CONVERT TIME style: {style}"))
+        })?;
+        check_arity(name, args, 1)?;
+        return eval_tsql_runtime_time_style(name, &args[0], style, num_rows);
     }
     if let Some(style) = upper.strip_prefix("TRY_CONVERT_TIMESTAMP_STYLE_") {
         let style = style.parse::<u32>().map_err(|_| {
@@ -19168,6 +19238,70 @@ mod tests {
                 &Expr::Cast {
                     expr: Box::new(Expr::Column("value".into())),
                     data_type: CastTarget::TimeMicros,
+                },
+                &input,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn time_convert_styles_parse_and_try_cast_invalid_values() {
+        let input = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(StringArray::from(vec![
+                Some("12:34:56"),
+                Some("12:34:56:789"),
+                Some("bad"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+
+        for (name, style, expected) in [
+            ("CONVERT_TIME_STYLE_8", 8, 45_296_000_000_i64),
+            ("CONVERT_TIME_STYLE_108", 108, 45_296_000_000_i64),
+            ("CONVERT_TIME_STYLE_114", 114, 45_296_789_000_i64),
+        ] {
+            let strict_input = RecordBatch::try_from_iter([(
+                "value",
+                Arc::new(StringArray::from(vec![Some(if style == 114 {
+                    "12:34:56:789"
+                } else {
+                    "12:34:56"
+                })])) as ArrayRef,
+            )])
+            .unwrap();
+            let result = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![Expr::Column("value".into())],
+                },
+                &strict_input,
+            )
+            .unwrap();
+            let values = result.as_primitive::<arrow::datatypes::Time64MicrosecondType>();
+            assert_eq!(values.value(0), expected);
+        }
+
+        let tried = evaluate(
+            &Expr::Function {
+                name: "TRY_CONVERT_TIME_STYLE_114".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let tried = tried.as_primitive::<arrow::datatypes::Time64MicrosecondType>();
+        assert_eq!(tried.value(1), 45_296_789_000);
+        assert!(tried.is_null(2));
+        assert!(tried.is_null(3));
+
+        assert!(
+            evaluate(
+                &Expr::Function {
+                    name: "CONVERT_TIME_STYLE_114".into(),
+                    args: vec![Expr::Column("value".into())],
                 },
                 &input,
             )
