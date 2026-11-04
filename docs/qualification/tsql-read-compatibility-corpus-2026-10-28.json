@@ -35,6 +35,7 @@
     {"id": "difference", "sql": "SELECT DIFFERENCE(name, region) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_ascii_inputs"},
     {"id": "substring_scalar_compatibility", "sql": "SELECT SUBSTRING(name, 1, 2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_unicode_scalar_inputs"},
     {"id": "try_parse_numeric", "sql": "SELECT TRY_PARSE(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_numeric_parsing"},
+    {"id": "parse_invariant_numeric", "sql": "SELECT PARSE(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_strict_invariant_numeric_parsing"},
     {"id": "try_parse_invariant_date", "sql": "SELECT TRY_PARSE(value AS DATE) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_temporal_inputs"},
     {"id": "try_parse_invariant_datetime2", "sql": "SELECT TRY_PARSE(value AS DATETIME2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_temporal_inputs"},
     {"id": "try_parse_invariant_datetimeoffset", "sql": "SELECT TRY_PARSE(value AS DATETIMEOFFSET) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_offset_temporal_inputs"},

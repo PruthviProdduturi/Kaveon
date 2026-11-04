@@ -10930,6 +10930,20 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_parse_to_strict_invariant_casts() {
+        let numeric = sql_to_logical_plan("SELECT PARSE(value AS BIGINT) FROM t")
+            .expect("PARSE numeric should lower");
+        assert!(format!("{numeric:?}").contains("Cast"));
+        let date = sql_to_logical_plan("SELECT PARSE(value AS DATE) FROM t")
+            .expect("PARSE date should lower");
+        assert!(format!("{date:?}").contains("Date32"));
+        let timestamp = sql_to_logical_plan("SELECT PARSE(value AS DATETIME2) FROM t")
+            .expect("PARSE DATETIME2 should lower");
+        assert!(format!("{timestamp:?}").contains("TimestampMicros"));
+        assert!(sql_to_logical_plan("SELECT PARSE(value AS BIGINT USING 'en-US') FROM t").is_err());
+    }
+
+    #[test]
     fn lowers_tsql_square_to_power() {
         let plan = sql_to_logical_plan("SELECT SQUARE(actions) FROM t")
             .expect("SQUARE should lower through POWER");
