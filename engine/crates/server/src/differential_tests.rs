@@ -556,7 +556,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_sized_text_cast",
-        "SELECT TOP 5 CAST(country AS VARCHAR(4)) AS short_name, CAST(country AS CHAR(8)) AS fixed_name, TRY_CONVERT(NVARCHAR(3), industry) AS short_industry FROM {T} ORDER BY event_date",
+        "SELECT TOP 5 CAST(country AS VARCHAR(4)) AS short_name, CAST(country AS CHAR(8)) AS fixed_name, TRY_CONVERT(NVARCHAR(3), industry) AS short_industry FROM {T} ORDER BY event_date, country, industry",
         true,
     ),
     (
