@@ -10763,6 +10763,24 @@ mod tests {
     }
 
     #[test]
+    fn lowers_partitioned_row_number_and_rows_aggregate_windows() {
+        for (sql, marker) in [
+            (
+                "SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY value) FROM t",
+                "ROW_NUMBER",
+            ),
+            (
+                "SELECT SUM(value) OVER (PARTITION BY region ORDER BY value ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM t",
+                "SUM",
+            ),
+        ] {
+            let plan = sql_to_logical_plan(sql)
+                .expect("partitioned window should lower through the window path");
+            assert!(format!("{plan:?}").contains(marker));
+        }
+    }
+
+    #[test]
     fn rejects_ambiguous_tsql_percentile_cont_shapes() {
         for sql in [
             "SELECT PERCENTILE_CONT(fraction) WITHIN GROUP (ORDER BY value) OVER () FROM t",
