@@ -46,8 +46,13 @@ test result: ok. 1 passed; 0 failed
 That case compares strict `DATE` and `DATETIME2` parses of a source-backed
 date column across the same three-worker path.
 
-The authoritative corpus case is `parse_invariant_numeric`, and the
-compatibility tracker is synchronized at 183 cases.
+The authoritative corpus cases are `parse_invariant_numeric` and
+`try_parse_decimal`; the compatibility tracker is synchronized at 184 cases.
+
+The decimal safe-parse boundary also has a focused local-versus-three-worker
+differential. Valid numeric text preserves `DECIMAL(10,2)` precision and scale;
+malformed text, NULL, and overflow return typed NULL through the `TRY_PARSE`
+path, matching the safe-cast contract.
 
 ## Explicit boundary
 

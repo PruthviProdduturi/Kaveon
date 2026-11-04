@@ -715,6 +715,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_try_parse_decimal",
+        "SELECT TOP 8 user_id, TRY_PARSE(CASE WHEN actions % 2 = 0 THEN CAST(actions AS VARCHAR) ELSE country END AS DECIMAL(10,2)) AS actions_decimal FROM {T} ORDER BY event_date, user_id, actions",
+        true,
+    ),
+    (
         "tsql_convert_varchar",
         "SELECT TOP 5 user_id, CONVERT(VARCHAR, actions) AS actions_text FROM {T} ORDER BY event_date, user_id, actions",
         true,
