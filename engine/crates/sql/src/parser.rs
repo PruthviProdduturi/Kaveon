@@ -2301,6 +2301,16 @@ pub enum ProductDmlCommand {
         id: String,
         document_json: String,
     },
+    /// Bounded MERGE update-or-insert semantics with a literal source-id
+    /// predicate on the matched clause.  The transaction layer updates only
+    /// existing target rows whose ids satisfy `matched_ids`; absent source
+    /// rows still follow the ordinary NOT MATCHED insert action.
+    MergeUpdateOrCreateFiltered {
+        kind: String,
+        id: String,
+        document_json: String,
+        matched_ids: Vec<String>,
+    },
     /// Bounded MERGE semantics: create a source product row when unmatched;
     /// an already-present key is a transactional no-op.
     MergeCreateIfAbsent {
@@ -2799,18 +2809,25 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     if !merge_id_predicate(on, &target_alias, &source_alias) {
         return Err(sql_error("MERGE ON must equate target.id with source.id"));
     }
-    let matched_source_filter =
-        if clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::Matched) {
-            if clauses[0].predicate.as_ref().is_some_and(|predicate| {
-                merge_id_predicate(predicate, &target_alias, &source_alias)
-            }) {
-                None
-            } else {
-                merge_source_filter(clauses[0].predicate.as_ref(), &target_alias, &source_alias)?
-            }
-        } else {
+    let matched_filter_allowed = clauses.len() == 1
+        || (clauses.len() == 2 && matches!(clauses[1].clause_kind, MergeClauseKind::NotMatched));
+    let matched_source_filter = if matched_filter_allowed
+        && matches!(
+            clauses.first().map(|clause| &clause.clause_kind),
+            Some(MergeClauseKind::Matched)
+        ) {
+        if clauses[0]
+            .predicate
+            .as_ref()
+            .is_some_and(|predicate| merge_id_predicate(predicate, &target_alias, &source_alias))
+        {
             None
-        };
+        } else {
+            merge_source_filter(clauses[0].predicate.as_ref(), &target_alias, &source_alias)?
+        }
+    } else {
+        None
+    };
     let not_matched_source_filter =
         if clauses.len() == 1 && matches!(clauses[0].clause_kind, MergeClauseKind::NotMatched) {
             clauses[0]
@@ -2829,6 +2846,12 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
     if clauses.iter().enumerate().any(|(index, clause)| {
         clause.predicate.as_ref().is_some_and(|predicate| {
             if single_matched_clause && index == 0 {
+                return false;
+            }
+            if index == 0
+                && matches!(clause.clause_kind, MergeClauseKind::Matched)
+                && matched_source_filter.is_some()
+            {
                 return false;
             }
             !((index == 0
@@ -3065,6 +3088,10 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                 "MERGE WHEN MATCHED must set document_json from source or a string literal",
             ));
         }
+    } else if matched_source_filter.is_some() {
+        return Err(sql_error(
+            "MERGE filtered matched DELETE with NOT MATCHED INSERT is not supported",
+        ));
     }
     let MergeAction::Insert(insert) = &clauses[1].action else {
         return Err(sql_error(
@@ -3096,6 +3123,7 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
         };
         Some(merge_document_assignment(&assignments[0].value, &source_alias).unwrap())
     };
+    let matched_ids = matched_source_filter.map(|ids| ids.into_iter().collect::<Vec<_>>());
     source_values
         .iter()
         .map(|row| {
@@ -3108,6 +3136,18 @@ fn adapt_product_merge(statement: &Statement) -> Result<Vec<ProductDmlCommand>> 
                         &source_alias,
                         &row[1],
                     )?,
+                }
+            } else if let Some(matched_ids) = &matched_ids {
+                ProductDmlCommand::MergeUpdateOrCreateFiltered {
+                    kind: kind.clone(),
+                    id: string_literal(&row[0], "MERGE source id")?,
+                    document_json: match matched_document_assignment.as_ref().unwrap() {
+                        MergeDocumentAssignment::Source => {
+                            string_literal(&row[1], "MERGE source document_json")?
+                        }
+                        MergeDocumentAssignment::Literal(value) => value.clone(),
+                    },
+                    matched_ids: matched_ids.clone(),
                 }
             } else {
                 let document_json = match matched_document_assignment.as_ref().unwrap() {
@@ -6414,10 +6454,39 @@ mod tests {
     }
 
     #[test]
+    fn product_merge_supports_filtered_matched_update_with_insert_fallback() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "MERGE INTO product.datasets AS target USING (VALUES ('update-me', '{\"changed\":true}'), ('new-row', '{\"created\":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('update-me') THEN UPDATE SET document_json = source.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)",
+        )
+        .expect("filtered matched MERGE should parse")
+        else {
+            panic!("expected product MERGE");
+        };
+        assert_eq!(
+            adapt_product_dml_batch(&dml).unwrap(),
+            vec![
+                ProductDmlCommand::MergeUpdateOrCreateFiltered {
+                    kind: "dataset".into(),
+                    id: "update-me".into(),
+                    document_json: "{\"changed\":true}".into(),
+                    matched_ids: vec!["update-me".into()],
+                },
+                ProductDmlCommand::MergeUpdateOrCreateFiltered {
+                    kind: "dataset".into(),
+                    id: "new-row".into(),
+                    document_json: "{\"created\":true}".into(),
+                    matched_ids: vec!["update-me".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn product_merge_rejects_unbounded_or_ambiguous_shapes() {
         for sql in [
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.owner_principal = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND t.id = s.id AND s.id = 'ds-1' THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",
+            "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND s.id IN ('ds-1') THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) WHEN NOT MATCHED BY SOURCE THEN DELETE",
         ] {
             let NativeTransactionalStatement::Dml(dml) =
                 parse_native_transactional(sql).expect("MERGE shape should parse")
