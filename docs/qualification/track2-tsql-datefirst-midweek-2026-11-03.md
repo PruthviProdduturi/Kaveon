@@ -24,6 +24,8 @@ qualification, not a claim of session mutation or general T-SQL parity.
 - Result: one focused test passed with zero failures.
 - The evaluator regression also covers all seven literal DATEFIRST values and
   verifies SQL Server's Monday-through-Sunday numbering (`1` through `7`).
+- The week-boundary regression verifies the SQL Server week containing January
+  1 under both Monday-first and Sunday-first settings.
 
 ## Limits
 
