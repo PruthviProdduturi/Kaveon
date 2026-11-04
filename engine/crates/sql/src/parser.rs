@@ -30,8 +30,9 @@ pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     let json_unique_normalized = normalize_json_object_unique_keys(&json_clauses_normalized)?;
     let json_returning_normalized = normalize_json_returning(&json_unique_normalized);
     let try_parse_normalized = normalize_try_parse(&json_returning_normalized);
+    let parse_normalized = normalize_parse(&try_parse_normalized);
     let (session_normalized, datefirst) =
-        normalize_default_tsql_session_prefixes(&try_parse_normalized)?;
+        normalize_default_tsql_session_prefixes(&parse_normalized)?;
     let session_normalized = rewrite_tsql_datepart_datefirst(&session_normalized, datefirst)?;
     let normalized = normalize_lateral_unnest(&session_normalized);
     // Lower the one recursive shape that has a finite, deterministic
@@ -298,6 +299,70 @@ fn normalize_try_parse(sql: &str) -> String {
         &sql[close + 1..]
     );
     normalize_try_parse(&replacement)
+}
+
+/// Lower the bounded SQL Server `PARSE(value AS type)` spelling to the
+/// Engine's strict cast path.  Only invariant numeric and temporal targets
+/// are accepted; culture-aware `USING` forms remain untouched so they fail
+/// closed rather than silently applying a locale that differs between workers.
+fn normalize_parse(sql: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let Some(position) = find_top_level_keyword(&upper, "PARSE") else {
+        return sql.to_owned();
+    };
+    let mut open = position + "PARSE".len();
+    while open < sql.len() && sql.as_bytes()[open].is_ascii_whitespace() {
+        open += 1;
+    }
+    if sql.as_bytes().get(open) != Some(&b'(') {
+        return sql.to_owned();
+    }
+    let Some(close) = matching_delimiter(sql, open, b'(', b')') else {
+        return sql.to_owned();
+    };
+    let body = sql[open + 1..close].trim();
+    let body_upper = body.to_ascii_uppercase();
+    let Some(as_position) = find_top_level_keyword(&body_upper, "AS") else {
+        return sql.to_owned();
+    };
+    let value = body[..as_position].trim();
+    let target = body[as_position + 2..].trim();
+    let target_upper = target.to_ascii_uppercase();
+    let numeric_target = [
+        "TINYINT",
+        "SMALLINT",
+        "INT",
+        "INTEGER",
+        "BIGINT",
+        "REAL",
+        "FLOAT",
+        "DOUBLE",
+        "DECIMAL",
+        "NUMERIC",
+        "MONEY",
+        "SMALLMONEY",
+    ]
+    .iter()
+    .any(|candidate| {
+        target_upper == *candidate || target_upper.starts_with(&format!("{candidate}("))
+    });
+    let invariant_temporal_target = matches!(
+        target_upper.as_str(),
+        "DATE" | "TIME" | "DATETIME" | "DATETIME2" | "DATETIMEOFFSET" | "SMALLDATETIME"
+    );
+    if value.is_empty()
+        || target.is_empty()
+        || target_upper.contains(" USING ")
+        || (!numeric_target && !invariant_temporal_target)
+    {
+        return sql.to_owned();
+    }
+    let replacement = format!(
+        "{}CAST({value} AS {target}){}",
+        &sql[..position],
+        &sql[close + 1..]
+    );
+    normalize_parse(&replacement)
 }
 
 /// Keep SQL Server/Fabric relational extensions fail-closed with a useful

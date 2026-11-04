@@ -39,7 +39,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 181-case corpus has planner coverage and focused exact
+  The current 182-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -241,6 +241,9 @@ DATETIMEOFFSET targets, with exact local/three-worker evidence in
 `docs/qualification/track2-tsql-try-parse-2026-10-29.md` and
 `docs/qualification/track2-tsql-try-parse-time-2026-11-03.md`; culture-aware
 `USING` forms remain explicitly rejected.
+Strict `PARSE(value AS type)` now uses the same invariant target boundary with
+statement-failing cast semantics; its local and three-worker qualification is
+recorded in `docs/qualification/track2-tsql-parse-invariant-2026-11-04.md`.
 Direct SQL Server `TRY_CAST` DATE, DATETIME2, and fixed-offset DATETIMEOFFSET
 targets now have exact local/three-worker evidence, including
 NULL-on-invalid-text behavior; the
