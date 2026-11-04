@@ -91,7 +91,11 @@ On the previous digest (`6f33810b…`) a worker retained memory across statement
 
 **Trino** reads and writes Hive, Iceberg, Delta and Hudi tables with schema evolution, partition evolution, time travel, `CREATE TABLE AS`, `INSERT`, `MERGE`, `DELETE`, compaction, and does so on S3, GCS, ADLS, HDFS and MinIO. Its Delta connector handles checkpoints and deletion vectors.
 
-**Why 5.** Three readers on one cloud, no writes, no S3, no Delta checkpoints. The read side is precise where it exists (exact statistics are better than Trino's estimates for broadcast decisions), but the surface is a fraction of Trino's.
+**Why 5.** Three read formats and object-store paths exist, but writes remain
+limited, S3 has no live qualification, and Delta protocol-v2 features remain
+unsupported. The read side is precise where it exists (exact statistics are
+better than Trino's estimates for broadcast decisions), but the surface is a
+fraction of Trino's.
 
 ### 1.5 Federation and connectors — **2 / 10**
 
