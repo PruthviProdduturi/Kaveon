@@ -26,13 +26,13 @@ Kaveon combines a columnar analytical engine, deterministic data intelligence, a
 
 | Pillar | Responsibility | Current state |
 |---|---|---|
-| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; Parquet, Delta and Iceberg reads from local and ADLS storage, SQL, CLI, HTTP server, and a distributed coordinator/worker runtime | Alpha, and the hosted deployment's only data and control plane |
+| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; Parquet, Delta and Iceberg reads from local and ADLS storage, SQL, CLI, HTTP server, and a distributed coordinator/worker runtime | Alpha; the native KaveonDB profile is its data and control plane |
 | **Kaveon DLM** | Deterministic dataset context compilation and natural-language-to-SQL routing without an LLM | Integrated in the Python API |
 | **Kaveon Studio** | Next.js analytics experience for questions, SQL, datasets, charts, and dashboards | Live preview |
 
-The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg without an import step. The Engine reads Parquet and Delta from local storage and from ADLS Gen2, with checkpoint-aware Delta snapshots and an Iceberg metadata reader; S3 is registerable as a catalog storage type. The hosted deployment runs entirely this way — a billion-row Delta table on ADLS, read distributed across three workers, with no warehouse underneath it.
+The product direction is direct lakehouse analytics: read Parquet, Delta Lake, and Iceberg without an import step. The Engine reads Parquet and Delta from local storage and from ADLS Gen2, with checkpoint-aware Delta snapshots and an Iceberg metadata reader; S3 is registerable as a catalog storage type. Qualified native deployments run this way — Delta tables on ADLS read through the distributed Engine, with no warehouse underneath them. A hosted migration deployment may still retain explicitly labelled legacy PostgreSQL authorities until its cutover evidence passes; that path must not be described as a native KaveonDB deployment.
 
-The control plane runs on the Engine too. Datasets, charts, dashboards, saved queries, favourites and query history are product records committed through the Engine's transaction API to object storage, not rows in a relational database. PostgreSQL has been retired from the deployment.
+The native control plane runs on the Engine too. Datasets, charts, dashboards, saved queries, favourites and query history are product records committed through the Engine's transaction API to object storage, not rows in a relational database. The local native profile is PostgreSQL-free; hosted migration deployments must report any remaining legacy PostgreSQL call sites until live reconciliation, fencing, restart, and restore evidence closes them.
 
 ## Why Kaveon
 
@@ -60,7 +60,7 @@ Question or SQL
                                              answer, chart, or dashboard
 ```
 
-The shipping web path is Studio → same-origin Next.js proxy → FastAPI/DLM → one selected registered SQL source. The Rust Engine currently has separate CLI and HTTP entry points; integrating it as the platform execution backend is target architecture.
+The shipping web path is Studio → same-origin Next.js proxy → FastAPI/DLM → one selected registered SQL source. The Rust Engine has separate CLI and HTTP entry points; native Engine-backed execution and registered-source passthrough are distinct, explicitly qualified paths rather than a claim of cross-source federation.
 
 ## Engine quick start
 
