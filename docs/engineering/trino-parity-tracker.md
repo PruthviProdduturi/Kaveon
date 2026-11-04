@@ -132,7 +132,9 @@ record at `6b15ac7d` reported 705/705; the current workspace-wide run at
 `289d664e` reports 714/714 and is authoritative. The complete current run is
 recorded in `docs/qualification/track0-workspace-gate-2026-11-03.md`; the
 scoped provenance remains in
-`docs/qualification/track1-server-suite-2026-11-03.md`. The earlier 675/675
+`docs/qualification/track1-server-suite-2026-11-03.md`. The current server
+gate is recorded in `docs/qualification/track1-server-suite-2026-11-04.md`
+with 717/717 tests passing. The earlier 675/675
 run in `track1-server-suite-2026-11-02.md` and the 611/611 release-binary
 record remain historical
 (`docs/qualification/server-suite-release-2026-10-20.md`).
