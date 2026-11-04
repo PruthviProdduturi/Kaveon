@@ -40,6 +40,15 @@ by the selected database and Kaveon's API guardrails.
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 | `APPROX_COUNT_DISTINCT` (`APPROX_DISTINCT`), `APPROX_PERCENTILE` | Alpha | Sketch-answered estimates with the error stated on the query record; from the table's statistics without a scan when they carry sketches at the pinned version, else computed over the rows. See [Approximate aggregates](#approximate-aggregates) |
 
+General lake-table index and constraint DDL is intentionally fail-closed:
+`CREATE INDEX`, `CREATE UNIQUE INDEX`, `DROP INDEX`, and
+`ALTER TABLE ... ADD CONSTRAINT` are not accepted. `clustered_by` and Bloom
+filters are physical layout hints, not transactional indexes or uniqueness
+constraints. The supported integrity surface is the qualified KaveonDB
+typed-row contract; broader constraint/index DDL requires durable catalog
+metadata, writer enforcement, snapshot-replacement semantics, and restart /
+distributed qualification before it can be advertised.
+
 `REGEXP_LIKE(value, pattern)` is qualified for literal-pattern text-column
 predicates with SQL NULL propagation and exact local/three-worker results;
 see [`track2-regexp-like-column-2026-11-03.md`](../qualification/track2-regexp-like-column-2026-11-03.md).
