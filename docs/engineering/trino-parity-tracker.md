@@ -268,6 +268,9 @@ rows, nested values, and map keys; the hash-join path likewise matches
 `Utf8View` keys while retaining SQL NULL non-matching semantics. This is
 required for chart dimensions and keyed consumers and is qualified in
 `docs/qualification/track5-utf8view-result-serialization-2026-11-02.md`.
+The scalar `REVERSE` path also accepts `Utf8View` input, preserves NULLs, and
+returns ordinary `VARCHAR`; the focused executor evidence is in
+`docs/qualification/track2-utf8view-reverse-2026-11-03.md`.
 The SQL Server `REPLICATE` spelling is also qualified through the bounded
 Unicode `REPEAT` path for non-negative integer-literal or bounded row-local
 BIGINT expressions (including arithmetic and casts); negative counts return

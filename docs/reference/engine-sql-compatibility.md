@@ -338,6 +338,9 @@ See the dedicated strict conversion qualification for the unstyled form:
 `LEFT` and `RIGHT` are qualified for bounded Unicode scalar text lengths and
 preserve NULLs across local and three-worker execution.
 `REVERSE` is qualified for the same Unicode scalar and NULL-preserving path.
+Arrow `Utf8View` inputs are accepted and return ordinary `VARCHAR` output;
+the focused executor boundary is recorded in
+[`track2-utf8view-reverse-2026-11-03.md`](../qualification/track2-utf8view-reverse-2026-11-03.md).
 `TRIM`, `LTRIM`, and `RTRIM` are qualified for ASCII-space boundary trimming
 with NULL preservation.
 `TRANSLATE` is qualified for Unicode scalar position mapping, SQL Server's
