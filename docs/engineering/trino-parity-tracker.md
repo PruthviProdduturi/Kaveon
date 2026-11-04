@@ -398,8 +398,12 @@ The bounded product `MERGE` contract now also qualifies SQL Server's `WHEN NOT M
 Matched-only `MERGE` clauses also accept the bounded source predicates
 `source.id = 'literal'` and `source.id IN ('literal', ...)`; excluded source
 rows are no-ops and selected rows retain ownership and revision/CAS checks.
-General search conditions, target-column predicates, `NOT IN`, and multi-clause
-predicate combinations remain outside the contract. Evidence:
+The equivalent bounded target predicates `target.id = 'literal'` and
+`target.id IN ('literal', ...)` are also accepted when the target alias is
+declared; the `ON target.id = source.id` equality makes them deterministic
+filters over the same source batch. General search conditions, other
+target-column predicates, `NOT IN`, and multi-clause predicate combinations
+remain outside the contract. Evidence:
 `docs/qualification/track2-native-dml-merge-predicates-2026-11-03.md`.
 
 Bounded `MERGE` matched updates and not-matched inserts also accept the direct
