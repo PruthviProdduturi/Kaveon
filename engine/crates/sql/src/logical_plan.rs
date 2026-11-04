@@ -10902,6 +10902,9 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT) FROM t")
             .expect("TRY_PARSE numeric should lower");
         assert!(format!("{plan:?}").contains("TRY_CAST_INT64"));
+        let decimal = sql_to_logical_plan("SELECT TRY_PARSE(value AS DECIMAL(10,2)) FROM t")
+            .expect("TRY_PARSE decimal should lower");
+        assert!(format!("{decimal:?}").contains("TRY_CAST_DECIMAL_10_2"));
         assert!(
             sql_to_logical_plan("SELECT TRY_PARSE(value AS BIGINT USING 'en-US') FROM t").is_err()
         );
