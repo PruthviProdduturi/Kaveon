@@ -536,7 +536,7 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   statement is pushed to exactly one source through the pool. This does not
   claim cross-source planning or joins. Evidence:
   `api/database/test_connectors.py` and
-  `docs/qualification/track5-registered-source-executor-2026-11-02.md`.
+  `docs/qualification/track5-registered-source-single-source-boundary-2026-11-03.md`.
 - [ ] Add cross-source joins only after snapshot, type, auth, and failure
   semantics are defined.
 - [ ] Qualify JDBC/ODBC and external Trino clients against the documented wire
