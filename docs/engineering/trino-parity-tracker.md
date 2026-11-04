@@ -8,7 +8,7 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 178 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-current pin is `2a80320a`, which includes SQL Server's configurable-datefirst week
+current pin is `f195efc5`, which includes SQL Server's configurable-datefirst week
 numbering and fixed-offset
 `DATEPART(tzoffset, ...)` slice alongside the existing scalar aliases.
 The pin also includes SQL Server's `ATN2` scalar alias
@@ -137,13 +137,13 @@ Planner, executor, and focused three-worker differential evidence are recorded i
 `docs/qualification/track2-tsql-date-bucket-width-origin-2026-11-03.md`,
 `docs/qualification/track2-tsql-eomonth-offset-2026-11-03.md`,
 `docs/qualification/track2-tsql-date-convert-runtime-styles-2026-10-29.md`,
-the versioned 176-case corpus. The bounded date-construction qualifications
+the versioned 178-case corpus. The bounded date-construction qualifications
 are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datetimeoffsetfromparts-2026-10-29.md` and
 `track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus is the authoritative
 `docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json`, with the
-corpus pinned at `2a80320a`;
+corpus pinned at `f195efc5`;
 later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
