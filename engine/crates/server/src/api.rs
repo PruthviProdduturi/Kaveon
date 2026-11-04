@@ -12134,7 +12134,14 @@ fn collect_operator_estimate_details(
     let actual = node
         .attributes
         .get("actual_output_rows")
-        .map(|value| (value, "query_result"))
+        .map(|value| {
+            let scope = node
+                .attributes
+                .get("actual_rows_scope")
+                .map(String::as_str)
+                .unwrap_or("query_result");
+            (value, scope)
+        })
         .or_else(|| {
             node.attributes
                 .get("actual_rows_selected")
@@ -16645,6 +16652,20 @@ mod tests {
         assert_eq!(details[0].filter_selectivity, Some(0.625));
         assert_eq!(details[0].classification, "overestimated");
         assert!((details[0].ratio - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn operator_estimates_preserve_derived_row_preserving_scope() {
+        let project = kaveon_core::PlanNode::new(32, kaveon_core::PlanPhase::Physical, "Project")
+            .with_attribute("estimated_output_rows", "100")
+            .with_attribute("actual_output_rows", "7")
+            .with_attribute("actual_rows_scope", "derived_row_preserving");
+        let mut details = Vec::new();
+        super::collect_operator_estimate_details(&project, &mut details);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].actual_rows, 7);
+        assert_eq!(details[0].actual_rows_scope, "derived_row_preserving");
+        assert!((details[0].ratio - 0.07).abs() < f64::EPSILON);
     }
 
     #[test]

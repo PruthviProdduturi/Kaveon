@@ -499,6 +499,10 @@ rows are no-ops. General MERGE clauses and typed lake-table DML remain outside
   boundary's input is never labeled with post-operation rows, and propagation
   stops at unrelated operators. Evidence:
   `docs/qualification/track3-row-preserving-actuals-2026-11-03.md`.
+  The diagnostics collector preserves the attached `derived_row_preserving`,
+  `query_result`, or `scan_selected_rows` scope instead of relabeling every
+  output counter as a final query result; evidence:
+  `docs/qualification/track3-operator-estimate-scope-2026-11-03.md`.
 - [x] Preserve stage operator and planner-estimate metadata during live
   distributed task publication. A later completion fills metadata on an
   already-running stage without inferring any row counts. Evidence:
