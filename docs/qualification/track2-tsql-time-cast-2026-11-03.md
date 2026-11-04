@@ -2,8 +2,9 @@
 
 ## Scope
 
-This gate qualifies bounded `CAST(expression AS TIME)` and
-`TRY_CAST(expression AS TIME)` for UTF-8 text and existing Arrow time values.
+This gate qualifies bounded `CAST(expression AS TIME)`,
+`TRY_CAST(expression AS TIME)`, `CONVERT(TIME, expression)`, and
+`TRY_CONVERT(TIME, expression)` for UTF-8 text and existing Arrow time values.
 Results use Arrow `Time64(Microsecond)` and preserve SQL NULLs. Strict casts
 reject malformed text; `TRY_CAST` converts malformed text to typed NULL.
 
@@ -34,8 +35,9 @@ Distributed exact-result regression:
 cargo test -p kaveon-server distributed_tsql_time_cast_matches_local -- --nocapture
 ```
 
-The three-worker result is compared byte-for-byte with local execution for a
-literal strict cast and a row-local `TRY_CAST` over text values.
+The three-worker result is compared byte-for-byte with local execution for
+literal strict casts and row-local safe casts through both SQL Server spelling
+families.
 
 ## Corpus boundary
 
