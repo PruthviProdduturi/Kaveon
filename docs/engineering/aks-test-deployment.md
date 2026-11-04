@@ -13,11 +13,13 @@
 > [restore the catalog](../guides/register-engine-catalog.md).
 
 > **Native-profile boundary.** The PostgreSQL references in this historical
-> record describe the September migration rehearsal only. A current Kaveon
-> deployment uses KaveonDB for native product metadata and must not provision
-> PostgreSQL as an application authority; an external PostgreSQL registration,
-> when explicitly configured, is a passthrough source rather than metadata
-> storage.
+> record describe the September migration rehearsal only. The qualified native
+> profile uses KaveonDB for product metadata and must not provision PostgreSQL
+> as an application authority; an external PostgreSQL registration, when
+> explicitly configured, is a passthrough source rather than metadata storage.
+> A live cloud claim requires the current authority audit, because historical
+> deployment records do not prove that every API metadata call site has cut
+> over.
 
 The user authorized provisioning in Microsoft tenant `72f988bf-86f1-41af-91ab-2d7cd011db47`, subscription `L1R_DSEng` (`eaa4a83d-8511-497c-b0bc-40aa5f0deae1`), resource group `test-prproddu-test`. This resumes AKS deployment only; the engine performance goal remains paused. No subscription policies, exemptions, or subscription-level role assignments were changed.
 
