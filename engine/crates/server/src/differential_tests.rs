@@ -571,7 +571,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "tsql_set_datefirst_default",
-        "SET DATEFIRST 7; SELECT TOP 5 DATEPART(dw, event_date) AS weekday_number FROM {T} ORDER BY event_date",
+        "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_WARNINGS ON; SET NOCOUNT ON; SET DATEFIRST 7; SELECT TOP 5 DATEPART(dw, event_date) AS weekday_number FROM {T} ORDER BY event_date",
         true,
     ),
     (
@@ -8404,15 +8404,16 @@ fn distributed_tsql_datepart_weekday_uses_default_datefirst_numbering() {
 }
 
 #[test]
-fn distributed_tsql_default_datefirst_prefix_matches_local() {
+fn distributed_tsql_default_read_session_prefixes_match_local() {
     let directory = std::env::temp_dir().join(format!(
-        "kaveon-tsql-datefirst-default-{}",
+        "kaveon-tsql-default-session-prefixes-{}",
         uuid::Uuid::new_v4()
     ));
     let manager = events_catalog(&directory);
-    let statement = "SET DATEFIRST 7; SELECT user_id, DATEPART(dw, event_date) AS weekday_number FROM events ORDER BY user_id, event_date LIMIT 20";
+    let statement = "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_WARNINGS ON; SET NOCOUNT ON; SET DATEFIRST 7; SELECT user_id, DATEPART(dw, event_date) AS weekday_number FROM events ORDER BY user_id, event_date LIMIT 20";
     let plan = bound_plan(statement, &manager);
-    let pool = QueryMemoryPool::new("tsql-datefirst-default-differential", 64 << 20).unwrap();
+    let pool =
+        QueryMemoryPool::new("tsql-default-session-prefixes-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
         .unwrap_or_else(|error| panic!("{statement} local: {error}"));
     let expected = canonical_rows(&drain(local.operator.as_mut()), false);
