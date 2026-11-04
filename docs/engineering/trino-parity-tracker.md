@@ -328,6 +328,13 @@ explicit ASCII-only and NULL semantics; local evaluator and three-worker
 differential evidence is recorded in
 `docs/qualification/track2-tsql-soundex-difference-2026-11-03.md`.
 
+The final grouped-aggregate merge now chooses a bounded 16–256-way recursive
+fanout from encoded spill bytes and the active query memory limit instead of
+using one fixed fanout. This is qualified for the local bounded-memory spill
+path in `docs/qualification/track1-adaptive-final-merge-fanout-2026-11-03.md`;
+deployed high-cardinality workload and cloud endurance qualification remain
+open.
+
 | Capability | State | Current contract | Acceptance evidence still required |
 |---|---|---|---|
 | Final-merge repartition materialization | Implemented (bounded) | Recursive high-cardinality aggregate repartition now streams the two binary grouped-state columns directly into per-partition Arrow builders instead of materializing row-index `take` batches. It preserves null state values, partition hashing, spill cleanup, and the existing depth cap. Broadcast final merges divide prepaid input-batch admission across selected sibling workers, so tight shared budgets reach the spill path instead of failing during per-worker prepayment. Exact skew/replay and release pressure evidence are recorded in `docs/qualification/track1-final-merge-repartition-streaming-2026-11-03.md`. | Measure allocation/CPU reduction on representative high-cardinality workloads and qualify the deployed image; this does not close the broader adaptive aggregate-exchange boundary. |
