@@ -12863,6 +12863,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(result.finish()))
                 }
+                DataType::Utf8View => {
+                    // Utf8View is a logical text type, not a debug/display
+                    // representation.  Materialize only the selected scalar
+                    // into the ordinary UTF-8 result while preserving NULLs.
+                    let mut result = StringBuilder::with_capacity(num_rows, 0);
+                    for row in 0..num_rows {
+                        match text_value(&args[0], row)? {
+                            Some(value) => {
+                                result.append_value(value.chars().rev().collect::<String>())
+                            }
+                            None => result.append_null(),
+                        }
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
                 other => Err(KaveonError::Execution(format!(
                     "REVERSE expects VARCHAR, got {other}"
                 ))),
@@ -28855,6 +28870,32 @@ mod tests {
         .unwrap();
         assert_eq!(result.data_type(), &DataType::LargeUtf8);
         let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "noevaK");
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), "界世");
+    }
+
+    #[test]
+    fn reverse_preserves_utf8_view_values_and_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "text",
+            Arc::new(StringViewArray::from(vec![
+                Some("Kaveon"),
+                None,
+                Some("世界"),
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REVERSE".into(),
+                args: vec![Expr::Column("text".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.data_type(), &DataType::Utf8);
+        let values = result.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(values.value(0), "noevaK");
         assert!(values.is_null(1));
         assert_eq!(values.value(2), "界世");
