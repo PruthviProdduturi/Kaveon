@@ -6534,6 +6534,23 @@ mod tests {
     }
 
     #[test]
+    fn sql_server_filtered_delete_merge_output_lowers_to_deleted_returning() {
+        let sql = "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.id = s.id WHEN MATCHED AND s.id IN ('ds-1') THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json) OUTPUT deleted.id, deleted.revision, deleted.document_json";
+        let NativeTransactionalStatement::Dml(dml) =
+            parse_native_transactional(sql).expect("filtered MERGE OUTPUT should parse")
+        else {
+            panic!("expected MERGE DML");
+        };
+        assert_eq!(dml.output_pseudo.as_deref(), Some("deleted"));
+        assert_eq!(dml.returning, ["id", "revision", "document_json"]);
+        let commands = adapt_product_dml_batch(&dml).expect("filtered MERGE should adapt");
+        assert!(commands.iter().all(|command| matches!(
+            command,
+            ProductDmlCommand::MergeDeleteOrCreateFiltered { .. }
+        )));
+    }
+
+    #[test]
     fn product_merge_rejects_unbounded_or_ambiguous_shapes() {
         for sql in [
             "MERGE INTO product.datasets AS t USING (VALUES ('ds-1', '{}')) AS s (id, document_json) ON t.owner_principal = s.id WHEN MATCHED THEN UPDATE SET document_json = s.document_json WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (s.id, s.document_json)",

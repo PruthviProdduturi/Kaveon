@@ -3129,6 +3129,7 @@ async fn execute_sql_request(
                                 | kaveon_sql::parser::ProductDmlCommand::CreateIgnore { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::Upsert { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrInsert { .. }
+                                | kaveon_sql::parser::ProductDmlCommand::MergeDeleteOrCreateFiltered { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDelete { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeUpdate { .. }
                                 | kaveon_sql::parser::ProductDmlCommand::MergeDeleteNotMatched { .. }
@@ -6692,21 +6693,26 @@ mod tests {
         );
 
         let merge = registry.begin("alice").await.unwrap();
-        assert_eq!(
-            execute_sql_request(
-                &registry,
-                "alice",
-                SqlTransactionRequest {
-                    sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('delete-me', '{"ignored":true}'), ('keep-existing', '{"must_not_change":true}'), ('new-row', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('delete-me') THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json)"#.into(),
-                    transaction_id: Some(merge.transaction_id.clone()),
-                    parameters: vec![],
-                    named_parameters: HashMap::new(),
-                },
-            )
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"MERGE INTO product.datasets AS target USING (VALUES ('delete-me', '{"ignored":true}'), ('keep-existing', '{"must_not_change":true}'), ('new-row', '{"created":true}')) AS source (id, document_json) ON target.id = source.id WHEN MATCHED AND source.id IN ('delete-me') THEN DELETE WHEN NOT MATCHED THEN INSERT (id, document_json) VALUES (source.id, source.document_json) OUTPUT deleted.id, deleted.revision, deleted.document_json"#.into(),
+                transaction_id: Some(merge.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
             .await
-            .status(),
-            StatusCode::OK
-        );
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["returning"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["returning"][0]["id"], "delete-me");
+        assert_eq!(value["returning"][0]["revision"], 1);
+        assert_eq!(value["returning"][0]["document_json"], "{\"old\":true}");
         assert_eq!(
             execute_sql_request(
                 &registry,
