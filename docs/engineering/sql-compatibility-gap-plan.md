@@ -552,7 +552,10 @@ same idempotent create-if-absent commands are staged. General MERGE clauses and 
 - [ ] Finish adaptive joins and aggregate exchange for high-cardinality data.
   The final-merge repartition path now streams encoded binary state directly
   into partition builders instead of materializing per-partition `take` batches;
-  exact skew/replay evidence is in
+  selected broadcast workers also divide prepaid input admission across the
+  shared query budget, allowing tight workloads to reach spill instead of
+  failing during per-worker prepayment. Exact skew/replay and release-pressure
+  evidence is in
   `docs/qualification/track1-final-merge-repartition-streaming-2026-11-03.md`.
   Adaptive exchange policy and deployed performance qualification remain open.
 - [ ] Distribute remaining window and global-sort shapes.
