@@ -283,7 +283,7 @@ fn normalize_try_parse(sql: &str) -> String {
     });
     let invariant_temporal_target = matches!(
         target_upper.as_str(),
-        "DATE" | "DATETIME" | "DATETIME2" | "DATETIMEOFFSET" | "SMALLDATETIME"
+        "DATE" | "TIME" | "DATETIME" | "DATETIME2" | "DATETIMEOFFSET" | "SMALLDATETIME"
     );
     if value.is_empty()
         || target.is_empty()

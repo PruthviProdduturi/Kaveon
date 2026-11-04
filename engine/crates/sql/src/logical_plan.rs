@@ -10832,6 +10832,9 @@ mod tests {
         let offset = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATETIMEOFFSET) FROM t")
             .expect("invariant TRY_PARSE DATETIMEOFFSET should lower");
         assert!(format!("{offset:?}").contains("TRY_CAST_TIMESTAMP_TZ"));
+        let time = sql_to_logical_plan("SELECT TRY_PARSE(value AS TIME) FROM t")
+            .expect("invariant TRY_PARSE TIME should lower");
+        assert!(format!("{time:?}").contains("TRY_CAST_TIME"));
         let try_cast_offset =
             sql_to_logical_plan("SELECT TRY_CAST(value AS DATETIMEOFFSET) FROM t")
                 .expect("TRY_CAST DATETIMEOFFSET should lower");
