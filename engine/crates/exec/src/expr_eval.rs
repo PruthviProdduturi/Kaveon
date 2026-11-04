@@ -15816,6 +15816,15 @@ fn extract_date_part(micros: i64, field: DateField, tsql_weekday: bool) -> i64 {
         // The generic extractor is Sunday=0..Saturday=6. SQL Server's
         // DATEFIRST 7 contract is Sunday=1..Saturday=7.
         value + 1
+    } else if tsql_weekday && matches!(field, DateField::Week) {
+        // SQL Server's default DATEFIRST 7 numbers weeks from Sunday and
+        // assigns the week containing January 1 to week 1.
+        let days = micros.div_euclid(86_400_000_000);
+        let (year, _, _) = days_to_ymd(days);
+        let jan1 = ymd_to_days(year, 1, 1);
+        let jan1_sunday_zero = (jan1 + 4).rem_euclid(7);
+        let day_of_year = days - jan1;
+        (day_of_year + jan1_sunday_zero) / 7 + 1
     } else {
         value
     }
@@ -28244,6 +28253,25 @@ mod tests {
         let error =
             eval_date_part_tsql(&StringArray::from(vec![Some("tzoffset")]), &naive, 1).unwrap_err();
         assert!(error.to_string().contains("fixed timezone offset"));
+    }
+
+    #[test]
+    fn date_part_tsql_week_uses_sunday_first_week_one() {
+        let source = Arc::new(Date32Array::from(vec![
+            Some(20_089), // 2025-01-01, Wednesday: week 1
+            Some(20_094), // 2025-01-06, Monday: week 2
+            Some(20_451), // 2025-12-29, Monday: week 53
+        ])) as ArrayRef;
+        let result = eval_date_part_tsql(
+            &StringArray::from(vec![Some("week"), Some("wk"), Some("ww")]),
+            &source,
+            3,
+        )
+        .unwrap();
+        let values = result.as_primitive::<Int64Type>();
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 2);
+        assert_eq!(values.value(2), 53);
     }
 
     #[test]
