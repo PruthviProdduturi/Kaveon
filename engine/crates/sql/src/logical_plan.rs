@@ -11281,6 +11281,16 @@ mod tests {
     }
 
     #[test]
+    fn lowers_tsql_convert_to_decimal() {
+        let plan = sql_to_logical_plan(
+            "SELECT CONVERT(DECIMAL(10,2), CASE WHEN actions % 2 = 0 THEN CAST(actions AS VARCHAR) ELSE '0' END) FROM t",
+        )
+        .expect("strict decimal CONVERT should lower");
+        let rendered = format!("{plan:?}");
+        assert!(rendered.contains("Decimal128"), "{rendered}");
+    }
+
+    #[test]
     fn parses_numeric_array_literal_as_an_expression() {
         let plan = sql_to_logical_plan("SELECT ARRAY[1, 2.5] FROM t").unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
