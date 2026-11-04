@@ -89,7 +89,7 @@
     {"id": "datediff_big", "sql": "SELECT DATEDIFF_BIG(dd, DATE '2026-01-01', event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datediff_abbreviation", "sql": "SELECT DATEDIFF(dd, start_date, end_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
     {"id": "datepart_abbreviation", "sql": "SELECT DATEPART(yyyy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified"},
-    {"id": "datepart_weekday_alias", "sql": "SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_weekday_aliases"},
+    {"id": "datepart_weekday_alias", "sql": "SELECT DATEPART(dw, event_date), DATEPART(weekday, event_date), DATEPART(w, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_weekday_aliases"},
     {"id": "datepart_dayofyear_alias", "sql": "SELECT DATEPART(dy, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_dayofyear_aliases"},
     {"id": "datepart_iso_week_alias", "sql": "SELECT DATEPART(iso_week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_iso_week_aliases"},
     {"id": "datepart_week_full_name", "sql": "SELECT DATEPART(week, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_sql_server_default_datefirst_week_numbering"},
