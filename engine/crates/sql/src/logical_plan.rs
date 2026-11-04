@@ -10562,12 +10562,14 @@ mod tests {
 
     #[test]
     fn lowers_unstyled_tsql_convert_aliases() {
-        let plan =
-            sql_to_logical_plan("SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value) FROM t")
-                .expect("unstyled CONVERT should lower through CAST");
+        let plan = sql_to_logical_plan(
+            "SELECT CONVERT(BIGINT, value), TRY_CONVERT(DATE, value), TRY_CONVERT(DATETIMEOFFSET, value) FROM t",
+        )
+        .expect("unstyled CONVERT should lower through CAST");
         let rendered = format!("{plan:?}");
         assert!(rendered.contains("Cast"), "{rendered}");
         assert!(rendered.contains("TRY_CAST_DATE32"), "{rendered}");
+        assert!(rendered.contains("TRY_CAST_TIMESTAMP_TZ"), "{rendered}");
     }
 
     #[test]

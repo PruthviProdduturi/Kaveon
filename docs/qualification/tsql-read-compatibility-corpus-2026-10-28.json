@@ -114,6 +114,7 @@
     {"id": "sysdatetime", "sql": "SELECT SYSDATETIME() FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_statement_stable_timestamp"},
     {"id": "convert_unstyled", "sql": "SELECT CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
     {"id": "try_convert_unstyled", "sql": "SELECT TRY_CONVERT(BIGINT, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
+    {"id": "try_convert_datetimeoffset", "sql": "SELECT TRY_CONVERT(DATETIMEOFFSET, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_invariant_fixed_offset_temporal_inputs"},
     {"id": "convert_varchar", "sql": "SELECT CONVERT(VARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
     {"id": "try_convert_varchar", "sql": "SELECT TRY_CONVERT(VARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},
     {"id": "try_convert_nvarchar", "sql": "SELECT TRY_CONVERT(NVARCHAR, value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_utf8_text_casts"},

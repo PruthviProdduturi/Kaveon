@@ -9,6 +9,7 @@ TRY_PARSE(value AS BIGINT)
 TRY_PARSE(value AS DATE)
 TRY_PARSE(value AS DATETIME2)
 TRY_PARSE(value AS DATETIMEOFFSET)
+TRY_CONVERT(DATETIMEOFFSET, value)
 ```
 
 The parser lowers them to the existing `TRY_CAST` evaluator, preserving NULL
@@ -36,6 +37,8 @@ or silently interpreted.
 - Exact local-vs-three-worker differential for mixed valid/invalid invariant
   fixed-offset DATETIMEOFFSET values:
   `differential_tests::distributed_tsql_try_parse_invariant_datetimeoffset_matches_local`.
+- The same differential covers unstyled `TRY_CONVERT(DATETIMEOFFSET, ...)`
+  through the shared safe-cast path, including invalid input returning NULL.
 - The versioned T-SQL corpus records `try_parse_numeric` with
   `qualified_for_invariant_numeric_parsing`, `try_parse_invariant_date`, and
   `try_parse_invariant_datetime2` with `qualified_for_invariant_temporal_inputs`,

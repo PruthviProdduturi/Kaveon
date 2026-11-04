@@ -8695,7 +8695,7 @@ fn distributed_tsql_try_cast_temporal_targets_match_local() {
         uuid::Uuid::new_v4()
     ));
     let manager = events_catalog(&directory);
-    let statement = "SELECT user_id, TRY_CAST(CASE WHEN user_id % 2 = 0 THEN '2024-12-30' ELSE 'bad' END AS DATE), TRY_CAST(CASE WHEN user_id % 2 = 0 THEN '2024-12-30T12:34:56' ELSE 'bad' END AS DATETIME2), TRY_CAST(CASE WHEN user_id % 2 = 0 THEN '2024-12-30T12:34:56+05:30' ELSE 'bad' END AS DATETIMEOFFSET) FROM events ORDER BY user_id LIMIT 20";
+    let statement = "SELECT user_id, TRY_CAST(CASE WHEN user_id % 2 = 0 THEN '2024-12-30' ELSE 'bad' END AS DATE), TRY_CAST(CASE WHEN user_id % 2 = 0 THEN '2024-12-30T12:34:56' ELSE 'bad' END AS DATETIME2), TRY_CAST(CASE WHEN user_id % 2 = 0 THEN '2024-12-30T12:34:56+05:30' ELSE 'bad' END AS DATETIMEOFFSET), TRY_CONVERT(DATETIMEOFFSET, CASE WHEN user_id % 2 = 0 THEN '2024-12-30T12:34:56+05:30' ELSE 'bad' END) FROM events ORDER BY user_id LIMIT 20";
     let plan = bound_plan(statement, &manager);
     let pool = QueryMemoryPool::new("tsql-try-cast-temporal-differential", 64 << 20).unwrap();
     let mut local = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
