@@ -585,6 +585,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "tsql_set_datefirst_week_boundary",
+        "SET DATEFIRST 1; SELECT TOP 5 DATEPART(week, event_date) AS week_number FROM {T} ORDER BY event_date",
+        true,
+    ),
+    (
         "tsql_datepart_dayofyear_alias",
         "SELECT TOP 5 DATEPART(dy, event_date) AS day_of_year FROM {T} ORDER BY event_date",
         true,

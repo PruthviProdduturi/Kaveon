@@ -28374,6 +28374,20 @@ mod tests {
             .value(0);
             assert_eq!(sql_server, i64::from(8 - datefirst), "DATEFIRST {datefirst}");
         }
+        let sunday_after_new_year = Arc::new(Date32Array::from(vec![Some(18_994)])) as ArrayRef;
+        for datefirst in 1..=7 {
+            let week = eval_date_part_tsql(
+                &StringArray::from(vec![Some("week")]),
+                &sunday_after_new_year,
+                1,
+                datefirst,
+            )
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .value(0);
+            let expected = if datefirst == 7 { 2 } else { 1 };
+            assert_eq!(week, expected, "DATEFIRST {datefirst} week boundary");
+        }
         let canonical = eval_date_part(&StringArray::from(vec![Some("DAYOFYEAR")]), &source, 1)
             .unwrap()
             .as_primitive::<Int64Type>()
