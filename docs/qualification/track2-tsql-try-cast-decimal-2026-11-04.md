@@ -23,6 +23,6 @@ overflow behavior remain fail-closed through the typed safe-cast evaluator.
 - Planner lowering uses the existing `TRY_CAST_DECIMAL_10_2` typed safe-cast
   path; no new execution shortcut or external-source claim is introduced.
 
-The authoritative T-SQL corpus contains 186 cases after this qualification.
+The authoritative T-SQL corpus contains 187 cases after this qualification.
 Cloud passthrough sources and general decimal
 precision beyond the Engine contract remain outside this evidence.
