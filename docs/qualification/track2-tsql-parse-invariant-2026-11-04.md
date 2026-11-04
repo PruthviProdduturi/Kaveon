@@ -35,6 +35,17 @@ The differential uses a row-local numeric value, orders by a complete key,
 and compares canonical local and three-worker output with zero retained query
 memory after execution.
 
+The temporal boundary is also covered by:
+
+```text
+cargo test -p kaveon-server --bin kaveon-server \
+  distributed_tsql_parse_invariant_temporal_matches_local -- --nocapture
+test result: ok. 1 passed; 0 failed
+```
+
+That case compares strict `DATE` and `DATETIME2` parses of a source-backed
+date column across the same three-worker path.
+
 The authoritative corpus case is `parse_invariant_numeric`, and the
 compatibility tracker is synchronized at 182 cases.
 
