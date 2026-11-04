@@ -39,7 +39,7 @@ The current PostgreSQL/Fabric authority-language audit is recorded in
 - [x] Classify every case as accepted, translated, or fail-closed with an
   actionable diagnostic.
 - [x] Add exact local and distributed result tests for accepted translations.
-  The current 180-case corpus has planner coverage and focused exact
+  The current 181-case corpus has planner coverage and focused exact
   three-worker differential evidence; the versioned corpus and distributed
   evidence are retained in
   `docs/qualification/tsql-read-compatibility-distributed-2026-10-28.md`,
@@ -133,6 +133,10 @@ SQL Server `CONVERT`/`TRY_CONVERT` to `TIME` also qualify styles `8`/`108`
 (`HH:MM:SS`) and `114` (`HH:MM:SS:mmm`) with strict-error and safe-NULL
 behavior; other time styles remain explicitly rejected. Evidence is in
 `docs/qualification/track2-tsql-convert-time-styles-2026-11-03.md`.
+Fixed-duration SQL Server `DATEADD` over microsecond `TIME` values now wraps
+at midnight for hour through microsecond units, with local and three-worker
+differential evidence in
+`docs/qualification/track2-tsql-time-dateadd-2026-11-03.md`.
 `ISDATE` now returns a safe boolean validity result for text and temporal
 inputs, explicitly refusing numeric epoch coercion.
 `ISNUMERIC` now returns a safe boolean result for native numeric and

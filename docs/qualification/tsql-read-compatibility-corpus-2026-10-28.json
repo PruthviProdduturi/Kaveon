@@ -1,6 +1,6 @@
 {
   "dialect": "sql-server-fabric-read",
-  "engine_commit": "2e9a016a",
+  "engine_commit": "7b509256",
   "purpose": "Versioned bounded T-SQL read-compatibility corpus. Cases marked planner_qualified have parser/planner regression coverage; distributed and external-client qualification remain separate gates.",
   "cases": [
     {"id": "bracket_identifier", "sql": "SELECT [region] FROM t ORDER BY [region], user_id", "status": "planner_qualified", "distributed_status": "qualified_for_quoted_identifiers"},
@@ -80,6 +80,7 @@
     {"id": "time_cast", "sql": "SELECT CAST(time_text AS TIME), TRY_CAST(time_text AS TIME) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_text_time_cast_and_safe_nulls"},
     {"id": "convert_time", "sql": "SELECT CONVERT(TIME, time_text), TRY_CONVERT(TIME, time_text) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_microsecond_text_time_conversion_and_safe_nulls"},
     {"id": "convert_time_styles", "sql": "SELECT TRY_CONVERT(TIME, time_text, 108), TRY_CONVERT(TIME, time_with_millis, 114), CONVERT(TIME, '12:34:56', 8) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_hms_and_millisecond_text_time_styles"},
+    {"id": "time_dateadd", "sql": "SELECT DATEADD(hour, hour_offset, CAST('23:30:00' AS TIME)), DATEADD(millisecond, millisecond_offset, CAST('23:59:59.999000' AS TIME)), DATEADD(microsecond, microsecond_offset, CAST('23:59:59.999999' AS TIME)) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_fixed_duration_microsecond_time_arithmetic_with_midnight_wrap"},
     {"id": "datetimeoffsetfromparts", "sql": "SELECT DATETIMEOFFSETFROMPARTS(2024, 2, 29, 12, 34, 56, 789, 3, 5, 30)", "status": "planner_qualified", "distributed_status": "qualified_for_utc_normalized_offsets_and_precision_0_to_6"},
     {"id": "datename", "sql": "SELECT DATENAME(month, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_calendar_parts"},
     {"id": "isdate", "sql": "SELECT ISDATE(value) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_text_and_temporal_inputs"},
