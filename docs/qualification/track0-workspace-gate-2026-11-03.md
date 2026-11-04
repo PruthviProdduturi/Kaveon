@@ -4,7 +4,7 @@
 
 This record covers the source-level release gate for the current `dev`
 branch after the strict invariant T-SQL `PARSE` qualification in
-`5c2b670b` (and the deterministic ordering correction in `39fe66a3`). It is a
+`289d664e` (and the deterministic ordering correction in `39fe66a3`). It is a
 correctness and build gate, not a claim of cloud deployment qualification or
 complete Trino/Fabric/PostgreSQL parity.
 
@@ -22,9 +22,9 @@ Observed results:
 - CLI/server and related workspace targets: all reported tests passed;
 - execution: 644 passed, 4 ignored;
 - optimizer: 86 passed;
-- SQL: 383 passed;
+- SQL: 384 passed;
 - storage: 158 passed, 3 ignored;
-- server differential suite: 712 passed, 0 failed, 0 ignored;
+- server differential suite: 714 passed, 0 failed, 0 ignored;
 - the 173-case T-SQL distributed differential sweep completed successfully;
 - workspace benchmark targets completed successfully.
 
@@ -32,8 +32,9 @@ The corrected qualification query uses a complete ordering key
 (`user_id, event_date, actions, country`) so ties cannot be mistaken for a
 distributed semantic mismatch. The full run completed with exit code 0.
 
-The strict invariant `PARSE` differential was also included in the server
-suite and passed against the local reference and three-worker execution.
+The strict invariant `PARSE` numeric and temporal differentials were included
+in the server suite and passed against the local reference and three-worker
+execution.
 
 The release-pressure benchmark was also run independently:
 
