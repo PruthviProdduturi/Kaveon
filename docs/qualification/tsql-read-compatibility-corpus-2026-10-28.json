@@ -169,6 +169,7 @@
     {"id": "set_datefirst_default", "sql": "SET DATEFIRST 7; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_default_datefirst_noop"},
     {"id": "set_default_read_session_prefixes", "sql": "SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; SET ANSI_WARNINGS ON; SET NOCOUNT ON; SET DATEFIRST 7; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_default_session_prefix_noops"},
     {"id": "set_datefirst_monday", "sql": "SET DATEFIRST 1; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_datefirst_1"},
+    {"id": "set_datefirst_wednesday", "sql": "SET DATEFIRST 3; SELECT DATEPART(dw, event_date) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_literal_datefirst_3"},
     {"id": "set_datefirst_out_of_range", "sql": "SET DATEFIRST 0; SELECT DATEPART(dw, event_date) FROM t", "status": "explicit_rejection", "distributed_status": "rejected_datefirst_out_of_range"}
   ]
 }
