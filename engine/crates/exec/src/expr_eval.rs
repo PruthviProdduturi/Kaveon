@@ -15924,7 +15924,10 @@ fn extract_date_part(micros: i64, field: DateField, tsql_weekday: bool, datefirs
     if tsql_weekday && matches!(field, DateField::DayOfWeek) {
         // The generic extractor is Sunday=0..Saturday=6. DATEFIRST selects
         // which weekday is numbered 1.
-        let first_zero = (i64::from(datefirst) + 6).rem_euclid(7);
+        // SQL Server numbers Monday as 1 and Sunday as 7. The generic
+        // extractor uses Sunday=0, so DATEFIRST 7 maps to zero while
+        // DATEFIRST 1 maps to one.
+        let first_zero = i64::from(datefirst).rem_euclid(7);
         (value - first_zero).rem_euclid(7) + 1
     } else if tsql_weekday && matches!(field, DateField::Week) {
         // SQL Server numbers the week containing January 1 as week 1; the
@@ -15933,7 +15936,7 @@ fn extract_date_part(micros: i64, field: DateField, tsql_weekday: bool, datefirs
         let (year, _, _) = days_to_ymd(days);
         let jan1 = ymd_to_days(year, 1, 1);
         let jan1_sunday_zero = (jan1 + 4).rem_euclid(7);
-        let first_zero = (i64::from(datefirst) + 6).rem_euclid(7);
+        let first_zero = i64::from(datefirst).rem_euclid(7);
         let day_of_year = days - jan1;
         (day_of_year + (jan1_sunday_zero - first_zero).rem_euclid(7)) / 7 + 1
     } else {
@@ -28359,16 +28362,18 @@ mod tests {
         // Saturday=7. The generic DATE_PART path above intentionally keeps
         // the Engine/Trino Sunday=0 numbering.
         let sunday = Arc::new(Date32Array::from(vec![Some(18_994)])) as ArrayRef;
-        let sql_server = eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1, 7)
+        for datefirst in 1..=7 {
+            let sql_server = eval_date_part_tsql(
+                &StringArray::from(vec![Some("dw")]),
+                &sunday,
+                1,
+                datefirst,
+            )
             .unwrap()
             .as_primitive::<Int64Type>()
             .value(0);
-        assert_eq!(sql_server, 1);
-        let monday_first = eval_date_part_tsql(&StringArray::from(vec![Some("dw")]), &sunday, 1, 1)
-            .unwrap()
-            .as_primitive::<Int64Type>()
-            .value(0);
-        assert_eq!(monday_first, 7);
+            assert_eq!(sql_server, i64::from(8 - datefirst), "DATEFIRST {datefirst}");
+        }
         let canonical = eval_date_part(&StringArray::from(vec![Some("DAYOFYEAR")]), &source, 1)
             .unwrap()
             .as_primitive::<Int64Type>()
