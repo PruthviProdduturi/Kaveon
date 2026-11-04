@@ -10709,6 +10709,9 @@ mod tests {
         let temporal = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATE) FROM t")
             .expect("invariant TRY_PARSE date should lower");
         assert!(format!("{temporal:?}").contains("TRY_CAST_DATE32"));
+        let timestamp = sql_to_logical_plan("SELECT TRY_PARSE(value AS DATETIME2) FROM t")
+            .expect("invariant TRY_PARSE DATETIME2 should lower");
+        assert!(format!("{timestamp:?}").contains("TRY_CAST_TIMESTAMP"));
     }
 
     #[test]
