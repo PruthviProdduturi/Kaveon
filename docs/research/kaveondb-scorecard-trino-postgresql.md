@@ -87,7 +87,7 @@ On the previous digest (`6f33810b…`) a worker retained memory across statement
 
 ### 1.4 Storage and formats — **5 / 10**
 
-**KaveonDB** reads Parquet (row-group pruning by statistics, projection pushdown), Delta (transaction-log replay pinned to one version; no checkpoints), and Iceberg, from local disk and ADLS Gen2 via workload identity. `StorageType::S3` exists as a type with no implementation. Writes are limited to the immutable product-record protocol (below). Statistics are exact and immutable: Parquet footers and Delta active snapshots, cached per planning pass — no file-size heuristics.
+**KaveonDB** reads Parquet (row-group pruning by statistics, projection pushdown), Delta (transaction-log replay pinned to one version with checkpoint support), and Iceberg, from local disk and object storage. The storage layer includes S3 and ADLS Gen2 object-store readers; S3 production qualification, credential/region coverage, and long-running cloud evidence are still open. Writes are limited to the immutable product-record protocol (below). Statistics are exact and immutable: Parquet footers and Delta active snapshots, cached per planning pass — no file-size heuristics.
 
 **Trino** reads and writes Hive, Iceberg, Delta and Hudi tables with schema evolution, partition evolution, time travel, `CREATE TABLE AS`, `INSERT`, `MERGE`, `DELETE`, compaction, and does so on S3, GCS, ADLS, HDFS and MinIO. Its Delta connector handles checkpoints and deletion vectors.
 
@@ -203,7 +203,7 @@ These are the things neither Trino nor PostgreSQL offers, and they are why the c
 
 1. **Interactive latency on the 504 M-row table**: wide-aggregate decode cost (3–10× the narrow scan) and `COUNT(DISTINCT)` at 3 M keys. Codex has `3531c68` landing; qualification pending. Moves 1.2 from 5 to 7.
 2. **Cold-cache and soak runs of the matched corpus.** Moves 1.1 from 7 to 8 and 1.6 from 6 to 7.
-3. **S3 reads.** One connector in `object_store` terms; unblocks the Oracle demo host and any non-Azure customer. Moves 1.4 from 5 to 6.
+3. **S3 production qualification.** The reader exists, but credential, region, retry, and sustained object-store evidence are still needed before claiming broad S3 support. Moves 1.4 from 5 to 6.
 4. **A client protocol.** Even a PostgreSQL wire façade for read-only SQL would open Tableau, Power BI, dbt and DBeaver. Moves 1.9 from 2 to 6 and changes what the product can be sold as.
 5. **Recovery and isolation qualification of the record store**: verified head recovery under interrupted publication, restart soak, point-in-time restore from ADLS versions. Moves 2.x from 4 to 6 and is the gate for retiring PostgreSQL.
 
