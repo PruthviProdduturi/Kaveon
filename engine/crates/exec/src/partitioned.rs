@@ -1567,6 +1567,7 @@ pub const MAX_JOIN_SPILL_DEPTH: u32 = 3;
 const JOIN_SKEW_SPLIT_RATIO: u128 = 4;
 const JOIN_SKEW_SPLIT_MIN_ROWS: u64 = 4_096;
 const JOIN_SKEW_SPLIT_MIN_BYTES: u64 = 4 * 1024 * 1024;
+const JOIN_ADAPTIVE_MAX_PARTITIONS: usize = 256;
 
 const JOIN_SPILL_METRICS_RESOURCE: &str = "kaveon.exec.join-spill-metrics.v1";
 
@@ -1727,6 +1728,26 @@ fn skewed_partition_index(partitions: &[Vec<SpillRun>]) -> Option<usize> {
     } else {
         bytes_skewed.then_some(byte_index)
     }
+}
+
+/// Choose a bounded secondary fanout for a measured hot join bucket. The
+/// estimate uses the bytes already captured by both spill writers and targets
+/// no more than one quarter of the active query budget per child. Equal keys
+/// can still remain skewed, so this only changes the fanout; the existing
+/// depth cap remains the fail-closed guard.
+fn adaptive_join_partition_count(
+    base_count: usize,
+    hot_left_bytes: u64,
+    hot_right_bytes: u64,
+    limit_bytes: u64,
+) -> usize {
+    let hot_bytes = hot_left_bytes.saturating_add(hot_right_bytes);
+    let target_bytes = (limit_bytes / 4).max(1);
+    let estimated = hot_bytes
+        .div_ceil(target_bytes)
+        .try_into()
+        .unwrap_or(JOIN_ADAPTIVE_MAX_PARTITIONS);
+    estimated.max(base_count).min(JOIN_ADAPTIVE_MAX_PARTITIONS)
 }
 
 /// The level a refused build partitions to: the first for a whole
@@ -2043,10 +2064,10 @@ impl PartitionedHashJoin {
         let left_skew = skewed_partition_index(&left_runs);
         let right_skew = skewed_partition_index(&right_runs);
         for (index, (left, right)) in left_runs.into_iter().zip(right_runs).enumerate() {
-            // One bounded secondary split is enough to spread a genuinely
-            // multi-key hot bucket. A single-key bucket remains on the normal
-            // depth-capped path, where it fails closed rather than creating
-            // unbounded spill work.
+            // A bounded secondary split spreads a genuinely multi-key hot
+            // bucket. Its fanout adapts to the measured encoded bytes while a
+            // single-key bucket remains on the normal depth-capped path,
+            // where it fails closed rather than creating unbounded work.
             if depth < MAX_JOIN_SPILL_DEPTH
                 && (left_skew == Some(index) || right_skew == Some(index))
             {
@@ -2061,11 +2082,22 @@ impl PartitionedHashJoin {
                     .map(|(_, key)| key.clone())
                     .collect::<Vec<_>>();
                 let child_depth = depth + 1;
+                let secondary_count = adaptive_join_partition_count(
+                    self.count,
+                    left.iter()
+                        .map(SpillRun::bytes)
+                        .fold(0, u64::saturating_add),
+                    right
+                        .iter()
+                        .map(SpillRun::bytes)
+                        .fold(0, u64::saturating_add),
+                    self.memory.query().snapshot().limit_bytes,
+                );
                 let mut left_source = RunSource::new(Arc::clone(&self.left_schema), left);
                 let left_runs = partition_input_salted(
                     &mut left_source,
                     &left_keys,
-                    self.count,
+                    secondary_count,
                     spill_salt(child_depth),
                     &self.memory,
                     &self.spill,
@@ -2075,7 +2107,7 @@ impl PartitionedHashJoin {
                 let right_runs = partition_input_salted(
                     &mut right_source,
                     &right_keys,
-                    self.count,
+                    secondary_count,
                     spill_salt(child_depth),
                     &self.memory,
                     &self.spill,
@@ -2853,6 +2885,19 @@ mod tests {
         drop(skewed);
         drop(small);
         assert_eq!(disk.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn adaptive_join_fanout_scales_with_hot_bucket_bytes_and_is_bounded() {
+        assert_eq!(adaptive_join_partition_count(16, 1, 1, 64 << 20), 16);
+        assert_eq!(
+            adaptive_join_partition_count(16, 512 << 20, 0, 64 << 20),
+            32
+        );
+        assert_eq!(
+            adaptive_join_partition_count(16, u64::MAX, u64::MAX, 1),
+            256
+        );
     }
 
     #[test]
