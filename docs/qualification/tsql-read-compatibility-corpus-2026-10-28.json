@@ -129,7 +129,7 @@
     {"id": "replicate_dynamic_count", "sql": "SELECT REPLICATE(name, actions - 20) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_row_local_bigint_expressions_and_negative_null_semantics"},
     {"id": "space", "sql": "SELECT SPACE(actions - 20) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_bounded_row_local_bigint_expressions_and_negative_null_semantics"},
     {"id": "try_cast", "sql": "SELECT TRY_CAST(value AS BIGINT) FROM t", "status": "planner_qualified", "distributed_status": "qualified_for_numeric_casts"},
-    {"id": "try_cast_temporal", "sql": "SELECT TRY_CAST(value AS DATE), TRY_CAST(value AS DATETIME2) FROM t", "status": "planner_qualified", "distributed_status": "qualified_date_and_timestamp_invalid_values_return_null"},
+    {"id": "try_cast_temporal", "sql": "SELECT TRY_CAST(value AS DATE), TRY_CAST(value AS DATETIME2), TRY_CAST(value AS DATETIMEOFFSET) FROM t", "status": "planner_qualified", "distributed_status": "qualified_date_timestamp_and_fixed_offset_invalid_values_return_null"},
     {"id": "convert_date_style_us", "sql": "SELECT CONVERT(DATE, '12/31/2024', 101)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
     {"id": "convert_date_style_text", "sql": "SELECT CONVERT(DATE, 'Dec 31 2024', 0)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
     {"id": "convert_date_style_iso_compact", "sql": "SELECT CONVERT(DATE, '20241231', 112)", "status": "planner_qualified", "distributed_status": "qualified_for_literal_styles"},
