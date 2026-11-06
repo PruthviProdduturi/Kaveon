@@ -68,7 +68,11 @@ struct Pages {
 }
 pub struct ResultWriter {
     shared: Arc<Pages>,
-    page: Vec<Vec<Value>>,
+    /// Rows are encoded once when they enter a page.  The previous
+    /// implementation encoded every row to calculate its size and then
+    /// encoded the complete page again on flush, doubling JSON work for wide
+    /// result sets (especially high-cardinality GROUP BY output).
+    page: Vec<Vec<u8>>,
     page_bytes: usize,
     published: bool,
     pub rows: usize,
@@ -288,7 +292,8 @@ impl Drop for Pages {
 }
 impl ResultWriter {
     pub fn push(&mut self, row: Vec<Value>) -> std::io::Result<()> {
-        let bytes = serde_json::to_vec(&row)?.len();
+        let encoded = serde_json::to_vec(&row)?;
+        let bytes = encoded.len();
         if bytes > PAGE_BYTES {
             return Err(std::io::Error::other(
                 "single result row exceeds 4 MiB page limit",
@@ -302,7 +307,7 @@ impl ResultWriter {
         }
         self.page_bytes += bytes;
         self.rows += 1;
-        self.page.push(row);
+        self.page.push(encoded);
         Ok(())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -316,7 +321,17 @@ impl ResultWriter {
                 "result was removed before it completed",
             ));
         }
-        let encoded = serde_json::to_vec(&self.page)?;
+        // Each row is already valid JSON.  Assemble the enclosing array
+        // without serializing the values a second time.
+        let mut encoded = Vec::with_capacity(self.page_bytes + self.page.len() + 2);
+        encoded.push(b'[');
+        for (index, row) in self.page.iter().enumerate() {
+            if index != 0 {
+                encoded.push(b',');
+            }
+            encoded.extend_from_slice(row);
+        }
+        encoded.push(b']');
         let bytes = encoded.len() as u64;
         if shared.bytes.load(Ordering::Acquire) + bytes > shared.query_bytes {
             return Err(std::io::Error::other(format!(
