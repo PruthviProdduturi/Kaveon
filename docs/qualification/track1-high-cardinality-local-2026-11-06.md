@@ -33,6 +33,18 @@ It isolates high-cardinality grouping and join-to-aggregate materialization as
 the next profiling target. The run is too small and too short to qualify the
 publication gate; it does not establish superiority over Trino.
 
+## Server-side profile follow-up
+
+The qualification harness now retains one bounded telemetry sample per Kaveon
+case. A one-million-row repeat showed that `high_groups` spent about 52 ms of
+aggregate CPU on its dominant partial task, while the end-to-end client time
+was about 2.7 s. The grouped-join stages similarly showed exchange fetch/wait
+time substantially larger than operator CPU. This shifts the next optimization
+from another hash-table rewrite to result delivery, exchange scheduling, and
+coordinator overhead. The profile is diagnostic only; the runtime must expose
+explicit serialization timing before attributing the remaining wall time to a
+single subsystem.
+
 ## Follow-up gate
 
 Before changing the algorithm, capture CPU, allocation, exchange bytes, and
