@@ -697,6 +697,150 @@ mod tests {
         assert!(scheduler.complete(&takeover.task_id));
     }
 
+    /// Every attempt a takeover supersedes stays fenced, not just the last one.
+    ///
+    /// The single-takeover case is covered. This drives one split through
+    /// successive takeovers and then offers each superseded attempt back, which
+    /// is where a scheduler that remembers "the superseded attempt" rather than
+    /// "the current attempt" fails: it accepts a result from a worker two
+    /// generations stale, and that is a wrong answer rather than an error.
+    #[test]
+    fn every_superseded_attempt_stays_fenced_across_successive_takeovers() {
+        let mut scheduler = super::SplitScheduler::new("query", StageId(21), vec![split("only")]);
+        let mut superseded = Vec::new();
+        let mut live = scheduler.lease_at("worker-0", 1, 100).unwrap();
+
+        // Each round expires the live attempt and hands the split to the next
+        // worker. The lease window is 100ms, so now advances past it each time.
+        for round in 1..3u64 {
+            let now = 100 + round * 200;
+            let takeover = scheduler
+                .steal_expired(&live.task_id, &*format!("worker-{round}"), now, 100)
+                .expect("an expired lease can be taken over");
+            assert_eq!(
+                takeover.task_id.attempt,
+                live.task_id.attempt + 1,
+                "attempts advance by one per takeover"
+            );
+            superseded.push(live.task_id.clone());
+            live = takeover;
+        }
+
+        // The test is only meaningful if more than one generation was
+        // superseded: with a single stale attempt it cannot tell a scheduler
+        // that fences all of them from one that fences only the last.
+        assert_eq!(superseded.len(), 2, "two generations must be superseded");
+
+        // Every generation behind the live attempt is refused, oldest included.
+        for stale in &superseded {
+            assert!(
+                !scheduler.heartbeat(stale, 10_000),
+                "attempt {} must not keep a lease alive",
+                stale.attempt
+            );
+            assert!(
+                !scheduler.complete(stale),
+                "attempt {} must not be able to complete the split",
+                stale.attempt
+            );
+        }
+
+        // And the live attempt still owns it.
+        assert!(scheduler.heartbeat(&live.task_id, 10_001));
+        assert!(scheduler.complete(&live.task_id));
+        assert!(
+            !scheduler.complete(&live.task_id),
+            "a completed split cannot be completed twice"
+        );
+    }
+
+    /// Over repeated expiry rounds every split completes exactly once, and a
+    /// lease that keeps heartbeating is never taken from under it.
+    ///
+    /// The existing cases expire everything or nothing. Here half the leases
+    /// heartbeat through each sweep while the other half lapse, which is the
+    /// shape that catches a sweep expiring by wall clock rather than by each
+    /// lease's own last heartbeat.
+    #[test]
+    fn repeated_expiry_rounds_complete_each_split_once_and_spare_live_leases() {
+        let splits: Vec<_> = (0..6).map(|n| split(&format!("s{n}"))).collect();
+        let mut scheduler = super::SplitScheduler::new("query", StageId(22), splits.clone());
+
+        let mut held = Vec::new();
+        for n in 0..splits.len() {
+            held.push(
+                scheduler
+                    .lease_at(&*format!("worker-{n}"), 1, 1_000)
+                    .expect("every split can be leased"),
+            );
+        }
+        assert_eq!(scheduler.leased_task_count(), splits.len());
+
+        // Three sweeps. The even leases heartbeat and must survive; the odd
+        // ones lapse and must be requeued, then taken by a fresh worker.
+        let mut completed = 0usize;
+        for round in 0..3u64 {
+            let now = 1_000 + (round + 1) * 200;
+            for (index, lease) in held.iter().enumerate() {
+                if index % 2 == 0 {
+                    assert!(
+                        scheduler.heartbeat(&lease.task_id, now - 10),
+                        "a live lease keeps its attempt"
+                    );
+                }
+            }
+            let expired = scheduler.expire_leases(now, 100);
+            // Exactly the leases that stopped heartbeating, and none of
+            // the ones that kept going. Naming them is the point: a sweep
+            // that expires by wall clock rather than by each lease's own
+            // last heartbeat takes the live ones too, and a count alone
+            // would not notice if it took the wrong half.
+            let lapsed: Vec<_> = held
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| index % 2 == 1)
+                .map(|(_, lease)| lease.task_id.clone())
+                .collect();
+            if round == 0 {
+                assert_eq!(
+                    expired, lapsed,
+                    "the sweep expires the lapsed leases and only those"
+                );
+            }
+            // Only the lapsed half can expire, and only on the first sweep --
+            // afterwards they are queued rather than leased.
+            if round == 0 {
+                // Re-lease the requeued splits and finish them.
+                while let Some(retry) = scheduler.lease_at("worker-fresh", 1, now + 1) {
+                    assert!(scheduler.complete(&retry.task_id));
+                    completed += 1;
+                }
+            } else {
+                assert!(
+                    expired.is_empty(),
+                    "nothing is left to expire once the lapsed half is done"
+                );
+            }
+        }
+
+        // The heartbeating half is still live and completes normally.
+        for (index, lease) in held.iter().enumerate() {
+            if index % 2 == 0 {
+                assert!(
+                    scheduler.complete(&lease.task_id),
+                    "a lease that heartbeated throughout still owns its split"
+                );
+                completed += 1;
+            }
+        }
+        assert_eq!(
+            completed,
+            splits.len(),
+            "each split completes exactly once across the rounds"
+        );
+        assert_eq!(scheduler.leased_task_count(), 0, "no lease is left behind");
+    }
+
     #[test]
     fn expiry_retries_are_served_in_partition_order() {
         let mut scheduler = super::SplitScheduler::new(

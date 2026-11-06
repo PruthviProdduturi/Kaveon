@@ -18983,6 +18983,151 @@ mod tests {
 
     /// Cancelling a queued statement by ID leaves the queue at once and
     /// answers the submitter with the cancellation.
+    /// Cancelling several queued statements at once must cancel exactly those,
+    /// release each queue slot once, and leave the rest runnable.
+    ///
+    /// The other cancellation tests each have one statement in flight, where
+    /// cross-talk cannot show: a shared flag or a mis-keyed registry entry
+    /// looks correct until a second statement is waiting, and then it fails
+    /// quietly, because the caller whose statement was cancelled by mistake
+    /// sees CANCELED and believes it.
+    #[tokio::test]
+    async fn concurrent_cancellation_cancels_only_its_targets_and_balances_admission() {
+        let (state, directory) = admission_test_state(8).await;
+        // One occupying admission holds the pool, so everything below queues
+        // instead of running -- which is the state a cancellation race needs.
+        let occupied = state
+            .memory_admission
+            .admit("occupying", state.config.query_memory_limit_bytes)
+            .unwrap();
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+
+        // Distinct statements, so each is identifiable in the store by its SQL.
+        let statements: Vec<String> = (0..6)
+            .map(|n| format!("SELECT id FROM orders WHERE id > {n} ORDER BY id"))
+            .collect();
+        let mut submitting = Vec::new();
+        for sql in &statements {
+            let state = state.clone();
+            let analyst = analyst.clone();
+            let sql = sql.clone();
+            submitting.push(tokio::spawn(async move {
+                submit(
+                    &state,
+                    &analyst,
+                    &sql,
+                    serde_json::json!({"result_cache": false}),
+                )
+                .await
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Looked up one statement at a time, by its own SQL. `QUERY_STORE`
+        // is a process global and the suite runs tests in parallel, so
+        // counting every Queued record in it counts other tests' statements
+        // too -- which is a count this test has no business asserting.
+        let queued: std::collections::HashMap<String, String> = {
+            let store = super::QUERY_STORE.read().await;
+            statements
+                .iter()
+                .map(|sql| {
+                    let id = store
+                        .queries
+                        .values()
+                        .find(|record| {
+                            record.sql == *sql && matches!(record.state, super::QueryState::Queued)
+                        })
+                        .map(|record| record.id.clone())
+                        .unwrap_or_else(|| {
+                            panic!("{sql} should be queued behind the occupying admission")
+                        });
+                    (sql.clone(), id)
+                })
+                .collect()
+        };
+
+        // Cancel half of them, concurrently, and leave the other half alone.
+        let targets: Vec<&String> = statements.iter().step_by(2).collect();
+        let survivors: Vec<&String> = statements.iter().skip(1).step_by(2).collect();
+        let mut cancelling = Vec::new();
+        for sql in &targets {
+            let id = queued[*sql].clone();
+            let state = state.clone();
+            let analyst = analyst.clone();
+            cancelling.push(tokio::spawn(async move {
+                super::cancel_trino_query(
+                    axum::extract::State(state),
+                    axum::Extension(analyst),
+                    axum::extract::Path(id),
+                )
+                .await
+                .status()
+            }));
+        }
+        for cancelled in cancelling {
+            assert_eq!(
+                cancelled.await.unwrap(),
+                axum::http::StatusCode::NO_CONTENT,
+                "each cancellation should be accepted"
+            );
+        }
+
+        // Exactly the targets are cancelled; the survivors keep their slots.
+        for sql in &targets {
+            let id = &queued[*sql];
+            assert_eq!(
+                record(id, &analyst).await["state"],
+                "CANCELED",
+                "{sql} was a cancellation target"
+            );
+        }
+        for sql in &survivors {
+            let id = &queued[*sql];
+            assert_ne!(
+                record(id, &analyst).await["state"],
+                "CANCELED",
+                "{sql} was never cancelled and must not have been"
+            );
+        }
+
+        // Each cancelled slot is withdrawn once -- not leaked, not twice --
+        // and nothing was rejected, because the queue had room for all of them.
+        let stats = state.memory_admission.stats();
+        assert_eq!(
+            (stats.withdrawn, stats.rejected),
+            (targets.len() as u64, 0),
+            "one withdrawal per cancellation and no rejections"
+        );
+        assert_eq!(
+            stats.queue_depth,
+            survivors.len(),
+            "the survivors are still queued"
+        );
+
+        // Releasing the pool lets the survivors through, which proves the
+        // cancellations did not drain the queue or leave it unwoken.
+        drop(occupied);
+        for (index, handle) in submitting.into_iter().enumerate() {
+            let (status, body) = handle.await.unwrap();
+            if index % 2 == 0 {
+                assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+                assert_eq!(body["code"], "QUERY_CANCELED");
+            } else {
+                assert_ne!(
+                    status,
+                    axum::http::StatusCode::CONFLICT,
+                    "a survivor must not report a conflict: {body}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[tokio::test]
     async fn a_queued_statement_can_be_cancelled_by_id() {
         let (state, directory) = admission_test_state(2).await;
