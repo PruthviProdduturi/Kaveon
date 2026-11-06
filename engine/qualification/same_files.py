@@ -314,6 +314,48 @@ def main():
                             case["stages"] = len(history.get("stages", []))
                             mode = (history.get("execution") or {}).get("mode")
                             case["execution_mode"] = mode
+                            # Retain one representative server-side timing
+                            # sample so a slow case can be diagnosed without
+                            # guessing from client wall time.  This is
+                            # deliberately bounded to one sample per case;
+                            # the benchmark remains a latency harness, not a
+                            # telemetry dump.
+                            if repetition == args.warmups:
+                                execution = history.get("execution") or {}
+                                timings = history.get("timings") or {}
+                                case["kaveon_telemetry"] = {
+                                    key: history.get(key, timings.get(key, execution.get(key)))
+                                    for key in (
+                                        "planning_us",
+                                        "execution_us",
+                                        "result_serialization_us",
+                                        "elapsed_ms",
+                                    )
+                                    if execution.get(key) is not None
+                                }
+                                case["kaveon_telemetry"]["stages"] = [
+                                    {
+                                        key: stage.get(key)
+                                        for key in ("stage_id", "state", "elapsed_us", "final_output_rows")
+                                        if stage.get(key) is not None
+                                    }
+                                    for stage in history.get("stages", [])
+                                    if isinstance(stage, dict)
+                                ]
+                                case["kaveon_telemetry"]["tasks"] = [
+                                    {
+                                        "stage_id": stage.get("stage_id"),
+                                        "task_id": task.get("task_id"),
+                                        "elapsed_us": task.get("elapsed_us"),
+                                        "output_rows": task.get("output_rows"),
+                                        "output_bytes": task.get("output_bytes"),
+                                        "execution": task.get("execution"),
+                                    }
+                                    for stage in history.get("stages", [])
+                                    if isinstance(stage, dict)
+                                    for task in (stage.get("tasks") or [])
+                                    if isinstance(task, dict)
+                                ]
                             # Exact catalog/context counts are intentionally answered
                             # without worker stages. Keep the distributed guard for every
                             # other shape so a real local fallback cannot go unnoticed.
