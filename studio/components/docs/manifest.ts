@@ -61,6 +61,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
   {
     label: "Intelligence",
     items: [
+      { title: "Kaveon IQ", href: "/docs/iq", description: "The governed intelligence layer that connects DLM, Engine, and Studio.", keywords: ["iq", "context", "agent"], status: "Reference" },
       { title: "Data Language Model", href: "/docs/dlm", description: "Understand Kaveon's compiled semantic layer.", keywords: ["dlm"], status: "Stable" },
       { title: "DLM · NL→SQL", href: "/docs/nl-to-sql", description: "Turn questions into deterministic queries.", keywords: ["natural language", "dlm"], status: "Stable" },
       { title: "Freshness Algorithm", href: "/docs/freshness", description: "Route between context and live data.", status: "Stable" },

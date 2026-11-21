@@ -327,7 +327,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 | Optimized ingest opt-in | Rewriting is explicit and remains in customer storage |
 | Deterministic DLM | No hallucination, hosted-model dependency, or per-question model cost |
 | Catalog/schema/table hierarchy | Multi-source identity independent of physical location |
-| Modular monorepo | Three pillars evolve independently but ship as one product |
+| Modular monorepo | Kaveon IQ connects three pillars that evolve independently but ship as one governed product |
 
 ## Known architectural debt
 

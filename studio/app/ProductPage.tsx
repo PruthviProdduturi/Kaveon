@@ -328,9 +328,9 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       <section style={{ padding: "96px 24px", background: "#0a0a0a", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 1080, margin: "0 auto" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>The Unified Data Intelligence Platform</div>
-            <h2 style={{ fontSize: "clamp(30px, 4vw, 44px)", fontWeight: 700, letterSpacing: "-1px", marginBottom: 14 }}>Three pillars. One governed system.</h2>
-            <p style={{ maxWidth: 720, margin: "0 auto", color: "#8b98a9", fontSize: 16, lineHeight: 1.75 }}>Studio is the intelligence surface. The Data Language Model resolves supported questions deterministically. The Rust Engine provides the vectorized analytical foundation beneath both.</p>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Kaveon IQ · The unified intelligence platform</div>
+            <h2 style={{ fontSize: "clamp(30px, 4vw, 44px)", fontWeight: 700, letterSpacing: "-1px", marginBottom: 14 }}>One governed intelligence system. Three connected pillars.</h2>
+            <p style={{ maxWidth: 760, margin: "0 auto", color: "#8b98a9", fontSize: 16, lineHeight: 1.75 }}>Kaveon IQ brings together the Data Language Model, Kaveon Engine, and Kaveon Studio: deterministic context, distributed execution, and a product surface for asking, exploring, and sharing answers.</p>
           </Anim>
           <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18 }}>
             {[

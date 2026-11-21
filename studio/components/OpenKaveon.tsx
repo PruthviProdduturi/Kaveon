@@ -24,8 +24,16 @@ import type { CSSProperties, ReactNode } from "react";
  * one configuration change and every entry point follows. Unset, this is an
  * ordinary link and costs one boolean.
  */
-const PAUSED = process.env.NEXT_PUBLIC_KAVEON_SERVICE_NOTICE;
+const RAW_PAUSED = process.env.NEXT_PUBLIC_KAVEON_SERVICE_NOTICE;
 const RETURNS = process.env.NEXT_PUBLIC_KAVEON_SERVICE_NOTICE_RETURNS;
+
+// A stale return date must never leave the public entry point looking like a
+// grey disabled control. The environment flag is still the explicit switch;
+// when it carries a date, the notice expires automatically after that date.
+const PAUSED = Boolean(
+  RAW_PAUSED &&
+    (!RETURNS || !Number.isFinite(Date.parse(RETURNS)) || Date.parse(RETURNS) > Date.now()),
+);
 
 /** True while the hosted demo is deliberately offline. */
 export function servicePaused() {

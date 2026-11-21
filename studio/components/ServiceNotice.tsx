@@ -31,11 +31,16 @@ const STORAGE_KEY = "kaveon.service-notice.dismissed";
 export function ServiceNotice() {
   const notice = process.env.NEXT_PUBLIC_KAVEON_SERVICE_NOTICE;
   const returns = process.env.NEXT_PUBLIC_KAVEON_SERVICE_NOTICE_RETURNS;
+  const returnAt = returns ? Date.parse(returns) : Number.NaN;
+  const activeNotice = Boolean(
+    notice &&
+      (!returns || !Number.isFinite(returnAt) || returnAt > Date.now()),
+  );
   const [open, setOpen] = useState(false);
   const dismissRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    if (!notice) return;
+    if (!activeNotice) return;
     // A dismissal is a per-browser convenience, not state anything depends
     // on: if it cannot be read the notice simply shows again, which is the
     // safe direction for a message about the service being unavailable.
@@ -46,7 +51,7 @@ export function ServiceNotice() {
       dismissed = false;
     }
     setOpen(!dismissed);
-  }, [notice]);
+  }, [activeNotice, notice]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +64,7 @@ export function ServiceNotice() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  if (!notice || !open) return null;
+  if (!activeNotice || !notice || !open) return null;
 
   function dismiss() {
     setOpen(false);
