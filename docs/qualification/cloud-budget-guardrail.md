@@ -18,3 +18,8 @@ Before any AKS/ADLS run:
 Local Docker and emulator qualification remains the default path and has no
 incremental cloud spend. This guardrail does not claim any cloud gate has
 passed; it prevents an unbounded cloud qualification attempt.
+
+The default root Compose profile was verified on 2026-11-22 to expose only
+`engine-coordinator`, two Engine workers, `api`, and `studio`; PostgreSQL and
+Azurite are opt-in profiles/services and are not started by the normal local
+stack.
