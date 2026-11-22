@@ -27,6 +27,12 @@ Read-only inspection of subscription `00000000-0000-4000-8000-000000000000`
   and its disk was retained for reversible rollback.
 - `kaveonlake`: Standard ZRS storage.
 - `kaveon-logs`: Log Analytics, `PerGB2018`, 30-day retention.
+- `kaveon-logs` ingestion is now capped at **0.1 GB/day** (`dailyQuotaGb=0.1`)
+  to prevent unbounded telemetry spend; retention remains 30 days.
+- Both stopped AKS managed VM scale sets have **zero instances**; no AKS worker
+  compute is currently running.
+- `kaveonacr` is Basic tier; image publication uses bounded CI/ACR builds and
+  does not require an AKS runtime.
 - Two additional AKS-related storage accounts in the managed resource group.
 - No NAT gateway was returned by the subscription inventory.
 
@@ -41,8 +47,9 @@ until the owner confirms current-month spend.
 2. Keep either the VM or the AKS serving path, not both, during qualification.
 3. Remove or retain the stopped cluster only after checking its disks, public
    IPs, and rollback requirement.
-4. Keep one `Standard_B2s` worker, NAT disabled, and Log Analytics ingestion
-   bounded; stop/deallocate resources immediately after each gate.
+4. Keep one `Standard_B2s` worker only for an approved qualification window,
+   NAT disabled, and Log Analytics ingestion bounded; stop/deallocate resources
+   immediately after each gate.
 
 The local Docker qualification path remains the default and is the only path
 that can continue without a verified cloud spend total. The post-stop preflight
