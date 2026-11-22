@@ -1,6 +1,6 @@
-# Kaveon IQ context contract
+# Kaveon Intelligence context contract
 
-Kaveon IQ is the governed intelligence layer that connects three product
+Kaveon Intelligence is the governed intelligence layer that connects three product
 pillars: Kaveon Studio, the deterministic Data Language Model (DLM), and
 Kaveon Engine. This document defines the context that may be used to answer a
 question and the evidence that must travel with the answer.
@@ -165,7 +165,7 @@ may evolve with the API version.
 
 ## Acceptance criteria
 
-Kaveon IQ may claim this contract as shipping only when the following are true:
+Kaveon may claim this contract as shipping only when the following are true:
 
 - The same supported question resolves to the same dataset, metric, and SQL
   under the same context version and permissions.

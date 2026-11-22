@@ -8,7 +8,7 @@ export default function DocsIntro() {
       <PageHeader
         eyebrow="Introduction"
         title="Kaveon documentation"
-        lead="Kaveon is a unified data intelligence platform: Kaveon IQ brings together KaveonDB transactional records, a distributed columnar query engine, a deterministic Data Language Model, and a complete analytics studio — built as one system over data that stays in storage you own."
+        lead="Kaveon is a unified data intelligence platform: Kaveon Intelligence brings together KaveonDB transactional records, a distributed columnar query engine, a deterministic Data Language Model, and a complete analytics studio — built as one system over data that stays in storage you own."
       />
 
       <h2>The idea</h2>
@@ -18,13 +18,13 @@ export default function DocsIntro() {
         place where cost, latency, and correctness leak.
       </p>
       <p>
-        Kaveon IQ is built as <strong>one system with three connected pillars</strong>. The engine is ours, so query
+        Kaveon Intelligence is built as <strong>one system with three connected pillars</strong>. The engine is ours, so query
         execution is not rented. The language layer is deterministic, so a question resolves through
         inspectable rules rather than a model&rsquo;s guess. The studio is the surface over both, not the
         product boundary.
       </p>
 
-      <h2>Three pillars of Kaveon IQ</h2>
+      <h2>Three pillars of Kaveon</h2>
       <table>
         <thead>
           <tr><th>Pillar</th><th>What it is</th><th>Maturity</th></tr>
@@ -116,7 +116,7 @@ export default function DocsIntro() {
         <li><strong>Getting Started</strong> — what Kaveon is, a runnable quickstart, and the core concepts reused everywhere.</li>
         <li><strong>Platform</strong> — architecture, the API surface, and the connector matrix.</li>
         <li><strong>Studio</strong> — SQL Lab, charts, dashboards, semantic datasets, and data sources.</li>
-        <li><strong>Intelligence</strong> — Kaveon IQ, the Data Language Model, NL→SQL, and freshness-based routing.</li>
+        <li><strong>Intelligence</strong> — Kaveon Intelligence, the Data Language Model, NL→SQL, and freshness-based routing.</li>
         <li><strong>Engine</strong> — the Rust engine manual: architecture, SQL, distributed runtime, storage, and memory.</li>
         <li><strong>CLI</strong> — installation, authenticated connections, interactive commands, catalog administration, and automation.</li>
         <li><strong>Deploy &amp; Operate</strong> — deployment, auth and RBAC, operations, troubleshooting, upgrades, and releases.</li>

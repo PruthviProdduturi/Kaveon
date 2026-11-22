@@ -22,9 +22,9 @@ Kaveon combines a columnar analytical engine, deterministic data intelligence, a
   <img src="docs/reference/kaveon-intelligence-loop.svg" alt="A question flows through Kaveon DLM, Engine, and Studio while data remains in customer-owned storage" width="960">
 </div>
 
-## Kaveon IQ: three connected pillars, one governed system
+## Kaveon Intelligence: three connected pillars, one governed system
 
-Kaveon IQ is the intelligence layer and product experience that brings the three
+Kaveon Intelligence is the intelligence layer and product experience that brings the three
 pillars together. It is not a fourth runtime: the DLM remains the deterministic
 semantic path, the Engine remains the execution path, and Studio remains the
 human-facing workspace.

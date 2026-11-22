@@ -1,6 +1,6 @@
-# Kaveon IQ agent API contract
+# Kaveon Intelligence agent API contract
 
-Kaveon IQ is the product contract for a governed data agent. It connects the
+Kaveon Intelligence is the product contract for a governed data agent. It connects the
 Studio experience, the deterministic Data Language Model (DLM), and Kaveon
 Engine without turning the agent into an unbounded chatbot or an untrusted SQL
 proxy.
@@ -25,7 +25,7 @@ An IQ request must be:
 6. **Cancellable** when a user leaves a page, closes a chat, or explicitly
    stops a request.
 
-IQ does not claim arbitrary enterprise reasoning, unrestricted cross-source
+Kaveon does not claim arbitrary enterprise reasoning, unrestricted cross-source
 joins, or a hosted LLM call. If the governed system cannot answer safely, it
 returns a structured refusal or clarification.
 
@@ -285,6 +285,6 @@ The unified agent surface may be called shipping when:
 * the public documentation labels target features separately from implemented
   behavior.
 
-The contract does not require pretending that Kaveon IQ is a general-purpose
+The contract does not require pretending that Kaveon Intelligence is a general-purpose
 LLM agent. Its advantage is governed, reproducible data reasoning with a
 clear handoff to Kaveon Engine.

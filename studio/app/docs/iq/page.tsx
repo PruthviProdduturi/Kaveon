@@ -1,18 +1,18 @@
 import { PageHeader, Callout, Pager } from "../../../components/docs/prose";
 
-export const metadata = { title: "Kaveon IQ" };
+export const metadata = { title: "Kaveon Intelligence" };
 
 export default function KaveonIqDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
         eyebrow="Intelligence"
-        title="Kaveon IQ"
+        title="Kaveon Intelligence"
         lead="The governed intelligence layer that connects Kaveon’s deterministic Data Language Model, distributed Engine, and Studio experience."
       />
 
       <Callout type="note">
-        Kaveon IQ is an umbrella product experience, not a fourth runtime. The DLM remains the
+        Kaveon Intelligence is a capability for individuals, teams, and organizations—not a fourth runtime. The DLM remains the
         deterministic semantic path, the Engine remains the execution path, and Studio remains the
         user-facing workspace.
       </Callout>
@@ -27,7 +27,7 @@ export default function KaveonIqDocs() {
         </tbody>
       </table>
 
-      <h2>What Kaveon IQ governs</h2>
+      <h2>What Kaveon Intelligence governs</h2>
       <ul>
         <li><strong>Context:</strong> metrics, dimensions, relationships, aliases, source locations, and freshness.</li>
         <li><strong>Resolution:</strong> deterministic matching, supported question classes, and refusal when evidence is insufficient.</li>
@@ -38,7 +38,7 @@ export default function KaveonIqDocs() {
 
       <h2>Agent boundary</h2>
       <p>
-        External agents may ask Kaveon IQ for a grounded answer, but they do not receive unrestricted
+        External agents may ask Kaveon Intelligence for a grounded answer, but they do not receive unrestricted
         database access. The request is evaluated against identity and permissions, resolved through the
         DLM when supported, and otherwise routed to a bounded Engine query. Every answer carries its
         evidence and refusal reason when Kaveon cannot prove the result.
@@ -49,7 +49,7 @@ export default function KaveonIqDocs() {
         The deterministic DLM path, Engine execution, Studio surfaces, freshness routing, and audit
         metadata are current product capabilities. Cross-source semantic graphs, broader agent tool
         orchestration, and enterprise-wide knowledge federation are target work and are not implied by
-        the Kaveon IQ name.
+        the Kaveon Intelligence name.
       </p>
 
       <Pager prev={{ href: "/docs/dlm", title: "Data Language Model" }} next={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }} />

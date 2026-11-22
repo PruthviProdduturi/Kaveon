@@ -1,6 +1,6 @@
-# Kaveon IQ evaluation program
+# Kaveon Intelligence evaluation program
 
-Kaveon IQ is the governed intelligence experience above Kaveon’s three pillars:
+Kaveon Intelligence is the governed intelligence experience above Kaveon’s three pillars:
 the deterministic Data Language Model (DLM), Kaveon Engine, and Kaveon Studio.
 This plan evaluates measurable outcomes commonly expected from Fabric IQ-style
 experiences without claiming that the products have identical scope.
@@ -97,7 +97,7 @@ denial with no data leakage.
 
 ## Local release gate
 
-Kaveon IQ is locally qualified only when the DLM corpus has exact expected
+Kaveon Intelligence is locally qualified only when the DLM corpus has exact expected
 routes and evidence, deterministic replay has identical digests, freshness
 invalidation has a rebuild receipt, RBAC negative tests show no leakage,
 cancellation leaves no retained result/exchange files, engine exact-result and

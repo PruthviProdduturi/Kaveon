@@ -5,11 +5,11 @@ export const metadata = { title: "Architecture" };
 export default function ArchitectureDocs() {
   return (
     <div className="docs-prose">
-      <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon IQ is one product with three connected pillars: Kaveon Studio, the deterministic Data Language Model, and the Rust analytical Engine. Together they provide the governed product surface, semantic intelligence, and distributed execution path for lake-backed statements." />
+      <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three connected pillars: Kaveon Studio, the deterministic Data Language Model, and the Rust analytical Engine. Together they provide the governed product surface, semantic intelligence, and distributed execution path for lake-backed statements." />
 
       <Callout type="note"><strong>Status vocabulary:</strong> Current means it is in the request path people use. Alpha means the path is implemented and qualified, but its SQL and cloud-format coverage is still expanding. Target means approved architecture that is not yet implemented.</Callout>
 
-      <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Kaveon IQ architecture showing Studio, DLM, and Engine with current and target boundaries" caption="Kaveon IQ is the umbrella experience; its product boundary includes all three pillars. Solid connections are current; explicitly labeled target connections are roadmap architecture. Open the diagram for a full-size view." />
+      <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Kaveon architecture showing Studio, DLM, and Engine with current and target boundaries" caption="Kaveon Intelligence is the governed capability across all three pillars. Solid connections are current; explicitly labeled target connections are roadmap architecture. Open the diagram for a full-size view." />
 
       <h2>Runtime boundaries</h2>
       <table>
