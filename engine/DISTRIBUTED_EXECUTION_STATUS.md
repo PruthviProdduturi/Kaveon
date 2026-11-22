@@ -4,6 +4,17 @@ This file is a reviewed capability snapshot for Kaveon's distributed analytical 
 
 ## Current baseline
 
+### Release qualification (2026-11-22)
+
+The Engine is release-qualified for the declared local Docker scope: the
+release workspace suite, strict Clippy/format gates, two-worker recovery and
+pressure runs, exchange-loss recovery, soak, and storage release suite all
+pass. The corresponding GitHub Actions Check & Test job passed on commit
+`9d491fe9`. Cloud-production qualification remains explicitly open for ADLS
+data-plane, endurance/failover, live identity isolation, scale/SLO, and
+release-operations evidence; those gates require an approved budget-capped
+cloud run and are not implied by local results.
+
 - Branch: `dev`
 - Execution unit: Arrow `RecordBatch`
 - Storage partitioning: deterministic Parquet row-group and Delta active-file partitions; Parquet, Delta (JSON commits and v1 checkpoints, pinned version) and Iceberg on local disk and ADLS Gen2 (decoder lanes, pinned object identity); S3 through the same reader, unqualified. A plain Parquet directory is a supported table: the coordinator lists and pins files/row groups, carries bounded assignments to workers, and workers verify the listing digest before reading; remote object-store qualification remains open.
