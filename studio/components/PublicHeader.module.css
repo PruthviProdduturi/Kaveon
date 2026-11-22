@@ -2,7 +2,7 @@
 .header.aboutHeader { min-height: 72px; padding: 0 clamp(20px,2.5vw,44px); border-bottom: 0 !important; backdrop-filter: none; box-shadow: none;
   /* Keep the public chrome on the same true-black ground as the hero. A
      translucent scrim reads as a grey header band on large displays. */
-  background: #0a0a0a !important; }
+  background: transparent !important; }
 .brand { display: flex; align-items: center; text-decoration: none; }
 .brand:hover, .brand:active, .aboutHeader .brand, .aboutHeader .brand:hover, .aboutHeader .brand:active { border-color: transparent !important; background: transparent !important; box-shadow: none !important; }
 .nav { display: flex; align-items: center; gap: 32px; }
