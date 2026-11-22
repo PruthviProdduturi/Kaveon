@@ -46,6 +46,12 @@ run. A passing local gate does not silently imply cloud production readiness.
   release. Its ACR QuickRun `cc17x` succeeded and published
   `kaveon-engine:fe32d2ec41a2102f0ecd92e27381373ef1a53fb4` with immutable
   digest `sha256:38c7361fdcbe1792252677ca50f4164f2c36f2eb693261dee9cf8dee57ad9565`.
+- Push run `45024869185` for commit `a736e3b8` passed Check & Test, all three
+  cross-platform builds, release creation, and bounded ACR publication. The
+  published image is
+  `kaveon-engine:a736e3b85e68a49a6a52bd505e2acfde46c35738` with immutable
+  digest `sha256:7d54c7bc2081e36efcceadc3f777e293e89b9bc74173a005a462d096d128c38d`.
+  The ACR build was constrained to 1,800 seconds and the CI job to 35 minutes.
 
 ## Release gates — still open
 
