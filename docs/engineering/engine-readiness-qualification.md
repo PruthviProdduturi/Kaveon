@@ -543,6 +543,9 @@ binary; cloud fault-injection and multi-coordinator recovery remain separate
 gates.
 The bounded two-worker pressure, spill, quota-refusal, and cancellation suite
 also passed for the same binary; cloud endurance remains separate.
+The native two-worker soak reached 50.25 seconds with 231 exact queries and an
+intentional worker loss; history, retained files, queue recovery, and RSS
+bounds passed. Cloud endurance remains separate.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 
