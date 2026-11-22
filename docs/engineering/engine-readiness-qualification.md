@@ -541,6 +541,8 @@ The consolidated Engine maturity tracker is
 The local exchange-loss/retry cleanup check also passed for the current release
 binary; cloud fault-injection and multi-coordinator recovery remain separate
 gates.
+The bounded two-worker pressure, spill, quota-refusal, and cancellation suite
+also passed for the same binary; cloud endurance remains separate.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 

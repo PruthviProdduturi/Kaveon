@@ -19,6 +19,10 @@ run. A passing local gate does not silently imply cloud production readiness.
   exchange materialization; the coordinator returned the exact join result and
   cleaned all exchange chunks. Evidence is in
   [`track1-docker-exchange-loss-2026-11-22.md`](track1-docker-exchange-loss-2026-11-22.md).
+- Docker pressure/cancellation: grouped joins, sort spill, bounded windows,
+  resource refusals, quota failure, and cancellation all passed with cleanup.
+  Evidence is in
+  [`track1-docker-pressure-cancellation-2026-11-22.md`](track1-docker-pressure-cancellation-2026-11-22.md).
 - Bracketed `DISTINCT` identifiers: local REST execution returns the exact
   typed result; evidence is in
   [`track1-bracket-distinct-runtime-2026-11-22.md`](track1-bracket-distinct-runtime-2026-11-22.md).
