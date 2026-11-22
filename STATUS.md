@@ -96,7 +96,7 @@
 | Identity forwarded to the API via shared-secret-authenticated proxy headers (`KAVEON_PROXY_SECRET`) | ✅ Done | Static secret comparison, not per-request signing |
 | RBAC — Viewer < Analyst < Editor < Admin | ✅ Done | |
 | Content visibility — private / internal / published | ✅ Done | |
-| Provider secrets encrypted at rest (Fernet/AES) | 🔄 In Progress | Connection strings remain plaintext in `data_sources`; no vault yet |
+| Provider secrets encrypted at rest (Fernet/AES) | ✅ Done (bounded) | Native writes use KaveonDB secret references; the legacy metadata fallback uses a versioned Fernet keyring; live Key Vault rotation/identity qualification remains a cloud gate |
 | Security headers, parameterization, proxy identity | 🔄 In Progress | Error-detail auditing remains open; see SECURITY.md |
 
 ## Connectors
@@ -131,7 +131,6 @@
 | Issue | Notes |
 |-------|-------|
 | Charts schema uses INT PK but some paths treat id as NVARCHAR(36) | Reconcile |
-| Connection strings stored plaintext in `data_sources` | Needs vault integration |
 | In-process rate limiting not shared across replicas | Redis fixes this |
 | Engine deployment hardening | TLS/auth are implemented; keep the Engine behind the trusted API boundary while rotation, network controls and recovery qualification remain open |
 | Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
