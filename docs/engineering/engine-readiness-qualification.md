@@ -446,6 +446,10 @@ The bounded KaveonDB product transaction contract also passes 8/8 focused
 checks, including atomic staging, CAS winner selection, savepoints, rollback,
 and principal/snapshot binding; see
 [`track1-product-transactions-2026-11-22.md`](../qualification/track1-product-transactions-2026-11-22.md).
+The local statistics contract also passes 4/4 focused checks, including
+source-change bounds, Delta version refresh, exact directory metadata, and
+Utf8View bounds/distinct values; see
+[`track1-statistics-2026-11-22.md`](../qualification/track1-statistics-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
