@@ -15,7 +15,8 @@ run.
 Read-only inspection of subscription `00000000-0000-4000-8000-000000000000`
 (`Visual Studio Enterprise Subscription`) in `westus2` found:
 
-- `kaveon-prod-aks`: **Running**, Free tier, one `Standard_B2s` system node.
+- `kaveon-prod-aks`: Free tier, one `Standard_B2s` system node; it was
+  **stopped during this check** after confirming it had no Kaveon workloads.
 - `kaveon-aks`: **Stopped**, Free tier, one `Standard_D4s_v3` system node and
   three `Standard_D4s_v3` worker nodes; its managed resource group and disks
   remain billable where applicable.
@@ -26,10 +27,10 @@ Read-only inspection of subscription `00000000-0000-4000-8000-000000000000`
 - Two additional AKS-related storage accounts in the managed resource group.
 - No NAT gateway was returned by the subscription inventory.
 
-Before the check, the VM and the running AKS cluster overlapped. The VM is now
-deallocated, leaving AKS as the only active serving compute path; the stopped
-cluster still has retained infrastructure. Do not start another cluster or
-increase worker count until the owner confirms current-month spend.
+Before the check, the VM and the running AKS cluster overlapped. Both serving
+compute paths are now stopped/deallocated, and the stopped legacy cluster still
+has retained infrastructure. Do not start a cluster or increase worker count
+until the owner confirms current-month spend.
 
 ## Required operator decision before cloud qualification
 
@@ -41,6 +42,6 @@ increase worker count until the owner confirms current-month spend.
    bounded; stop/deallocate resources immediately after each gate.
 
 The local Docker qualification path remains the default and is the only path
-that can continue without a verified cloud spend total. The post-deallocation
-preflight still fails closed solely because Cost Management returned no usable
+that can continue without a verified cloud spend total. The post-stop preflight
+still fails closed solely because Cost Management returned no usable
 current-month usage rows.
