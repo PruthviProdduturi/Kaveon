@@ -404,6 +404,19 @@ policy. Publish failures and per-query measurements as well as aggregate results
 See [qualification commands](../../engine/qualification/README.md) and the
 [benchmark protocol](../../engine/benches/README.md).
 
+### Current local release-artifact gate (2026-11-22)
+
+The locked release build and server suite are green on the current `dev`
+revision: 720/720 server tests, strict server Clippy, formatting, and
+`cargo build --workspace --release --locked`. The release Docker image also
+passed the extended two-worker same-file gate (11/11 cases, zero mismatches,
+distributed stages observed). See
+[`track1-server-suite-2026-11-22.md`](../qualification/track1-server-suite-2026-11-22.md)
+and
+[`track1-docker-distributed-2026-11-22.md`](../qualification/track1-docker-distributed-2026-11-22.md).
+These close local correctness and packaging evidence only; the cloud gates
+below remain open until an immutable AKS/ADLS rollout is available.
+
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 
 - Source migration requires a qualified workload-identity secret resolver, atomic catalog/data-source writers, shared visibility parity, and live coupled backfill evidence. The opaque legacy secret reference is not cutover evidence.
