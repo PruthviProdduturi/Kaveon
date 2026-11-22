@@ -1,7 +1,7 @@
 name: Deploy Kaveon Engine to AKS
 
 # Defect D-7: `infra/helm/kaveon-engine` was deployed by nobody. Every change to
-# it — `workers.replicas: 4`, the Trino anti-affinity, the node-sized resource
+# it — worker replica topology, the Trino anti-affinity, the node-sized resource
 # limits — was applied to the live cluster by hand, so the chart and the cluster
 # could disagree without anything saying so.
 #

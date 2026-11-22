@@ -9,6 +9,9 @@ param additionalOperatorIpCidrs array = []
 param restrictApiToOperatorIps bool = false
 @description('Small default node size for budget-capped test clusters. Override only with an approved cost estimate.')
 param nodeSize string = 'Standard_B2s'
+@description('Keep the default test topology to one worker. Override for distributed qualification only with an approved cost estimate.')
+@minValue(1)
+param workerCount int = 1
 
 var suffix = uniqueString(resourceGroup().id)
 var tags = { project: 'kaveon', environment: 'test', owner: 'prproddu' }
@@ -135,7 +138,7 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
       vnetSubnetID: subnet.id
     }, {
       name: 'workers'
-      count: 3
+      count: workerCount
       vmSize: nodeSize
       osType: 'Linux'
       osSKU: 'Ubuntu'

@@ -57,7 +57,7 @@ jobs:
               operatorObjectId="${{ steps.operator.outputs.object_id }}" \
               location="$AZURE_LOCATION" \
               minWorkers=1 \
-              maxWorkers=4
+              maxWorkers=2
 
       - name: Verify cluster and autoscaler bounds
         run: |

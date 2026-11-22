@@ -20,10 +20,10 @@ incremental cloud spend. This guardrail does not claim any cloud gate has
 passed; it prevents an unbounded cloud qualification attempt.
 
 The AKS Bicep defaults are intentionally conservative: `Standard_B2s` nodes
-with one production worker minimum and two maximum (the test template also
-defaults to `Standard_B2s`). Larger node sizes, extra workers, NAT/public IP,
-or additional observability resources require explicit parameter overrides and
-an updated cost estimate before deployment.
+with one production worker minimum and two maximum; the test template uses
+one `Standard_B2s` worker by default. Larger node sizes, extra workers,
+NAT/public IP, or additional observability resources require explicit
+parameter overrides and an updated cost estimate before deployment.
 
 The default root Compose profile was verified on 2026-11-22 to expose only
 `engine-coordinator`, two Engine workers, `api`, and `studio`; PostgreSQL and
