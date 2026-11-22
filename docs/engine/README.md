@@ -15,8 +15,12 @@ that reach the Engine through the API's authenticated bridge.
 | Production-qualified | Scale, concurrency, failure, security, and operations meet release gates |
 
 "Implemented" does not mean production-qualified unless evidence explicitly
-says so. The Engine is alpha throughout: every path below is implemented and
-tested, most are cluster-verified, none is production-qualified.
+says so. The current Engine release is **locally release-qualified for the
+declared scope**: the locked build, correctness, distributed Docker,
+storage-format, transaction, security, cache, pressure, soak, and CLI gates
+are recorded under `docs/qualification/`. AKS/ADLS production gates—cloud
+identity rotation, node/disk failure, backup/restore, upgrade/rollback,
+multi-coordinator consistency, and cloud soak—remain explicitly pending.
 
 ## Manual
 

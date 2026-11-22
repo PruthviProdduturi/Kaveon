@@ -31,7 +31,7 @@ human-facing workspace.
 
 | Pillar | Responsibility | Current state |
 |---|---|---|
-| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; Parquet, Delta and Iceberg reads from local and ADLS storage, SQL, CLI, HTTP server, and a distributed coordinator/worker runtime | Alpha; the native KaveonDB profile is its data and control plane |
+| **Kaveon Engine** | Vectorized Rust query engine over Arrow `RecordBatch` data; Parquet, Delta and Iceberg reads from local and ADLS storage, SQL, CLI, HTTP server, and a distributed coordinator/worker runtime | Locally release-qualified for the declared scope; cloud-production gates remain explicit |
 | **Kaveon DLM** | Deterministic dataset context compilation and natural-language-to-SQL routing without an LLM | Integrated in the Python API |
 | **Kaveon Studio** | Next.js analytics experience for questions, SQL, datasets, charts, and dashboards | Live preview |
 
@@ -158,7 +158,7 @@ The public demo runs with the demo posture on: the platform is read-only below t
 
 Each platform query targets one selected data source; cross-source federated execution is not implemented.
 
-The Engine remains **alpha** as a database: the SQL surface is incomplete against Trino, and the qualification evidence under [`docs/qualification/`](docs/qualification/) is the authority on what has actually been measured rather than this table.
+The Engine is **locally release-qualified for the declared analytical scope**, not a claim of full Trino/PostgreSQL parity. Its SQL surface remains intentionally bounded; the qualification evidence under [`docs/qualification/`](docs/qualification/) is the authority on what has actually been measured rather than this table.
 
 ## Repository map
 

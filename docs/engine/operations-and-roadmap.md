@@ -53,6 +53,8 @@ See the [validation checkpoint](../engineering/checkpoint-2026-09-08.md),
 [CLI guide](../guides/engine-cli.md) and
 [remaining CLI compatibility gaps](../engineering/cli-compatibility.md).
 
-The Engine is a functioning distributed alpha, measured against Trino on a
-matched three-worker cluster (`docs/qualification/`), not yet a
-production-qualified engine.
+The Engine is locally release-qualified for its declared distributed lakehouse
+scope, with the evidence recorded under `docs/qualification/`. It is not yet
+cloud-production-qualified: AKS/ADLS identity rotation, node/disk failure,
+backup/restore, upgrade/rollback, multi-coordinator consistency, and sustained
+cloud soak remain release gates.
