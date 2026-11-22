@@ -36,6 +36,18 @@ The Engine Helm apply workflow has the same explicit approval input and refuses
 an apply whose resolved worker count exceeds two. A read-only plan may still be
 rendered without approval.
 
+Run the read-only subscription preflight before any cloud gate:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-azure-budget-guardrail.ps1
+```
+
+It exits non-zero when current-month Cost Management evidence is unavailable,
+when VM and AKS serving paths overlap, when an active worker pool exceeds the
+bound, or when a NAT gateway exists. On 2026-11-22 it correctly failed closed:
+the subscription had one running VM and one running AKS cluster, and Azure
+returned no usable current-month usage rows.
+
 The default root Compose profile was verified on 2026-11-22 to expose only
 `engine-coordinator`, two Engine workers, `api`, and `studio`; PostgreSQL and
 Azurite are opt-in profiles/services and are not started by the normal local
