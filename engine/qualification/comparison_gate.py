@@ -4,7 +4,7 @@ This evaluator does not run either workload. It consumes the machine-readable
 reports produced by independent, resource-matched runners and refuses to publish
 a win unless correctness, workload scale, sample count, and resource gates pass.
 Missing reports are recorded as pending so this command remains useful before
-external PostgreSQL or Trino services are available.
+an external comparison implementation is available.
 """
 import argparse
 from datetime import datetime, timezone
@@ -23,6 +23,12 @@ def load(path):
     if path is None:
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def metric(report, current, legacy):
+    """Read the neutral metric name while accepting archived reports."""
+    value = report.get(current)
+    return value if value is not None else report.get(legacy)
 
 
 def analytics_gate(report):
@@ -64,8 +70,8 @@ def transaction_gate(report):
         "required_operations": not missing,
         "operation_samples": bool(operations) and all(item.get("samples", 0) >= 30 for item in operations),
         "operation_results": bool(operations) and all(item.get("passed") is True and item.get("state_sha256") for item in operations),
-        "throughput_win": isinstance(report.get("kaveon_over_postgresql_qps"), (int, float)) and report["kaveon_over_postgresql_qps"] > 1.0,
-        "tail_latency_win": isinstance(report.get("kaveon_over_postgresql_p95_ratio"), (int, float)) and report["kaveon_over_postgresql_p95_ratio"] < 1.0,
+        "throughput_win": isinstance(metric(report, "kaveon_over_reference_qps", "kaveon_over_postgresql_qps"), (int, float)) and metric(report, "kaveon_over_reference_qps", "kaveon_over_postgresql_qps") > 1.0,
+        "tail_latency_win": isinstance(metric(report, "kaveon_over_reference_p95_ratio", "kaveon_over_postgresql_p95_ratio"), (int, float)) and metric(report, "kaveon_over_reference_p95_ratio", "kaveon_over_postgresql_p95_ratio") < 1.0,
     }
     reasons.extend(name.replace("_", " ") + " gate failed" for name, passed in checks.items() if not passed)
     if missing:
@@ -73,8 +79,8 @@ def transaction_gate(report):
     qualified = all(checks.values())
     return {"status": "qualified" if qualified else "not_qualified", "qualified": qualified,
             "checks": checks,
-            "target": {"throughput": "Kaveon QPS > PostgreSQL QPS", "tail_latency": "Kaveon p95 < PostgreSQL p95"},
-            "observed": {"qps_ratio": report.get("kaveon_over_postgresql_qps"), "p95_ratio": report.get("kaveon_over_postgresql_p95_ratio")},
+            "target": {"throughput": "Kaveon QPS > selected reference QPS", "tail_latency": "Kaveon p95 < selected reference p95"},
+            "observed": {"qps_ratio": metric(report, "kaveon_over_reference_qps", "kaveon_over_postgresql_qps"), "p95_ratio": metric(report, "kaveon_over_reference_p95_ratio", "kaveon_over_postgresql_p95_ratio")},
             "reasons": reasons}
 
 
@@ -88,6 +94,9 @@ def evaluate(analytics, transactions):
         "claim": "qualified_for_declared_workloads" if qualified else "not_qualified",
         "qualified": qualified,
         "analytics_vs_trino": analytical,
+        "transactions_vs_reference": transactional,
+        # Compatibility alias for archived consumers; new reports use the
+        # neutral reference name above.
         "transactions_vs_postgresql": transactional,
         "scope": "Only the declared matched datasets, workloads, versions, resource limits, cache policy, and concurrency represented by the input reports.",
     }

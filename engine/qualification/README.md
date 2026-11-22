@@ -191,19 +191,24 @@ python scripts/qualify-aks-fault-pressure.py `
   --output tmp/aks-fault-pressure/report.json
 ```
 
-## Combined PostgreSQL and Trino publication gate
+## Combined Engine publication gate
 
 `comparison_gate.py` combines two independent reports and fails closed. The
 analytics input is the `report.json` emitted by `same_files.py`. The transaction
-input must be emitted by a resource-matched Kaveon/PostgreSQL runner and contain:
+input must be emitted by a resource-matched KaveonDB transaction runner and contain:
 
 - `resources_matched`, `publication_workload_gate`, and `correctness_passed` set
   to true;
 - at least 30 measured, correctness-checked samples for `point_read`, `insert`,
   `update`, `delete`, `conflicting_update`, and `multi_record_commit`;
 - a deterministic `state_sha256` for each operation;
-- `kaveon_over_postgresql_qps` greater than 1.0 and
-  `kaveon_over_postgresql_p95_ratio` below 1.0.
+- `kaveon_over_reference_qps` greater than 1.0 and
+  `kaveon_over_reference_p95_ratio` below 1.0.
+
+The reference runner is an explicitly selected comparison implementation; it
+is not a Kaveon authority and does not provision or require PostgreSQL. Legacy
+reports containing the old PostgreSQL-named fields remain readable for
+historical analysis, but they cannot authorize a release.
 
 Run the evaluator even when one service is unavailable; omitted inputs are
 reported as `pending` and the process returns exit code 2 instead of manufacturing
@@ -217,8 +222,9 @@ a result:
 ```
 
 The combined report claims only the declared workloads. It cannot establish
-general PostgreSQL or Trino superiority. Kaveon's product SQL surface now exposes
-the write operations, while its bounded point-read operation remains pending.
+general superiority over any other engine. KaveonDB's product transaction
+surface is the authority; this gate measures only the declared operations and
+does not imply PostgreSQL compatibility.
 
 ### Distributed execution evidence
 
