@@ -427,6 +427,10 @@ coordinator restart miss and measured warm-hit latency; see
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
 [`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
+The bounded native two-worker mixed-workload soak also passes: 120.11 seconds,
+941 queries, intentional worker loss, zero failures, bounded history, and clean
+retained files; see
+[`track1-local-soak-2026-11-22.md`](../qualification/track1-local-soak-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
