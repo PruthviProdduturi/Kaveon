@@ -35,6 +35,8 @@ Read-only inspection of subscription `00000000-0000-4000-8000-000000000000`
   compute is currently running.
 - `kaveonacr` is Basic tier; image publication uses bounded CI/ACR builds and
   does not require an AKS runtime.
+- Final read-only check found no active ACR build (the bounded publication runs
+  `cc17y`, `cc17x`, and `cc17w` are all `Succeeded`).
 - Two additional AKS-related storage accounts in the managed resource group.
 - No NAT gateway was returned by the subscription inventory.
 
