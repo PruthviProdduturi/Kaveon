@@ -3,7 +3,7 @@
 ## Result
 
 **Pass: the subscription is currently below the $100/month Kaveon ceiling.**
-The month-to-date Cost Management REST query reports **$51.194352 USD** for
+The month-to-date Cost Management REST query reports **$51.981062 USD** for
 the selected subscription. No new resources were provisioned by this check.
 
 The Azure CLI preview usage endpoint still returns 230 unpriced records, but
@@ -48,7 +48,7 @@ until the owner confirms current-month spend.
 ## Required operator checks before cloud qualification
 
 1. Re-run the guardrail and retain the current-month Cost Management total and
-   resource breakdown; the current check is $51.194352 USD month-to-date.
+   resource breakdown; the current check is $51.981062 USD month-to-date.
 2. Keep either the VM or the AKS serving path, not both, during qualification.
 3. Remove or retain the stopped cluster only after checking its disks, public
    IPs, and rollback requirement.
