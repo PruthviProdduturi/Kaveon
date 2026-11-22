@@ -424,6 +424,9 @@ conflicts and no lost updates; see
 The local result-cache SLO also passes its full harness, including a real
 coordinator restart miss and measured warm-hit latency; see
 [`track1-cache-slo-2026-11-22.md`](../qualification/track1-cache-slo-2026-11-22.md).
+The packaged release CLI also passes its contract workflow for batch, stdin,
+file, output-format, error, metadata, and paged-result behavior; see
+[`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
