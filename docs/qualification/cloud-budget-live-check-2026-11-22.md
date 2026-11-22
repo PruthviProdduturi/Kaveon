@@ -11,7 +11,9 @@ must be obtained from Cost Management before enabling a cloud qualification
 run. The read-only `az consumption usage list` fallback returned 230 usage
 records, but every record had `pretaxCost=None` (zero priced rows). That proves
 usage metadata exists, not the billed dollar total, so it is not accepted as
-proof of the `$100` ceiling.
+proof of the `$100` ceiling. A direct read-only Cost Management query was also
+rate-limited (`429 Too Many Requests`) and is therefore not treated as billing
+evidence.
 
 ## Observed inventory
 
