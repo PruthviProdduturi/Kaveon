@@ -432,6 +432,9 @@ The bounded native two-worker mixed-workload soak also passes: 120.11 seconds,
 941 queries, intentional worker loss, zero failures, bounded history, and clean
 retained files; see
 [`track1-local-soak-2026-11-22.md`](../qualification/track1-local-soak-2026-11-22.md).
+The local plain-Parquet directory reader gate also passes 16/16 focused storage
+checks, including partition pruning, schema validation, and exact metadata;
+see [`track1-parquet-directory-2026-11-22.md`](../qualification/track1-parquet-directory-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
