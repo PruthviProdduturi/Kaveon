@@ -30,6 +30,9 @@ run. A passing local gate does not silently imply cloud production readiness.
 - A fail-closed validator now checks these four reports against the exact Engine
   binary digest; see
   [`track1-local-release-validator-2026-11-22.md`](track1-local-release-validator-2026-11-22.md).
+- Storage release suite: 158 passed, 0 failed, and 3 explicitly ignored
+  Azurite-only tests under `--release --locked`. Evidence is in
+  [`track1-storage-release-suite-2026-11-22.md`](track1-storage-release-suite-2026-11-22.md).
 - Bracketed `DISTINCT` identifiers: local REST execution returns the exact
   typed result; evidence is in
   [`track1-bracket-distinct-runtime-2026-11-22.md`](track1-bracket-distinct-runtime-2026-11-22.md).

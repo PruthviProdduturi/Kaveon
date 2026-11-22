@@ -546,6 +546,9 @@ also passed for the same binary; cloud endurance remains separate.
 The native two-worker soak reached 50.25 seconds with 231 exact queries and an
 intentional worker loss; history, retained files, queue recovery, and RSS
 bounds passed. Cloud endurance remains separate.
+The release-profile storage suite passed 158 tests with three explicitly
+ignored Azurite-only conditional-commit cases; those emulator/cloud checks
+remain open rather than being counted as passes.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 
