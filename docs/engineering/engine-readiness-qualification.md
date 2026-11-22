@@ -442,6 +442,10 @@ The local Delta snapshot contract also passes 5/5 focused checks, including
 checkpoint/tail replay, tombstones, multipart completeness, and version-gap
 rejection; see
 [`track1-delta-snapshot-2026-11-22.md`](../qualification/track1-delta-snapshot-2026-11-22.md).
+The bounded KaveonDB product transaction contract also passes 8/8 focused
+checks, including atomic staging, CAS winner selection, savepoints, rollback,
+and principal/snapshot binding; see
+[`track1-product-transactions-2026-11-22.md`](../qualification/track1-product-transactions-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
