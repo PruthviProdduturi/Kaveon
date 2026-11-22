@@ -20,6 +20,11 @@
 /tmp-*.json
 tmp-*
 **/tmp-*
+/tmp/
+/.playwright-mcp/
+/out/
+/packaging/
+/docker/
 *.py
 **/*.py
 **/node_modules/
@@ -33,3 +38,4 @@ tmp-*
 /*.md
 /docker-compose.yml
 /LICENSE
+
