@@ -38,6 +38,14 @@ cargo test -p kaveon-server --bin kaveon-server admission -- --nocapture
 - No Azure, AKS, ADLS, or other billable cloud resource was started for this
   evidence run.
 
+The locked distributable artifact was then rebuilt from the same pushed tree:
+
+```text
+cargo build --workspace --release --locked
+```
+
+The optimized workspace build completed successfully in 1m41s.
+
 ## Boundary
 
 This receipt closes the current local server correctness/build gate only. The
