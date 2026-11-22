@@ -16,7 +16,7 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
   return (
     <header
       className={`${styles.header} ${styles.aboutHeader} ${isAbout ? "" : styles.docsHeader}`}
-      style={{ background: "transparent", borderBottom: "none" }}
+      style={{ background: "#0a0a0a", borderBottom: "none" }}
     >
       <Link
         href="/"
