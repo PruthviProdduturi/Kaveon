@@ -20,8 +20,9 @@ export default function DataSourcesDocs() {
           <tr><td>PostgreSQL</td><td>Studio + API · <code>postgresql</code></td><td>psycopg2</td></tr>
           <tr><td>MySQL</td><td>API only · <code>mysql</code></td><td>pymysql</td></tr>
           <tr><td>StarRocks</td><td>Studio + API · <code>starrocks</code></td><td>pymysql (MySQL protocol)</td></tr>
-          <tr><td>Local Parquet</td><td>Engine alpha</td><td>Arrow · Parquet</td></tr>
-          <tr><td>Trino, ADLS Gen2, S3, Delta Lake, Iceberg</td><td>Target</td><td>Not executable</td></tr>
+          <tr><td>Local Parquet</td><td>Engine · available</td><td>Arrow · Parquet</td></tr>
+          <tr><td>ADLS Gen2 Parquet / Delta Lake</td><td>Engine · qualified datasets</td><td>Arrow · object-store reader</td></tr>
+          <tr><td>S3 / Iceberg cloud deployment</td><td>Cloud qualification staged</td><td>Object-store reader</td></tr>
         </tbody>
       </table>
 

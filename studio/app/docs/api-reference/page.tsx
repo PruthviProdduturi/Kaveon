@@ -7,7 +7,7 @@ export default function ApiReferenceDocs() {
     <PageHeader
       eyebrow="Platform"
       title="API reference"
-      lead="Kaveon exposes two independent HTTP surfaces: the FastAPI platform API that Studio calls, and the standalone Rust Engine API. They have different base paths, different authentication, and different maturity."
+      lead="Kaveon exposes two independent HTTP surfaces: the FastAPI platform API that Studio calls, and the standalone Rust Engine API. They have different base paths, authentication boundaries, and qualification scopes."
     />
 
     <Callout type="note">
@@ -19,7 +19,7 @@ export default function ApiReferenceDocs() {
     <table><thead><tr><th>Surface</th><th>Base path</th><th>Use for</th><th>Maturity</th></tr></thead><tbody>
       <tr><td>Studio proxy</td><td><code>/api/kaveon/*</code></td><td>Browser and user-facing clients</td><td>Current</td></tr>
       <tr><td>Platform API</td><td><code>/api/v1/*</code></td><td>Server-side integrations behind the trusted boundary</td><td>Current</td></tr>
-      <tr><td>Engine HTTP</td><td><code>/v1/*</code></td><td>SQL, catalog, cluster, and query operations</td><td>Alpha</td></tr>
+      <tr><td>Engine HTTP</td><td><code>/v1/*</code></td><td>SQL, catalog, cluster, and query operations</td><td>Available · local qualified</td></tr>
     </tbody></table>
 
     <h2>Authentication</h2>

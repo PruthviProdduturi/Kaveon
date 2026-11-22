@@ -5,7 +5,7 @@ export const metadata = { title: "Engine Memory" };
 export default function EngineMemoryDocs() {
   return <div className="docs-prose">
     <PageHeader eyebrow="Engine" title="Engine memory management" lead="Kaveon reserves retained execution state against explicit query budgets and fails closed when a bounded operator cannot continue safely." />
-    <Callout type="warn"><strong>Alpha boundary:</strong> coordinator and worker execution propagate query budgets into retained operator state. Logical reservations are not a universal process RSS ceiling: decoders, runtime overhead, and retained caller buffers require separate limits and measurement.</Callout>
+    <Callout type="warn"><strong>Qualification boundary:</strong> coordinator and worker execution propagate query budgets into retained operator state. Logical reservations are not a universal process RSS ceiling: decoders, runtime overhead, and retained caller buffers require separate limits and measurement.</Callout>
 
     <h2>Budget hierarchy</h2>
     <ol>

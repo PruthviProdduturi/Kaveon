@@ -4,9 +4,9 @@ export const metadata = { title: "Releases and Changelog" };
 
 export default function ReleaseDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Deploy &amp; Operate" title="Releases and changelog" lead="There is not yet a canonical historical changelog or stable platform release channel. Release notes must separate shipped behavior from alpha Engine work and roadmap targets." />
+    <PageHeader eyebrow="Deploy &amp; Operate" title="Releases and changelog" lead="Kaveon publishes reproducible Engine artifacts and a moving platform channel. Release notes separate shipped behavior, qualified local scope, cloud gates, and roadmap targets." />
     <h2>Current channels</h2>
-    <ul><li>Platform workflows build/deploy from <code>dev</code>; workflow success is not a versioned release note.</li><li>Engine CI publishes a moving <code>engine-dev</code> prerelease after successful dev builds.</li><li>No stable support window or API deprecation period is declared.</li></ul>
+    <ul><li>Platform workflows build/deploy from <code>dev</code>; workflow success is not a versioned release note.</li><li>Engine CI publishes a reproducible moving <code>engine-dev</code> prerelease after successful dev builds; the local Docker scope is qualified.</li><li>No stable support window or API deprecation period is declared.</li></ul>
     <h2>What every release note needs</h2>
     <ul><li>Identifier, commit, date, and maturity.</li><li>Affected components and user-visible changes.</li><li>Breaking API, configuration, auth, or metadata changes.</li><li>Upgrade, rollback, known limitations, and security notes.</li><li>Validation evidence and reproducible context for performance claims.</li></ul>
     <h2>Categories</h2>

@@ -33,7 +33,7 @@ export default function DocsIntro() {
           <tr>
             <td><strong><a href="/docs/engine">Kaveon Engine</a></strong></td>
             <td>A vectorized columnar query engine in Rust, over Arrow. Its own SQL parser, planner, optimizer, and distributed runtime — no DuckDB, Trino, or Spark embedded inside it.</td>
-            <td>Alpha</td>
+            <td>Available · local qualified</td>
           </tr>
           <tr>
             <td><strong><a href="/docs/dlm">Kaveon DLM</a></strong></td>
@@ -85,9 +85,10 @@ export default function DocsIntro() {
           query your registered SQL sources directly.
         </li>
         <li>
-          <strong>Engine is alpha and its distributed path is qualified through the CLI, HTTP API, and KaveonDB
-          product path.</strong> Broader SQL, cloud-format, and direct end-user authentication coverage is still
-          staged. Keep the Engine behind the platform trust boundary.
+          <strong>Engine is publicly available in the qualified local Docker scope, with its distributed path
+          verified through the CLI, HTTP API, and KaveonDB product path.</strong> Broader SQL, cloud-format,
+          and direct end-user authentication coverage is still staged. Keep the Engine behind the platform
+          trust boundary.
         </li>
       </ul>
 

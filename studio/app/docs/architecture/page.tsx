@@ -7,7 +7,7 @@ export default function ArchitectureDocs() {
     <div className="docs-prose">
       <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three connected pillars: Kaveon Studio, the deterministic Data Language Model, and the Rust analytical Engine. Together they provide the governed product surface, semantic intelligence, and distributed execution path for lake-backed statements." />
 
-      <Callout type="note"><strong>Status vocabulary:</strong> Current means it is in the request path people use. Alpha means the path is implemented and qualified, but its SQL and cloud-format coverage is still expanding. Target means approved architecture that is not yet implemented.</Callout>
+      <Callout type="note"><strong>Status vocabulary:</strong> Available means the capability is implemented and qualified in the declared local Docker scope. Cloud qualification is called out separately where it remains staged. Target means approved architecture that is not yet implemented.</Callout>
 
       <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Kaveon architecture showing Studio, DLM, and Engine with current and target boundaries" caption="Kaveon Intelligence is the governed capability across all three pillars. Solid connections are current; explicitly labeled target connections are roadmap architecture. Open the diagram for a full-size view." />
 
@@ -17,7 +17,7 @@ export default function ArchitectureDocs() {
         <tbody>
           <tr><td><strong>Kaveon Studio</strong></td><td>Next.js 15 · React 19</td><td>Current</td><td>Ask, SQL Lab, semantic datasets, charts, dashboards, and administration.</td></tr>
           <tr><td><strong>Platform API + DLM</strong></td><td>FastAPI · Python</td><td>Current</td><td>Authenticated application services, deterministic question resolution, and the statements it hands the Engine.</td></tr>
-          <tr><td><strong>Kaveon Engine</strong></td><td>Rust · Arrow · Delta on ADLS Gen2</td><td>Alpha · qualified path</td><td>Durable catalog, optimized plans, distributed vectorized stages, Arrow IPC exchange, cube and sketch answers, and KaveonDB transactional records.</td></tr>
+          <tr><td><strong>Kaveon Engine</strong></td><td>Rust · Arrow · Parquet/Delta</td><td>Available · local qualified</td><td>Durable catalog, optimized plans, distributed vectorized stages, Arrow IPC exchange, cube and sketch answers, and KaveonDB transactional records. Cloud deployment qualification is staged separately.</td></tr>
         </tbody>
       </table>
 
@@ -43,7 +43,7 @@ Coordinator: durable catalog → SQL → optimizer → stage graph
 Versioned fragments → worker tasks → Arrow IPC exchanges
   ▼
 local Parquet / Delta splits → root Arrow result`}</Code>
-      <p>The Engine executes distributed scans, partial and final aggregates, Sort/TopN, and repartitioned or broadcast joins, with retry, cancellation, exchange cleanup and bounded Sort/TopN spill. A cube-shaped aggregate skips execution entirely and is answered from precomputed cells and HyperLogLog sketches; the record says which lane a statement took. Delta on <strong>ADLS Gen2 is in production use</strong>. S3, Iceberg, aggregate and join spill, and engine HTTP authentication with TLS remain target work.</p>
+      <p>The Engine executes distributed scans, partial and final aggregates, Sort/TopN, and repartitioned or broadcast joins, with retry, cancellation, exchange cleanup and bounded Sort/TopN spill. A cube-shaped aggregate skips execution entirely and is answered from precomputed cells and HyperLogLog sketches; the record says which lane a statement took. Parquet and Delta on declared ADLS Gen2 datasets are qualified, while the cloud deployment gate remains staged. S3, Iceberg deployment, aggregate and join spill, and engine HTTP authentication with TLS remain target work.</p>
       <Callout type="warn">Internal exchange and catalog-mutation routes carry bearer tokens, but statement clients still have no end-user authentication, authorization or TLS of their own. In the reference deployment the Engine&rsquo;s ports are bound to localhost and only the API reaches them. Keep it behind a trusted boundary.</Callout>
 
       <h2>Data and control planes</h2>

@@ -353,7 +353,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             {[
               { name: "Kaveon Studio", status: "Available", color: B, body: "Questions, SQL Lab, governed dashboards, chart building, and operational exploration." },
               { name: "Data Language Model", status: "Available", color: B, body: "Compiled dataset semantics and deterministic NL→SQL for supported question classes." },
-              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Distributed Arrow execution over Parquet and Delta tables on local storage, with exact memory accounting. Qualified on a cluster; broader cloud and format qualification remains staged." },
+              { name: "Kaveon Engine", status: "Available", color: B, body: "Distributed Arrow execution over Parquet and Delta tables with exact memory accounting. The local Docker release is qualified; broader cloud qualification remains staged." },
             ].map((pillar, index) => (
               <Anim key={pillar.name} dir="up" delay={index * 120} style={{ padding: "30px 28px", borderRadius: 16, background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", minHeight: 220 }} className="about-card">
                 <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, marginBottom: 28 }}>
@@ -366,7 +366,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
           </div>
           <div aria-label="Capability status legend" style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap", marginTop: 26, color: "#9aa7b8", fontSize: 12 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: "#4A9EE8", boxShadow: "0 0 10px #4A9EE855" }} />Available today</span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: "#f59e0b", boxShadow: "0 0 10px #f59e0b55" }} />Preview, clearly labeled</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: "#8b98a9" }} />Cloud qualification staged</span>
           </div>
         </div>
       </section>
@@ -1071,7 +1071,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               { name: "Rust", version: "2024", color: "#f59e0b" },
               { name: "Apache Arrow", version: "54", color: B },
               { name: "Parquet", version: "Direct read", color: "#06b6d4" },
-              { name: "Delta Lake", version: "Local alpha", color: "#10b981" },
+              { name: "Delta Lake", version: "Local qualified", color: "#10b981" },
               { name: "Next.js", version: "15", color: "#fff" },
               { name: "React", version: "19", color: "#61dafb" },
               { name: "TypeScript", version: "5.x", color: "#3178c6" },

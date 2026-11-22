@@ -7,12 +7,11 @@ export type DocsItem = {
    * Required, so that adding a page is adding a claim about its maturity
    * rather than inheriting one. This used to be optional with `"Stable"` as
    * the fallback, which meant 25 of 39 pages asserted stability because
-   * nobody had said otherwise -- `/docs/sql-compatibility`, whose own
-   * description reads "See what the alpha Engine can execute", displayed
-   * Stable. The values here follow the maturity each pillar is documented at:
-   * Engine alpha, CLI beta, Studio and DLM shipping.
+   * nobody had said otherwise. The values here follow the maturity each
+   * pillar is documented at: Engine available in the qualified local scope,
+   * CLI beta, Studio and DLM shipping.
    */
-  status: "Stable" | "Beta" | "Alpha" | "Reference";
+  status: "Stable" | "Beta" | "Alpha" | "Available" | "Reference";
   /**
    * The date someone last checked this page against the product. Absent means
    * exactly that and renders nothing: there used to be a single hardcoded
@@ -70,13 +69,13 @@ export const DOCS_NAV: readonly DocsGroup[] = [
   {
     label: "Engine",
     items: [
-      { title: "Kaveon Engine", href: "/docs/engine", description: "Run the alpha Rust query engine.", keywords: ["rust", "parquet", "cli"], status: "Alpha" },
-      { title: "Engine Architecture", href: "/docs/engine/architecture", description: "Understand processes, crates, startup, and boundaries.", keywords: ["coordinator", "worker", "startup"], status: "Alpha", lastVerified: "September 4, 2026" },
-      { title: "Engine SQL", href: "/docs/engine/sql", description: "Track committed SQL semantics and integration gates.", keywords: ["sql", "function", "window"], status: "Alpha", lastVerified: "September 4, 2026" },
-      { title: "Distributed Runtime", href: "/docs/engine/distributed", description: "Follow stages, fragments, tasks, exchange, retry, and cancellation.", keywords: ["stage", "fragment", "exchange"], status: "Alpha", lastVerified: "September 4, 2026" },
-      { title: "Storage & Catalogs", href: "/docs/engine/storage", description: "Read Parquet/Delta and understand native metadata.", keywords: ["parquet", "delta", "catalog"], status: "Alpha", lastVerified: "September 4, 2026" },
-      { title: "Engine Memory", href: "/docs/memory", description: "Understand admission, reservations, spill, and current safety boundaries.", keywords: ["memory", "spill", "admission"], status: "Alpha", lastVerified: "September 4, 2026" },
-      { title: "SQL Compatibility", href: "/docs/sql-compatibility", description: "See what the alpha Engine can execute.", keywords: ["order by", "aggregate", "operator"], status: "Alpha" },
+      { title: "Kaveon Engine", href: "/docs/engine", description: "Run the publicly available local Docker release of the Rust query engine.", keywords: ["rust", "parquet", "cli"], status: "Available" },
+      { title: "Engine Architecture", href: "/docs/engine/architecture", description: "Understand processes, crates, startup, and boundaries in the qualified local release.", keywords: ["coordinator", "worker", "startup"], status: "Available", lastVerified: "November 22, 2026" },
+      { title: "Engine SQL", href: "/docs/engine/sql", description: "Track committed SQL semantics and integration gates.", keywords: ["sql", "function", "window"], status: "Available", lastVerified: "November 22, 2026" },
+      { title: "Distributed Runtime", href: "/docs/engine/distributed", description: "Follow stages, fragments, tasks, exchange, retry, and cancellation.", keywords: ["stage", "fragment", "exchange"], status: "Available", lastVerified: "November 22, 2026" },
+      { title: "Storage & Catalogs", href: "/docs/engine/storage", description: "Read Parquet/Delta and understand native metadata.", keywords: ["parquet", "delta", "catalog"], status: "Available", lastVerified: "November 22, 2026" },
+      { title: "Engine Memory", href: "/docs/memory", description: "Understand admission, reservations, spill, and current safety boundaries.", keywords: ["memory", "spill", "admission"], status: "Available", lastVerified: "November 22, 2026" },
+      { title: "SQL Compatibility", href: "/docs/sql-compatibility", description: "See what the qualified local Engine can execute.", keywords: ["order by", "aggregate", "operator"], status: "Available" },
     ],
   },
   {
