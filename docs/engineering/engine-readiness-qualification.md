@@ -532,6 +532,9 @@ because the current-month Cost Management total was unavailable, cloud
 qualification is fail-closed and local Docker remains the default.
 The repeatable read-only preflight is
 [`scripts/verify-azure-budget-guardrail.ps1`](../../scripts/verify-azure-budget-guardrail.ps1).
+The legacy VM was deallocated on 2026-11-22, leaving the running AKS cluster
+as the only active serving compute path; billing evidence is still required
+before any additional cloud qualification.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 

@@ -19,16 +19,17 @@ Read-only inspection of subscription `00000000-0000-4000-8000-000000000000`
 - `kaveon-aks`: **Stopped**, Free tier, one `Standard_D4s_v3` system node and
   three `Standard_D4s_v3` worker nodes; its managed resource group and disks
   remain billable where applicable.
-- `kaveon-vm`: **Running**, `Standard_B2als_v2`.
+- `kaveon-vm`: `Standard_B2als_v2`; it was **deallocated during this check**
+  and its disk was retained for reversible rollback.
 - `kaveonlake`: Standard ZRS storage.
 - `kaveon-logs`: Log Analytics, `PerGB2018`, 30-day retention.
 - Two additional AKS-related storage accounts in the managed resource group.
 - No NAT gateway was returned by the subscription inventory.
 
-This combination is not an approved minimal footprint: the VM and the running
-AKS cluster overlap, and the stopped cluster still has retained infrastructure.
-Do not start another cluster or increase worker count until the owner chooses
-one serving path and confirms current-month spend.
+Before the check, the VM and the running AKS cluster overlapped. The VM is now
+deallocated, leaving AKS as the only active serving compute path; the stopped
+cluster still has retained infrastructure. Do not start another cluster or
+increase worker count until the owner confirms current-month spend.
 
 ## Required operator decision before cloud qualification
 
@@ -40,4 +41,6 @@ one serving path and confirms current-month spend.
    bounded; stop/deallocate resources immediately after each gate.
 
 The local Docker qualification path remains the default and is the only path
-that can continue without a verified cloud spend total.
+that can continue without a verified cloud spend total. The post-deallocation
+preflight still fails closed solely because Cost Management returned no usable
+current-month usage rows.
