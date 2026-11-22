@@ -1,8 +1,9 @@
 # Engine memory management
 
-**Maturity:** Alpha runtime control. Every path below is implemented and
-tested; qualification under skew, disk exhaustion and sustained load remains
-a release gate. The variables are listed with their defaults and AKS values
+**Maturity:** Available in the locally qualified Docker runtime. Every path
+below is implemented and tested; qualification under cloud skew, disk
+exhaustion and sustained load remains a release gate. The variables are listed
+with their defaults and AKS values
 in the [settings reference](../engine/settings.md).
 
 Kaveon treats memory limits as execution correctness. An operator must
