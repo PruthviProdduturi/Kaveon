@@ -43,6 +43,16 @@ $vms = @(Invoke-AzJson @("vm", "list", "-d") | ForEach-Object {
 $nats = @(Invoke-AzJson @("network", "nat", "gateway", "list") | ForEach-Object {
     [pscustomobject]@{ name = $_.name; resource_group = $_.resourceGroup; sku = $_.sku.name }
 })
+$logWorkspaces = @(Invoke-AzJson @("monitor", "log-analytics", "workspace", "list") | Where-Object {
+    $_.resourceGroup -eq $ResourceGroup -and $_.name -eq "kaveon-logs"
+} | ForEach-Object {
+    $detail = Invoke-AzJson @("monitor", "log-analytics", "workspace", "show", "-g", $_.resourceGroup, "-n", $_.name)
+    [pscustomobject]@{
+        name = $_.name; resource_group = $_.resourceGroup
+        daily_quota_gb = $detail.workspaceCapping.dailyQuotaGb
+        retention_days = $detail.retentionInDays
+    }
+})
 
 $monthStart = (Get-Date -Day 1).ToUniversalTime().ToString("yyyy-MM-dd")
 $tomorrow = (Get-Date).ToUniversalTime().Date.AddDays(1).ToString("yyyy-MM-dd")
@@ -76,6 +86,13 @@ foreach ($cluster in $runningAks) {
     }
 }
 if ($nats.Count -gt 0) { $violations.Add("NAT gateway(s) exist; dedicated NAT is disabled by the Kaveon budget policy") }
+foreach ($workspace in $logWorkspaces) {
+    if ([decimal]$workspace.daily_quota_gb -lt 0) {
+        $violations.Add("Log Analytics '$($workspace.name)' has unlimited ingestion; set a finite daily quota")
+    } elseif ([decimal]$workspace.daily_quota_gb -gt 0.1) {
+        $violations.Add("Log Analytics '$($workspace.name)' daily quota $($workspace.daily_quota_gb) GB exceeds the 0.1 GB budget guardrail")
+    }
+}
 if ($null -eq $costTotal) {
     $violations.Add("current-month Cost Management usage is unavailable; cannot prove the $MonthlyCeilingUsd USD ceiling")
 } elseif ($costTotal -gt $MonthlyCeilingUsd) {
@@ -94,6 +111,7 @@ $result = [ordered]@{
     aks = $aks
     vms = $vms
     nat_gateways = $nats
+    log_workspaces = $logWorkspaces
     violations = @($violations)
     passed = ($violations.Count -eq 0)
 }
