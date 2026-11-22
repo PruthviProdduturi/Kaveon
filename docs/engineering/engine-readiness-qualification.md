@@ -506,6 +506,9 @@ routes, and 9 SVGs; see
 The local delegated identity-token suite also passes 3/3 checks for cached-key
 validation, required claims, and fail-closed display-claim handling; see
 [`track1-entra-token-validation-2026-11-22.md`](../qualification/track1-entra-token-validation-2026-11-22.md).
+The current release Docker image also passes the extended two-worker same-file
+smoke (12/12 exact cases, zero mismatches, distributed stages observed); see
+[`track1-docker-distributed-2026-11-22-r2.md`](../qualification/track1-docker-distributed-2026-11-22-r2.md).
 Paged result restart cleanup is also qualified locally: stale result directories
 older than the 15-minute TTL are reclaimed at startup, fresh neighboring result
 directories are preserved, and the focused result suite passes 7/7; see
