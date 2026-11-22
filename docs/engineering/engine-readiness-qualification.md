@@ -429,6 +429,9 @@ The local query-lifecycle suite also passes 10/10 focused checks for
 owner-scoped state, cancellation, waiter wake-up, bounded registry cleanup,
 capacity release, and terminal DLM-run binding; see
 [`track1-lifecycle-2026-11-22.md`](../qualification/track1-lifecycle-2026-11-22.md).
+The pinned local differential smoke gate also passes 37/37 exact-result cases
+against DuckDB and Trino 483, including paging and security checks; see
+[`track1-differential-smoke-2026-11-22.md`](../qualification/track1-differential-smoke-2026-11-22.md).
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
 [`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
