@@ -497,7 +497,7 @@ Catalog access and DDL authorization also pass 11/11 and 9/9 checks for
 default-deny visibility, grants/revocation, restart persistence, location
 probing, Parquet/Delta registration, and role-gated changes; see
 [`track1-catalog-access-ddl-2026-11-22.md`](../qualification/track1-catalog-access-ddl-2026-11-22.md).
-Repository documentation validation also passes across 766 Markdown files, 40
+Repository documentation validation also passes across 767 Markdown files, 40
 routes, and 9 SVGs; see
 [`track1-docs-validation-2026-11-22.md`](../qualification/track1-docs-validation-2026-11-22.md).
 The local delegated identity-token suite also passes 3/3 checks for cached-key
