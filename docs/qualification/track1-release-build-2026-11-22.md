@@ -2,7 +2,7 @@
 
 ## Result
 
-**PASS.** The committed Engine workspace (`e36e6de263fdaa01886eb53c18c2aef313bc802e`) built with the locked dependency graph and pinned Rust toolchain:
+**PASS.** The committed Engine workspace (`e5991668`) built with the locked dependency graph and pinned Rust toolchain:
 
 ```text
 cargo build --workspace --release --locked
@@ -14,7 +14,7 @@ SHA-256:
 
 | Artifact | SHA-256 |
 |---|---|
-| `kaveon-server.exe` | `DD153AF3B0EDF445B19F63D10636D2FBA78F1F764966DEF25B719387387489BC` |
+| `kaveon-server.exe` | `5627B9F265B3D40246D77E607C68174D294FB19018B38D2DCC79C98EECC3D338` |
 | `kaveon.exe` | `04E7321B442A9E115272C38F588410CC119ACDF5C120DF895EB4EB8B245A5AC0` |
 
 The source tree was clean after the build. This is local packaging evidence;
