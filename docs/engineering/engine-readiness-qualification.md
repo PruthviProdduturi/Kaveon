@@ -435,6 +435,10 @@ against DuckDB and Trino 483, including paging and security checks; see
 The two-worker differential smoke gate also passes five distributed exact-result
 cases plus paging, with distributed stages observed for every case; see
 [`track1-differential-distributed-smoke-2026-11-22.md`](../qualification/track1-differential-distributed-smoke-2026-11-22.md).
+The optimized execution crate suite also passes 645/645 tests (four explicit
+benchmark skips), including spill, memory, joins, aggregates, windows, and
+partitioned operators; see
+[`track1-exec-release-tests-2026-11-22.md`](../qualification/track1-exec-release-tests-2026-11-22.md).
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
 [`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).

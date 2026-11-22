@@ -1598,6 +1598,7 @@ mod tests {
         gate: Arc<std::sync::atomic::AtomicUsize>,
         open: usize,
         refusals: Arc<std::sync::atomic::AtomicU64>,
+        refuse_once: bool,
     }
     impl ThreadSource for GatedSource {
         fn schema(&self) -> &SchemaRef {
@@ -1610,6 +1611,14 @@ mod tests {
             while self.gate.load(std::sync::atomic::Ordering::Acquire) < self.open {
                 self.account.check_cancelled()?;
                 std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if self.refuse_once {
+                self.refuse_once = false;
+                self.refusals
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                return Err(KaveonError::MemoryLimit(
+                    "qualification source pressure refusal".into(),
+                ));
             }
             match self.account.reserve(self.bytes) {
                 Ok(memory) => Ok(Some(ReservedBatch {
@@ -1706,6 +1715,7 @@ mod tests {
                     gate: done,
                     open: 2,
                     refusals,
+                    refuse_once: true,
                 }) as Box<dyn ThreadSource>)
             }) as SourceOpener
         });
@@ -1779,6 +1789,7 @@ mod tests {
                         gate: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                         open: 0,
                         refusals,
+                        refuse_once: false,
                     }) as Box<dyn ThreadSource>)
                 }) as SourceOpener
             })
