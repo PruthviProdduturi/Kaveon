@@ -23,7 +23,7 @@ Kaveon should not claim to outperform Trino until the identical-data, identical-
 
 ## Distributed execution
 
-Both systems decompose a query into stages, tasks, splits, operators, and exchanges. Trino has a long-established production implementation: its coordinator plans and schedules work; workers fetch connector splits and exchange intermediate data. Kaveon now has the corresponding foundational contracts and an executable alpha path:
+Both systems decompose a query into stages, tasks, splits, operators, and exchanges. Trino has a long-established production implementation: its coordinator plans and schedules work; workers fetch connector splits and exchange intermediate data. Kaveon now has the corresponding foundational contracts and a locally qualified executable path:
 
 - versioned executable fragments with pinned Delta versions;
 - coordinator dependency-gated stage scheduling and a FIFO memory admission queue;

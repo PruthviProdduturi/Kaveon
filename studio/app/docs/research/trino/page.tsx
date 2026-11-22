@@ -14,9 +14,9 @@ export default function KaveonVsTrinoDocs() {
       <tr><td>Core runtime</td><td>Rust and Arrow <code>RecordBatch</code></td><td>JVM coordinator and workers</td></tr>
       <tr><td>Product boundary</td><td>Engine + DLM + Studio</td><td>Distributed SQL engine</td></tr>
       <tr><td>Catalog</td><td>Native single-coordinator durable catalog; adapters are targets</td><td>Connector catalogs and established external integrations</td></tr>
-      <tr><td>Distributed execution</td><td>Executable alpha stages, tasks, splits, exchanges, joins, aggregates, and TopN</td><td>Mature stages, tasks, drivers, splits, exchanges, and scheduling</td></tr>
+      <tr><td>Distributed execution</td><td>Locally qualified stages, tasks, splits, exchanges, joins, aggregates, and TopN; cloud qualification staged</td><td>Mature stages, tasks, drivers, splits, exchanges, and scheduling</td></tr>
       <tr><td>Optimization</td><td>Projection/filter pushdown and Parquet pruning; no CBO or dynamic filtering</td><td>Statistics-driven CBO, connector pushdown, and dynamic filtering</td></tr>
-      <tr><td>SQL coverage</td><td>Focused alpha subset; no CTEs, subqueries, HAVING, general SELECT DISTINCT, windows, or CASE</td><td>Substantially broader mature SQL surface</td></tr>
+      <tr><td>SQL coverage</td><td>Broad, tested SQL subset including CTEs, subqueries, HAVING, windows, set operations, arrays, maps, and joins; unsupported edges are explicit</td><td>Substantially broader mature SQL surface</td></tr>
       <tr><td>Language intelligence</td><td>Deterministic DLM above Engine</td><td>Outside the engine boundary</td></tr>
     </tbody></table>
 

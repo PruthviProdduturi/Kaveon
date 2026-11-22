@@ -60,7 +60,7 @@ GROUP  BY c.region;`}</Code>
       joins execute locally with qualified relation aliases. Distributed <code>INNER</code> equi-joins
       repartition both sides by hash; a broadcast build side is used when the planner selects it. Broader
       representative distributed evidence for outer and cross joins now passes; broader skew and failure
-      qualification remains an alpha gate. Join conditions must be
+      qualification remains a cloud qualification gate. Join conditions must be
       equalities — general predicates are not yet supported as join conditions, though they work in{" "}
       <code>WHERE</code>.
     </p>

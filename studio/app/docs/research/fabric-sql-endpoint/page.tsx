@@ -12,7 +12,7 @@ export default function KaveonVsFabricSqlDocs() {
       <tr><td>Data</td><td>Registered customer-controlled Parquet/Delta locations</td><td>OneLake Delta tables and supported shortcuts</td></tr>
       <tr><td>SQL</td><td>Focused analytical SQL surface</td><td>Read-oriented T-SQL with DQL and limited DDL</td></tr>
       <tr><td>Writes</td><td>Read path today; optimized ingest target</td><td>Read-only table serving; Fabric Warehouse is the transactional offering</td></tr>
-      <tr><td>Operations</td><td>Operator-managed alpha runtime</td><td>Managed Fabric capacity</td></tr>
+      <tr><td>Operations</td><td>Operator-managed Engine; local Docker qualified, cloud qualification staged</td><td>Managed Fabric capacity</td></tr>
       <tr><td>BI</td><td>Studio integration target</td><td>Power BI and Direct Lake ecosystem</td></tr>
     </tbody></table>
 

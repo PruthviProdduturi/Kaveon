@@ -14,7 +14,7 @@ export default function KaveonVsHtapPlatformsDocs() {
       <tr><td>Databricks LTAP</td><td><strong>Two</strong>: Postgres (Lakebase) and Spark/Photon</td><td>Object storage, Delta and Iceberg</td><td>Partial</td><td>Announced June 2026, &ldquo;coming soon&rdquo;</td></tr>
       <tr><td>TiDB X</td><td>One</td><td>Object storage as single source of truth</td><td>Apache 2.0</td><td>Announced October 2025; GA unconfirmed</td></tr>
       <tr><td>Fabric SQL database</td><td>SQL plus Spark</td><td>OneLake, read-only Delta mirror for analytics</td><td>No</td><td>GA</td></tr>
-      <tr><td><strong>Kaveon</strong></td><td>One (target)</td><td>ADLS Gen2 (target)</td><td>MIT</td><td>Analytics alpha; transactional layer not implemented</td></tr>
+      <tr><td><strong>Kaveon</strong></td><td>One integrated product with separate analytical and product-state paths</td><td>ADLS Gen2 for governed data; KaveonDB object-backed product records</td><td>MIT</td><td>Analytics locally qualified; bounded transactional product state implemented, cloud qualification staged</td></tr>
     </tbody></table>
 
     <h2>Where Kaveon differs</h2>

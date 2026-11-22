@@ -184,7 +184,7 @@ appear early is the plan's property described above: a scan, filter or
 join from its first batch, an `ORDER BY`, `GROUP BY` or `DISTINCT` root at
 the end.
 
-## Engine HTTP path — alpha
+## Engine HTTP path — available (local qualified)
 
 The Rust server exposes these routes:
 
@@ -224,7 +224,7 @@ The Rust server exposes these routes:
 | `GET` | `/v1/task/{query_id}/{stage_id}/{partition}/{attempt}/metrics` | A task's outcome on its worker, exchange-token authenticated: `200` `{"elapsed_us", "scan", "execution"}` once it finished (`scan` and `execution` are the task's scan and execution metrics, `null` when it carries none), `202` `{"state": "RUNNING"}` while it runs, `500` `{"error"}` when it failed, `404` for a task the worker does not know or has already forgotten with its finished query |
 | `GET` | `/health`, `/ready`, `/ui` | Liveness, catalog readiness, and operational UI |
 
-Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, admits every statement through its resource group (concurrency, memory share, queue) and the memory admission pool, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
+Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, admits every statement through its resource group (concurrency, memory share, queue) and the memory admission pool, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not a claim of cloud identity federation: rotation without restart, tenant isolation and row/column policies remain cloud qualification gates, so keep the Engine behind the trusted API/private-network boundary until those gates are measured.
 
 The statement JSON body requires `query`. Clients may also provide `parameters`
 for typed positional (`$1`, `?`) values or `named_parameters` for typed named
