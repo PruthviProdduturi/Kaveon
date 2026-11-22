@@ -27,6 +27,11 @@ managed load-balancer egress path. Larger node sizes, extra workers, NAT/public
 IP, or additional observability resources require explicit parameter overrides
 and an updated cost estimate before deployment.
 
+The infrastructure workflow is manual-only and fail-closed: it requires the
+`budget_approved=true` dispatch input after a current-month Cost Management
+check, and passes the conservative worker, node-size, and NAT parameters
+explicitly. A push to `dev` cannot provision AKS.
+
 The default root Compose profile was verified on 2026-11-22 to expose only
 `engine-coordinator`, two Engine workers, `api`, and `studio`; PostgreSQL and
 Azurite are opt-in profiles/services and are not started by the normal local

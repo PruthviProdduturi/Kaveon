@@ -2,11 +2,14 @@ name: Azure AKS infrastructure
 
 on:
   workflow_dispatch:
-  push:
-    branches: [dev]
-    paths:
-      - 'infra/bicep/environments/aks-production.bicep'
-      - '.github/workflows/azure-aks.yml'
+    inputs:
+      budget_approved:
+        description: >-
+          Explicitly approve this temporary AKS operation only after confirming
+          current-month spend is below the $100 Kaveon ceiling.
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -28,6 +31,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enforce the cloud budget gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "${{ inputs.budget_approved }}" != "true" ]]; then
+            echo 'Refusing AKS provisioning: budget_approved must be true after a current-month Cost Management check.' >&2
+            exit 1
+          fi
+          echo 'Budget gate approved by the operator; conservative defaults remain enforced.'
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -57,7 +70,9 @@ jobs:
               operatorObjectId="${{ steps.operator.outputs.object_id }}" \
               location="$AZURE_LOCATION" \
               minWorkers=1 \
-              maxWorkers=2
+              maxWorkers=2 \
+              nodeSize=Standard_B2s \
+              enableNatGateway=false
 
       - name: Verify cluster and autoscaler bounds
         run: |
