@@ -37,7 +37,7 @@
 | Authentication (GitHub / Google / Entra) + RBAC | 🔄 In Progress |
 | Multi-source connectors | 🔄 In Progress |
 | DLM (no-LLM NL→SQL, answer-from-context) — primary homepage path | ✅ Done |
-| KaveonDB product authority and lake catalogs | 🧪 Alpha | Product records use the Engine transaction API; external SQL systems remain optional passthrough sources |
+| KaveonDB product authority and lake catalogs | ✅ Done (local/native scope) | Product records use the Engine transaction API; external SQL systems remain optional passthrough sources; cloud recovery and multi-coordinator gates remain explicit |
 | CI/CD + repo standards | ✅ Done |
 | Superset-parity gaps | 📋 Planning |
 
@@ -45,22 +45,22 @@
 
 | Capability | Status | Notes |
 |---|---|---|
-| Local Parquet reader, projection, metadata statistics, row-group pruning | 🧪 Alpha | Synchronous Arrow `RecordBatch` stream |
-| Local Delta Lake reader | 🧪 Alpha | Pins a Delta snapshot, reads JSON commits and supported v1 checkpoints, and streams active Parquet files; deletion vectors and other advanced table features remain unsupported |
-| Scan, filter, project, hash aggregate, limit | 🧪 Alpha | Vectorized node-local execution |
+| Local Parquet reader, projection, metadata statistics, row-group pruning | ✅ Done (local scope) | Synchronous Arrow `RecordBatch` stream; exact metadata and pruning are qualified |
+| Local Delta Lake reader | ✅ Done (local scope) | Pins a Delta snapshot, replays checkpoints/tails, handles tombstones and multipart completeness, and streams active Parquet files; advanced protocol features remain unsupported |
+| Scan, filter, project, hash aggregate, limit | ✅ Done (local scope) | Vectorized execution with bounded memory and spill evidence |
 | SQL coverage — window functions, set operations, date/time, decimal, subqueries | 🧪 Alpha | ROW_NUMBER/RANK/DENSE_RANK/LAG/LEAD/SUM/AVG/COUNT/MIN/MAX OVER with frame specs (ROWS/RANGE/GROUPS BETWEEN), INTERSECT/EXCEPT, EXTRACT, DATE_TRUNC, DATE_PART, TO_CHAR, NOW/CURRENT_DATE/CURRENT_TIMESTAMP; DISTINCT on SUM/AVG; Decimal128 type; IN/NOT IN/EXISTS/NOT EXISTS subqueries via semi/anti join |
-| SQL parser, remote-first CLI, HTTP statement API | 🧪 Alpha | Studio/API routes use the authenticated Engine bridge; native statements remain an alpha contract |
-| Native durable catalog | 🧪 Alpha | SQLite/WAL single-coordinator authority with revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
-| Coordinator/worker discovery and heartbeats | 🧪 Alpha | Two-worker local Docker topology verified on real Delta data |
-| Query lifecycle and storage-scan telemetry | 🧪 Alpha | HTTP history retains real phase timings, logical plans, file/row-group pruning, selected bytes, emitted rows, scan throughput, and decoded-cache hit/miss/eviction/single-flight counters |
-| Physical operator, stage, and task telemetry | 🧪 Alpha | Completed distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, and bytes; estimate diagnostics are emitted when matching runtime counters exist, including bounded `derived_row_preserving` attribution through `Window`/`Project`/`Sort` chains; full intermediate attribution remains target |
-| Sort and TopN | 🧪 Alpha | Local and distributed execution with fixed-fan-in external merge |
-| Filter-pushdown optimizer pass | 🧪 Alpha | Wired conservative pushdown with residual row-level evaluation |
-| ADLS Gen2 / S3 readers | 🧪 Alpha | ADLS Gen2 Parquet and Delta reads are qualified on the declared datasets; S3 uses the shared object-store path but remains unqualified |
-| Cloud Delta Lake / Iceberg readers | 🧪 Alpha | Delta is qualified on ADLS Gen2; Iceberg is qualified locally but its ADLS deployment gate remains open |
-| Distributed scheduling, exchange, retry | 🧪 Alpha | Versioned fragments execute scans, partial/final aggregates including AVG/exact DISTINCT, Sort/TopN, and repartitioned/broadcast joins; retry/cancellation wired |
-| Hash exchange | 🧪 Alpha | Authenticated Arrow IPC v2, stable partitioning, bounded payloads, idempotent upload, and cleanup; streaming flow control remains target |
-| Engine HTTP auth and TLS | 🧪 Alpha | Internal exchange/catalog mutation tokens and authenticated end-user statement routes exist; keep the Engine behind the trusted API boundary while broader deployment qualification remains open |
+| SQL parser, remote-first CLI, HTTP statement API | ✅ Done (local scope) | Studio/API routes use the authenticated Engine bridge; packaged CLI and API contracts are qualified |
+| Native durable catalog | ✅ Done (local scope) | KaveonDB object-backed snapshots, revisions, lifecycle, audit, Arrow schemas, authenticated mutation API, and restart recovery |
+| Coordinator/worker discovery and heartbeats | ✅ Done (local scope) | Two-worker local Docker topology verified on real Delta data |
+| Query lifecycle and storage-scan telemetry | ✅ Done (local scope) | HTTP history retains phase timings, logical plans, pruning, selected bytes, emitted rows, scan throughput, and cache counters |
+| Physical operator, stage, and task telemetry | ✅ Done (local scope) | Distributed stages/tasks report worker, partition, elapsed time, rows, Arrow batches, bytes, and bounded estimate attribution; deeper live operator metrics remain open |
+| Sort and TopN | ✅ Done (local scope) | Local and distributed execution with bounded fixed-fan-in external merge |
+| Filter-pushdown optimizer pass | ✅ Done (local scope) | Conservative pushdown with residual row-level evaluation |
+| ADLS Gen2 / S3 readers | ✅ ADLS local qualification | ADLS Gen2 Parquet and Delta paths are qualified on declared datasets; S3 uses the shared object-store path but remains unqualified |
+| Cloud Delta Lake / Iceberg readers | ✅ Delta local qualification | Delta is qualified on ADLS Gen2 paths; Iceberg is qualified locally but its ADLS deployment gate remains open |
+| Distributed scheduling, exchange, retry | ✅ Done (local scope) | Versioned fragments execute scans, aggregates, Sort/TopN, and repartitioned/broadcast joins with retry and cancellation |
+| Hash exchange | ✅ Done (local scope) | Authenticated Arrow IPC, stable partitioning, bounded payloads, idempotent upload, retries, fencing, and cleanup; cloud flow-control qualification remains open |
+| Engine HTTP auth and TLS | ✅ Done (local scope) | Internal exchange/catalog mutation tokens and authenticated end-user statement routes are qualified locally; cloud identity rotation and deployment qualification remain open |
 
 ---
 
@@ -80,7 +80,7 @@
 | Dashboard filter bar — DLM-powered dropdowns, cascading filters, click-outside close | ✅ Done | Dimension count is dataset- and dashboard-specific |
 | Client-side query cache — SHA-based dedup of repeated dashboard chart queries | ✅ Done | |
 | SQL Lab — Monaco, multi-tab, history, saved queries | ✅ Done | |
-| Control plane on object storage — datasets, charts, dashboards, saved queries, favourites and history as product records committed through the Engine's transaction API | 🧪 Alpha | PostgreSQL retired. Records are published beside the catalog snapshot, 64 content-addressed shards a kind, so a commit rewrites one shard rather than the catalogue. Measured capacity 11,900 owners at the per-owner retention caps; verified on the in-memory, filesystem and Azurite stores only — see Known Issues |
+| Control plane on object storage — datasets, charts, dashboards, saved queries, favourites and history as product records committed through the Engine's transaction API | ✅ Done (local/native scope) | PostgreSQL retired. Records are published beside the catalog snapshot in content-addressed shards; capacity and restart/CAS behavior are qualified on in-memory, filesystem, and Azurite stores. Cloud recovery remains open |
 | Async query execution + result caching (SHA-256, TTL) | ✅ Done | Async job store not cleaned on restart |
 | CTAS endpoint | ✅ Done | |
 | Per-user favorites, themes, workspace activity | ✅ Done | |
