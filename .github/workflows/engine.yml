@@ -39,6 +39,14 @@ jobs:
         working-directory: engine
     steps:
       - uses: actions/checkout@v4
+        with:
+          # validate-tsql-compatibility-tracker.py resolves the corpus's
+          # engine_commit with `git cat-file`, which can only find an object the
+          # clone actually holds. The default depth-1 checkout holds one: HEAD.
+          # So the check passed on the push that wrote the pin and failed on
+          # every push after it, which is why Engine CI went red on 4 November
+          # and stayed red.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
