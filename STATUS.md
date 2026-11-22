@@ -62,7 +62,7 @@
 | Distributed scheduling, exchange, retry | ✅ Done (local scope) | Versioned fragments execute scans, aggregates, Sort/TopN, and repartitioned/broadcast joins with retry and cancellation |
 | Hash exchange | ✅ Done (local scope) | Authenticated Arrow IPC, stable partitioning, bounded payloads, idempotent upload, retries, fencing, and cleanup; cloud flow-control qualification remains open |
 | Engine HTTP auth and TLS | ✅ Done (local scope) | Internal exchange/catalog mutation tokens and authenticated end-user statement routes are qualified locally; cloud identity rotation and deployment qualification remain open |
-| Cloud budget guardrail | ✅ Defined; cloud gate closed | AKS defaults are bounded to Standard_B2s with one test worker/two-worker production ceiling and NAT disabled. The legacy VM and empty production AKS are now stopped/deallocated; current-month Cost Management evidence is still unavailable, so the cloud gate remains fail-closed. See [`cloud-budget-live-check-2026-11-22.md`](docs/qualification/cloud-budget-live-check-2026-11-22.md). |
+| Cloud budget guardrail | ✅ Passing; cloud deployment gated | AKS defaults are bounded to Standard_B2s with a one-node test/two-worker production ceiling and NAT disabled. The legacy VM and AKS clusters are stopped/deallocated; the live Cost Management REST check reports $51.19 month-to-date, leaving $48.81 under the $100 ceiling. Cloud deployment remains manual and requires a post-run cost check. See [`cloud-budget-live-check-2026-11-22.md`](docs/qualification/cloud-budget-live-check-2026-11-22.md). |
 
 ---
 
