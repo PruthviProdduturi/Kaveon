@@ -8,7 +8,10 @@ Kaveon ceiling.** No new resources were provisioned by this check.
 The Azure Cost Management usage query returned no usable cost rows for the
 selected period, so this report does not invent a dollar total. A spend total
 must be obtained from Cost Management before enabling a cloud qualification
-run.
+run. The read-only `az consumption usage list` fallback returned 230 usage
+records, but every record had `pretaxCost=None` (zero priced rows). That proves
+usage metadata exists, not the billed dollar total, so it is not accepted as
+proof of the `$100` ceiling.
 
 ## Observed inventory
 
