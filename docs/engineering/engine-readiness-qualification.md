@@ -476,6 +476,9 @@ probing, Parquet/Delta registration, and role-gated changes; see
 Repository documentation validation also passes across 757 Markdown files, 40
 routes, and 9 SVGs; see
 [`track1-docs-validation-2026-11-22.md`](../qualification/track1-docs-validation-2026-11-22.md).
+The local delegated identity-token suite also passes 3/3 checks for cached-key
+validation, required claims, and fail-closed display-claim handling; see
+[`track1-entra-token-validation-2026-11-22.md`](../qualification/track1-entra-token-validation-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
