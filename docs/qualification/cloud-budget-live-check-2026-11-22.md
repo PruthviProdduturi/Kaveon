@@ -37,6 +37,9 @@ Read-only inspection of subscription `00000000-0000-4000-8000-000000000000`
   does not require an AKS runtime.
 - Final read-only check found no active ACR build (the bounded publication runs
   `cc17y`, `cc17x`, and `cc17w` are all `Succeeded`).
+- The push-triggered AKS deployment preflight correctly refused to proceed while
+  `kaveon-aks` was stopped; AKS deployment is now manual-dispatch only so normal
+  Studio or documentation pushes cannot initiate billable cloud qualification.
 - Two additional AKS-related storage accounts in the managed resource group.
 - No NAT gateway was returned by the subscription inventory.
 
