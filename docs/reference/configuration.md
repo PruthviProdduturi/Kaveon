@@ -69,7 +69,7 @@ change independently of the central settings class.
 Configure at least one OAuth provider for Studio sign-in. There is no built-in
 username/password login.
 
-## Engine configuration — alpha
+## Engine configuration — current local release
 
 The CLI accepts `--data-dir` for a directory of local Parquet files and immediate
 child Delta table directories in its embedded `--local` mode. The server reads

@@ -1,6 +1,6 @@
 # Engine SQL Compatibility
 
-Status: **Alpha**. This page describes the standalone Rust Engine, not SQL sent by
+Status: **Locally release-qualified, bounded compatibility**. This page describes the standalone Rust Engine, not SQL sent by
 Studio to registered databases. Registered-source SQL compatibility is determined
 by the selected database and Kaveon's API guardrails.
 
