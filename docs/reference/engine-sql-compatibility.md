@@ -4,6 +4,11 @@ Status: **Locally release-qualified, bounded compatibility**. This page describe
 Studio to registered databases. Registered-source SQL compatibility is determined
 by the selected database and Kaveon's API guardrails.
 
+The **Alpha** state in the feature matrix is deliberately feature-scoped: it
+marks a bounded SQL surface or an edge still under qualification, not the
+availability of the Engine release. The Engine itself is publicly available
+for the qualified local Docker scope; unsupported syntax is rejected explicitly.
+
 ## Current Engine support
 
 | SQL feature | State | Notes |
