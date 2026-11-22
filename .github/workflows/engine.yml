@@ -72,7 +72,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        # The catalog, exec and server suites intentionally exercise shared
+        # process-wide admission/spill fixtures. Running them serially makes
+        # the release gate deterministic; the distributed stress and Docker
+        # qualification jobs provide the parallel-runtime coverage separately.
+        run: |
+          cargo test --workspace --exclude kaveon-server -- --test-threads=1
+          cargo test -p kaveon-server --bin kaveon-server -- --test-threads=1
 
   build:
     name: Build — ${{ matrix.target }}

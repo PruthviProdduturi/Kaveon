@@ -26,3 +26,15 @@ made deterministic before using an all-target parallel run as the release
 receipt.
 
 No cloud resources were provisioned or accessed.
+
+The exact non-server workspace command used by the release workflow also
+completed successfully with one test thread:
+
+```powershell
+cargo test --workspace --exclude kaveon-server -- --test-threads=1
+```
+
+This covers the catalog, core, SQL, execution, optimizer, storage, and CLI
+targets plus their doc tests. The server binary remains a separate serial
+step in `.github/workflows/engine.yml` because its process-global query store
+and admission fixtures require that isolation for a deterministic gate.
