@@ -421,6 +421,9 @@ The local object-storage contract is also qualified against Azurite: storage
 2/2 and catalog recovery 4/4 ignored checks passed, with expected conditional
 conflicts and no lost updates; see
 [`track1-azurite-storage-2026-11-22.md`](../qualification/track1-azurite-storage-2026-11-22.md).
+The local result-cache SLO also passes its full harness, including a real
+coordinator restart miss and measured warm-hit latency; see
+[`track1-cache-slo-2026-11-22.md`](../qualification/track1-cache-slo-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
