@@ -41,6 +41,11 @@ run. A passing local gate does not silently imply cloud production readiness.
   Check & Test job (format, Clippy, compatibility validation, and release test
   suite). Publish/Release jobs were correctly skipped for this manual
   qualification run; they do not count as a cloud deployment.
+- Push run `45020400087` for commit `fe32d2ec` passed Check & Test, all three
+  cross-platform builds, CLI workflows, and the reproducible `engine-dev`
+  release. Its ACR QuickRun `cc17x` succeeded and published
+  `kaveon-engine:fe32d2ec41a2102f0ecd92e27381373ef1a53fb4` with immutable
+  digest `sha256:38c7361fdcbe1792252677ca50f4164f2c36f2eb693261dee9cf8dee57ad9565`.
 
 ## Release gates — still open
 
