@@ -446,6 +446,9 @@ The optimized server suite also passes 720/720 tests serially, including API,
 distributed recovery, transaction, differential SQL, storage, and lifecycle
 coverage; see
 [`track1-server-release-tests-2026-11-22.md`](../qualification/track1-server-release-tests-2026-11-22.md).
+The complete non-server workspace also passes in optimized mode after the
+pressure-fixture fix; see
+[`track1-workspace-release-tests-2026-11-22.md`](../qualification/track1-workspace-release-tests-2026-11-22.md).
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
 [`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
