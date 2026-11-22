@@ -15,6 +15,10 @@ run. A passing local gate does not silently imply cloud production readiness.
   release suite passed 721/721)
 - Two-worker Docker distributed smoke over 500,000 rows: 12/12 exact cases,
   zero mismatches, distributed stages observed.
+- Docker exchange-loss recovery: a consumer worker was terminated after
+  exchange materialization; the coordinator returned the exact join result and
+  cleaned all exchange chunks. Evidence is in
+  [`track1-docker-exchange-loss-2026-11-22.md`](track1-docker-exchange-loss-2026-11-22.md).
 - Bracketed `DISTINCT` identifiers: local REST execution returns the exact
   typed result; evidence is in
   [`track1-bracket-distinct-runtime-2026-11-22.md`](track1-bracket-distinct-runtime-2026-11-22.md).

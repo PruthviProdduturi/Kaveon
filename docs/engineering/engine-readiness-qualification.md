@@ -538,6 +538,9 @@ collected.
 
 The consolidated Engine maturity tracker is
 [`engine-public-availability-gate-2026-11-22.md`](../qualification/engine-public-availability-gate-2026-11-22.md).
+The local exchange-loss/retry cleanup check also passed for the current release
+binary; cloud fault-injection and multi-coordinator recovery remain separate
+gates.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 
