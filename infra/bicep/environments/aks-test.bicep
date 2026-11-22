@@ -12,6 +12,8 @@ param nodeSize string = 'Standard_B2s'
 @description('Keep the default test topology to one worker. Override for distributed qualification only with an approved cost estimate.')
 @minValue(1)
 param workerCount int = 1
+@description('Provision a dedicated NAT gateway only with an approved cost estimate. The default uses the AKS managed load-balancer egress path.')
+param enableNatGateway bool = false
 
 var suffix = uniqueString(resourceGroup().id)
 var tags = { project: 'kaveon', environment: 'test', owner: 'prproddu' }
@@ -64,14 +66,14 @@ resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 // tenant closes it out on 2026-09-30), so the nodes leave through a NAT
 // Gateway with one static address — the address the storage account's
 // firewall admits.
-resource egressIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+resource egressIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (enableNatGateway) {
   name: 'kaveon-test-egress-ip'
   location: location
   tags: tags
   sku: { name: 'Standard', tier: 'Regional' }
   properties: { publicIPAllocationMethod: 'Static', publicIPAddressVersion: 'IPv4' }
 }
-resource egress 'Microsoft.Network/natGateways@2024-05-01' = {
+resource egress 'Microsoft.Network/natGateways@2024-05-01' = if (enableNatGateway) {
   name: 'kaveon-test-egress'
   location: location
   tags: tags
@@ -87,7 +89,7 @@ resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   properties: {
     addressPrefix: '10.224.0.0/20'
     defaultOutboundAccess: false
-    natGateway: { id: egress.id }
+    natGateway: enableNatGateway ? { id: egress.id } : null
     serviceEndpoints: [
       { service: 'Microsoft.Storage' }
       { service: 'Microsoft.KeyVault' }
@@ -157,7 +159,7 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
       serviceCidr: '10.0.0.0/16'
       dnsServiceIP: '10.0.0.10'
       loadBalancerSku: 'standard'
-      outboundType: 'userAssignedNATGateway'
+      outboundType: enableNatGateway ? 'userAssignedNATGateway' : 'loadBalancer'
     }
   }
   dependsOn: [networkRole]

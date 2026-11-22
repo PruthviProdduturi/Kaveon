@@ -12,6 +12,8 @@ param nodeSize string = 'Standard_B2s'
 param minWorkers int = 1
 @description('Keep the default topology within the qualification budget; raise only with explicit approval.')
 param maxWorkers int = 2
+@description('Provision a dedicated NAT gateway only with an approved cost estimate. The default uses the AKS managed load-balancer egress path.')
+param enableNatGateway bool = false
 
 var tags = {
   project: 'kaveon'
@@ -40,14 +42,14 @@ resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   tags: tags
   properties: { addressSpace: { addressPrefixes: ['10.225.0.0/16'] } }
 }
-resource egressIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+resource egressIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (enableNatGateway) {
   name: 'kaveon-egress-ip'
   location: location
   tags: tags
   sku: { name: 'Standard', tier: 'Regional' }
   properties: { publicIPAllocationMethod: 'Static', publicIPAddressVersion: 'IPv4' }
 }
-resource egress 'Microsoft.Network/natGateways@2024-05-01' = {
+resource egress 'Microsoft.Network/natGateways@2024-05-01' = if (enableNatGateway) {
   name: 'kaveon-egress'
   location: location
   tags: tags
@@ -63,7 +65,7 @@ resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   properties: {
     addressPrefix: '10.225.0.0/20'
     defaultOutboundAccess: false
-    natGateway: { id: egress.id }
+    natGateway: enableNatGateway ? { id: egress.id } : null
     serviceEndpoints: [
       { service: 'Microsoft.Storage' }
       { service: 'Microsoft.KeyVault' }
@@ -139,7 +141,7 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
       serviceCidr: '10.0.0.0/16'
       dnsServiceIP: '10.0.0.10'
       loadBalancerSku: 'standard'
-      outboundType: 'userAssignedNATGateway'
+      outboundType: enableNatGateway ? 'userAssignedNATGateway' : 'loadBalancer'
     }
   }
   dependsOn: [networkRole]
