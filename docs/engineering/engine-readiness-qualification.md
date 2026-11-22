@@ -513,6 +513,10 @@ Paged result restart cleanup is also qualified locally: stale result directories
 older than the 15-minute TTL are reclaimed at startup, fresh neighboring result
 directories are preserved, and the focused result suite passes 7/7; see
 [`track1-result-restart-cleanup-2026-11-22.md`](../qualification/track1-result-restart-cleanup-2026-11-22.md).
+The complete optimized workspace release test gate also passes with exit code
+zero across 2,417 listed tests (all non-ignored tests passed), including the
+721-test server suite; see
+[`track1-workspace-release-tests-2026-11-22.md`](../qualification/track1-workspace-release-tests-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 Any future cloud run is governed by the

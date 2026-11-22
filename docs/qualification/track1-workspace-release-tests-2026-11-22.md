@@ -1,19 +1,21 @@
-# Release-mode workspace qualification — 2026-11-22
+# Workspace release test gate — 2026-11-22
 
-## Result
-
-**PASS.** After stabilizing the release pressure fixture, the complete
-non-server workspace test command passed in optimized mode:
+## Command
 
 ```text
-cargo test --workspace --exclude kaveon-server --release -- --test-threads=1
+cargo test --workspace --release --locked -- --test-threads=1
 ```
 
-Catalog, CLI, core, execution, optimizer, SQL, storage, Python binding, and
-their doctest targets completed with no failures. Tests explicitly marked as
-benchmarks or emulator-dependent remained ignored by their contract. The
-server crate has its own separate release receipt with 720/720 tests passed.
+Executed from `engine/` on the pinned Rust `1.98.1` toolchain. The command
+completed with exit code `0`. The workspace test listing contained 2,417 test
+entries across catalog, CLI, core, execution, optimizer, server, SQL, and
+storage. Every non-ignored test passed; the run reported zero failures.
 
-This is local release evidence only; cloud deployment and cloud-scale
-performance gates remain separate. No cloud resources were provisioned and
-incremental cloud spend was **$0**.
+The server portion included the complete 721-test release suite, including the
+distributed differential corpus, exchange/recovery, spill, cancellation,
+catalog, transaction, API, and lifecycle tests. Tests requiring an external
+Azurite service or explicitly marked benchmark-only remain ignored by their
+declared contract; they are not represented as cloud qualification.
+
+This is local release evidence only. It does not close the AKS/ADLS sustained
+soak, cloud identity rotation, backup/restore, or upgrade/rollback gates.
