@@ -9,16 +9,10 @@ on:
         default: rehearsal
         type: choice
         options: [rehearsal, retirement]
-  push:
-    branches: [dev]
-    paths:
-      - 'api/**'
-      - 'studio/**'
-      - 'packages/**'
-      - 'pnpm-lock.yaml'
-      - 'infra/helm/kaveon-platform/**'
-      - 'scripts/deploy-kaveon-aks.sh'
-      - '.github/workflows/deploy-aks-platform.yml'
+
+# AKS is a billable, explicitly approved qualification target. Keep this
+# workflow manual so ordinary pushes (including Studio/docs changes) cannot
+# wake or build against a stopped cluster. Local CI and Vercel remain push-driven.
 
 permissions:
   contents: read
