@@ -442,7 +442,7 @@ partitioned operators; see
 Strict release-mode Clippy also passes for every workspace target with
 `-D warnings` under the pinned Rust 1.98.1 toolchain; see
 [`track1-release-clippy-2026-11-22.md`](../qualification/track1-release-clippy-2026-11-22.md).
-The optimized server suite also passes 720/720 tests serially, including API,
+The optimized server suite also passes 721/721 tests serially, including API,
 distributed recovery, transaction, differential SQL, storage, and lifecycle
 coverage; see
 [`track1-server-release-tests-2026-11-22.md`](../qualification/track1-server-release-tests-2026-11-22.md).

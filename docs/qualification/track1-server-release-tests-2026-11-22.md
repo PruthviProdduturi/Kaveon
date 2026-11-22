@@ -5,8 +5,8 @@
 **PASS.** The optimized Engine server suite completed serially:
 
 ```text
-cargo test -p kaveon-server --release --bin kaveon-server -- --test-threads=1
-720 passed, 0 failed, 0 ignored
+cargo test -p kaveon-server --all-targets --release -- --test-threads=1
+721 passed, 0 failed, 0 ignored
 ```
 
 This covers authenticated API and transaction paths, distributed worker-loss
