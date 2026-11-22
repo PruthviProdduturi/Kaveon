@@ -518,6 +518,10 @@ below remain open until an immutable AKS/ADLS rollout is available.
 Any future cloud run is governed by the
 [`cloud qualification budget guardrail`](../qualification/cloud-budget-guardrail.md)
 and must remain below the approved $100 monthly ceiling.
+The latest read-only subscription inventory is recorded in
+[`cloud-budget-live-check-2026-11-22.md`](../qualification/cloud-budget-live-check-2026-11-22.md);
+because the current-month Cost Management total was unavailable, cloud
+qualification is fail-closed and local Docker remains the default.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 

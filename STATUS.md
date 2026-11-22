@@ -61,6 +61,7 @@
 | Distributed scheduling, exchange, retry | ✅ Done (local scope) | Versioned fragments execute scans, aggregates, Sort/TopN, and repartitioned/broadcast joins with retry and cancellation |
 | Hash exchange | ✅ Done (local scope) | Authenticated Arrow IPC, stable partitioning, bounded payloads, idempotent upload, retries, fencing, and cleanup; cloud flow-control qualification remains open |
 | Engine HTTP auth and TLS | ✅ Done (local scope) | Internal exchange/catalog mutation tokens and authenticated end-user statement routes are qualified locally; cloud identity rotation and deployment qualification remain open |
+| Cloud budget guardrail | ✅ Defined; cloud gate closed | AKS defaults are bounded to Standard_B2s with one test worker/two-worker production ceiling and NAT disabled. The live subscription still has overlapping VM/AKS resources and no usable current-month spend total; see [`cloud-budget-live-check-2026-11-22.md`](docs/qualification/cloud-budget-live-check-2026-11-22.md). |
 
 ---
 
