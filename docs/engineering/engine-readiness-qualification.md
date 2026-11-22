@@ -425,6 +425,10 @@ conflicts and no lost updates; see
 The local result-cache SLO also passes its full harness, including a real
 coordinator restart miss and measured warm-hit latency; see
 [`track1-cache-slo-2026-11-22.md`](../qualification/track1-cache-slo-2026-11-22.md).
+The local query-lifecycle suite also passes 10/10 focused checks for
+owner-scoped state, cancellation, waiter wake-up, bounded registry cleanup,
+capacity release, and terminal DLM-run binding; see
+[`track1-lifecycle-2026-11-22.md`](../qualification/track1-lifecycle-2026-11-22.md).
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
 [`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
@@ -473,7 +477,7 @@ Catalog access and DDL authorization also pass 11/11 and 9/9 checks for
 default-deny visibility, grants/revocation, restart persistence, location
 probing, Parquet/Delta registration, and role-gated changes; see
 [`track1-catalog-access-ddl-2026-11-22.md`](../qualification/track1-catalog-access-ddl-2026-11-22.md).
-Repository documentation validation also passes across 757 Markdown files, 40
+Repository documentation validation also passes across 761 Markdown files, 40
 routes, and 9 SVGs; see
 [`track1-docs-validation-2026-11-22.md`](../qualification/track1-docs-validation-2026-11-22.md).
 The local delegated identity-token suite also passes 3/3 checks for cached-key
