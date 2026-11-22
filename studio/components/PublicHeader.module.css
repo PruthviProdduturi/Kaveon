@@ -3,6 +3,14 @@
   /* Keep the public chrome on the same true-black ground as the hero. A
      translucent scrim reads as a grey header band on large displays. */
   background: #0a0a0a !important; }
+/* The app's dashboard stylesheet has a broad dark-theme `header` rule with
+   `!important`. Scope this stronger public-page rule so that global product
+   chrome can never repaint the landing/docs header as #1e1e1e. */
+:global(html[data-kaveon-public]) .header.aboutHeader {
+  background: #0a0a0a !important;
+  background-color: #0a0a0a !important;
+  background-image: none !important;
+}
 .brand { display: flex; align-items: center; text-decoration: none; }
 .brand:hover, .brand:active, .aboutHeader .brand, .aboutHeader .brand:hover, .aboutHeader .brand:active { border-color: transparent !important; background: transparent !important; box-shadow: none !important; }
 .nav { display: flex; align-items: center; gap: 32px; }
