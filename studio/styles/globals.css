@@ -51,6 +51,13 @@ body {
   min-height: 100vh;
 }
 
+/* The public landing page is a single, theme-independent surface. Keep the
+   document ground identical to the hero so the SSR body cannot flash or leave
+   a grey band above the fixed page shell. */
+html[data-kaveon-public] body {
+  background: #0a0a0a !important;
+}
+
 a {
   color: var(--lens-primary);
 }
