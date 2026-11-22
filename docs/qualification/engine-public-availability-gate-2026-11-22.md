@@ -37,6 +37,10 @@ run. A passing local gate does not silently imply cloud production readiness.
   typed result; evidence is in
   [`track1-bracket-distinct-runtime-2026-11-22.md`](track1-bracket-distinct-runtime-2026-11-22.md).
 - Documentation integrity: `node scripts/validate-docs.mjs` passes.
+- GitHub Actions run `45018913739` for commit `9d491fe9` passed its complete
+  Check & Test job (format, Clippy, compatibility validation, and release test
+  suite). Publish/Release jobs were correctly skipped for this manual
+  qualification run; they do not count as a cloud deployment.
 
 ## Release gates — still open
 
