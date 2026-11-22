@@ -74,30 +74,33 @@ if ($costRows.Count -gt 0) {
     $costSource = "az consumption usage list"
 }
 if ($null -eq $costTotal) {
-    try {
-        $token = (& az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)
-        if ($LASTEXITCODE -ne 0 -or -not $token) { throw "Azure access token unavailable" }
-        $body = @{
-            type = "Usage"
-            timeframe = "MonthToDate"
-            dataset = @{
-                granularity = "None"
-                aggregation = @{ totalCost = @{ name = "PreTaxCost"; function = "Sum" } }
-            }
-        } | ConvertTo-Json -Depth 8
-        $query = Invoke-RestMethod -Method Post `
-            -Uri "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.CostManagement/query?api-version=2026-06-01" `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -ContentType "application/json" -Body $body
-        $rows = @($query.properties.rows)
-        if ($rows.Count -gt 0) {
-            $costTotal = [decimal]$rows[0][0]
-            $costRows = $rows
-            $costSource = "Cost Management REST query"
+    $body = @{
+        type = "Usage"
+        timeframe = "MonthToDate"
+        dataset = @{
+            granularity = "None"
+            aggregation = @{ totalCost = @{ name = "PreTaxCost"; function = "Sum" } }
         }
-    } catch {
-        $costError = (($costError, "Cost Management REST fallback: $($_.Exception.Message)") |
-            Where-Object { $_ }) -join "; "
+    } | ConvertTo-Json -Depth 8
+    for ($attempt = 1; $attempt -le 3 -and $null -eq $costTotal; $attempt++) {
+        try {
+            $token = (& az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)
+            if ($LASTEXITCODE -ne 0 -or -not $token) { throw "Azure access token unavailable" }
+            $query = Invoke-RestMethod -Method Post `
+                -Uri "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.CostManagement/query?api-version=2026-06-01" `
+                -Headers @{ Authorization = "Bearer $token" } `
+                -ContentType "application/json" -Body $body
+            $rows = @($query.properties.rows)
+            if ($rows.Count -gt 0) {
+                $costTotal = [decimal]$rows[0][0]
+                $costRows = $rows
+                $costSource = "Cost Management REST query"
+            }
+        } catch {
+            $costError = (($costError, "Cost Management REST attempt ${attempt}: $($_.Exception.Message)") |
+                Where-Object { $_ }) -join "; "
+            if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+        }
     }
 }
 
