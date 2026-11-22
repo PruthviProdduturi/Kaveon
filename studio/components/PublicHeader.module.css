@@ -1,15 +1,8 @@
 .header { --text-primary: #f4f7fb; position: fixed; inset: 0 0 auto; z-index: 100; display: flex; min-height: 72px; align-items: center; justify-content: space-between; padding: 0 clamp(20px,2.5vw,44px); border-bottom: 1px solid rgba(255,255,255,.07); background: #0a0a0a; }
-.header.aboutHeader { min-height: 72px; padding: 0 clamp(20px,2.5vw,44px); border-bottom-color: transparent !important; backdrop-filter: none; box-shadow: none;
-  /* A scrim, not a slab. The flat fill was the same #0a0a0a as the page, but it
-     ended on a hard line, and against the hero's ambient gradients that edge read
-     as a grey band across the top of every page. Fading the same colour to nothing
-     leaves no edge to see: over the page's own ground it is invisible, and content
-     scrolling underneath dissolves instead of being cut off. */
-  background: linear-gradient(to bottom,
-    rgba(10,10,10,1) 0%,
-    rgba(10,10,10,.96) 55%,
-    rgba(10,10,10,.78) 80%,
-    rgba(10,10,10,0) 100%) !important; }
+.header.aboutHeader { min-height: 72px; padding: 0 clamp(20px,2.5vw,44px); border-bottom: 0 !important; backdrop-filter: none; box-shadow: none;
+  /* Keep the public chrome on the same true-black ground as the hero. A
+     translucent scrim reads as a grey header band on large displays. */
+  background: #0a0a0a !important; }
 .brand { display: flex; align-items: center; text-decoration: none; }
 .brand:hover, .brand:active, .aboutHeader .brand, .aboutHeader .brand:hover, .aboutHeader .brand:active { border-color: transparent !important; background: transparent !important; box-shadow: none !important; }
 .nav { display: flex; align-items: center; gap: 32px; }
