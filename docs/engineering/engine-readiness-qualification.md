@@ -469,6 +469,10 @@ The local security and exchange protocol suites also pass 8/8 and 61/61,
 covering strict identity, role/configuration validation, exchange integrity,
 bounded transport, retries, fencing, and cleanup; see
 [`track1-security-exchange-2026-11-22.md`](../qualification/track1-security-exchange-2026-11-22.md).
+Catalog access and DDL authorization also pass 11/11 and 9/9 checks for
+default-deny visibility, grants/revocation, restart persistence, location
+probing, Parquet/Delta registration, and role-gated changes; see
+[`track1-catalog-access-ddl-2026-11-22.md`](../qualification/track1-catalog-access-ddl-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
