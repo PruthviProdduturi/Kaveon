@@ -465,6 +465,10 @@ The authenticated transaction API suite also passes 72/72 checks for owner
 isolation, roles, bounded product DML, savepoints/rollback, idempotency, CAS
 recovery, and DLM lifecycle binding; see
 [`track1-transaction-api-security-2026-11-22.md`](../qualification/track1-transaction-api-security-2026-11-22.md).
+The local security and exchange protocol suites also pass 8/8 and 61/61,
+covering strict identity, role/configuration validation, exchange integrity,
+bounded transport, retries, fencing, and cleanup; see
+[`track1-security-exchange-2026-11-22.md`](../qualification/track1-security-exchange-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
