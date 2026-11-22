@@ -146,7 +146,7 @@ curl -s http://kaveon-api:8080/api/v1/datasets \\
     <ul>
       <li>Pin clients to a deployed version; the API is pre-1.0 and response fields may change.</li>
       <li>Route user-facing traffic through the Studio proxy, never directly at the platform API.</li>
-      <li>Keep the Engine API on a trusted network during alpha.</li>
+      <li>Keep the standalone Engine API on a trusted network; direct end-user authentication and TLS remain separate deployment gates.</li>
     </ul>
 
     <Pager prev={{ href: "/docs/architecture", title: "Architecture" }} next={{ href: "/docs/connectors", title: "Connector Matrix" }} />

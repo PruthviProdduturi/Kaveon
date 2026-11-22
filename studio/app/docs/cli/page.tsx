@@ -11,7 +11,7 @@ export default function CliDocs() {
         lead="A terminal client with a live session header, streaming result pages, query cancellation, catalog completion and scriptable output."
       />
 
-      <Callout type="note">The remote shell is Beta. Embedded <code>--local</code> mode is Alpha. The full reference covers every option, dot command, SQL keyword, catalog/schema/table lifecycle command, optimization clause, output field and unsupported boundary in the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/guides/engine-cli.md">CLI guide</a>.</Callout>
+      <Callout type="note">The remote shell is Beta. Embedded <code>--local</code> mode is a preview path separate from the qualified Docker runtime. The full reference covers every option, dot command, SQL keyword, catalog/schema/table lifecycle command, optimization clause, output field and unsupported boundary in the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/guides/engine-cli.md">CLI guide</a>.</Callout>
 
       <h2>Install once</h2>
       <Code lang="powershell">{`irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
