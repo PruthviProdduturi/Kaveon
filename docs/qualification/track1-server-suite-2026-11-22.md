@@ -27,12 +27,20 @@ The focused admission qualification was also run after the fixture change:
 cargo test -p kaveon-server --bin kaveon-server admission -- --nocapture
 ```
 
+The deterministic CI command was then run in full:
+
+```text
+cargo test -p kaveon-server --bin kaveon-server -- --test-threads=1
+```
+
 ## Results
 
 - Formatting: passed.
 - Strict server Clippy (`-D warnings`): passed.
 - Focused admission suite: **6 passed, 0 failed**.
 - Complete server binary suite: **720 passed, 0 failed, 0 ignored**.
+- Deterministic serial server suite: **720 passed, 0 failed, 0 ignored**
+  (900.82s).
 - The complete distributed differential sweep passed, including the long
   Parquet-encoding and execution-path comparison.
 - No Azure, AKS, ADLS, or other billable cloud resource was started for this
