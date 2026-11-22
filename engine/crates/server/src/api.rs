@@ -19012,7 +19012,11 @@ mod tests {
 
         // Distinct statements, so each is identifiable in the store by its SQL.
         let statements: Vec<String> = (0..6)
-            .map(|n| format!("SELECT id FROM orders WHERE id > {n} ORDER BY id"))
+            .map(|n| {
+                format!(
+                    "SELECT id FROM orders WHERE id > {n} ORDER BY id /* concurrent-cancel-{n} */"
+                )
+            })
             .collect();
         let mut submitting = Vec::new();
         for sql in &statements {
@@ -19144,7 +19148,10 @@ mod tests {
             display_identity: None,
             role: Role::Analyst,
         };
-        let sql = "SELECT id FROM orders WHERE id > 2 ORDER BY id";
+        // Keep this fixture distinct from the other process-global admission
+        // tests; the query store is shared while the test binary runs in
+        // parallel.
+        let sql = "SELECT id FROM orders WHERE id > 2 ORDER BY id /* cancel-by-id */";
         let submitting = {
             let state = state.clone();
             let analyst = analyst.clone();
