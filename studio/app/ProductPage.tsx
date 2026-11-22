@@ -339,8 +339,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Distributed Arrow execution over Parquet and Delta tables on local storage, with exact memory accounting. Qualified on a cluster; broader cloud and format qualification remains staged." },
             ].map((pillar, index) => (
               <Anim key={pillar.name} dir="up" delay={index * 120} style={{ padding: "30px 28px", borderRadius: 16, background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", minHeight: 220 }} className="about-card">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 28 }}>
-                  <span style={{ fontSize: 11, fontFamily: "monospace", color: "#596678" }}>0{index + 1}</span>
+                <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, marginBottom: 28 }}>
                   <span style={{ padding: "4px 9px", borderRadius: 999, border: `1px solid ${pillar.color}35`, background: `${pillar.color}10`, color: pillar.color, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{pillar.status}</span>
                 </div>
                 <h3 style={{ margin: "0 0 12px", fontSize: 22, color: "#e8edf4" }}>{pillar.name}</h3>
@@ -348,7 +347,10 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               </Anim>
             ))}
           </div>
-          <div style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap", marginTop: 26, color: "#6f7d90", fontSize: 12 }}><span>Solid capabilities are available today</span><span>·</span><span>Preview capabilities are labeled explicitly</span></div>
+          <div aria-label="Capability status legend" style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap", marginTop: 26, color: "#9aa7b8", fontSize: 12 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: "#4A9EE8", boxShadow: "0 0 10px #4A9EE855" }} />Available today</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: "#f59e0b", boxShadow: "0 0 10px #f59e0b55" }} />Preview, clearly labeled</span>
+          </div>
         </div>
       </section>
 
