@@ -242,7 +242,10 @@ Status on 2026-09-17 of the ten gates listed on 2026-09-04 (evidence in the HAND
 9. Source registry to Engine catalog bridge: done (`POST /api/v1/catalog-sources/{id}/engine-sync`).
 10. Versioned production metadata migrations: superseded by the PostgreSQL retirement program (`postgresql-retirement.md`); **at this historical snapshot** PostgreSQL was still the live authority. The current native profile is KaveonDB-first; verify present deployment evidence before treating this historical gate as active.
 
-Do not call Kaveon Trino-class or production-ready until the relevant gates have measured evidence. Current wording is distributed alpha, measured against Trino on a matched three-worker cluster.
+Do not call Kaveon Trino-class or cloud-production-ready until the relevant
+gates have measured evidence. The Engine is publicly available for its
+locally qualified Docker scope; comparative claims and cloud production
+readiness still require the evidence listed in the release gate tracker.
 
 ## Historical next execution order (2026-09-04, retained for provenance)
 
