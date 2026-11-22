@@ -52,6 +52,9 @@ run. A passing local gate does not silently imply cloud production readiness.
   `kaveon-engine:a736e3b85e68a49a6a52bd505e2acfde46c35738` with immutable
   digest `sha256:7d54c7bc2081e36efcceadc3f777e293e89b9bc74173a005a462d096d128c38d`.
   The ACR build was constrained to 1,800 seconds and the CI job to 35 minutes.
+- CI run `45032896024` for the documentation-aligned release state passed Web
+  lint/type-check/build, API syntax/tests, Helm lint/render, and secret scan.
+  It did not deploy AKS or start billable Azure compute.
 
 ## Release gates — still open
 
