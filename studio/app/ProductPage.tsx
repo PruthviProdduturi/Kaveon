@@ -55,6 +55,17 @@ function Section({ children, style }: { children: React.ReactNode; style?: React
 }
 
 export default function ProductPage({ benchmarks = null }: { benchmarks?: BenchmarkFigures | null }) {
+  // The public landing page is a single dark surface. Keep the document body
+  // on that same surface while it is mounted so the fixed header cannot reveal
+  // the app shell's darker-grey body token through compositing or DevTools.
+  useEffect(() => {
+    const previous = document.body.style.backgroundColor;
+    document.body.style.backgroundColor = "#0a0a0a";
+    return () => {
+      document.body.style.backgroundColor = previous;
+    };
+  }, []);
+
   const r1 = useFadeIn(0);
   const r2 = useFadeIn(100);
   const r3 = useFadeIn(0);
