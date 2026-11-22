@@ -7,7 +7,8 @@ param operatorIpCidr string
 param additionalOperatorIpCidrs array = []
 @description('Enable only with stable, verified operator egress CIDRs. Entra authentication and Azure RBAC remain enabled either way.')
 param restrictApiToOperatorIps bool = false
-param nodeSize string = 'Standard_D4s_v3'
+@description('Small default node size for budget-capped test clusters. Override only with an approved cost estimate.')
+param nodeSize string = 'Standard_B2s'
 
 var suffix = uniqueString(resourceGroup().id)
 var tags = { project: 'kaveon', environment: 'test', owner: 'prproddu' }

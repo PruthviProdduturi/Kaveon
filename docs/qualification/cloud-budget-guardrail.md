@@ -19,6 +19,12 @@ Local Docker and emulator qualification remains the default path and has no
 incremental cloud spend. This guardrail does not claim any cloud gate has
 passed; it prevents an unbounded cloud qualification attempt.
 
+The AKS Bicep defaults are intentionally conservative: `Standard_B2s` nodes
+with one production worker minimum and two maximum (the test template also
+defaults to `Standard_B2s`). Larger node sizes, extra workers, NAT/public IP,
+or additional observability resources require explicit parameter overrides and
+an updated cost estimate before deployment.
+
 The default root Compose profile was verified on 2026-11-22 to expose only
 `engine-coordinator`, two Engine workers, `api`, and `studio`; PostgreSQL and
 Azurite are opt-in profiles/services and are not started by the normal local

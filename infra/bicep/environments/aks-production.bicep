@@ -7,9 +7,11 @@ param registryName string
 param location string = resourceGroup().location
 param kubernetesVersion string = '1.35.7'
 param operatorObjectId string
-param nodeSize string = 'Standard_D4s_v3'
+@description('Small default worker size for budget-capped qualification. Override only with an approved cost estimate.')
+param nodeSize string = 'Standard_B2s'
 param minWorkers int = 1
-param maxWorkers int = 4
+@description('Keep the default topology within the qualification budget; raise only with explicit approval.')
+param maxWorkers int = 2
 
 var tags = {
   project: 'kaveon'
