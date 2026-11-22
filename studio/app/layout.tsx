@@ -31,8 +31,18 @@ export default function RootLayout({
             The product page at / is a theme-independent #0a0a0a surface and renders
             client-side, so taking the theme ground there left a #171717 band (or, in
             light theme, a near-white one) on screen until the page painted over it.
-            It reads as a grey header, and only a warm cache hides it. */}
-        <script dangerouslySetInnerHTML={{ __html: `(function(){var t=localStorage.getItem('kaveon-theme')||'dark';document.documentElement.setAttribute('data-theme',t);var b=location.pathname==='/'?'#0a0a0a':(t==='dark'?'#171717':'#f5f5f7');document.documentElement.style.background=b;document.body&&(document.body.style.background=b)})();` }} />
+            It reads as a grey header, and only a warm cache hides it.
+
+            This script runs in the head, where `document.body` is still null —
+            the element has not been parsed. So the `document.body && …` form
+            this used to carry never once assigned: `<html>` took the right
+            ground and `<body>` kept the literal below it, which is the grey
+            band the comment above describes. A stylesheet rule has no such
+            timing: it applies to the body whenever the body appears. It is
+            `!important` because it has to beat that inline literal, and it is
+            written only on `/`, so every other route keeps a body the theme
+            toggle can still repaint. */}
+        <script dangerouslySetInnerHTML={{ __html: `(function(){var t=localStorage.getItem('kaveon-theme')||'dark';document.documentElement.setAttribute('data-theme',t);var b=location.pathname==='/'?'#0a0a0a':(t==='dark'?'#171717':'#f5f5f7');document.documentElement.style.background=b;if(location.pathname==='/'){var s=document.createElement('style');s.id='kaveon-ground';s.textContent='body{background:#0a0a0a!important}';document.head.appendChild(s);}})();` }} />
       </head>
       <body suppressHydrationWarning style={{ background: "#171717" }}>
         <Providers>

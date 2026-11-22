@@ -58,11 +58,17 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
   // The public landing page is a single dark surface. Keep the document body
   // on that same surface while it is mounted so the fixed header cannot reveal
   // the app shell's darker-grey body token through compositing or DevTools.
+  // This effect runs on mount, which is after the first paint, so the head
+  // script in `layout.tsx` covers the window before it by writing a
+  // `#kaveon-ground` rule. That rule is `!important` and outlives a client-side
+  // navigation, so this cleanup takes it away on the way out — otherwise
+  // leaving for /docs would carry this page's ground along with it.
   useEffect(() => {
     const previous = document.body.style.backgroundColor;
     document.body.style.backgroundColor = "#0a0a0a";
     return () => {
       document.body.style.backgroundColor = previous;
+      document.getElementById("kaveon-ground")?.remove();
     };
   }, []);
 
