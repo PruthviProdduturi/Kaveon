@@ -36,7 +36,7 @@ technical reference for current versus target capability boundaries.
 |---|---|
 | **Kaveon Studio** | Dashboards, chart construction, SQL Lab, datasets, and administration |
 | **Kaveon DLM** | Deterministic dataset routing, intent resolution, compiled answers, and SQL generation without a hosted LLM |
-| **Kaveon Engine** | Rust catalog resolution, SQL optimization, vectorized operators, and distributed stage execution over local Parquet and Delta; direct cloud lake reads remain target capabilities |
+| **Kaveon Engine** | Rust catalog resolution, SQL optimization, vectorized operators, and distributed stage execution over local Parquet, Delta, and Iceberg; local release qualification is recorded, while cloud operational gates remain explicit |
 
 The defining data model is the **Live Lake Path**: Kaveon reads data in the customer’s storage without mandatory import. **Optimized ingest** is an explicit target mode that writes sorted, partitioned, compressed data back into customer-controlled storage. The current internal enum still calls this access pattern `Shortcut`; that implementation name is not the product concept.
 
@@ -75,7 +75,7 @@ to ADLS, and commits its definition/run records in KaveonDB; serving verifies th
 artifact revision and hash and has no PostgreSQL fallback. Registered external
 SQL sources remain an explicit passthrough path rather than Engine federation.
 
-### Rust Engine path — distributed alpha
+### Rust Engine path — distributed, locally release-qualified
 
 ```mermaid
 flowchart LR
@@ -115,7 +115,7 @@ kaveon-cli ─────> kaveon-server ──> kaveon-sql ──> kaveon-opti
                                                 Arrow / Parquet / Delta
 
 kaveon-core: shared errors, expressions, catalog, fragment, exchange, memory, and telemetry contracts
-kaveon-catalog: SQLite/WAL metadata authority for one coordinator
+kaveon-catalog: KaveonDB snapshot, product-record, and catalog transaction authority
 kaveon-optim: wired logical filter pushdown and predicate conversion
 kaveon-python: Python boundary (scaffold)
 ```
@@ -138,19 +138,26 @@ pub trait BatchOperator {
 
 ### Capability truth
 
+The status below describes capability scope, not an unrestricted production or
+cloud-parity claim. The current local release qualification covers the locked
+build, distributed Docker topology, storage readers, transactions, security,
+cache, pressure, soak, CLI, differential SQL, and optimized test suites. AKS,
+ADLS failure recovery, backup/restore, rollback, and multi-coordinator gates
+remain separate; see the [readiness qualification](docs/engineering/engine-readiness-qualification.md).
+
 | Capability | State | Notes |
 |---|---|---|
 | Local Parquet scan | **Implemented** | Streaming batches, metadata, strict projection |
-| Local Delta scan | **Alpha** | JSON-log snapshot replay and streaming across active Parquet files; complete history from version 0 required, checkpoints unsupported |
+| Local Delta scan | **Implemented** | Checkpoint/tail replay, tombstones, multipart completeness, version-gap rejection, and snapshot-pinned streaming are locally qualified |
 | Row-group pruning | **Implemented** | Conservative statistics pruning; planner supplies pushed filters and retains residual evaluation |
 | Filter and projection | **Implemented** | Batch operators |
-| Hash aggregate | **Alpha** | Local and distributed partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT; opt-in group/distinct-state accounting fails closed at the query limit; aggregate spill absent |
+| Hash aggregate | **Implemented** | Local and distributed partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT with bounded memory and spill qualification |
 | Limit | **Implemented** | Physical operator |
-| Sort / TopN | **Alpha** | Vectorized local execution, distributed partial/final TopN, and fixed-fan-in external merge |
+| Sort / TopN | **Implemented** | Vectorized local/distributed execution with bounded external merge and exact ordering/null semantics |
 | Filter pushdown | **Implemented** | Wired optimizer pass converts safe predicates while retaining the row filter |
-| Distributed execution | **Alpha** | General fragments cover scans, aggregates, Sort/TopN, and hash/cross joins with retry and cancellation |
-| Exchange foundation | **Alpha** | Authenticated Arrow IPC v2 endpoints, deterministic partitioning, byte bounds, idempotency, and cleanup; streaming flow control absent |
-| Native durable catalog | **Alpha** | SQLite/WAL transactions, revisions, lifecycle, audit, Arrow schemas, and restart reconstruction for one coordinator |
+| Distributed execution | **Implemented** | Validated fragments cover scans, aggregates, Sort/TopN, joins, retry, cancellation, bounded admission, and worker-loss recovery in the qualified local topology |
+| Exchange foundation | **Implemented** | Authenticated Arrow IPC, deterministic partitioning, byte bounds, idempotency, bounded buffering, retries, fencing, and cleanup are locally qualified |
+| Native durable catalog | **Implemented** | KaveonDB typed product records, immutable snapshots, revision CAS, lifecycle, audit, statistics, and restart reconstruction over the governed object-backed store |
 
 ### Catalog identity
 
@@ -163,7 +170,7 @@ Catalog
         └── access: Shortcut | Optimized
 ```
 
-The catalog separates logical `catalog.schema.table` identity from physical location. SQLite/WAL is the durable authority for the current single coordinator; `CatalogManager` is its process-local planning snapshot. Executable fragment version 2 carries the resolved source URI and data format, so workers do not depend on divergent local catalog state. External Hive Metastore, Glue, Unity Catalog, and Iceberg REST adapters are contracts—not implemented connectivity. See [Engine catalog architecture](engine/CATALOG.md).
+The catalog separates logical `catalog.schema.table` identity from physical location. KaveonDB stores the durable catalog snapshot and product-record transaction log; `CatalogManager` is the coordinator's process-local planning snapshot. Executable fragment version 2 carries the resolved source URI and data format, so workers do not depend on divergent local catalog state. External Hive Metastore, Glue, Unity Catalog, and Iceberg REST adapters are contracts—not implemented connectivity. See [Engine catalog architecture](engine/CATALOG.md).
 
 ### Target lake-read path
 
@@ -193,7 +200,7 @@ Correctness dominates pruning aggression. Missing, nested, inexact, incompatible
 4. A covered request returns a deterministic answer without scanning the source.
 5. An uncovered request falls through to one live semantic query.
 
-### Engine statement — alpha
+### Engine statement — locally release-qualified scope
 
 1. `POST /v1/statement` accepts SQL.
 2. `kaveon-sql` creates a logical plan.
@@ -232,7 +239,10 @@ sequenceDiagram
     end
 ```
 
-API-to-Engine identity and Studio routing remain target integration. Distributed scheduling, exchanges, and worker fragment execution are implemented alpha capabilities.
+API-to-Engine identity and Studio routing are implemented through the authenticated
+bridge. Distributed scheduling, exchanges, and worker fragment execution are
+locally release-qualified for the declared scope; cloud identity rotation,
+multi-coordinator consistency, and cloud failure recovery remain open gates.
 
 ## Trust boundaries
 
@@ -254,12 +264,17 @@ The metadata plane stores product configuration, semantic definitions, DLM artif
 | Session | Cookie and Studio runtime | Identity remains server asserted |
 | DLM context | Metadata DB and process-local compiled contexts | Coverage and freshness are observable |
 | Database pools | FastAPI process | Bounded pools and stale-connection recovery |
-| Engine catalog | SQLite/WAL authority plus coordinator planning snapshot | External transactional service for multi-coordinator consistency |
+| Engine catalog | KaveonDB governed object-backed snapshot plus coordinator planning snapshot | External coordination or a qualified multi-coordinator catalog service for shared-head consistency |
 | Engine results | Bounded process-local query registry | Expiry, pagination, persistence policy, asynchronous retrieval |
 | Parquet batches | Pull-based storage boundary | Preserve bounded execution end to end |
 | Object metadata | Not implemented | Cache by object identity/eTag; never mix snapshots |
 
-The Engine still collects root results for synchronous response materialization. A thread-safe admission controller reserves query budgets at coordinator submission, and local plans plus worker fragments propagate query/operator reservations into hash aggregate and hash join. Production integration still requires queued admission/resource groups, aggregate/join spill, paged/streaming delivery, and exchange streaming flow control.
+The Engine returns bounded and paged root results through the coordinator. A
+thread-safe admission controller reserves query budgets at submission, and
+local plans plus worker fragments propagate query/operator reservations into
+hash aggregate and hash join. Spill, cancellation cleanup, exchange bounds,
+and worker-loss recovery are locally qualified; cloud-scale soak, alerting,
+multi-coordinator consistency, and backup/rollback remain release gates.
 
 ## Deployment and startup
 
@@ -291,7 +306,7 @@ kaveon-server [config.toml]
 5. Workers start heartbeats to the coordinator.
 6. Bind Axum to `0.0.0.0:<http_port>`; default `8080`.
 
-Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive versioned fragment tasks, and exchange typed Arrow IPC partitions after scanning disjoint Parquet row groups or Delta active files. The coordinator schedules partial/final aggregates, distributed Sort/TopN, and repartitioned/broadcast joins. The catalog database uses a persistent coordinator volume; customer data is bind-mounted separately and starts empty unless explicitly provided.
+Docker declares one coordinator and two workers. Workers advertise routable service URIs, receive versioned fragment tasks, and exchange typed Arrow IPC partitions after scanning disjoint Parquet row groups or Delta active files. The coordinator schedules partial/final aggregates, distributed Sort/TopN, and repartitioned/broadcast joins. KaveonDB metadata uses its configured governed object-store/volume backend; customer data is mounted separately and starts empty unless explicitly provided.
 
 ## Quality invariants
 
@@ -311,10 +326,10 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 | Horizon | Engine capability |
 |---|---|
-| **Delivered alpha** | Local Parquet/Delta/Iceberg, ADLS Gen2 Parquet/Delta reads, optimizer, analytical operators, native catalog, remote CLI, distributed fragments/exchanges/retry/cancellation |
-| **Next** | Iceberg ADLS qualification, S3 live-bucket qualification, API/Studio identity bridge, catalog synchronization, admission control, aggregate/join spill |
-| **Then** | Broader Delta protocol support, schema evolution, deletion vectors, time travel, cost-based join planning, dynamic filtering, and live S3/Iceberg qualification |
-| **Scale qualification** | Exchange flow control, worker-loss/concurrency/skew tests, operator telemetry, five-worker AKS evidence, comparative benchmarks |
+| **Locally release-qualified** | Local Parquet/Delta/Iceberg, ADLS Gen2 Parquet/Delta reader paths, optimizer, bounded analytical operators, KaveonDB catalog, remote CLI, distributed fragments/exchanges/retry/cancellation, security, cache, pressure, soak, and differential evidence |
+| **Cloud qualification** | Iceberg ADLS qualification, S3 live-bucket qualification, workload-identity rotation, node/disk failure, sustained soak, backup/restore, upgrade/rollback, and multi-coordinator consistency |
+| **Next capability work** | Broader Delta protocol support, schema evolution, deletion vectors, time travel, cost-based join planning, dynamic filtering, and richer operator telemetry |
+| **Post-launch direction** | Cross-source federation, catalog-service adapters, optimized ingest, SIMD/JIT candidates, and broader lake-format protocol support |
 | **Post-launch** | Cross-source federation, catalog-service adapters, optimized ingest, SIMD/JIT candidates, and broader lake-format protocol support |
 
 ## Architectural decisions
@@ -331,13 +346,13 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 ## Known architectural debt
 
-- Engine query execution is not integrated with Studio/FastAPI identity, and Python bindings remain a scaffold.
+- Python bindings remain a scaffold; Studio/FastAPI identity reaches native Engine routes through the authenticated bridge, while broader tenant and cloud identity qualification remains open.
 - The platform PostgreSQL source registry and Engine native catalog need a revision-aware synchronization bridge.
 - ADLS Gen2 Parquet/Delta reads are executable and qualified for their declared paths. S3 reads are implemented through the shared object-store reader but remain unqualified; Iceberg is locally qualified but has no completed ADLS/AKS qualification. Broader Delta/Iceberg protocol semantics remain unsupported.
-- Aggregate/join spill, coordinator-wired admission, exchange streaming flow control, dynamic filtering, and cost-based optimization are absent. The admission and aggregate/join accounting foundations are opt-in and fail closed when enabled.
-- Engine statement HTTP lacks end-user authentication, TLS, authorization, resource groups, and quotas.
-- Query responses still materialize root results synchronously; retained history is process-local.
-- Multi-coordinator metadata requires an external transactional catalog service; SQLite is intentionally single-coordinator.
+- Aggregate/join spill, coordinator admission, bounded exchanges, retries, cancellation, and paged delivery are implemented and locally qualified; dynamic filtering, cost-based optimization breadth, and full live operator telemetry remain bounded work.
+- Engine statement HTTP has authenticated identity, role checks, quotas, and bounded resource groups in the qualified local path; TLS, workload-identity rotation, and adversarial cloud deployment evidence remain open.
+- Query history and result retrieval remain bounded and coordinator-scoped; durable multi-coordinator history is not claimed.
+- Multi-coordinator metadata requires a qualified shared transactional catalog service; the current KaveonDB snapshot authority is intentionally single-coordinator.
 - Docker data mounts must be configured explicitly, and readiness does not validate every registered table snapshot.
 - The shipping application uses legacy SQL passthrough during Engine integration.
 
