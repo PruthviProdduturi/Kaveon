@@ -148,14 +148,15 @@ the remaining boundaries still prevent a broad production-readiness claim.
 | Distributed execution and recovery | 14/15 | Multi-worker operators, immutable query catalog pinning, authenticated worker recovery, clean local consumer-loss recovery, and current-image AKS evidence for 12/12 concurrent exact queries plus forced in-flight worker loss, alternate-worker attempt-1 retry, exact output and three-worker catalog-compatible recovery | Node drain, catalog mutation during a running query, and multi-coordinator consistency |
 | Authentication and platform integration | 13/15 | Entra/TLS, owner-bound results and transactions, role checks, exchange authentication, fail-closed secrets/configuration | Live rotation/revocation, tenant isolation and adversarial authorization qualification on the release deployment |
 | Storage correctness | 8/10 | Parquet/Delta/Iceberg readers, pinned source identities, authenticated ADLS reads, CAS-backed immutable product/statistics documents | Live ADLS conflict/fault/restart evidence, broader schema evolution and corruption/recovery qualification |
-| Operability | 8/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, immutable ACR build and current-digest AKS rollout, startup stale-exchange reconciliation, and a passing combined restart/fault/pressure gate | Backup/restore, upgrade/rollback, alerting and a sustained current-image soak |
+| Operability | 8/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, immutable ACR build and current-digest AKS rollout, startup stale-exchange reconciliation, passing combined restart/fault/pressure gate, and local 120-second mixed-workload soak | AKS/ADLS sustained soak, backup/restore, upgrade/rollback, and alerting |
 | Performance | 8/10 | Completed six-round, six-sample-class resource-matched AKS publication run; 12 exact-result query shapes, pinned images, verified ADLS objects, 30 latency samples per engine/case, 6 throughput rounds, technical gate passed, and 2.1254× aggregate QPS ratio | Explicit acceptance of the QPS metric for the broad claim; high-cardinality grouping remains slower, and this result does not establish all-workload or PostgreSQL transaction superiority |
 
 Three material boundaries prevent expanding this narrow 8/10 rating:
 
-1. The current image has passed bounded coordinator restart, catalog catch-up,
-   concurrent correctness, pressure and worker-loss recovery, but not a sustained
-   mixed-workload soak, backup/restore or upgrade/rollback qualification.
+1. The current local image has passed bounded coordinator restart, catalog
+   catch-up, concurrent correctness, pressure, worker-loss recovery, and a
+   120-second mixed-workload soak. AKS/ADLS sustained soak, backup/restore,
+   and upgrade/rollback qualification remain open.
 2. Kaveon's transactional surface is a durable, typed product-record protocol.
    Arbitrary relational row DML, parameter binding, constraints/indexes,
    multi-table SQL transactions and a qualified isolation level remain absent.
