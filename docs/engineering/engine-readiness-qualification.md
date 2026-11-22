@@ -414,6 +414,9 @@ distributed stages observed). See
 [`track1-server-suite-2026-11-22.md`](../qualification/track1-server-suite-2026-11-22.md)
 and
 [`track1-docker-distributed-2026-11-22.md`](../qualification/track1-docker-distributed-2026-11-22.md).
+The complete execution crate is also green in a serial isolation run (645/645
+tests; four explicit benchmark/emulator skips); see
+[`track1-execution-suite-2026-11-22.md`](../qualification/track1-execution-suite-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
