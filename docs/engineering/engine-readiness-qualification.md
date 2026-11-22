@@ -435,6 +435,9 @@ retained files; see
 The local plain-Parquet directory reader gate also passes 16/16 focused storage
 checks, including partition pruning, schema validation, and exact metadata;
 see [`track1-parquet-directory-2026-11-22.md`](../qualification/track1-parquet-directory-2026-11-22.md).
+The local Iceberg reader contract also passes 6/6 focused checks, including
+snapshot/field-ID resolution and fail-closed delete-manifest handling; see
+[`track1-iceberg-reader-2026-11-22.md`](../qualification/track1-iceberg-reader-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
