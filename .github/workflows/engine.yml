@@ -197,6 +197,9 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    # ACR builds compile the Rust server remotely. Bound the complete job so a
+    # stuck build cannot consume unbounded registry-build time or budget.
+    timeout-minutes: 35
     environment: production
     env:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -220,6 +223,7 @@ jobs:
           [[ -n "${AZURE_SUBSCRIPTION_ID:-}" ]] || { echo 'Missing AZURE_SUBSCRIPTION_ID' >&2; exit 1; }
           [[ -n "${AZURE_CLIENT_ID:-}" ]] || { echo 'Missing AZURE_CLIENT_ID' >&2; exit 1; }
           az acr build --registry "$KAVEON_ACR_NAME" --only-show-errors \
+            --timeout 1800 \
             --image "kaveon-engine:${GITHUB_SHA}" \
             --file engine/Dockerfile engine
 
