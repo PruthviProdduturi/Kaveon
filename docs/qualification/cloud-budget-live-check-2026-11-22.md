@@ -2,18 +2,15 @@
 
 ## Result
 
-**Fail closed: the subscription is not yet proven to be below the $100/month
-Kaveon ceiling.** No new resources were provisioned by this check.
+**Pass: the subscription is currently below the $100/month Kaveon ceiling.**
+The month-to-date Cost Management REST query reports **$51.194352 USD** for
+the selected subscription. No new resources were provisioned by this check.
 
-The Azure Cost Management usage query returned no usable cost rows for the
-selected period, so this report does not invent a dollar total. A spend total
-must be obtained from Cost Management before enabling a cloud qualification
-run. The read-only `az consumption usage list` fallback returned 230 usage
-records, but every record had `pretaxCost=None` (zero priced rows). That proves
-usage metadata exists, not the billed dollar total, so it is not accepted as
-proof of the `$100` ceiling. A direct read-only Cost Management query was also
-rate-limited (`429 Too Many Requests`) and is therefore not treated as billing
-evidence.
+The Azure CLI preview usage endpoint still returns 230 unpriced records, but
+the guardrail now falls back to the authenticated Cost Management REST query
+(`api-version=2026-06-01`) and records its priced total. The script therefore
+fails closed only when both sources are unavailable. This is month-to-date
+actual cost, not a forecast of the remainder of the billing period.
 
 ## Observed inventory
 
@@ -48,9 +45,10 @@ compute paths are now stopped/deallocated, and the stopped legacy cluster still
 has retained infrastructure. Do not start a cluster or increase worker count
 until the owner confirms current-month spend.
 
-## Required operator decision before cloud qualification
+## Required operator checks before cloud qualification
 
-1. Export the current-month Cost Management total and resource breakdown.
+1. Re-run the guardrail and retain the current-month Cost Management total and
+   resource breakdown; the current check is $51.194352 USD month-to-date.
 2. Keep either the VM or the AKS serving path, not both, during qualification.
 3. Remove or retain the stopped cluster only after checking its disks, public
    IPs, and rollback requirement.
@@ -58,7 +56,7 @@ until the owner confirms current-month spend.
    NAT disabled, and Log Analytics ingestion bounded; stop/deallocate resources
    immediately after each gate.
 
-The local Docker qualification path remains the default and is the only path
-that can continue without a verified cloud spend total. The post-stop preflight
-still fails closed solely because Cost Management returned no usable
-current-month usage rows.
+The local Docker qualification path remains the default. The budget guardrail
+now passes for this check, while the post-stop preflight still prevents a cloud
+qualification run unless the cluster is explicitly enabled and the spend check
+remains below the ceiling.

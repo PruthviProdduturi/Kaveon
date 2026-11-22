@@ -67,9 +67,38 @@ try {
     $costError = $_.Exception.Message
 }
 $costTotal = $null
+$costSource = $null
 if ($costRows.Count -gt 0) {
     $costTotal = [decimal](($costRows | ForEach-Object { [decimal]$_.pretaxCost } |
             Measure-Object -Sum).Sum)
+    $costSource = "az consumption usage list"
+}
+if ($null -eq $costTotal) {
+    try {
+        $token = (& az account get-access-token --resource https://management.azure.com --query accessToken -o tsv)
+        if ($LASTEXITCODE -ne 0 -or -not $token) { throw "Azure access token unavailable" }
+        $body = @{
+            type = "Usage"
+            timeframe = "MonthToDate"
+            dataset = @{
+                granularity = "None"
+                aggregation = @{ totalCost = @{ name = "PreTaxCost"; function = "Sum" } }
+            }
+        } | ConvertTo-Json -Depth 8
+        $query = Invoke-RestMethod -Method Post `
+            -Uri "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.CostManagement/query?api-version=2026-06-01" `
+            -Headers @{ Authorization = "Bearer $token" } `
+            -ContentType "application/json" -Body $body
+        $rows = @($query.properties.rows)
+        if ($rows.Count -gt 0) {
+            $costTotal = [decimal]$rows[0][0]
+            $costRows = $rows
+            $costSource = "Cost Management REST query"
+        }
+    } catch {
+        $costError = (($costError, "Cost Management REST fallback: $($_.Exception.Message)") |
+            Where-Object { $_ }) -join "; "
+    }
 }
 
 $violations = [System.Collections.Generic.List[string]]::new()
@@ -105,6 +134,7 @@ $result = [ordered]@{
     month_start = $monthStart
     cost_total_usd = $costTotal
     cost_rows = $costRows.Count
+    cost_source = $costSource
     cost_error = $costError
     running_aks = $runningAks | ForEach-Object name
     running_vms = $runningVms | ForEach-Object name
