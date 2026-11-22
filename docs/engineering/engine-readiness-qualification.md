@@ -481,6 +481,9 @@ validation, required claims, and fail-closed display-claim handling; see
 [`track1-entra-token-validation-2026-11-22.md`](../qualification/track1-entra-token-validation-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
+Any future cloud run is governed by the
+[`cloud qualification budget guardrail`](../qualification/cloud-budget-guardrail.md)
+and must remain below the approved $100 monthly ceiling.
 
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 
