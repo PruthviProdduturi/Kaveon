@@ -14,7 +14,10 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
   const isAbout = active === "about";
 
   return (
-    <header className={`${styles.header} ${styles.aboutHeader} ${isAbout ? "" : styles.docsHeader}`}>
+    <header
+      className={`${styles.header} ${styles.aboutHeader} ${isAbout ? "" : styles.docsHeader}`}
+      style={{ background: "transparent", borderBottom: "none" }}
+    >
       <Link
         href="/"
         className={styles.brand}
