@@ -37,6 +37,7 @@
 | Authentication (GitHub / Google / Entra) + RBAC | 🔄 In Progress |
 | Multi-source connectors | 🔄 In Progress |
 | DLM (no-LLM NL→SQL, answer-from-context) — primary homepage path | ✅ Done |
+| Kaveon Engine release — distributed Arrow runtime | ✅ Available (local qualified) | Public Docker release, cross-platform artifacts, immutable image, and local correctness/recovery evidence are complete; ADLS/AKS production gates remain staged explicitly. |
 | KaveonDB product authority and lake catalogs | ✅ Done (local/native scope) | Product records use the Engine transaction API; external SQL systems remain optional passthrough sources; cloud recovery and multi-coordinator gates remain explicit |
 | CI/CD + repo standards | ✅ Done |
 | Superset-parity gaps | 📋 Planning |
