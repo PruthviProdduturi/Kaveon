@@ -536,6 +536,9 @@ The legacy VM was deallocated and the empty AKS production cluster was stopped
 on 2026-11-22; no serving cloud compute is active while billing evidence is
 collected.
 
+The consolidated Engine maturity tracker is
+[`engine-public-availability-gate-2026-11-22.md`](../qualification/engine-public-availability-gate-2026-11-22.md).
+
 - Favorite retirement additionally requires a typed non-secret data-source destination, unified direct-route writers, and live backfill/replay/shadow evidence.
 
 - Source migration requires a qualified workload-identity secret resolver, atomic catalog/data-source writers, shared visibility parity, and live coupled backfill evidence. The opaque legacy secret reference is not cutover evidence.
