@@ -30,13 +30,13 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 
 | Pillar | Identity | What it does |
 |--------|----------|-------------|
-| **Kaveon Engine** | The analytical database | Distributed columnar query engine built in Rust. Current (alpha): Parquet, Delta and Iceberg on local disk and ADLS Gen2, a coordinator with workers, measured against Trino on a matched cluster (`qualification/benchmark-program.md`). Target: S3 qualification, plain Parquet directory tables, Delta protocol v2, optimized ingest. Zero external engine dependencies. |
+| **Kaveon Engine** | The analytical database | Distributed columnar query engine built in Rust. Available today in a locally qualified Docker scope: Parquet, Delta and Iceberg on local disk and declared ADLS Gen2 datasets, with a coordinator and workers. Cloud production qualification, S3 qualification, Delta protocol v2, and optimized ingest remain staged. Zero external engine dependencies. |
 | **Kaveon Studio** | The intelligence layer | Dashboards (37 chart types, drag-drop canvas, cross-filtering), SQL Lab (Monaco editor), dataset management, data source registration. One surface for all analytics. |
 | **Kaveon DLM** | The Data Language Model | Deterministic NL→SQL for supported question classes. Compiles per-dataset context and runs inside the shipping API; standalone API extraction is planned. Patent work is tracked privately. |
 
 ### Data model
 
-- **Live Lake Path** (default): Kaveon Engine reads data where it lives. Parquet, Delta Lake and Iceberg on local disk and ADLS Gen2 run today (alpha); S3 is implemented through the same reader and not qualified. GCS is outside the current roadmap.
+- **Live Lake Path** (default): Kaveon Engine reads data where it lives. Parquet, Delta Lake and Iceberg on local disk are qualified, and declared ADLS Gen2 datasets have local/native qualification evidence; S3 uses the shared reader but is not cloud-qualified. GCS is outside the current roadmap.
 - **Optimized ingest** (post-launch target): Engine reads source data and rewrites it in a sorted, partitioned, compressed layout in the same customer-controlled storage.
 - **External SQL connectors**: Optional direct query to registered PostgreSQL, Fabric SQL,
   or Azure SQL sources. These are source integrations only; KaveonDB remains the

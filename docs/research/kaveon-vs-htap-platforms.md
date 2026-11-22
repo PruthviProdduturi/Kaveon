@@ -31,7 +31,7 @@ What remains defensible is narrower, accurate, and still differentiating: Kaveon
 | Databricks LTAP | **Two**: Postgres (Lakebase) and Spark/Photon | Object storage, Delta and Iceberg | Claimed, no sync pipelines | Partial | Announced June 2026, "coming soon" |
 | TiDB X | One | **Object storage as single source of truth** | Yes | **Apache 2.0** | Announced October 2025; GA unconfirmed |
 | Microsoft Fabric SQL database | SQL plus Spark | OneLake | **No** — near-real-time mirror to a read-only Delta copy | No | GA |
-| **Kaveon** | One (bounded product-state path) | ADLS Gen2 (qualified local/native path; cloud recovery separately gated) | Bounded product state | **MIT** | Analytics alpha; bounded transactional product state implemented |
+| **Kaveon** | One integrated product with separate analytical and product-state paths | ADLS Gen2 (qualified local/native path; cloud recovery separately gated) | Bounded product state | **MIT** | Analytics locally qualified; bounded transactional product state implemented |
 
 ## Platform notes
 
