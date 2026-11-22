@@ -449,6 +449,9 @@ coverage; see
 The complete non-server workspace also passes in optimized mode after the
 pressure-fixture fix; see
 [`track1-workspace-release-tests-2026-11-22.md`](../qualification/track1-workspace-release-tests-2026-11-22.md).
+The committed workspace also produces a locked optimized build with a clean
+format check and recorded server/CLI artifact hashes; see
+[`track1-release-build-2026-11-22.md`](../qualification/track1-release-build-2026-11-22.md).
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
 [`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
