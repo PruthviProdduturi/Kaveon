@@ -136,7 +136,7 @@
 | In-process rate limiting not shared across replicas | Redis fixes this |
 | Engine deployment hardening | TLS/auth are implemented; keep the Engine behind the trusted API boundary while rotation, network controls and recovery qualification remain open |
 | Platform catalog-source registry is not synchronized to Engine catalog | Add an authenticated revision-aware API-to-Engine bridge |
-| Hash aggregate/join stop at their configured query budget instead of spilling | Add partitioned aggregate/join spill before production scale claims |
+| Cloud-scale aggregate/join spill qualification | Local partitioned aggregate/join spill, bounded refusal, repartitioning, cleanup, and cancellation are qualified; AKS/object-store disk exhaustion and sustained cloud-scale spill remain open |
 | Control-plane record sharding is not qualified against the cluster | A published-format change verified on the in-memory, filesystem and Azurite stores. The measured 11,900-owner capacity and the one-shard write cost are local figures; qualify both on AKS before either is claimed publicly |
 | A commit still republishes every shard a change touches | Group commit and incremental per-shard appends are unbuilt. Writes are small enough that this is no longer urgent, and the Azurite concurrency baseline exists for when it is taken up |
 
