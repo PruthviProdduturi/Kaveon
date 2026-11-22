@@ -52,6 +52,20 @@ cargo build --workspace --release --locked
 
 The optimized workspace build completed successfully in 1m41s.
 
+After the workspace scheduler exposed two additional admission-fixture
+collisions, those fixtures were made SQL-unique as well. The two affected
+tests pass independently after the correction:
+
+```text
+concurrent_cancellation_cancels_only_its_targets_and_balances_admission ... ok
+a_queued_statement_can_be_cancelled_by_id ... ok
+```
+
+The full server rerun was intentionally interrupted after exceeding its
+expected duration with no output; it is not counted as a passing result. The
+720/720 result above is the completed suite on the prior fixture-isolated tree,
+and the focused rerun is the evidence for this final isolation-only change.
+
 ## Boundary
 
 This receipt closes the current local server correctness/build gate only. The
