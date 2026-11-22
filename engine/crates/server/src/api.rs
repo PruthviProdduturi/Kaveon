@@ -18826,7 +18826,9 @@ mod tests {
             display_identity: None,
             role: Role::Analyst,
         };
-        let sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id";
+        // Keep the global query-history lookup isolated when the workspace
+        // test harness runs this test concurrently with the expiry case.
+        let sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id /* admission-success */";
         let submitting = {
             let state = state.clone();
             let analyst = analyst.clone();
@@ -18897,7 +18899,9 @@ mod tests {
             display_identity: None,
             role: Role::Analyst,
         };
-        let sql = "SELECT id FROM orders WHERE id > 0 ORDER BY id";
+        // QUERY_STORE is process-global; this marker prevents a parallel test
+        // from being mistaken for this expiry record during history lookup.
+        let sql = "SELECT id FROM orders WHERE id > 0 ORDER BY id /* admission-expiry */";
 
         let started = std::time::Instant::now();
         let (status, body) = submit(
