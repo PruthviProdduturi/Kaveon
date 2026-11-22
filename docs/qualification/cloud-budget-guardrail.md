@@ -32,6 +32,10 @@ The infrastructure workflow is manual-only and fail-closed: it requires the
 check, and passes the conservative worker, node-size, and NAT parameters
 explicitly. A push to `dev` cannot provision AKS.
 
+The Engine Helm apply workflow has the same explicit approval input and refuses
+an apply whose resolved worker count exceeds two. A read-only plan may still be
+rendered without approval.
+
 The default root Compose profile was verified on 2026-11-22 to expose only
 `engine-coordinator`, two Engine workers, `api`, and `studio`; PostgreSQL and
 Azurite are opt-in profiles/services and are not started by the normal local

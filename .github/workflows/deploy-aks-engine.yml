@@ -87,6 +87,13 @@ on:
         required: false
         default: false
         type: boolean
+      budget_approved:
+        description: >-
+          Explicitly approve an apply after confirming current-month spend is
+          below the $100 Kaveon ceiling. Plan mode does not need approval.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [dev]
     paths:
@@ -140,8 +147,18 @@ jobs:
       ALLOW_BUSY: ${{ inputs.allow_busy || false }}
       ALLOW_RESOURCE_GROUPS: ${{ inputs.allow_resource_groups_takeover || false }}
       ALLOW_CATALOG_CHANGE: ${{ inputs.allow_product_catalog_change || false }}
+      BUDGET_APPROVED: ${{ inputs.budget_approved || false }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enforce the cloud budget gate for applies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$MODE" == apply && "$BUDGET_APPROVED" != true ]]; then
+            echo 'Refusing Engine apply: budget_approved must be true after a current-month Cost Management check.' >&2
+            exit 1
+          fi
 
       - name: Azure login with OIDC
         uses: azure/login@v2
@@ -279,6 +296,10 @@ jobs:
           # Floors mirror api/services/availability_guard.py FLOORS.
           coord_replicas="$(resolve "$INPUT_COORDINATOR_REPLICAS" "$live_coord_replicas" 1 coordinator)"
           worker_replicas="$(resolve "$INPUT_WORKER_REPLICAS" "$live_worker_replicas" 1 worker)"
+          if [[ "$MODE" == apply ]] && (( worker_replicas > 2 )); then
+            echo "Refusing Engine apply: worker replicas $worker_replicas exceeds the budget-capped maximum of 2." >&2
+            exit 1
+          fi
 
           mkdir -p tmp
           cat > tmp/engine-values.yaml <<EOF
