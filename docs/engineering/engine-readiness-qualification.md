@@ -461,6 +461,10 @@ and cleanup; see
 The constrained two-worker pressure harness also passes 11/11 cases for
 successful workloads, fail-closed refusals, and cancellation recovery; see
 [`track1-pressure-admission-2026-11-22.md`](../qualification/track1-pressure-admission-2026-11-22.md).
+The authenticated transaction API suite also passes 72/72 checks for owner
+isolation, roles, bounded product DML, savepoints/rollback, idempotency, CAS
+recovery, and DLM lifecycle binding; see
+[`track1-transaction-api-security-2026-11-22.md`](../qualification/track1-transaction-api-security-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
