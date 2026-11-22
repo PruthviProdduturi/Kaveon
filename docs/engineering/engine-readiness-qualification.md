@@ -450,6 +450,10 @@ The local statistics contract also passes 4/4 focused checks, including
 source-change bounds, Delta version refresh, exact directory metadata, and
 Utf8View bounds/distinct values; see
 [`track1-statistics-2026-11-22.md`](../qualification/track1-statistics-2026-11-22.md).
+The statistics-driven optimizer suite also passes 24/24 checks for exact
+source bounds, broadcast selection, join reordering, selectivity, and output
+order preservation; see
+[`track1-optimizer-statistics-2026-11-22.md`](../qualification/track1-optimizer-statistics-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
