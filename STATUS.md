@@ -81,7 +81,7 @@
 | Client-side query cache — SHA-based dedup of repeated dashboard chart queries | ✅ Done | |
 | SQL Lab — Monaco, multi-tab, history, saved queries | ✅ Done | |
 | Control plane on object storage — datasets, charts, dashboards, saved queries, favourites and history as product records committed through the Engine's transaction API | ✅ Done (local/native scope) | PostgreSQL retired. Records are published beside the catalog snapshot in content-addressed shards; capacity and restart/CAS behavior are qualified on in-memory, filesystem, and Azurite stores. Cloud recovery remains open |
-| Async query execution + result caching (SHA-256, TTL) | ✅ Done | Async job store not cleaned on restart |
+| Async query execution + result caching (SHA-256, TTL) | ✅ Done (bounded) | Paged result pages are process-local by design; query history is journaled and stale result directories are reclaimed on startup after the 15-minute TTL |
 | CTAS endpoint | ✅ Done | |
 | Per-user favorites, themes, workspace activity | ✅ Done | |
 | First-run setup wizard (KaveonDB authority) | ✅ Done | Native setup no longer requires a PostgreSQL metadata database |
@@ -131,7 +131,6 @@
 | Issue | Notes |
 |-------|-------|
 | Charts schema uses INT PK but some paths treat id as NVARCHAR(36) | Reconcile |
-| Async job store not cleaned on restart | Add cleanup on startup |
 | Connection strings stored plaintext in `data_sources` | Needs vault integration |
 | In-process rate limiting not shared across replicas | Redis fixes this |
 | Engine deployment hardening | TLS/auth are implemented; keep the Engine behind the trusted API boundary while rotation, network controls and recovery qualification remain open |

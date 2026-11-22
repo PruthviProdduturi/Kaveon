@@ -29,6 +29,7 @@ pub const DEFAULT_QUERY_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_PROCESS_BYTES: u64 = 1024 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(900);
 const RETAINED_RESULTS: usize = 100;
+const RESULT_DIRECTORY_PREFIX: &str = "kaveon-result-";
 
 const IN_PROGRESS: u8 = 0;
 const COMPLETE: u8 = 1;
@@ -91,6 +92,13 @@ impl ResultStore {
     /// `process_bytes` together (`KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES`,
     /// `KAVEON_RESULT_DISK_LIMIT_BYTES`).
     pub fn with_limits(query_bytes: u64, process_bytes: u64) -> Self {
+        // Result pages are deliberately process-local.  A coordinator crash
+        // cannot restore their ownership safely, but it can leave the page
+        // directories behind in the shared temp directory.  Remove only
+        // directories older than the result TTL: a live neighboring process
+        // is never touched, while stale pages from a prior process are
+        // eventually reclaimed on the next startup.
+        cleanup_orphaned_result_directories();
         Self {
             results: Mutex::new(HashMap::new()),
             used: Arc::new(AtomicU64::new(0)),
@@ -267,6 +275,34 @@ impl ResultStore {
     pub fn cleanup(&self) {
         if let Ok(mut entries) = self.results.lock() {
             entries.retain(|_, entry| entry.expires > Instant::now());
+        }
+    }
+}
+
+fn cleanup_orphaned_result_directories() {
+    let temp = std::env::temp_dir();
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(TTL)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let Ok(entries) = fs::read_dir(temp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_result_dir = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(RESULT_DIRECTORY_PREFIX)
+            && path.is_dir();
+        if !is_result_dir {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified <= cutoff);
+        if stale {
+            let _ = fs::remove_dir_all(path);
         }
     }
 }
@@ -626,5 +662,20 @@ mod tests {
             store.page("query", 0, &alice).unwrap_err(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[test]
+    fn startup_cleanup_does_not_remove_fresh_result_directories() {
+        let path = std::env::temp_dir().join(format!(
+            "{RESULT_DIRECTORY_PREFIX}fresh-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&path).unwrap();
+        cleanup_orphaned_result_directories();
+        assert!(
+            path.exists(),
+            "a live result directory must not be reclaimed"
+        );
+        fs::remove_dir_all(path).unwrap();
     }
 }
