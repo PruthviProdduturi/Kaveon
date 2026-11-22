@@ -38,6 +38,12 @@ cargo test -p kaveon-server --bin kaveon-server admission -- --nocapture
 - No Azure, AKS, ADLS, or other billable cloud resource was started for this
   evidence run.
 
+The workspace-wide strict lint gate also passed:
+
+```text
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
 The locked distributable artifact was then rebuilt from the same pushed tree:
 
 ```text
