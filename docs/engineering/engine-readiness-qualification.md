@@ -454,6 +454,10 @@ The statistics-driven optimizer suite also passes 24/24 checks for exact
 source bounds, broadcast selection, join reordering, selectivity, and output
 order preservation; see
 [`track1-optimizer-statistics-2026-11-22.md`](../qualification/track1-optimizer-statistics-2026-11-22.md).
+The bounded-memory and spill suite also passes 36/36 checks for refusal,
+repartitioning, join/aggregate/sort/Top-N spill, byte accounting, corruption,
+and cleanup; see
+[`track1-spill-memory-2026-11-22.md`](../qualification/track1-spill-memory-2026-11-22.md).
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 
