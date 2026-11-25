@@ -10,6 +10,8 @@ Production is selected by default. For a production installation, `rg-kaveon-pro
 
 The installer generates the storage and registry names and assigns the signed-in user as the first administrator. Azure checks the generated names during deployment validation. If a global name is taken on a fresh installation, change the installation name and validate again.
 
+If your tenant requires a service management reference on app registrations, set the resource group tag `ServiceTreeId` before deploying or pass the `serviceManagementReference` template parameter. Both registration steps use that value.
+
 With directory provisioning enabled, the template reserves a DNS name in the customer's resource group, registers the Studio callback for that name in the customer's Entra tenant, and assigns the initial Admin. Outputs include the reserved IP name and non-secret Helm identity values. Directory permissions are required to register the app and assign roles. A tenant that restricts delegated consent may also require approval of Kaveon's own API scope.
 
 **Preview boundary.** The template provisions the foundation. An operator still deploys the images and Helm releases, attaches ingress to the reserved IP, obtains the HTTPS certificate and verifies first sign-in and SQL execution. The planned Studio origin in deployment outputs only identifies the address. A searchable Marketplace listing is a separate publication step.

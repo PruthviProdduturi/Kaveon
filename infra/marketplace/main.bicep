@@ -17,6 +17,9 @@ param registryName string = 'acrkaveon${environment}${installationName == 'kaveo
 param operatorObjectId string = deployer().objectId
 @description('Create the dedicated Kaveon Entra application and assign its first Admin. Requires directory permission. Disable for an infrastructure-only deployment.')
 param configureDirectory bool = true
+
+@description('Service or asset management reference for the Entra application. Defaults to the resource group ServiceTreeId tag when present.')
+param serviceManagementReference string = resourceGroup().tags.?ServiceTreeId ?? ''
 @description('Kaveon Admin user or group object ID. Defaults to the cluster operator.')
 param kaveonAdminObjectId string = operatorObjectId
 @description('AKS worker VM size.')
@@ -55,6 +58,7 @@ module directory 'directory.bicep' = if (configureDirectory) {
     installationKey: 'kaveon-${installKey}'
     installationName: resourcePrefix
     studioOrigin: studioOrigin
+    serviceManagementReference: serviceManagementReference
     adminPrincipalId: kaveonAdminObjectId
   }
 }

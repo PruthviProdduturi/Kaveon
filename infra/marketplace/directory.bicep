@@ -4,6 +4,7 @@ extension 'br:mcr.microsoft.com/bicep/extensions/microsoftgraph/v1.0:1.0.0' as g
 param installationKey string
 param installationName string
 param studioOrigin string
+param serviceManagementReference string
 @description('Entra user or security group to receive the initial Kaveon Admin assignment.')
 param adminPrincipalId string
 
@@ -13,6 +14,7 @@ var scopeId = guid(tenant().tenantId, installationKey, 'access_as_user')
 resource application 'graph:Microsoft.Graph/applications@v1.0' = {
   uniqueName: installationKey
   displayName: 'Kaveon · ${installationName}'
+  serviceManagementReference: empty(serviceManagementReference) ? null : serviceManagementReference
   signInAudience: 'AzureADMyOrg'
   isFallbackPublicClient: true
   appRoles: roles
@@ -41,6 +43,7 @@ module apiRegistration 'directory-api.bicep' = {
     displayName: application.displayName
     clientId: application.appId
     scopeId: scopeId
+    serviceManagementReference: serviceManagementReference
   }
 }
 

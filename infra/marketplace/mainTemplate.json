@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "12806845840965129384"
+      "templateHash": "3917176621850708729"
     }
   },
   "parameters": {
@@ -60,6 +60,13 @@
       "defaultValue": true,
       "metadata": {
         "description": "Create the dedicated Kaveon Entra application and assign its first Admin. Requires directory permission. Disable for an infrastructure-only deployment."
+      }
+    },
+    "serviceManagementReference": {
+      "type": "string",
+      "defaultValue": "[coalesce(tryGet(resourceGroup().tags, 'ServiceTreeId'), '')]",
+      "metadata": {
+        "description": "Service or asset management reference for the Entra application. Defaults to the resource group ServiceTreeId tag when present."
       }
     },
     "kaveonAdminObjectId": {
@@ -220,6 +227,9 @@
             "value": "[variables('resourcePrefix')]"
           },
           "studioOrigin": "[if(parameters('configureDirectory'), createObject('value', format('https://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix'))), '2024-05-01').dnsSettings.fqdn)), createObject('value', ''))]",
+          "serviceManagementReference": {
+            "value": "[parameters('serviceManagementReference')]"
+          },
           "adminPrincipalId": {
             "value": "[parameters('kaveonAdminObjectId')]"
           }
@@ -232,7 +242,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.46.1.21595",
-              "templateHash": "9639107129158008537"
+              "templateHash": "585947337056483682"
             }
           },
           "parameters": {
@@ -246,6 +256,9 @@
               "type": "string"
             },
             "studioOrigin": {
+              "type": "string"
+            },
+            "serviceManagementReference": {
               "type": "string"
             },
             "adminPrincipalId": {
@@ -314,6 +327,7 @@
               "properties": {
                 "uniqueName": "[parameters('installationKey')]",
                 "displayName": "[format('Kaveon · {0}', parameters('installationName'))]",
+                "serviceManagementReference": "[if(empty(parameters('serviceManagementReference')), null(), parameters('serviceManagementReference'))]",
                 "signInAudience": "AzureADMyOrg",
                 "isFallbackPublicClient": true,
                 "appRoles": "[variables('roles')]",
@@ -384,6 +398,9 @@
                   },
                   "scopeId": {
                     "value": "[variables('scopeId')]"
+                  },
+                  "serviceManagementReference": {
+                    "value": "[parameters('serviceManagementReference')]"
                   }
                 },
                 "template": {
@@ -394,7 +411,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.46.1.21595",
-                      "templateHash": "6852108929457254555"
+                      "templateHash": "5675150534939617126"
                     }
                   },
                   "parameters": {
@@ -408,6 +425,9 @@
                       "type": "string"
                     },
                     "scopeId": {
+                      "type": "string"
+                    },
+                    "serviceManagementReference": {
                       "type": "string"
                     }
                   },
@@ -424,6 +444,7 @@
                       "properties": {
                         "uniqueName": "[parameters('installationKey')]",
                         "displayName": "[parameters('displayName')]",
+                        "serviceManagementReference": "[if(empty(parameters('serviceManagementReference')), null(), parameters('serviceManagementReference'))]",
                         "identifierUris": [
                           "[format('api://{0}', parameters('clientId'))]"
                         ],
