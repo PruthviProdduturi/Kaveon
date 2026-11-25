@@ -7,7 +7,7 @@ const azurePackage = "https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99
 
 export default function InstallationDocs() {
   return <div className="docs-prose">
-    <PageHeader eyebrow="Getting Started" title="Deploy Kaveon" lead="Start a local workspace with Docker, run it on a Linux server, or provision an Azure installation in your own subscription." />
+    <PageHeader eyebrow="Deploy &amp; Operate" title="Deploy Kaveon" lead="Start a local workspace with Docker, run it on a Linux server, or provision an Azure installation in your own subscription." />
 
     <h2>Choose where to run</h2>
     <table>
@@ -47,6 +47,6 @@ curl -fsS http://localhost:8082/api/health
 curl -fsS http://localhost:8081/health`}</Code>
     <p>See <a href="/docs/deployment">Deployment topology</a> for service placement, <a href="/docs/auth">Auth &amp; RBAC</a> for identity, and <a href="/docs/operations">Operations</a> for backups and recovery.</p>
 
-    <Pager prev={{ href: "/docs/quickstart", title: "Quickstart" }} next={{ href: "/docs/concepts", title: "Core concepts" }} />
+    <Pager prev={{ href: "/docs/concepts", title: "Core concepts" }} next={{ href: "/docs/deployment", title: "Deployment topology" }} />
   </div>;
 }

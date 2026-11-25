@@ -35,6 +35,6 @@ curl -fsS http://localhost:8081/health`}</Code>
 # Resume from this checkout with the same configuration and volumes.
 docker compose up -d`}</Code>
     <p>Keep the checkout’s <code>.env</code> and its volumes. Adding <code>--volumes</code> to the stop command deletes named volumes, including the coordinator catalog.</p>
-    <Pager prev={{ href: "/docs", title: "Introduction" }} next={{ href: "/docs/installation", title: "Deploy Kaveon" }} />
+    <Pager prev={{ href: "/docs", title: "Introduction" }} next={{ href: "/docs/concepts", title: "Core concepts" }} />
   </div>;
 }

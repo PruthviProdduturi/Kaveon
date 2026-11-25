@@ -114,8 +114,8 @@ export default function DocsIntro() {
 
       <h2>How these docs are organized</h2>
       <ul>
-        <li><strong>Getting Started</strong> — what Kaveon is, a local quickstart, deployment options, and core concepts.</li>
-        <li><strong>Deploy &amp; Operate</strong> — deployment, auth and RBAC, operations, troubleshooting, upgrades, and releases.</li>
+        <li><strong>Getting Started</strong> — what Kaveon is, a local quickstart, and core concepts.</li>
+        <li><strong>Deploy &amp; Operate</strong> — installation, deployment topology, auth and RBAC, operations, troubleshooting, upgrades, and releases.</li>
         <li><strong>Platform</strong> — architecture, the API surface, and the connector matrix.</li>
         <li><strong>Studio</strong> — SQL Lab, charts, dashboards, semantic datasets, and data sources.</li>
         <li><strong>Intelligence</strong> — Kaveon Intelligence, the Data Language Model, NL→SQL, and freshness-based routing.</li>
