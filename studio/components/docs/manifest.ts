@@ -35,13 +35,13 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     items: [
       { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"], status: "Stable" },
       { title: "Quickstart", href: "/docs/quickstart", description: "Start Docker Compose and run your first SQL query.", keywords: ["install", "start"], status: "Stable" },
-      { title: "Deploy Kaveon", href: "/docs/installation", description: "Run locally, provision Azure infrastructure, and bring Studio online. AWS deployment is coming soon.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "azure", "aws"], status: "Reference" },
       { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions.", status: "Stable" },
     ],
   },
   {
     label: "Deploy & Operate",
     items: [
+      { title: "Deploy Kaveon", href: "/docs/installation", description: "Run locally, provision Azure infrastructure, and bring Studio online. AWS deployment is coming soon.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "azure", "aws"], status: "Reference" },
       { title: "Deployment topology", href: "/docs/deployment", description: "Understand runtime placement, networking, storage, and cutover boundaries.", keywords: ["topology", "azure", "aks"], status: "Stable" },
       { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"], status: "Stable" },
       { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"], status: "Stable" },

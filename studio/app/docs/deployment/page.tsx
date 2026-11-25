@@ -38,6 +38,6 @@ export default function DeploymentDocs() {
     <h2>Release and verify</h2>
     <p>The AKS Engine and platform use separate Helm releases and digest-pinned images. Keep the release values, image digests, trust bundle and storage identifiers with the installation record. Protect credentials in the deployment’s secret store.</p>
     <p>Verify Studio over HTTPS, sign in, run a SQL Lab query and read a registered table. Check worker health from the Engine console. For recovery and ongoing checks, see <a href="/docs/operations">Operations</a> and <a href="/docs/upgrades">Upgrades</a>.</p>
-    <Pager prev={{ href: "/docs/concepts", title: "Core concepts" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
+    <Pager prev={{ href: "/docs/installation", title: "Deploy Kaveon" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
   </div>;
 }
