@@ -14,6 +14,8 @@ param location string = resourceGroup().location
 param identityName string = 'kaveon-test-api'
 param serviceAccountNamespace string = 'kaveon'
 param serviceAccountName string = 'kaveon-api'
+@description('Installation storage account containing the product artifacts and catalog backups. Leave empty when the API does not publish to ADLS.')
+param artifactStorageAccountName string = ''
 param vaultName string = 'kvsec${uniqueString(resourceGroup().id)}'
 
 var tags = { project: 'kaveon', environment: environment, component: 'api-secrets' }
@@ -65,6 +67,14 @@ resource apiSecretsRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: apiIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
+  }
+}
+
+module artifactAccess 'aks-api-artifact-access.bicep' = if (!empty(artifactStorageAccountName)) {
+  name: 'api-artifacts-${uniqueString(apiIdentity.id, artifactStorageAccountName)}'
+  params: {
+    storageAccountName: artifactStorageAccountName
+    principalId: apiIdentity.properties.principalId
   }
 }
 
