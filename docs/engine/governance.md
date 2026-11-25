@@ -121,7 +121,7 @@ name 400 `INVALID_GRANT`. `GET /v1/admin/catalog-access/effective/{principal}`
 is the effective view: each grant with the level every Engine role would
 reach on it, and the catalogs the principal is not granted. A request
 body never names the actor; the security layer's identity is the actor
-and the ledger records it. Studio's **Settings → Catalog access** page
+and the ledger records it. Studio's **Settings → Access control** page
 manages the same document and hands a conflict back as a reload;
 `kaveon catalog access …` does the same from the command line.
 
@@ -241,7 +241,7 @@ controller's policies first, then the durable copy, then the selectors —
 so it takes effect for the next admission decision, waiting statements
 included, and survives a restart; an invalid document is HTTP 400
 `INVALID_RESOURCE_GROUPS` naming the group or selector and nothing
-changes. Studio's Settings → Governance page edits the same document.
+changes. Studio's Settings → Operations → Query limits page edits the same document.
 
 ### The admission order
 
@@ -460,6 +460,5 @@ ledger first, so a line enqueued before the call is in the answer. An
 unparsable time, an unknown kind or another format is 400
 `INVALID_AUDIT_QUERY`; any other role is 403.
 
-The platform proxies both under `/api/v1/engine/audit` and
-`/api/v1/engine/admin/resource-groups` for Studio's Settings → Governance
-page, which filters, pages and exports the same ledger.
+In Studio, open **Settings → Operations → Audit** to filter, page through, or export the ledger.
+The page reads `/api/v1/engine/audit`. **Query limits** uses `/api/v1/engine/admin/resource-groups`.

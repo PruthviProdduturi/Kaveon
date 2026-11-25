@@ -11,11 +11,14 @@ const GROUPS = [
     { href: "/settings/storage", label: "Lake storage" },
     { href: "/settings/data-sources", label: "External databases" },
   ] },
-  { label: "Catalog access", icon: "fa-key", admin: true, pages: [
-    { href: "/settings/catalog-access", label: "Catalog access" },
+  { label: "Access control", icon: "fa-key", admin: true, pages: [
+    { href: "/settings/catalog-access", label: "Assignments" },
+    { href: "/settings/catalog-access/check", label: "Check access" },
+    { href: "/settings/catalog-access/import", label: "Import grants" },
   ] },
   { label: "Operations", icon: "fa-sliders", admin: true, pages: [
-    { href: "/settings/governance", label: "Query limits & audit" },
+    { href: "/settings/governance", label: "Query limits" },
+    { href: "/settings/audit", label: "Audit" },
     { href: "/settings/maintenance", label: "Library previews" },
   ] },
   { label: "Preferences", icon: "fa-user-gear", admin: false, pages: [

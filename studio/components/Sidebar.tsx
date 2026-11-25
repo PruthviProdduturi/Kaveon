@@ -1271,16 +1271,22 @@ const PAGES: Candidate[] = [
     aliases: ["maintenance preview thumbnail refresh settings"],
   },
   {
-    id: "p-governance", label: "Query limits & audit", href: "/settings/governance", type: "page", glyph: "settings",
+    id: "p-governance", label: "Query limits", href: "/settings/governance", type: "page", glyph: "settings",
     boost: 0, adminOnly: true,
-    detail: "Manage query resource groups and review Engine audit events",
-    aliases: ["governance query admission resource groups audit operations settings"],
+    detail: "Manage query resource groups",
+    aliases: ["governance query admission resource groups operations settings"],
   },
   {
-    id: "p-catalog-access", label: "Catalog access", href: "/settings/catalog-access", type: "page", glyph: "settings",
+    id: "p-engine-audit", label: "Engine audit", href: "/settings/audit", type: "page", glyph: "settings",
+    boost: 0, adminOnly: true,
+    detail: "Review query, catalog, settings and authentication events",
+    aliases: ["audit ledger operations engine security settings"],
+  },
+  {
+    id: "p-catalog-access", label: "Access control", href: "/settings/catalog-access", type: "page", glyph: "settings",
     boost: 0, adminOnly: true,
     detail: "Grant and review access to individual catalogs",
-    aliases: ["permissions grants access roles schemas settings"],
+    aliases: ["catalog access RBAC permissions grants access roles settings"],
   },
   {
     id: "p-preferences", label: "Preferences", href: "/settings/preferences", type: "page", glyph: "settings", boost: 0,
