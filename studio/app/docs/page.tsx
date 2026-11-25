@@ -102,29 +102,29 @@ export default function DocsIntro() {
         <thead><tr><th>If you want to…</th><th>Start here</th></tr></thead>
         <tbody>
           <tr><td>Run Kaveon locally and try it</td><td><a href="/docs/quickstart">Quickstart</a></td></tr>
+          <tr><td>Deploy and operate it</td><td><a href="/docs/installation">Deploy Kaveon</a> · <a href="/docs/operations">Operations</a></td></tr>
           <tr><td>Understand the model before committing</td><td><a href="/docs/concepts">Core concepts</a></td></tr>
           <tr><td>See how the pieces fit</td><td><a href="/docs/architecture">Architecture</a></td></tr>
           <tr><td>Evaluate or develop the query engine</td><td><a href="/docs/engine">Kaveon Engine</a></td></tr>
           <tr><td>Understand deterministic NL→SQL</td><td><a href="/docs/dlm">Data Language Model</a></td></tr>
           <tr><td>Integrate programmatically</td><td><a href="/docs/api-reference">API reference</a></td></tr>
-          <tr><td>Deploy and operate it</td><td><a href="/docs/deployment">Deployment</a> · <a href="/docs/operations">Operations</a></td></tr>
           <tr><td>Read the underlying research</td><td><a href="/docs/research">Papers &amp; patents</a></td></tr>
         </tbody>
       </table>
 
       <h2>How these docs are organized</h2>
       <ul>
-        <li><strong>Getting Started</strong> — what Kaveon is, a runnable quickstart, and the core concepts reused everywhere.</li>
+        <li><strong>Getting Started</strong> — what Kaveon is, a local quickstart, deployment options, and core concepts.</li>
+        <li><strong>Deploy &amp; Operate</strong> — deployment, auth and RBAC, operations, troubleshooting, upgrades, and releases.</li>
         <li><strong>Platform</strong> — architecture, the API surface, and the connector matrix.</li>
         <li><strong>Studio</strong> — SQL Lab, charts, dashboards, semantic datasets, and data sources.</li>
         <li><strong>Intelligence</strong> — Kaveon Intelligence, the Data Language Model, NL→SQL, and freshness-based routing.</li>
         <li><strong>Engine</strong> — the Rust engine manual: architecture, SQL, distributed runtime, storage, and memory.</li>
         <li><strong>CLI</strong> — installation, authenticated connections, interactive commands, catalog administration, and automation.</li>
-        <li><strong>Deploy &amp; Operate</strong> — deployment, auth and RBAC, operations, troubleshooting, upgrades, and releases.</li>
         <li><strong>Research</strong> — technical papers, the patent disclosure, and comparisons with other engines.</li>
       </ul>
       <p>
-        Every page carries a status badge and a verification date. Desktop pages have an outline on the
+        Pages show a status badge and, when recorded, a verification date. Desktop pages have an outline on the
         right; the sidebar filter searches titles, descriptions, keywords, and body text.
       </p>
 

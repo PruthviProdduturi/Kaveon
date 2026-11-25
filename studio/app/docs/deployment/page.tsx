@@ -1,163 +1,44 @@
-import { PageHeader, Callout, Code, Diagram, Pager } from "../../../components/docs/prose";
+import { PageHeader, Code, Pager } from "../../../components/docs/prose";
 
-export const metadata = { title: "Deployment" };
+export const metadata = { title: "Deployment topology" };
 
 export default function DeploymentDocs() {
-  return (
-    <div className="docs-prose">
-      <PageHeader
-        eyebrow="Deploy &amp; Operate"
-        title="Deployment topology"
-        lead="Understand where Studio, the API, DLM and Engine run after installation, how requests cross the trust boundary, and what must pass before a hosting cutover."
-      />
+  return <div className="docs-prose">
+    <PageHeader eyebrow="Deploy &amp; Operate" title="Deployment topology" lead="Studio is the browser entry point. The platform API handles product requests and DLM routing. The Engine coordinates analytical queries and commits product records." />
+    <p>For the Azure form, Linux VM instructions and first-sign-in checks, start with <a href="/docs/installation">Deploy Kaveon</a>.</p>
 
-      <h2>Topology</h2>
-      <Callout type="note">
-        The production cloud topology is <code>kaveon-aks</code> in
-        <code>kaveon-rg</code>, with a coordinator, autoscaled worker pool, API
-        and DLM deployed as one PostgreSQL-free Helm release. Vercel hosts the
-        Studio separately. The VM is a legacy migration reference only; use
-        <a href="/docs/installation">Install &amp; deploy</a> and the automated
-        AKS workflow for new deployments.
-      </Callout>
-      <Diagram
-        src="/docs/architecture/kaveon-deployment-topology.svg"
-        alt="Browser to Studio on Vercel, through a same-origin proxy to the API on AKS, into the Kaveon Engine coordinator and autoscaled workers, reading Delta tables in ADLS Gen2 while the platform's own records are written to a separate container"
-        caption="One request path. Table data and the platform's own records are separate containers in the same storage account."
-      />
-      <Code lang="text">{`Browser ──► Vercel  (Kaveon Studio · Auth.js: GitHub / Google / Microsoft)
-               │  same-origin /api/kaveon proxy (injects X-User-* + secret)
-               ▼
-            AKS private services ── TLS ──► API + DLM (FastAPI)
-               │
-               ├──► Kaveon Engine coordinator ──► worker-1, worker-2
-               │         planning, cube and statistics   fragment execution
-               │                                         Arrow exchange
-               ▼
-            ADLS Gen2 · kaveonlake
-               ├── opensource/snapshots/…     Delta tables — the rows
-               └── product/kaveon/system/v2   KaveonDB — the platform's records`}</Code>
-      <p>
-        The browser only talks to Studio. The proxy forwards to the API with <code>X-User-*</code> headers stamped by{" "}
-        <code>KAVEON_PROXY_SECRET</code>, which the API validates (see <a href="/docs/auth">Auth &amp; RBAC</a>). The
-        Engine&rsquo;s own ports are bound to localhost on the VM and are never reachable from outside it.
-      </p>
-      <p>
-        Local Docker uses the repository&rsquo;s <code>docker-compose.yml</code> for development; AKS uses the
-        production Helm release. Datasets, charts, dashboards, saved statements, chat history and audit entries are
-        transactional rows in <code>kaveon.product.*</code>, written only through KaveonDB&rsquo;s transaction
-        boundary; the table data itself is Delta in object storage, read in place.
-      </p>
+    <h2>Where each service runs</h2>
+    <table>
+      <thead><tr><th>Installation</th><th>Studio and API</th><th>Engine and storage</th></tr></thead>
+      <tbody>
+        <tr><td>Local Docker or Linux VM</td><td>Compose runs Studio and the API on the same host. A shared VM needs an HTTPS endpoint and configured sign-in.</td><td>Coordinator and two workers. Local files are mounted at <code>/data</code>. The coordinator uses a persistent volume for its catalog.</td></tr>
+        <tr><td>AKS</td><td>The platform Helm chart runs Studio and the API. Route public HTTPS to Studio and keep the API service private.</td><td>The Engine Helm chart runs the coordinator and workers. Workload identity grants access to the configured ADLS containers.</td></tr>
+        <tr><td>Studio on Vercel</td><td>Vercel hosts Studio. Configure its server-side proxy with an API endpoint it can securely reach.</td><td>The API and Engine run on separate compute. A private Kubernetes service address requires a network path from the Studio host.</td></tr>
+      </tbody>
+    </table>
 
-      <h2>Where state lives, and what a new host gets back</h2>
-      <p>
-        Three places, and only two of them are in object storage. This is the thing to know before you replace the
-        machine.
-      </p>
-      <table>
-        <thead><tr><th>What</th><th>Where</th><th>Survives a new host</th></tr></thead>
-        <tbody>
-          <tr>
-            <td>Table data</td>
-            <td><code>kaveonlake</code> / <code>opensource</code></td>
-            <td>Yes — object storage</td>
-          </tr>
-          <tr>
-            <td>The platform&rsquo;s records: datasets, charts, dashboards, saved statements, chat history, favourites, audit</td>
-            <td><code>kaveonlake</code> / <code>product</code> / <code>kaveon/system/v2</code></td>
-            <td>Yes — object storage</td>
-          </tr>
-          <tr>
-            <td>The Engine&rsquo;s catalog: catalogs, schemas, every table definition, planner statistics, cubes</td>
-            <td><code>/var/lib/kaveon/catalog.db</code> on the coordinator (the <code>catalog-data</code> volume)</td>
-            <td><strong>No</strong> — a file on the host</td>
-          </tr>
-        </tbody>
-      </table>
-      <Callout type="warn">
-        <strong>The data is durable; the map to it is not yet.</strong> A replaced host comes up able to read
-        everything and knowing about nothing: no catalogs, no table definitions, no statistics and no cubes, so
-        dashboards that were answered from precomputed cells go back to scanning. Back up{" "}
-        <code>catalog.db</code> alongside the system store, and see{" "}
-        <a href="/docs/operations">Operations</a> for the sequence that rebuilds the catalog when you do not have it.
-        Folding this third place into the first two is a design in progress.
-      </Callout>
+    <p><strong>AWS deployment · Coming soon.</strong> Use the <a href="/docs/installation#azure">guided Azure installation</a> for the current cloud preview.</p>
 
-      <h2>Where a query actually runs</h2>
-      <p>
-        A chart or a question reaches the Engine, and the Engine decides between two lanes. A cube-shaped aggregate is
-        answered from precomputed cells and HyperLogLog sketches without reading the table; anything else is planned
-        into fragments and executed across the workers with Arrow exchange, retry and cancellation. The Engine reports
-        which lane it took on every statement, and Studio shows it. See <a href="/docs/engine">Kaveon Engine</a> for the
-        execution model and <a href="/docs/freshness">Freshness</a> for when a precomputed answer is allowed to stand.
-      </p>
+    <h2>From the browser to the lake</h2>
+    <Code lang="text">{`Browser → Studio → authenticated Studio proxy → platform API
+                                                  ├─ DLM context answer
+                                                  ├─ analytical SQL → Engine → lake
+                                                  └─ product write → KaveonDB`}</Code>
+    <p>Studio derives the user identity from the session. The API verifies the proxy credential and authorizes the request. The Engine reads a registered lake using the deployment’s storage identity. A catalog can point to another storage account when that identity has access. See <a href="/docs/auth">Auth &amp; RBAC</a>.</p>
 
-      <h2>CI/CD</h2>
-      <p>
-        <code>.github/workflows/ci.yml</code> runs on every push and PR to <code>dev</code>: type-check and build Studio,
-        run the API test suite, run the operational script tests, scan for secrets, and validate the documentation. The
-        documentation gate fails closed — a new Engine setting without a row in{" "}
-        <a href="/docs/engine">the settings table</a> turns CI red and holds the Studio deploy with it. On a green run,
-        Studio deploys to Vercel.
-      </p>
-      <p>
-        <strong>AKS deployment is explicit and environment-gated.</strong> The
-        <code>.github/workflows/deploy-aks-platform.yml</code> workflow invokes
-        <code>scripts/deploy-kaveon-aks.sh</code> with Azure OIDC. It checks
-        immutable images, workload identity, Engine CA, ADLS, auth credentials
-        and retirement evidence before an atomic Helm rollout. The retired
-        Container Apps workflow is not used for new releases.
-      </p>
+    <h2>What persists</h2>
+    <table>
+      <thead><tr><th>State</th><th>Location</th><th>Recovery dependency</th></tr></thead>
+      <tbody>
+        <tr><td>Source table data</td><td>Registered files or lake tables</td><td>Keep their storage, credentials and paths accessible to the replacement deployment.</td></tr>
+        <tr><td>Product records</td><td>KaveonDB’s configured local store or ADLS account, container and prefix</td><td>Preserve the store and reconnect to the same location to recover datasets, charts and dashboards.</td></tr>
+        <tr><td>Engine catalog</td><td>Coordinator storage, including <code>/var/lib/kaveon/catalog.db</code></td><td>Keep the volume or a tested catalog backup. A restored lake alone does not recreate table registrations.</td></tr>
+      </tbody>
+    </table>
 
-      <h2>Running the whole platform locally</h2>
-      <p>
-        <code>scripts/kaveon-up.sh</code> brings up the same stack on any machine with Docker, generating its secrets
-        once and writing them to <code>.env</code>. Point it at a directory of Delta or Parquet tables to mount
-        read-only; the one decision worth making is where Kaveon keeps its own records. See{" "}
-        <a href="/docs/quickstart">Quickstart</a> for the short path and the self-hosting guide for the long one.
-      </p>
-      <Code lang="bash">{`./scripts/kaveon-up.sh --data /mnt/warehouse
-./scripts/kaveon-up.sh --storage adls://myaccount/product/kaveon/system
-
-# Studio:   http://localhost:3000
-# API:      http://localhost:8082/api/health
-# Engine:   http://localhost:8081/v1/statement`}</Code>
-      <p>
-        Only Studio&rsquo;s port is meant for a person. The API and the Engine publish to loopback so that Studio stays
-        the only front door, which is what the proxy secret assumes.
-      </p>
-      <p>
-        <code>docker-compose.workers.yml</code> adds two more workers. It exists for one reason: the statistics and cube
-        pass gives each worker a single task over all of its files, and that task has a hard 600&nbsp;second ceiling, so
-        a large table can only be cubed by putting fewer files in each task. Use it to build, then take the extra
-        workers down — see the warning in that file before serving from it.
-      </p>
-
-      <h2>Key environment variables</h2>
-      <table>
-        <thead><tr><th>Where</th><th>Vars</th></tr></thead>
-        <tbody>
-          <tr><td>Both tiers</td><td><code>KAVEON_PROXY_SECRET</code> (must match)</td></tr>
-          <tr><td>Studio (Vercel)</td><td><code>AUTH_SECRET</code>, <code>AUTH_URL</code>, provider IDs and secrets, <code>API_URL</code>, <code>AUTH_ADMIN_EMAILS</code></td></tr>
-          <tr><td>API (AKS)</td><td><code>KAVEON_PROXY_SECRET</code>, <code>KAVEON_ENGINE_BRIDGE_TOKEN</code>, <code>KAVEON_ENGINE_CATALOG_TOKEN</code>, <code>KAVEON_CREDENTIAL_KEYS</code>, <code>KAVEON_CREDENTIAL_ACTIVE_KEY</code>, workload identity and retirement evidence</td></tr>
-          <tr><td>The system store (coordinator and API, same values)</td><td><code>KAVEON_PRODUCT_STORAGE_MODE</code>, and for object storage <code>KAVEON_PRODUCT_ADLS_ACCOUNT</code>, <code>KAVEON_PRODUCT_ADLS_CONTAINER</code>, <code>KAVEON_PRODUCT_ADLS_PREFIX</code>; for a directory <code>KAVEON_PRODUCT_LOCAL_PATH</code></td></tr>
-          <tr><td>Engine (coordinator and workers)</td><td><code>KAVEON_DATA_DIR</code>, <code>KAVEON_EXCHANGE_TOKEN</code>, <code>KAVEON_DISCOVERY_URI</code>, memory and spill settings</td></tr>
-        </tbody>
-      </table>
-      <p>
-        The coordinator and the API read the system-store variables from the same values, so Settings can report where
-        the control plane is kept without being told twice. The API only reads them; it never writes to that store.
-      </p>
-
-      <h2>Production notes</h2>
-      <p>
-        The AKS release separates the API from the coordinator and worker pool,
-        uses private service networking, keeps opaque credentials in Key Vault,
-        and uses workload identity for Azure resources. The deployment script
-        refuses a PostgreSQL-backed render in either supported cutover mode.
-      </p>
-
-      <Pager prev={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
-    </div>
-  );
+    <h2>Release and verify</h2>
+    <p>The AKS Engine and platform use separate Helm releases and digest-pinned images. Keep the release values, image digests, trust bundle and storage identifiers with the installation record. Protect credentials in the deployment’s secret store.</p>
+    <p>Verify Studio over HTTPS, sign in, run a SQL Lab query and read a registered table. Check worker health from the Engine console. For recovery and ongoing checks, see <a href="/docs/operations">Operations</a> and <a href="/docs/upgrades">Upgrades</a>.</p>
+    <Pager prev={{ href: "/docs/concepts", title: "Core concepts" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
+  </div>;
 }

@@ -34,8 +34,20 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     pinned: true,
     items: [
       { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"], status: "Stable" },
-      { title: "Quickstart", href: "/docs/quickstart", description: "Connect data and build a first chart.", keywords: ["install", "start"], status: "Stable" },
+      { title: "Quickstart", href: "/docs/quickstart", description: "Start Docker Compose and run your first SQL query.", keywords: ["install", "start"], status: "Stable" },
+      { title: "Deploy Kaveon", href: "/docs/installation", description: "Run locally, provision Azure infrastructure, and bring Studio online. AWS deployment is coming soon.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "vercel", "azure", "aws"], status: "Reference" },
       { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions.", status: "Stable" },
+    ],
+  },
+  {
+    label: "Deploy & Operate",
+    items: [
+      { title: "Deployment topology", href: "/docs/deployment", description: "Understand runtime placement, networking, storage, and cutover boundaries.", keywords: ["topology", "azure", "aks"], status: "Stable" },
+      { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"], status: "Stable" },
+      { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"], status: "Stable" },
+      { title: "Troubleshooting", href: "/docs/troubleshooting", description: "Diagnose authentication, database, and Engine issues.", keywords: ["cors", "proxy", "logs"], status: "Stable" },
+      { title: "Upgrades", href: "/docs/upgrades", description: "Plan upgrades under the current pre-1.0 policy.", keywords: ["version", "migration", "rollback"], status: "Stable" },
+      { title: "Releases", href: "/docs/releases", description: "Release channels and changelog requirements.", keywords: ["changelog", "engine-dev"], status: "Stable" },
     ],
   },
   {
@@ -86,18 +98,6 @@ export const DOCS_NAV: readonly DocsGroup[] = [
       { title: "Interactive commands", href: "/docs/cli/commands", description: "Use the shell, inspect sessions, browse metadata, and cancel work.", keywords: ["commands", "shell", "cancel"], status: "Beta" },
       { title: "SQL & catalog administration", href: "/docs/cli/sql", description: "Run SQL and manage catalogs, schemas, tables, statistics, and layouts.", keywords: ["sql", "catalog", "schema", "analyze"], status: "Beta" },
       { title: "Automation & output", href: "/docs/cli/automation", description: "Run batches, choose deterministic formats, and integrate the CLI into CI.", keywords: ["scripts", "csv", "jsonl", "automation"], status: "Beta" },
-    ],
-  },
-  {
-    label: "Deploy & Operate",
-    items: [
-      { title: "Install & deploy", href: "/docs/installation", description: "Choose Docker, VM, AKS, or optional Vercel hosting and install the platform.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "vercel"], status: "Stable" },
-      { title: "Deployment topology", href: "/docs/deployment", description: "Understand runtime placement, networking, storage, and cutover boundaries.", keywords: ["topology", "azure", "aks"], status: "Stable" },
-      { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"], status: "Stable" },
-      { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"], status: "Stable" },
-      { title: "Troubleshooting", href: "/docs/troubleshooting", description: "Diagnose authentication, database, and Engine issues.", keywords: ["cors", "proxy", "logs"], status: "Stable" },
-      { title: "Upgrades", href: "/docs/upgrades", description: "Plan upgrades under the current pre-1.0 policy.", keywords: ["version", "migration", "rollback"], status: "Stable" },
-      { title: "Releases", href: "/docs/releases", description: "Release channels and changelog requirements.", keywords: ["changelog", "engine-dev"], status: "Stable" },
     ],
   },
   {

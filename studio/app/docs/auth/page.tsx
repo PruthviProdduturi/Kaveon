@@ -12,9 +12,7 @@ export default function AuthDocs() {
       />
 
       <h2>Azure installation</h2>
-      <p>Run <code>python scripts/install-entra.py --help</code> from the Kaveon checkout to provision sign-in in your own Microsoft Entra tenant.
-        Supply your Studio HTTPS origin and an initial administrator. The installer creates the application, enterprise application, delegated scope and built-in roles.
-        Use the generated values for both Engine and Studio.</p>
+      <p>The <a href="/docs/installation#azure">guided Azure installer</a> creates a single-tenant app registration, records the Studio SPA callback at <code>/auth/microsoft</code> and assigns the first Admin. Use its <code>entraHelmValues</code> output for both releases. For installations provisioned without the directory module, use <code>python scripts/install-entra.py --help</code> to configure the tenant and final Studio HTTPS origin.</p>
       <p>Assign groups to Viewer, Analyst, Editor or Admin in Entra. A catalog group can receive query access to a single lake catalog.
         Each signed-in user can check their effective permissions in Settings → Access control. Group changes take effect with a fresh token.
         ADLS access uses the Engine workload identity. AWS IAM integration is coming soon.</p>
@@ -33,7 +31,7 @@ export default function AuthDocs() {
           <tr><td>Microsoft Entra ID</td><td><code>AUTH_MICROSOFT_ENTRA_ID_ID</code> · <code>_SECRET</code> · <code>_ISSUER</code></td></tr>
         </tbody>
       </table>
-      <p>Also required: <code>AUTH_SECRET</code> (session signing). The OAuth callback URL is <code>{"{origin}"}/api/auth/callback/{"{provider}"}</code> — register it on each provider app.</p>
+      <p>Also required: <code>AUTH_SECRET</code> (session signing). For server-side OAuth providers, the callback URL is <code>{"{origin}"}/api/auth/callback/{"{provider}"}</code> — register it on each provider app.</p>
       <Callout type="warn">
         Each provider&rsquo;s app must list your exact origins as redirect URIs (e.g. <code>https://kaveon.io/…</code>
         and <code>http://localhost:3000/…</code>). A missing origin is the usual cause of a
@@ -52,12 +50,12 @@ export default function AuthDocs() {
         </tbody>
       </table>
       <p>
-        Admins are seeded from <code>AUTH_ADMIN_EMAILS</code> (comma-separated). Every state-changing endpoint is guarded by
+        In standalone email-based configurations, admins are seeded from <code>AUTH_ADMIN_EMAILS</code> (comma-separated). Every state-changing endpoint is guarded by
         a <code>require_min_role(&quot;…&quot;)</code> dependency — a lower role gets <code>403 forbidden</code>.
       </p>
       <Callout type="note">
         The four-role ladder lives in the API&rsquo;s authorization layer (<code>Viewer / Analyst / Editor / Admin</code>).
-        The NextAuth sign-in itself resolves each user to just two of them: <strong>Admin</strong> when their email is
+        Directory-managed installations use assigned Entra app roles. Standalone email-based sign-in assigns <strong>Admin</strong> when their email is
         listed in <code>AUTH_ADMIN_EMAILS</code>, otherwise <strong>Viewer</strong>.
       </Callout>
 

@@ -1,4 +1,4 @@
-import { Callout, Code, Diagram, PageHeader, Pager } from "../../../components/docs/prose";
+import { Callout, Code, PageHeader, Pager } from "../../../components/docs/prose";
 
 export const metadata = { title: "Operations" };
 
@@ -8,22 +8,15 @@ export default function OperationsDocs() {
 
     <h2>Know your deployment</h2>
     <p>
-      One request path: browser → Studio (Vercel, AKS, or VM) → its same-origin proxy → the API → the Kaveon Engine coordinator →
-      its workers → object storage. The Engine is the query path for every chart, dashboard and question; nothing
-      answers around it. Studio is the only front door, and the API trusts the proxy header, so the API and the
-      Engine must never be published.
+      Start at the configured Studio origin. Studio forwards authenticated requests to the API. Eligible DLM questions use compiled context. Live lake queries run through the coordinator and workers. See <a href="/docs/deployment">Deployment topology</a> for service placement.
     </p>
-    <Diagram src="/docs/architecture/kaveon-deployment-topology.svg" alt="Browser to Studio on Vercel, through a same-origin proxy to the API on the host behind Caddy, into the Engine coordinator and two workers, reading Delta tables from one storage container while the platform's own records are written to another" caption="Table data and the platform's own records are separate containers in one account. The Engine's own catalog is a file on the coordinator." />
 
     <h2>Health and readiness</h2>
-    <Code lang="bash">{`curl -fsS https://<api-host>/api/health      # the API — note the /api prefix
-curl -fsS http://<engine-host>/health        # liveness: the process answers
-curl -fsS http://<engine-host>/ready         # readiness: it can serve`}</Code>
-    <p>
-      Liveness proves a process responds; readiness proves its dependencies — catalogs and the system store — are
-      reachable. Monitor both separately, and alert on readiness rather than liveness: a coordinator that is up but
-      cannot read its store will answer <code>/health</code> and fail every query.
-    </p>
+    <p>On the Compose host, check the API, coordinator process and coordinator readiness separately. On AKS, use private service endpoints and the deployment’s TLS configuration.</p>
+    <Code lang="bash">{`curl -fsS http://localhost:8082/api/health
+curl -fsS http://localhost:8081/health
+curl -fsS http://localhost:8081/ready`}</Code>
+    <p>Engine readiness checks for a loaded catalog and, on workers, synchronization with the coordinator’s catalog snapshot. Verify storage credentials separately by reading a registered table in SQL Lab.</p>
     <p>
       A worker appearing healthy says nothing about whether the cluster returns correct answers for a given topology.
       Check the Engine console&rsquo;s worker count against what you deployed before trusting a result.
@@ -62,31 +55,10 @@ curl -fsS http://<engine-host>/ready         # readiness: it can serve`}</Code>
 
     <h2>Replacing a host</h2>
     <p>
-      Losing the machine is not losing the data. Table data and the system store are untouched when both are in
-      object storage. What does not come back on its own is the Engine&rsquo;s catalog, so a new host comes up able to
-      read everything and knowing about nothing.
+      Restore the coordinator catalog and reconnect to the original product-store location. Preserve any local volumes that hold product or source data. If registrations are missing, use your catalog archive or register the catalogs and tables again. Verify each table with a bounded read, refresh its statistics and rebuild any required cubes before comparing dashboard performance.
     </p>
-    <p>
-      With <code>catalog.db</code> restored from backup, the stack comes up as it was. Without it, rebuild the map:
-    </p>
-    <Code lang="bash">{`# 1. Bring the stack up against the same system store, so the dashboards,
-#    charts and datasets are already there.
-./scripts/kaveon-up.sh --storage adls://<account>/<container>/<prefix>
-
-# 2. Re-register each catalog, its schemas and its tables. Columns are read
-#    from each table's own metadata; re-running skips what already exists.
-python scripts/register-lake-catalog.py --api http://localhost:8082 \\
-    --catalog OpenSource --account <account> --container <container> \\
-    --root snapshots/<version> \\
-    --schema public:<table>,<table>
-
-# 3. Re-measure. ANALYZE each table, from SQL Lab or the Catalog page.`}</Code>
-    <p>
-      Expect step 3 to take a while, and expect dashboards to be <em>right and slow</em> until it finishes: a tile that
-      was answered from a cube goes back to scanning its table until that table&rsquo;s cube exists again. The cube
-      pass gives each worker a single task over all of its files under a hard 600&nbsp;second ceiling, so a large table
-      may need more workers to fit inside it — bring them up to build, then take them down.
-    </p>
+    <p>For an ADLS catalog, the registration utility accepts the account, container, prefix and schema-to-table mappings. Inspect the inputs before running it against the restored installation.</p>
+    <Code lang="bash">python scripts/register-lake-catalog.py --help</Code>
 
     <h2>Routine checklist</h2>
     <ul>

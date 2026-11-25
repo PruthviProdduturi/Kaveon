@@ -33,28 +33,22 @@ location you choose at deployment.
 
 ```bash
 ./scripts/kaveon-up.sh                                       # local disk
-./scripts/kaveon-up.sh --storage s3://my-bucket/kaveon
 ./scripts/kaveon-up.sh --storage adls://myaccount/system/kaveon
 ```
 
 | | use it when |
 |---|---|
 | `file:///path` | a laptop, a single server, an evaluation. The default. |
-| `s3://bucket/prefix` | AWS, or anything S3-compatible with conditional writes |
+| AWS | Coming soon. The launcher currently rejects S3 as the system store. |
 | `adls://account/container/prefix` | Azure |
 
-**Table data is a separate question.** A catalog can point at any location the
-deployment can reach — another bucket, another account, a mounted directory,
-someone else's Delta or Iceberg tables. The *record* of those catalogs is always
-written to the system store. So you can keep the system store on Azure and query
-data in S3, or the other way round.
+**Table data and system storage are configured separately.** Register a catalog over a mounted directory or an authorized ADLS location. See the [Azure installation preview](../../infra/marketplace/README.md) for the portal form, directory registration and Helm handoff.
 
 Choose it once. Moving it later is a migration, not a setting — see
 [system storage](../engineering/system-storage.md).
 
 Credentials never go in the URL and never go in `.env`. ADLS uses workload
-identity, falling back to managed identity; S3 uses the standard provider chain
-(environment, web identity, instance profile). The host supplies them; Kaveon
+identity, falling back to managed identity. The host supplies them; Kaveon
 reads them.
 
 ## Bringing your data
@@ -82,7 +76,7 @@ metastore, no external catalog service.
 Without an OAuth provider the stack runs in local mode with a single development
 identity. That is fine on a laptop and **not fine on a network**.
 
-To require real sign-in, set any one of GitHub, Google or Microsoft Entra in
+To require real sign-in, configure the Microsoft Entra settings supported by Compose in
 `.env` and restart:
 
 ```bash
