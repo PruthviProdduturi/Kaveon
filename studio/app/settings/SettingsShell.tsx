@@ -45,7 +45,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
         {current?.admin && <span className={s.navTag} title="Administrators only">Admin</span>}
       </nav>
       {locked ? (
-        <div className={s.locked}><b>Administrators only</b>This section changes how Kaveon is connected. Your account can manage AI keys and preferences.</div>
+        <div className={s.locked}><b>Administrators only</b>This section changes how Kaveon is connected. Your personal settings are available in Preferences.</div>
       ) : children}
     </div>
   );

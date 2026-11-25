@@ -887,7 +887,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                 >
                   {Object.entries(ADAPTER_META).map(([key, meta]) => (
                     <option key={key} value={key} disabled={key !== "native"}>
-                      {key === "native" ? meta.label : `${meta.label} — not yet supported`}
+                      {key === "native" ? meta.label : `${meta.label} · Coming soon`}
                     </option>
                   ))}
                 </select>

@@ -7,10 +7,10 @@ export default function ConnectorDocs() {
     <PageHeader eyebrow="Platform" title="Connector matrix" lead="Registration, query execution, and deterministic context profiling are separate capabilities." />
     <table><thead><tr><th>Source</th><th>Studio</th><th>Execution</th><th>DLM boundary</th></tr></thead><tbody>
       <tr><td>Fabric SQL / Azure SQL</td><td>Current</td><td>Current · pyodbc + Azure identity</td><td>Per-dataset DLM compilation; no statistics/HLL profiling</td></tr>
-      <tr><td>PostgreSQL</td><td>Legacy / retirement-disabled</td><td>Legacy · psycopg2</td><td>Migration and reconciliation only; KaveonDB is authoritative when retirement mode is enabled</td></tr>
+      <tr><td>PostgreSQL</td><td>External SQL source</td><td>psycopg2</td><td>Requires a reachable PostgreSQL database and database credentials</td></tr>
       <tr><td>StarRocks</td><td>Current</td><td>Current · MySQL protocol</td><td>Per-dataset DLM compilation; no statistics/HLL profiling</td></tr>
       <tr><td>MySQL / MariaDB</td><td>API only</td><td>Current · pymysql</td><td>Not in Studio’s source picker</td></tr>
-      <tr><td>Trino</td><td>Registration only</td><td>Target</td><td>No driver</td></tr>
+      <tr><td>Trino</td><td>Coming soon</td><td>Coming soon</td><td>Unavailable</td></tr>
       <tr><td>Parquet, Delta, Iceberg in storage</td><td>Current · registered as a catalog, not a connector</td><td>Current · the Engine, read in place</td><td>Statistics and cube cells per table</td></tr>
     </tbody></table>
     <Callout type="note">Each platform query targets one selected SQL source. Cross-source federation is not implemented. The data-source test endpoint is currently a stub; use SQL Lab or a setup/admin probe for a real connection check.</Callout>

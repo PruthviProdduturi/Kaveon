@@ -190,6 +190,8 @@ def adapt_sql(sql: str, db_type: str) -> str:
 def _map_ds_type(raw: Optional[str]) -> str:
     """Map a data_sources.type label to an internal db_type."""
     t = (raw or "").strip().lower()
+    if t == "trino":
+        raise ValueError("Trino connections are coming soon")
     if "postgre" in t:
         return "postgresql"
     if "mysql" in t or "mariadb" in t:

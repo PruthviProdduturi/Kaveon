@@ -240,6 +240,15 @@ def sync_catalog(source, actor, expected_revision=None):
     current = _request("GET", path, token, actor)
     created = current is None
     if current is None:
+        # SQL-created catalogs keep their own stable ID and table registrations.
+        # An identical registration already describes the live catalog.
+        sql_id = "catalog:" + desired["name"]
+        existing = _request("GET", "/v1/catalog/definitions/" + quote(sql_id, safe=""), token, actor)
+        if existing is not None:
+            fields = ("name", "storage", "credential", "adapter", "lifecycle")
+            if existing.get("id") == sql_id and all(existing.get(k) == desired[k] for k in fields):
+                return {"catalog": existing, "changed": False}
+            raise HTTPException(409, "This name belongs to a SQL-created catalog with a different definition")
         if expected_revision is not None:
             raise HTTPException(409, "Mapped Engine catalog no longer exists")
         # Engine catalogs must first be created as draft revision 1.

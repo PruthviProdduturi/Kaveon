@@ -173,11 +173,17 @@ def get_data_source(ds_id: str, response: Response, user: str = Depends(require_
     return {"success": True, "dataSource": result["rows"][0]}
 
 
+def _check_connector(source_type):
+    if str(source_type or "").strip().lower() == "trino":
+        raise HTTPException(422, "Trino connections are coming soon")
+
+
 @router.post("/data-sources", status_code=201)
 def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
     user = ctx.email
     name = data.get("name")
     ds_type = data.get("type")
+    _check_connector(ds_type)
     connection_string = data.get("connection_string")
     region = data.get("region")
     if not name or not ds_type or not connection_string or not region:
@@ -233,6 +239,7 @@ def create_data_source(data: dict, ctx=Depends(require_min_role("Admin"))):
 
 @router.patch("/data-sources/{ds_id}")
 def update_data_source(ds_id: str, data: dict, ctx=Depends(require_min_role("Admin"))):
+    _check_connector(data.get("type"))
     user = ctx.email  # noqa: F841
     region = data.get("region")
     if region and region not in ("WW", "EU"):
@@ -345,11 +352,11 @@ def test_data_source(ds_id: str, user: str = Depends(require_auth)):
     if product_read_authority.enabled("sources"):
         document=product_read_authority.read_document("sources",f"data-{int(ds_id)}",user,"Viewer")
         if not document:raise HTTPException(404,"Data source not found")
-        return {"success":True,"message":"Connection test not yet implemented","database":document.get("database_name"),"type":document.get("source_type")}
+        return {"success":False,"message":"Connection testing is coming soon","database":document.get("database_name"),"type":document.get("source_type")}
     row = db.query_one("SELECT database_name, type FROM data_sources WHERE id = @param0", [int(ds_id)])
     if not row:
         raise HTTPException(status_code=404, detail="Data source not found")
-    return {"success": True, "message": "Connection test not yet implemented",
+    return {"success": False, "message": "Connection testing is coming soon",
             "database": row.get("database_name"), "type": row.get("type")}
 
 
