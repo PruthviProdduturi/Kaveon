@@ -9,7 +9,7 @@ export default function ArchitectureDocs() {
 
       <Callout type="note"><strong>Status vocabulary:</strong> Available means the capability is implemented and qualified in the declared local Docker scope. Cloud qualification is called out separately where it remains staged. Target means approved architecture that is not yet implemented.</Callout>
 
-      <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Studio routes questions to the DLM, lake queries to the Engine, and product edits to KaveonDB" caption="A question can finish in compiled context or continue as SQL. Saving the resulting chart uses the KaveonDB transaction path." />
+      <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="The Kaveon platform showing Studio, DLM context, distributed SQL, KaveonDB product state and lake storage" caption="Studio uses the platform API for dataset modeling, chat, SQL and dashboard authoring. The diagram shows where context is compiled, queries run and product records persist." />
 
       <h2>Runtime boundaries</h2>
       <table>

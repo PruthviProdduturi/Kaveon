@@ -1,71 +1,95 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="920" height="480" viewBox="0 0 920 480" role="img" aria-labelledby="title desc">
-  <title id="title">Inside Kaveon</title>
-  <desc id="desc">Studio sends requests through its authenticated API. The Data Language Model resolves questions against compiled dataset context and can return an answer or generate SQL. The Engine distributes lake queries across workers reading Parquet or Delta. KaveonDB commits product edits as versioned records.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="614" viewBox="0 0 960 614" role="img" aria-labelledby="title desc">
+  <title id="title">The Kaveon platform</title>
+  <desc id="desc">An exploded view of the native lake architecture. Studio includes Catalog, semantic datasets, Chat, SQL Lab, charts and dashboards. The Data Language Model compiles context for supported questions or generates SQL. The Rust Engine runs distributed Arrow stages. KaveonDB versions product state and access records. The Engine reads Parquet and Delta from local storage or ADLS Gen2.</desc>
   <defs>
-    <linearGradient id="surface" x2="1" y2="0" gradientUnits="objectBoundingBox">
-      <stop stop-color="#101c29"/><stop offset="1" stop-color="#10151d"/>
+    <radialGradient id="back" cx=".27" cy=".48" r=".81">
+      <stop stop-color="#14283d"/><stop offset=".59" stop-color="#0b1624"/><stop offset="1" stop-color="#090f18"/>
+    </radialGradient>
+    <linearGradient id="glass" x2="1" y2="1">
+      <stop stop-color="#365772"/><stop offset=".48" stop-color="#20374d"/><stop offset="1" stop-color="#16283b"/>
     </linearGradient>
-    <marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-      <path d="m1 1 4.5 2.5L1 6" fill="none" stroke="#8ea0b4" stroke-width="1.3"/>
-    </marker>
+    <pattern id="dust" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r=".8" fill="#a4c9f6" opacity=".21"/>
+    </pattern>
+    <g id="plane">
+      <path d="m-140 0 140 54 140-54v7L0 63l-140-56Z" fill="#172738" stroke="currentColor" stroke-opacity=".55"/>
+      <path d="M0-54 140 0 0 54-140 0Z" fill="url(#glass)" stroke="currentColor" stroke-width="1.6"/>
+    </g>
+    <g id="worker"><path d="m0-9 19 7v10L0 15l-19-7V-2Z" fill="#183649" stroke="#85deef" stroke-width="1.5"/><path d="m-19-2 19 7 19-7M0 5v10" fill="none" stroke="#85deef"/></g>
     <style>
       text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-      .heading{font-size:22px;font-weight:650;fill:#f2f6fa}
-      .label{font-size:17px;font-weight:600;fill:#e1e8ef}
-      .detail{font-size:16px;fill:#aec0cf}
-      .route{fill:none;stroke:#6e8196;stroke-width:1.6}
-      .icon{fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+      .head{font-size:25px;font-weight:650;fill:#f4f8ff}
+      .body{font-size:17px;fill:#c1d2e1}
+      .sub{font-size:16px;fill:#a6bdcf}
+      .wire{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
     </style>
   </defs>
-  <rect x="1" y="1" width="918" height="478" rx="18" fill="#0d1218" stroke="#35414d"/>
-  <path d="M19 1h882q18 0 18 18v86H1V19Q1 1 19 1Z" fill="url(#surface)"/>
-  <path d="M1 105h918" stroke="#303c49"/>
-  <!-- Studio is the common entry point. The three branches describe different requests. -->
-  <g transform="translate(33 31)" class="icon" color="#75baff">
-    <rect x="0" y="0" width="37" height="31" rx="5"/><path d="M1 9h35M10 10v20"/>
+  <rect width="960" height="614" rx="19" fill="url(#back)"/>
+  <rect x="12" y="12" width="397" height="523" rx="13" fill="url(#dust)"/>
+  <!-- The four drawings share an isometric axis. The guide lines identify product responsibilities. -->
+  <path d="M85 119v311m280-311v311M225 66v310" fill="none" stroke="#56738a" stroke-width="1" stroke-dasharray="3 5" opacity=".65"/>
+  <g class="wire">
+    <path d="M365 118h25l16-14h30" stroke="#749fc8"/>
+    <path d="M365 222h25l16-8h30" stroke="#978fe8"/>
+    <path d="M365 326h25l16 6h30" stroke="#64bacc"/>
+    <path d="M365 430h25l16 18h30" stroke="#62bda8"/>
   </g>
-  <text x="90" y="54" font-size="32" font-weight="650" fill="#f4f7fa">Kaveon Studio</text>
-  <text x="91" y="82" class="detail">Chat, SQL Lab, charts and dashboards</text>
-  <text x="883" y="58" text-anchor="end" class="label">Authenticated Studio API</text>
+  <!-- Transaction plane: immutable record revisions. -->
+  <g transform="translate(225 430)" color="#76d9bf">
+    <use href="#plane"/>
+    <g fill="#1b4849" stroke="#89dac4" stroke-linejoin="round">
+      <path d="m-69 8 64-25L68 9 5 34Z"/><path d="m-69 1 64-25L68 2 5 27Z"/><path d="m-69-6 64-25L68-5 5 20Z"/>
+      <path d="m-37-7 32-12 25 9m-44 8 23-9" fill="none" stroke-width="2"/>
+    </g>
+  </g>
+  <!-- Compute plane: three workers connected by exchange. -->
+  <g transform="translate(225 326)" color="#81e2ee">
+    <use href="#plane"/>
+    <path d="m-55 4 55 20L56 4M0 24v-38" class="wire" stroke="#9ee6ef"/>
+    <use href="#worker" x="-55" y="-2"/><use href="#worker" y="-20"/><use href="#worker" x="56" y="-2"/>
+    <circle cy="24" r="3" fill="#c4fbff"/>
+  </g>
+  <!-- Semantic plane: the curated relationships in one dataset's context. -->
+  <g transform="translate(225 222)" color="#b3aaff">
+    <use href="#plane"/>
+    <g stroke="#b7b1ff" stroke-width="1.7">
+      <path d="m-79 0 47-19L0 4l52-12 29 11-58 21L0 4l-41 11Z" fill="none"/>
+      <g fill="#292750"><circle cx="-79" r="4"/><circle cx="-32" cy="-19" r="5"/><circle cx="52" cy="-8" r="5"/><circle cx="81" cy="3" r="4"/><circle cx="23" cy="24" r="4"/><circle cx="-41" cy="15" r="4"/></g>
+      <circle cy="4" r="7" fill="#d7d0ff"/>
+    </g>
+  </g>
+  <!-- Studio plane: a miniature dashboard with filters and two visualizations. -->
+  <g transform="translate(225 118)" color="#79baff">
+    <use href="#plane"/>
+    <g transform="matrix(.86 .33 -.86 .33 0 -43)">
+      <rect x="6" y="6" width="125" height="115" rx="6" fill="#12273e" stroke="#82bdff" stroke-width="2"/>
+      <path d="M6 31h125" stroke="#6292b7" stroke-width="2"/>
+      <g fill="#96cfff"><circle cx="17" cy="19" r="3"/><circle cx="27" cy="19" r="3"/><path d="M81 16h33v6H81z"/></g>
+      <path d="M16 44h44v63H16zM71 44h48v63H71z" fill="#213d58"/>
+      <path d="M21 96V81h6v15zm11 0V72h6v24zm11 0V57h6v39z" fill="#84caff"/>
+      <path d="m76 88 9-15 9 6 17-22" fill="none" stroke="#83d9cb" stroke-width="4"/>
+    </g>
+  </g>
 
-  <path d="M51 105v306" class="route"/>
-  <g class="route" marker-end="url(#arrow)">
-    <path d="M51 168h146"/><path d="M51 292h146"/><path d="M51 411h146"/>
-    <path d="M510 168h61"/><path d="M510 292h61"/><path d="M510 411h61"/>
-    <path d="M240 201v52"/>
-  </g>
-  <g fill="#0d1218" stroke="#7cbfff" stroke-width="2">
-    <circle cx="51" cy="168" r="4"/><circle cx="51" cy="292" r="4"/>
-    <circle cx="51" cy="411" r="4" stroke="#63cbb8"/>
-  </g>
-  <g class="label">
-    <text x="67" y="155">Ask</text><text x="67" y="279">Query</text><text x="67" y="398">Save</text>
-  </g>
+  <g transform="translate(454 0)">
+    <text y="72" class="head">Kaveon Studio</text>
+    <text y="101" class="body">Catalog · Datasets · Chat · SQL Lab</text>
+    <text y="126" class="body">Chart builder · Interactive dashboards</text>
 
-  <g transform="translate(210 144)" class="icon" color="#7cbfff">
-    <path d="M2 10 23 1l21 9-21 9Zm0 8 21 9 21-9M2 26l21 9 21-9"/>
-  </g>
-  <text x="273" y="162" class="heading">Data Language Model</text>
-  <text x="273" y="188" class="detail">Resolve metrics and dimensions</text>
-  <text x="586" y="162" class="label">Answer from context</text>
-  <text x="586" y="188" class="detail">Use a precomputed answer when fresh.</text>
-  <text x="255" y="233" class="detail" fill="#7cbfff">Generated SQL</text>
+    <text y="190" class="head">Data Language Model</text>
+    <text y="219" class="body">Compiles metrics, dimensions and vocabulary.</text>
+    <text y="244" class="sub">Fresh context → answer   /   live path → SQL</text>
 
-  <g transform="translate(210 270)" class="icon" color="#7cbfff">
-    <path d="M23 10v8M4 24v-6h38v6"/><rect x="17" width="12" height="10" rx="2"/>
-    <rect x="0" y="24" width="9" height="9" rx="2"/><rect x="19" y="24" width="9" height="9" rx="2"/><rect x="38" y="24" width="9" height="9" rx="2"/><path d="M23 18v6"/>
-  </g>
-  <text x="273" y="286" class="heading">Kaveon Engine</text>
-  <text x="273" y="312" class="detail">Coordinator and Arrow workers</text>
-  <text x="586" y="286" class="label">Read lake tables in place</text>
-  <text x="586" y="312" class="detail">Parquet and Delta on local disk or ADLS.</text>
+    <text y="307" class="head">Distributed SQL engine</text>
+    <text y="336" class="body">Rust coordinator · Vectorized Arrow workers</text>
+    <text y="361" class="sub">Plan → partition → join or aggregate → result</text>
 
-  <path d="M86 351h796" stroke="#2c3742"/>
-  <g transform="translate(212 389)" class="icon" color="#63cbb8">
-    <ellipse cx="20" cy="7" rx="18" ry="6"/><path d="M2 7v22c0 8 36 8 36 0V7M2 18c0 8 36 8 36 0"/>
+    <text y="424" class="head">KaveonDB</text>
+    <text y="453" class="body">Transactional catalog and product records.</text>
+    <text y="478" class="sub">Chart definitions, dashboard layouts and access grants</text>
   </g>
-  <text x="273" y="405" class="heading">KaveonDB</text>
-  <text x="273" y="431" class="detail">Commit a product edit</text>
-  <text x="586" y="405" class="label">Versioned product records</text>
-  <text x="586" y="431" class="detail">Datasets, saved queries, charts, dashboards.</text>
+  <path d="M42 526h876" stroke="#324557"/>
+  <g transform="translate(47 550)" fill="none" stroke="#93b6d1" stroke-width="1.7"><ellipse cx="13" cy="4" rx="13" ry="4"/><path d="M0 4v15c0 6 26 6 26 0V4M0 12c0 6 26 6 26 0"/></g>
+  <text x="90" y="570" font-size="18" font-weight="600" fill="#f1f5fa">Your lake</text>
+  <text x="197" y="570" class="body">Parquet and Delta tables read in place on local storage or Azure Data Lake Storage Gen2.</text>
 </svg>
