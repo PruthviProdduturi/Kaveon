@@ -81,3 +81,14 @@ helm upgrade --install kaveon infra/helm/kaveon-engine --namespace kaveon --crea
 ```
 
 Use port-forwarding and a trusted CA for test access. No public load balancer or ingress is created. An ingress NetworkPolicy permits port 8080 from pods in the same namespace only; cross-namespace API access requires an explicit additional rule. Egress remains available for Azure identity, ADLS and DNS. Authenticated TLS is required on every engine endpoint. Confirm the cluster network plugin enforces NetworkPolicy.
+## Read an analytical lake in another Entra tenant
+
+Install the Engine in the work cluster with its work identity for product transactions.
+In the lake's resource group, deploy `infra/marketplace/external-lake-reader.bicep`
+with the existing storage account, the work cluster's exact OIDC issuer URL, a
+dedicated identity name and the analytical container names. For the dev trial the
+containers are `opensource` and `telemetry`. Set the Engine chart's `externalLake`
+to the template's output and use the `kaveon-engine` service account in namespace
+`kaveon`. Each Engine pod exchanges its projected token for the lake identity
+when opening that account. Product commits use the work identity. Verify the
+result by querying a registered table through Studio as a signed-in work user.

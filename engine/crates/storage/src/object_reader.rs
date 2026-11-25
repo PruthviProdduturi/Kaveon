@@ -10,7 +10,7 @@ use crate::{
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 use kaveon_core::{BatchSource, KaveonError, Result, StoragePredicate};
-use object_store::{ObjectStore, aws::AmazonS3Builder, azure::MicrosoftAzureBuilder, path::Path};
+use object_store::{ObjectStore, aws::AmazonS3Builder, path::Path};
 use parquet::arrow::{
     ParquetRecordBatchStreamBuilder, ProjectionMask, async_reader::ParquetObjectReader,
 };
@@ -69,9 +69,7 @@ impl ObjectLocation {
             return Err(error("invalid ADLS authority"));
         }
         let path = relative_path(key)?;
-        let store = MicrosoftAzureBuilder::from_env()
-            .with_account(account)
-            .with_container_name(container)
+        let store = crate::adls_reader::read_store_builder(account, container, None)?
             .build()
             .map_err(storage_error)?;
         Ok(Self {
