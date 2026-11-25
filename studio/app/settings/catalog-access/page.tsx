@@ -248,7 +248,7 @@ function GrantsCard({ onChanged }: { onChanged: () => void }) {
           {problem && <div className={g.problem} role="alert">{problem}</div>}
           {saved && <div className={g.saved} role="status">{saved}</div>}
           <p className={s.note} style={{ marginTop: 12 }}>
-            <b>browse</b> lists the catalog and describes its schemas, tables and columns. <b>query</b> adds SQL that reads it. <b>manage</b> adds schema and table changes inside it. A grant never exceeds the role: a Viewer browses whatever the grant says, an Analyst or Editor reaches the level granted, and the platform still requires the Editor role to register schemas and tables. Every grant and revoke is written to the audit ledger under <Link href="/settings/governance" className={g.link}>Governance</Link> with the administrator who made it.
+            <b>browse</b> lists the catalog and describes its schemas, tables and columns. <b>query</b> adds SQL that reads it. <b>manage</b> adds schema and table changes inside it. A grant never exceeds the role: a Viewer browses whatever the grant says, an Analyst or Editor reaches the level granted, and the platform still requires the Editor role to register schemas and tables. Every grant and revoke is written to the audit ledger under <Link href="/settings/governance" className={g.link}>Query limits &amp; audit</Link> with the administrator who made it.
           </p>
         </>
       )}
