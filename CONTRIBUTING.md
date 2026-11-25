@@ -7,7 +7,7 @@ Thanks for your interest in contributing to Kaveon — the Analyze module of the
 - Node.js 22.x (required by the root `package.json`; `.nvmrc` is currently stale at Node 20)
 - pnpm 10 (`corepack prepare pnpm@10 --activate`)
 - Python 3.11+
-- ODBC Driver 18 for SQL Server (Fabric SQL / Azure SQL) — see the README Prerequisites section
+- ODBC Driver 18 for SQL Server (Fabric SQL / Azure SQL)
 
 ## Local Development
 
