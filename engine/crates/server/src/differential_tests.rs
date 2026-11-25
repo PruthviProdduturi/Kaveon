@@ -280,6 +280,15 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        // `+ 1` keeps the argument away from zero, where the tangent is zero
+        // and the cotangent is not finite. That edge is outside the bounded
+        // claim, and a case that straddled it would be asserting on an
+        // infinity rather than on agreement between the layouts.
+        "tsql_cot_scalar_compatibility",
+        "SELECT user_id, COT(CAST(actions AS DOUBLE) / 10 + 1) FROM {T} ORDER BY user_id, actions LIMIT 20",
+        true,
+    ),
+    (
         "tsql_atn2_scalar_compatibility",
         "SELECT user_id, ATN2(CAST(actions AS DOUBLE) + 1, CAST(actions AS DOUBLE) + 2) FROM {T} ORDER BY user_id, actions LIMIT 20",
         true,

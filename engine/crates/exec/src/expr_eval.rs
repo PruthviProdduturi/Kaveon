@@ -13188,6 +13188,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::tan)
         }
+        // SQL Server, Fabric and Trino all spell the reciprocal of the tangent
+        // `COT`, and `f64` carries no cotangent of its own. Dividing by the
+        // tangent is the same computation each of them performs, so a finite
+        // argument whose tangent is finite and non-zero agrees across all
+        // three. Arguments at a zero of the tangent divide by zero and leave
+        // the bounded claim, exactly as the other transcendental slices treat
+        // their own domain edges: the value is produced, not qualified.
+        "COT" => {
+            check_arity(name, args, 1)?;
+            unary_float_fn(&args[0], |value| 1.0 / value.tan())
+        }
         "COSH" => {
             check_arity(name, args, 1)?;
             unary_float_fn(&args[0], f64::cosh)

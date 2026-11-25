@@ -299,6 +299,13 @@ The same bounded numeric contract now qualifies SQL Server/Fabric `SIN`, `COS`,
 NULL-preserving local and three-worker results. Evidence:
 `docs/qualification/track2-tsql-trigonometric-2026-11-03.md`.
 
+`COT` completes that family under the same contract. It was the one member the
+evaluator did not implement, so a statement naming it failed with `unknown
+scalar function: COT`; it is computed as the reciprocal of the tangent, which
+is the same computation SQL Server, Fabric and Trino perform. Arguments at a
+zero of the tangent leave the bounded claim. Evidence:
+`docs/qualification/track2-tsql-cot-2026-11-25.md`.
+
 SQL Server's `ATN2(y, x)` now maps to the existing typed two-argument
 arctangent path and is qualified across local and three-worker execution;
 `ATAN2` remains the generic Trino-compatible spelling. Evidence:
