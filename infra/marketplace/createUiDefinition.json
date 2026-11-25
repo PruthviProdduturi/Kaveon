@@ -21,7 +21,7 @@
         "name": "installationName",
         "type": "Microsoft.Common.TextBox",
         "label": "Installation name",
-        "placeholder": "e.g. analytics",
+        "placeholder": "e.g. kaveon",
         "toolTip": "Used to name this installation’s Azure resources. Use the same name and environment when updating it.",
         "constraints": {
           "required": true,
