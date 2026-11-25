@@ -3,27 +3,125 @@
   "handler": "Microsoft.Azure.CreateUIDef",
   "version": "0.1.2-preview",
   "parameters": {
+    "config": {
+      "basics": {
+        "description": "Provision the Azure infrastructure and Microsoft Entra registration for Kaveon. Your signed-in account becomes the first administrator. Studio installation is a separate step in this preview.",
+        "location": {
+          "label": "Region",
+          "resourceTypes": [
+            "Microsoft.ContainerService/managedClusters",
+            "Microsoft.Storage/storageAccounts",
+            "Microsoft.ContainerRegistry/registries"
+          ]
+        }
+      }
+    },
     "basics": [
-      { "name": "installationName", "type": "Microsoft.Common.TextBox", "label": "Installation name", "defaultValue": "kaveon", "toolTip": "Used in Azure resource names for this Kaveon installation.", "constraints": { "required": true, "regex": "^[a-z][a-z0-9-]{1,14}[a-z0-9]$", "validationMessage": "Enter 3–16 lowercase letters, numbers or hyphens. Start with a letter and end with a letter or number." } },
-      { "name": "environment", "type": "Microsoft.Common.DropDown", "label": "Environment", "defaultValue": "dev", "constraints": { "required": true, "allowedValues": [ { "label": "dev", "value": "dev" }, { "label": "stage", "value": "stage" }, { "label": "prod", "value": "prod" } ] } }
+      {
+        "name": "installationName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Installation name",
+        "placeholder": "e.g. analytics",
+        "toolTip": "Used to name this installation’s Azure resources. Use the same name and environment when updating it.",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-z][a-z0-9-]{1,14}[a-z0-9]$",
+          "validationMessage": "Use 3–16 lowercase letters, numbers or hyphens. Start with a letter and end with a letter or number."
+        },
+        "visible": true
+      },
+      {
+        "name": "environment",
+        "type": "Microsoft.Common.DropDown",
+        "label": "Environment",
+        "defaultValue": "Development",
+        "toolTip": "Included in resource names. Choose the environment this installation will serve.",
+        "constraints": {
+          "required": true,
+          "allowedValues": [
+            {
+              "label": "Development",
+              "value": "dev"
+            },
+            {
+              "label": "Staging",
+              "value": "stage"
+            },
+            {
+              "label": "Production",
+              "value": "prod"
+            }
+          ]
+        },
+        "visible": true
+      }
     ],
     "steps": [
-      { "name": "capacity", "label": "Capacity and cost", "subLabel": "System nodes and workers", "elements": [
-        { "name": "capacityInfo", "type": "Microsoft.Common.InfoBox", "visible": true, "options": { "icon": "Info", "text": "This installation provisions two D4s v5 system nodes plus at least one worker. All three incur compute charges while running. The signed-in installer receives initial cluster and Kaveon administrator access." } },
-        { "name": "nodeSize", "type": "Microsoft.Common.DropDown", "label": "Worker size", "defaultValue": "Standard_B2s", "constraints": { "allowedValues": [ { "label": "B2s — budget default", "value": "Standard_B2s" }, { "label": "D2s v5 — performance", "value": "Standard_D2s_v5" } ] } },
-        { "name": "maxWorkers", "type": "Microsoft.Common.Slider", "label": "Maximum workers", "defaultValue": 2, "min": 1, "max": 4, "step": 1, "showStepMarkers": true },
-        { "name": "enableNatGateway", "type": "Microsoft.Common.CheckBox", "label": "Dedicated NAT Gateway", "defaultValue": false, "toolTip": "Adds a billable NAT Gateway and public IP." }
-      ] }
+      {
+        "name": "capacity",
+        "label": "Compute",
+        "subLabel": {
+          "preValidation": "Choose worker capacity",
+          "postValidation": "Worker capacity configured"
+        },
+        "bladeTitle": "Compute",
+        "elements": [
+          {
+            "name": "billing",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "AKS starts with two D4s v5 system nodes and one worker. All three incur compute charges while running. The worker limit caps autoscaling."
+            }
+          },
+          {
+            "name": "nodeSize",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Worker size",
+            "defaultValue": "Standard B2s",
+            "toolTip": "VM size for query workers. Availability depends on regional capacity and subscription quota.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                {
+                  "label": "Standard B2s",
+                  "value": "Standard_B2s"
+                },
+                {
+                  "label": "Standard D2s v5",
+                  "value": "Standard_D2s_v5"
+                }
+              ]
+            },
+            "visible": true
+          },
+          {
+            "name": "maxWorkers",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Maximum workers",
+            "toolTip": "AKS can scale the worker pool from one node up to this limit.",
+            "defaultValue": "2 workers",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "1 worker", "value": "1" },
+                { "label": "2 workers", "value": "2" },
+                { "label": "3 workers", "value": "3" },
+                { "label": "4 workers", "value": "4" }
+              ]
+            },
+            "visible": true
+          }
+        ]
+      }
     ],
     "outputs": {
       "installationName": "[basics('installationName')]",
-      "location": "[location()]",
       "environment": "[basics('environment')]",
-      "configureDirectory": true,
+      "location": "[location()]",
       "nodeSize": "[steps('capacity').nodeSize]",
-      "minWorkers": 1,
-      "maxWorkers": "[steps('capacity').maxWorkers]",
-      "enableNatGateway": "[steps('capacity').enableNatGateway]"
+      "maxWorkers": "[int(steps('capacity').maxWorkers)]"
     }
   }
 }

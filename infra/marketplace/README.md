@@ -4,7 +4,9 @@ The installation should end with an **Open Kaveon** link, a successful first adm
 
 ## Customer experience
 
-[Open the installation preview in Azure](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fcodex%2Fazure-install-preview%2Finfra%2Fmarketplace%2FmainTemplate.json). Select a subscription, resource group, region and installation name. By default the signed-in user receives cluster administration and the Kaveon Admin role. The Azure-generated form allows a different Kaveon Admin user or group. The default configuration provisions two system nodes, at least one worker and a Standard public IP. Review these billable resources before selecting **Create**.
+[Open the guided installation preview in Azure](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fcodex%2Fazure-install-preview%2Finfra%2Fmarketplace%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fcodex%2Fazure-install-preview%2Finfra%2Fmarketplace%2FcreateUiDefinition.json). On **Basics**, choose the subscription, resource group and region, then enter an installation name such as `analytics` and choose an environment. On **Compute**, review the worker size and autoscaling limit. The default installation starts two system nodes and one worker, and reserves a Standard public IP. Review charges before selecting **Create**.
+
+The installer generates the storage and registry names and assigns the signed-in user as the first administrator. Azure checks the generated names during deployment validation. If a global name is taken on a fresh installation, change the installation name and validate again. Reuse the original settings to update an existing installation.
 
 With directory provisioning enabled, the template reserves a DNS name in the customer's resource group, registers the Studio callback for that name in the customer's Entra tenant, and assigns the initial Admin. Outputs include the reserved IP name and non-secret Helm identity values. Directory permissions are required to register the app and assign roles. A tenant that restricts delegated consent may also require approval of Kaveon's own API scope.
 
@@ -18,7 +20,7 @@ To use the manual portal editor, load the checked-in mainTemplate.json. To rebui
 
 In Azure Portal, choose **Create a resource**, search for **Template deployment (deploy using custom templates)**, then select **Create → Build your own template in the editor → Load file**. Load the compiled JSON and select **Save**. The portal generates a parameter form. Select the subscription, resource group, environment and capacity.
 
-For the designed Marketplace form, preview `createUiDefinition.json` in the Azure Create UI Definition sandbox. The custom deployment editor accepts the compiled ARM template. Completing that form provisions infrastructure; publishing images, installing the Helm releases and configuring sign-in are subsequent steps.
+The guided link loads both the template and its UI definition. Loading the template alone opens the advanced parameter editor, where operators may override resource names, identities and networking defaults.
 
 ## First installation in a Microsoft Entra tenant
 
