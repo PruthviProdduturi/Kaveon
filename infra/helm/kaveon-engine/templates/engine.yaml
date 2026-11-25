@@ -169,6 +169,14 @@ spec:
             - name: https
               containerPort: 8080
           env:
+            {{- if or $.Values.externalLake.account $.Values.externalLake.clientId $.Values.externalLake.tenantId }}
+            - name: KAVEON_EXTERNAL_LAKE_ACCOUNT
+              value: {{ required "externalLake.account is required" $.Values.externalLake.account | quote }}
+            - name: KAVEON_EXTERNAL_LAKE_CLIENT_ID
+              value: {{ required "externalLake.clientId is required" $.Values.externalLake.clientId | quote }}
+            - name: KAVEON_EXTERNAL_LAKE_TENANT_ID
+              value: {{ required "externalLake.tenantId is required" $.Values.externalLake.tenantId | quote }}
+            {{- end }}
             - name: POD_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: POD_UID

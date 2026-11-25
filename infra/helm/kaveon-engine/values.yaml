@@ -8,6 +8,10 @@ image:
   digest: ""
 workloadIdentity:
   clientId: ""
+externalLake:
+  account: ""
+  clientId: ""
+  tenantId: ""
 studioUrl: ""
 # Where KaveonDB keeps the platform's own records — datasets, charts,
 # dashboards, sources, chat, query history, activity. Immutable snapshot

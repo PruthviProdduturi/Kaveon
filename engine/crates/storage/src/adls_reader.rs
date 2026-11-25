@@ -1600,6 +1600,34 @@ impl AdlsParquetReader {
     }
 }
 
+/// For an external analytics account, exchange the pod assertion in the
+/// lake's tenant. Keep the pod's default identity for other accounts.
+pub(crate) fn read_store_builder(
+    account: &str,
+    container: &str,
+    azure_cli: Option<bool>,
+) -> Result<MicrosoftAzureBuilder> {
+    let builder = if std::env::var("KAVEON_EXTERNAL_LAKE_ACCOUNT").as_deref() == Ok(account) {
+        let required = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| storage_error(format!("external lake identity requires {name}")))
+        };
+        MicrosoftAzureBuilder::new()
+            .with_client_id(required("KAVEON_EXTERNAL_LAKE_CLIENT_ID")?)
+            .with_tenant_id(required("KAVEON_EXTERNAL_LAKE_TENANT_ID")?)
+            .with_federated_token_file(required("AZURE_FEDERATED_TOKEN_FILE")?)
+    } else {
+        let builder = MicrosoftAzureBuilder::from_env();
+        match azure_cli {
+            Some(enabled) => builder.with_use_azure_cli(enabled),
+            None => builder,
+        }
+    };
+    Ok(builder.with_account(account).with_container_name(container))
+}
+
 /// The cached Azure client for one account, container and credential mode.
 pub(crate) fn adls_store(
     account: &str,
@@ -1613,12 +1641,13 @@ pub(crate) fn adls_store(
         return Ok(store);
     }
     let store: Arc<dyn ObjectStore> = Arc::new(
-        MicrosoftAzureBuilder::from_env()
-            .with_account(account)
-            .with_container_name(container)
-            .with_use_azure_cli(auth_mode == AdlsAuthMode::AzureCli)
-            .build()
-            .map_err(object_store_error)?,
+        read_store_builder(
+            account,
+            container,
+            Some(auth_mode == AdlsAuthMode::AzureCli),
+        )?
+        .build()
+        .map_err(object_store_error)?,
     );
     cache_object_store(store_key, store.clone());
     Ok(store)
