@@ -22,7 +22,6 @@ param systemNodeCount int = 1
 param tags object = {
   project: 'kaveon'
   environment: 'production'
-  owner: 'prproddu'
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {

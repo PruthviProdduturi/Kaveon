@@ -4,20 +4,22 @@
   "version": "0.1.2-preview",
   "parameters": {
     "basics": [
-      { "name": "operatorObjectId", "type": "Microsoft.Common.TextBox", "label": "AKS administrator object ID", "toolTip": "Microsoft Entra object ID granted AKS administrator access.", "constraints": { "required": true, "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "validationMessage": "Enter a Microsoft Entra object ID." } },
+      { "name": "installationName", "type": "Microsoft.Common.TextBox", "label": "Installation name", "defaultValue": "kaveon", "toolTip": "Used in Azure resource names for this Kaveon installation.", "constraints": { "required": true, "regex": "^[a-z][a-z0-9-]{1,14}[a-z0-9]$", "validationMessage": "Enter 3–16 lowercase letters, numbers or hyphens. Start with a letter and end with a letter or number." } },
       { "name": "environment", "type": "Microsoft.Common.DropDown", "label": "Environment", "defaultValue": "dev", "constraints": { "required": true, "allowedValues": [ { "label": "dev", "value": "dev" }, { "label": "stage", "value": "stage" }, { "label": "prod", "value": "prod" } ] } }
     ],
     "steps": [
-      { "name": "capacity", "label": "Capacity and cost", "subLabel": "Budget-safe defaults", "elements": [
+      { "name": "capacity", "label": "Capacity and cost", "subLabel": "System nodes and workers", "elements": [
+        { "name": "capacityInfo", "type": "Microsoft.Common.InfoBox", "visible": true, "options": { "icon": "Info", "text": "This installation provisions two D4s v5 system nodes plus at least one worker. All three incur compute charges while running. The signed-in installer receives initial cluster and Kaveon administrator access." } },
         { "name": "nodeSize", "type": "Microsoft.Common.DropDown", "label": "Worker size", "defaultValue": "Standard_B2s", "constraints": { "allowedValues": [ { "label": "B2s — budget default", "value": "Standard_B2s" }, { "label": "D2s v5 — performance", "value": "Standard_D2s_v5" } ] } },
         { "name": "maxWorkers", "type": "Microsoft.Common.Slider", "label": "Maximum workers", "defaultValue": 2, "min": 1, "max": 4, "step": 1, "showStepMarkers": true },
         { "name": "enableNatGateway", "type": "Microsoft.Common.CheckBox", "label": "Dedicated NAT Gateway", "defaultValue": false, "toolTip": "Adds a billable NAT Gateway and public IP." }
       ] }
     ],
     "outputs": {
+      "installationName": "[basics('installationName')]",
       "location": "[location()]",
       "environment": "[basics('environment')]",
-      "operatorObjectId": "[basics('operatorObjectId')]",
+      "configureDirectory": true,
       "nodeSize": "[steps('capacity').nodeSize]",
       "minWorkers": 1,
       "maxWorkers": "[steps('capacity').maxWorkers]",

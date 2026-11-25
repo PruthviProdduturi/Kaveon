@@ -84,10 +84,7 @@ api:
   # push. The warmer is otherwise on and working; this list is the only thing
   # that lets it run before a reader arrives rather than after.
   #
-  # Set to this installation's administrator. The address is already in
-  # `.env.example` and eight other committed files, so naming it here is not a
-  # new exposure; a different installation should change it.
-  warmPrincipals: "demo-owner@example.org:Admin"
+  warmPrincipals: ""
   evidenceStorage:
     # Create a restricted, durable PVC shared by report/smoke Jobs and the
     # PostgreSQL-free API. Azure Files CSI supplies the required RWX topology.
@@ -247,7 +244,7 @@ api:
   # `kubectl exec` were cancelled twice when a deploy replaced the API pod
   # under them.
   cubeBuild:
-    enabled: true
+    enabled: false
     # The principal the build runs as, and the table to build, as
     # catalog.schema.table. Naming both is what makes the job renderable; it
     # refuses to build as nobody or to guess a table.
@@ -255,8 +252,8 @@ api:
     # Rendered but SUSPENDED: a run is created from it deliberately, which is
     # how the cube over this table was built after two attempts driven over
     # `kubectl exec` were killed by a deploy restarting the API pod.
-    actor: "demo-owner@example.org"
-    target: "KaveonTelemetry.events.daily_user_activity"
+    actor: ""
+    target: ""
     # Bounds one build. Generous, because the work is one scan per grouping and
     # a ten-axis shape is fifty-five of them; the maintenance resource group is
     # what keeps that off the interactive path, not this.

@@ -1,7 +1,7 @@
 name: Demo images
 
 # Publishes multi-architecture images for the public demo host to GHCR:
-# ghcr.io/<owner>/kaveon-engine and kaveon-api, tagged :demo and :sha-<commit>.
+# ghcr.io/<owner>/kaveon-engine, kaveon-api and kaveon-studio, tagged :demo and :sha-<commit>.
 # Each architecture builds natively on its own runner (no emulation; a Rust
 # release build under QEMU takes an hour), then one manifest joins them so the
 # same tag serves an Oracle A1 (arm64) host and an amd64 host alike.
@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [engine, api]
+        image: [engine, api, studio]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -43,6 +43,9 @@ jobs:
           - image: api
             context: .
             file: api/Dockerfile
+          - image: studio
+            context: .
+            file: studio/Dockerfile
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -95,7 +98,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        image: [engine, api]
+        image: [engine, api, studio]
     steps:
       - uses: actions/checkout@v4
         with:

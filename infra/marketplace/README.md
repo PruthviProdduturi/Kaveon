@@ -1,31 +1,28 @@
 # Kaveon Azure Marketplace package
 
-This directory is the boundary for the future one-click Azure deployment. The
-Marketplace package must orchestrate the already-supported PostgreSQL-free
-stack; it must not revive the retired Container Apps or PostgreSQL templates.
+The installation should end with an **Open Kaveon** link, a successful first administrator sign-in and a query in SQL Lab against the customer's own lake.
 
 ## Customer experience
 
-The customer supplies only the Azure region, resource-group name, ADLS
-account/container, administrator identity, worker sizing, and optional
-hostname. The package then creates or validates the resource group, ACR, AKS,
-managed identities, Key Vault, network policy, Engine, API, Studio, catalog
-bootstrap, ingress/TLS configuration, and a deployment receipt containing the
-Studio URL and health status.
+[Open the installation preview in Azure](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fcodex%2Fazure-install-preview%2Finfra%2Fmarketplace%2FmainTemplate.json). Select a subscription, resource group, region and installation name. By default the signed-in user receives cluster administration and the Kaveon Admin role. The Azure-generated form allows a different Kaveon Admin user or group. The default configuration provisions two system nodes, at least one worker and a Standard public IP. Review these billable resources before selecting **Create**.
+
+With directory provisioning enabled, the template reserves a DNS name in the customer's resource group, registers the Studio callback for that name in the customer's Entra tenant, and assigns the initial Admin. Outputs include the reserved IP name and non-secret Helm identity values. Directory permissions are required to register the app and assign roles. A tenant that restricts delegated consent may also require approval of Kaveon's own API scope.
+
+**Preview boundary.** The template provisions the foundation. An operator still deploys the images and Helm releases, attaches ingress to the reserved IP, obtains the HTTPS certificate and verifies first sign-in and SQL execution. The planned Studio origin in deployment outputs only identifies the address. A searchable Marketplace listing is a separate publication step.
 
 ## Open the infrastructure form in Azure Portal
 
-Compile the resource-group template from the repository root.
+To use the manual portal editor, load the checked-in mainTemplate.json. To rebuild it from Bicep, run the following from the repository root.
 
     az bicep build --file infra/marketplace/main.bicep --outfile mainTemplate.json
 
-In Azure Portal, choose **Create a resource**, search for **Template deployment (deploy using custom templates)**, then select **Create → Build your own template in the editor → Load file**. Load the compiled JSON and select **Save**. Azure generates a parameter form. Choose the subscription, resource group, environment, AKS administrator object ID and capacity. Review the resource changes before creating them. The AKS administrator object ID controls cluster administration; the directory bootstrap below assigns Kaveon product roles.
+In Azure Portal, choose **Create a resource**, search for **Template deployment (deploy using custom templates)**, then select **Create → Build your own template in the editor → Load file**. Load the compiled JSON and select **Save**. The portal generates a parameter form. Select the subscription, resource group, environment and capacity.
 
 For the designed Marketplace form, preview `createUiDefinition.json` in the Azure Create UI Definition sandbox. The custom deployment editor accepts the compiled ARM template. Completing that form provisions infrastructure; publishing images, installing the Helm releases and configuring sign-in are subsequent steps.
 
 ## First installation in a Microsoft Entra tenant
 
-Run the directory bootstrap from the repository root using an Azure CLI login in the customer's tenant. Use the final HTTPS Studio origin. A directory administrator supplies the initial Admin group or an enabled user's object ID. The command previews the changes. Repeat with `--apply` to provision them. Add `--grant-consent` when the directory administrator wants to grant delegated consent for Kaveon's own API.
+For installations provisioned without the portal's directory module, run the directory bootstrap from the repository root using an Azure CLI login in the customer's tenant. Use the final HTTPS Studio origin. A directory administrator supplies the initial Admin group or an enabled user's object ID. The command previews the changes. Repeat with `--apply` to provision them. Add `--grant-consent` when the directory administrator wants to grant delegated consent for Kaveon's own API. Installations created with the directory module already have their tenant and client ID in the entraHelmValues output.
 
 ```sh
 python scripts/install-entra.py --tenant "$TENANT_ID" --origin "https://studio.example.org" --group "Admin=$ADMIN_GROUP_ID" --catalog-group "OpenSource=$ANALYTICS_GROUP_ID" --output kaveon-directory.json
@@ -84,10 +81,4 @@ In this example the application group is `rg-kaveon-dev` and the AKS-managed nod
 - `createUiDefinition.json` is the Marketplace-style portal form with explicit
   worker and NAT cost choices.
 
-This package intentionally stops before Helm because image digests, Engine TLS,
-Key Vault references, Entra configuration, and customer-specific ingress must
-be supplied through the deployment environment rather than embedded in a
-public ARM parameter file. The next automation layer must consume the Bicep
-outputs and invoke the existing digest-pinned Helm workflows; it must never
-deploy `latest`, store secrets in parameters, or create a database authority
-outside KaveonDB.
+The remaining installer work is to deploy a versioned Engine, API and Studio release using the template outputs, provision its runtime credentials and TLS, and bootstrap the first lake catalog. A release rehearsal must start in an empty resource group and exercise sign-in and SQL Lab through the public Studio URL.

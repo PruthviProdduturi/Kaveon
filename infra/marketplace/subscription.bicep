@@ -17,6 +17,7 @@ module foundation 'main.bicep' = {
   params: {
     environment: environment
     location: location
+    configureDirectory: false
     operatorObjectId: operatorObjectId
   }
 }
