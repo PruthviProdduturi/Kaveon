@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [
+      { "name": "location", "type": "Microsoft.Common.Location", "label": "Azure region", "defaultValue": "westus2", "toolTip": "Keep Kaveon, ADLS and the registry in the same region." },
+      { "name": "operatorObjectId", "type": "Microsoft.Common.TextBox", "label": "Initial administrator object ID", "toolTip": "Microsoft Entra object ID granted AKS administrator access.", "constraints": { "required": true, "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "validationMessage": "Enter a Microsoft Entra object ID." } },
+      { "name": "storageAccountName", "type": "Microsoft.Common.TextBox", "label": "ADLS Gen2 account name", "toolTip": "Globally unique, 3–24 lowercase letters and numbers.", "constraints": { "required": true, "regex": "^[a-z0-9]{3,24}$", "validationMessage": "Use 3–24 lowercase letters and numbers." } },
+      { "name": "registryName", "type": "Microsoft.Common.TextBox", "label": "Container Registry name", "toolTip": "Globally unique, 5–50 alphanumeric characters.", "constraints": { "required": true, "regex": "^[a-zA-Z0-9]{5,50}$", "validationMessage": "Use 5–50 alphanumeric characters." } }
+    ],
+    "steps": [
+      { "name": "capacity", "label": "Capacity and cost", "subLabel": "Budget-safe defaults", "elements": [
+        { "name": "nodeSize", "type": "Microsoft.Common.DropDown", "label": "Worker size", "defaultValue": "Standard_B2s", "constraints": { "allowedValues": [ { "label": "B2s — budget default", "value": "Standard_B2s" }, { "label": "D2s v5 — performance", "value": "Standard_D2s_v5" } ] } },
+        { "name": "maxWorkers", "type": "Microsoft.Common.Slider", "label": "Maximum workers", "defaultValue": 2, "min": 1, "max": 4, "step": 1, "showStepMarkers": true },
+        { "name": "enableNatGateway", "type": "Microsoft.Common.CheckBox", "label": "Dedicated NAT Gateway", "defaultValue": false, "toolTip": "Adds a billable NAT Gateway and public IP." }
+      ] }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "storageAccountName": "[basics('storageAccountName')]",
+      "registryName": "[basics('registryName')]",
+      "operatorObjectId": "[basics('operatorObjectId')]",
+      "nodeSize": "[steps('capacity').nodeSize]",
+      "minWorkers": 1,
+      "maxWorkers": "[steps('capacity').maxWorkers]",
+      "enableNatGateway": "[steps('capacity').enableNatGateway]"
+    }
+  }
+}

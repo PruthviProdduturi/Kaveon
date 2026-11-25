@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "westus2" },
+    "storageAccountName": { "value": "" },
+    "registryName": { "value": "" },
+    "operatorObjectId": { "value": "" },
+    "nodeSize": { "value": "Standard_B2s" },
+    "minWorkers": { "value": 1 },
+    "maxWorkers": { "value": 2 },
+    "enableNatGateway": { "value": false }
+  }
+}

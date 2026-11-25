@@ -29,3 +29,20 @@ Studio URL and health status.
 Until these artifacts and a clean-subscription rehearsal pass, this is not yet
 a Marketplace-ready one-click offer. The supported operator path remains the
 AKS Bicep template plus the two reviewed Helm deployment workflows.
+
+## Current package contents
+
+- `main.bicep` creates secure ADLS Gen2 containers and ACR, then invokes the
+  supported AKS infrastructure template.
+- `main.parameters.json` is a deployment example; replace the empty globally
+  unique names and administrator object ID before deployment.
+- `createUiDefinition.json` is the Marketplace-style portal form with explicit
+  worker and NAT cost choices.
+
+This package intentionally stops before Helm because image digests, Engine TLS,
+Key Vault references, Entra configuration, and customer-specific ingress must
+be supplied through the deployment environment rather than embedded in a
+public ARM parameter file. The next automation layer must consume the Bicep
+outputs and invoke the existing digest-pinned Helm workflows; it must never
+deploy `latest`, store secrets in parameters, or create a database authority
+outside KaveonDB.
