@@ -31,7 +31,7 @@ export default function DataSourcesDocs() {
       <p>
         Go to <strong>Data Sources → + Add Data Source</strong>, fill in a unique name, the type, database name,
         connection string, region (<code>WW</code> / <code>EU</code> for residency tracking), and an optional description.
-        Click <strong>Test Connection</strong>, then <strong>Save</strong>.
+        Save the source, then verify it with a read through SQL Lab.
       </p>
       <Callout type="note">MySQL is implemented in the API but is not currently exposed in Studio&rsquo;s source-type picker. StarRocks is exposed separately and uses the MySQL wire protocol.</Callout>
 

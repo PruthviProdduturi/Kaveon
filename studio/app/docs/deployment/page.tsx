@@ -12,8 +12,7 @@ export default function DeploymentDocs() {
       <thead><tr><th>Installation</th><th>Studio and API</th><th>Engine and storage</th></tr></thead>
       <tbody>
         <tr><td>Local Docker or Linux VM</td><td>Compose runs Studio and the API on the same host. A shared VM needs an HTTPS endpoint and configured sign-in.</td><td>Coordinator and two workers. Local files are mounted at <code>/data</code>. The coordinator uses a persistent volume for its catalog.</td></tr>
-        <tr><td>AKS</td><td>The platform Helm chart runs Studio and the API. Route public HTTPS to Studio and keep the API service private.</td><td>The Engine Helm chart runs the coordinator and workers. Workload identity grants access to the configured ADLS containers.</td></tr>
-        <tr><td>Studio on Vercel</td><td>Vercel hosts Studio. Configure its server-side proxy with an API endpoint it can securely reach.</td><td>The API and Engine run on separate compute. A private Kubernetes service address requires a network path from the Studio host.</td></tr>
+        <tr><td>Azure Kubernetes Service (AKS)</td><td>The platform Helm chart runs Studio and the API. Route public HTTPS to Studio and keep the API service private.</td><td>The Engine Helm chart runs the coordinator and workers. Workload identity grants access to the configured ADLS containers.</td></tr>
       </tbody>
     </table>
 
