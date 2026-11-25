@@ -9,7 +9,7 @@ export default function ArchitectureDocs() {
 
       <Callout type="note"><strong>Status vocabulary:</strong> Available means the capability is implemented and qualified in the declared local Docker scope. Cloud qualification is called out separately where it remains staged. Target means approved architecture that is not yet implemented.</Callout>
 
-      <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Kaveon architecture showing Studio, DLM, and Engine with current and target boundaries" caption="Kaveon Intelligence is the governed capability across all three pillars. Solid connections are current; explicitly labeled target connections are roadmap architecture. Open the diagram for a full-size view." />
+      <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Studio routes questions to the DLM, lake queries to the Engine, and product edits to KaveonDB" caption="A question can finish in compiled context or continue as SQL. Saving the resulting chart uses the KaveonDB transaction path." />
 
       <h2>Runtime boundaries</h2>
       <table>

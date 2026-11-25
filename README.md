@@ -7,11 +7,21 @@
 
 # Talk to your data
 
-Kaveon is an open-source analytics workspace for data you own. Ask a question in plain English, inspect the SQL behind an answer, or build a dashboard over the same dataset. The distributed Rust engine reads Parquet and Delta tables in place.
+Kaveon brings a **deterministic Data Language Model**, a **distributed SQL engine**, and an **analytics studio** together over data you own. Define what a metric means once, ask about it in chat, and use the same definition in a chart or dashboard.
 
 [Open Studio](https://kaveon.io) · [Read the docs](https://kaveon.io/docs) · [Run locally](#run-locally)
 
-![The Climate × Energy Impact dashboard in Kaveon Studio, with country and year filters, a warming trend and energy comparisons.](studio/public/showcase/energy-dark.png)
+## Inside Kaveon
+
+[![Kaveon Studio routes questions to the DLM, lake queries to distributed Engine workers, and product edits to KaveonDB.](docs/reference/kaveon-platform-architecture.svg)](docs/reference/kaveon-platform-architecture.svg)
+
+Suppose your dataset defines **sessions** as a metric and **country** as a dimension. Here is what happens when you ask *“Which three countries had the most sessions?”*
+
+- **Ask in Studio.** The DLM resolves the question against the dataset’s vocabulary. If fresh compiled context covers the breakdown, it can return the top three without scanning the lake. Otherwise, supported questions can take the live SQL path. The DLM uses no hosted language model.
+- **Run SQL.** Generated SQL and statements you write in SQL Lab can use the same lake execution path. The Rust coordinator plans the work. Workers read Parquet or Delta, exchange Arrow batches when rows need repartitioning, and return the result.
+- **Save the work.** Saving a chart or editing a dashboard commits a versioned product record in KaveonDB. The underlying lake table stays where it is.
+
+[Architecture](ARCHITECTURE.md) · [Engine manual](https://kaveon.io/docs/engine) · [CLI guide](docs/guides/engine-cli.md) · [Project status](STATUS.md)
 
 ## Run locally
 
@@ -30,16 +40,6 @@ SELECT 1 AS ready;
 ```
 
 You should see one row with the value `1`. To query your own files, restart the launcher with `--data /absolute/path/to/warehouse`, then register a table under the mounted `/data` directory. [Local quickstart](https://kaveon.io/docs/quickstart)
-
-## How a question becomes an answer
-
-| Component | What it does |
-| --- | --- |
-| **Data Language Model (DLM)** | Compiles a dataset’s metrics, dimensions and vocabulary. For supported questions it can answer from precomputed context or generate SQL for live execution. This path uses no hosted model. |
-| **Kaveon Engine** | Plans SQL and distributes work across Arrow-based workers. Workers can exchange partitions for joins and grouped aggregates. KaveonDB stores product records such as saved queries, charts and dashboards. |
-| **Kaveon Studio** | Gives analysts one workspace for chat, catalog discovery, SQL Lab, charts and dashboards. A team can reuse a metric defined on a dataset across multiple views. |
-
-[Architecture](ARCHITECTURE.md) · [Engine manual](https://kaveon.io/docs/engine) · [CLI guide](docs/guides/engine-cli.md) · [Project status](STATUS.md)
 
 ## Deploy
 

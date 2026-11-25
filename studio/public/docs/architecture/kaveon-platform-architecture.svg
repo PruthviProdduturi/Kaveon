@@ -1,33 +1,71 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="platform-title platform-desc">
-  <title id="platform-title">Kaveon product architecture</title>
-  <desc id="platform-desc">Kaveon combines the shipping Studio and deterministic DLM with a separate alpha Engine. Solid connectors are current; dashed connectors mark planned Engine integration and lake support.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="480" viewBox="0 0 920 480" role="img" aria-labelledby="title desc">
+  <title id="title">Inside Kaveon</title>
+  <desc id="desc">Studio sends requests through its authenticated API. The Data Language Model resolves questions against compiled dataset context and can return an answer or generate SQL. The Engine distributes lake queries across workers reading Parquet or Delta. KaveonDB commits product edits as versioned records.</desc>
   <defs>
-    <marker id="platform-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker>
+    <linearGradient id="surface" x2="1" y2="0" gradientUnits="objectBoundingBox">
+      <stop stop-color="#101c29"/><stop offset="1" stop-color="#10151d"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+      <path d="m1 1 4.5 2.5L1 6" fill="none" stroke="#8ea0b4" stroke-width="1.3"/>
+    </marker>
     <style>
-      .eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 28px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 20px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 13px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.rule{stroke:#263244;stroke-width:1}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#platform-arrow)}.target{stroke-dasharray:7 8;animation:platform-flow 3s linear infinite}@keyframes platform-flow{to{stroke-dashoffset:-30}}@media(prefers-reduced-motion:reduce){.target{animation:none}}
+      text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .heading{font-size:22px;font-weight:650;fill:#f2f6fa}
+      .label{font-size:17px;font-weight:600;fill:#e1e8ef}
+      .detail{font-size:16px;fill:#aec0cf}
+      .route{fill:none;stroke:#6e8196;stroke-width:1.6}
+      .icon{fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
     </style>
   </defs>
-  <rect width="1440" height="900" rx="24" fill="#0b0f15"/>
-
-  <g transform="translate(622.125 20) scale(.15)" fill="#f8fafc">
-    <rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/><path d="M260 235 330 70h20l70 165h-23l-57-131-57 131Z"/><path d="M465 70h23l57 131 57-131h23l-70 165h-20Z"/><rect x="675" y="70" width="20" height="165"/><rect x="675" y="70" width="130" height="20"/><rect x="675" y="142.5" width="108" height="20"/><rect x="675" y="215" width="130" height="20"/><rect x="1060" y="70" width="20" height="165"/><rect x="1195" y="70" width="20" height="165"/><polygon points="1062.53,83.3 1197.53,235 1212.47,221.7 1077.47,70"/><path d="M966.25 215.29A72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20"/>
+  <rect x="1" y="1" width="918" height="478" rx="18" fill="#0d1218" stroke="#35414d"/>
+  <path d="M19 1h882q18 0 18 18v86H1V19Q1 1 19 1Z" fill="url(#surface)"/>
+  <path d="M1 105h918" stroke="#303c49"/>
+  <!-- Studio is the common entry point. The three branches describe different requests. -->
+  <g transform="translate(33 31)" class="icon" color="#75baff">
+    <rect x="0" y="0" width="37" height="31" rx="5"/><path d="M1 9h35M10 10v20"/>
   </g>
-  <text x="720" y="76" text-anchor="middle" class="note">Talk to your data.</text>
-  <text x="720" y="112" text-anchor="middle" class="title">The Unified Data Intelligence Platform</text>
-  <line x1="64" y1="140" x2="1376" y2="140" class="rule"/>
+  <text x="90" y="54" font-size="32" font-weight="650" fill="#f4f7fa">Kaveon Studio</text>
+  <text x="91" y="82" class="detail">Chat, SQL Lab, charts and dashboards</text>
+  <text x="883" y="58" text-anchor="end" class="label">Authenticated Studio API</text>
 
-  <text x="64" y="180" class="eyebrow">PRODUCT PILLARS</text>
-  <g transform="translate(64 204)"><rect width="400" height="178" rx="16" class="box"/><rect width="4" height="178" rx="2" fill="#4A9EE8"/><text x="28" y="44" class="heading">Studio</text><text x="28" y="74" class="body">The intelligence surface</text><line x1="28" y1="98" x2="372" y2="98" class="rule"/><text x="28" y="128" class="body">Ask · SQL Lab · datasets</text><text x="28" y="154" class="body">Charts · dashboards · collaboration</text><text x="372" y="44" text-anchor="end" class="eyebrow">LIVE</text></g>
-  <g transform="translate(520 204)"><rect width="400" height="178" rx="16" class="box"/><rect width="4" height="178" rx="2" fill="#78859a"/><text x="28" y="44" class="heading">DLM</text><text x="28" y="74" class="body">Deterministic data language</text><line x1="28" y1="98" x2="372" y2="98" class="rule"/><text x="28" y="128" class="body">Compiled context · intent routing</text><text x="28" y="154" class="body">Context answers · inspectable SQL</text><text x="372" y="44" text-anchor="end" class="eyebrow">LIVE</text></g>
-  <g transform="translate(976 204)"><rect width="400" height="178" rx="16" class="box accent"/><rect width="4" height="178" rx="2" fill="#4A9EE8"/><text x="28" y="44" class="heading">Engine</text><text x="28" y="74" class="body">The analytical compute core</text><line x1="28" y1="98" x2="372" y2="98" class="rule"/><text x="28" y="128" class="body">Rust · Arrow · vectorized execution</text><text x="28" y="154" class="body">Direct Parquet · distributed target</text><text x="372" y="44" text-anchor="end" class="eyebrow">ALPHA</text></g>
+  <path d="M51 105v306" class="route"/>
+  <g class="route" marker-end="url(#arrow)">
+    <path d="M51 168h146"/><path d="M51 292h146"/><path d="M51 411h146"/>
+    <path d="M510 168h61"/><path d="M510 292h61"/><path d="M510 411h61"/>
+    <path d="M240 201v52"/>
+  </g>
+  <g fill="#0d1218" stroke="#7cbfff" stroke-width="2">
+    <circle cx="51" cy="168" r="4"/><circle cx="51" cy="292" r="4"/>
+    <circle cx="51" cy="411" r="4" stroke="#63cbb8"/>
+  </g>
+  <g class="label">
+    <text x="67" y="155">Ask</text><text x="67" y="279">Query</text><text x="67" y="398">Save</text>
+  </g>
 
-  <path d="M264 382v50" class="flow"/><path d="M720 382v50" class="flow"/><path d="M1176 382v50" class="flow target"/>
-  <text x="64" y="432" class="eyebrow">CONTROL PLANE</text>
-  <g transform="translate(64 456)"><rect width="1312" height="126" rx="16" class="box"/><text x="32" y="42" class="heading">Unified control plane</text><text x="32" y="72" class="body">FastAPI gateway · identity and RBAC · catalog · semantic metadata · DLM artifacts · query lifecycle</text><line x1="32" y1="94" x2="1280" y2="94" class="rule"/><text x="32" y="116" class="note">CURRENT · STUDIO + API + DLM</text><text x="1280" y="116" text-anchor="end" class="note">TARGET · ENGINE INTEGRATION</text></g>
+  <g transform="translate(210 144)" class="icon" color="#7cbfff">
+    <path d="M2 10 23 1l21 9-21 9Zm0 8 21 9 21-9M2 26l21 9 21-9"/>
+  </g>
+  <text x="273" y="162" class="heading">Data Language Model</text>
+  <text x="273" y="188" class="detail">Resolve metrics and dimensions</text>
+  <text x="586" y="162" class="label">Answer from context</text>
+  <text x="586" y="188" class="detail">Use a precomputed answer when fresh.</text>
+  <text x="255" y="233" class="detail" fill="#7cbfff">Generated SQL</text>
 
-  <path d="M396 582v58" class="flow"/><path d="M1044 582v58" class="flow target"/>
-  <text x="64" y="640" class="eyebrow">CUSTOMER DATA PLANE</text>
-  <g transform="translate(64 664)"><rect width="620" height="166" rx="16" class="box"/><text x="30" y="44" class="heading">Registered SQL sources</text><text x="30" y="74" class="body">Fabric SQL · Azure SQL · StarRocks · MySQL via API</text><line x1="30" y1="100" x2="590" y2="100" class="rule"/><text x="30" y="130" class="note">CURRENT · ONE SELECTED SOURCE PER QUERY</text><text x="30" y="150" class="note">POSTGRESQL · LEGACY CONNECTOR · CLOUD CUTOVER QUALIFICATION REQUIRED</text></g>
-  <g transform="translate(724 664)"><rect width="652" height="166" rx="16" class="box accent"/><text x="30" y="44" class="heading">Live Lake Path</text><text x="30" y="74" class="body">Query data in place · no mandatory import</text><line x1="30" y1="100" x2="622" y2="100" class="rule"/><text x="30" y="130" class="note">CURRENT · LOCAL PARQUET</text><text x="30" y="150" class="note">TARGET · ADLS GEN2 · S3 · DELTA LAKE · ICEBERG</text></g>
-  <text x="64" y="866" class="note">SOLID · SHIPPING CONNECTION</text><text x="242" y="866" class="note">DASHED · TARGET INTEGRATION</text><text x="1376" y="866" text-anchor="end" class="eyebrow">YOUR ACCOUNT · YOUR STORAGE · YOUR CONTROL</text>
+  <g transform="translate(210 270)" class="icon" color="#7cbfff">
+    <path d="M23 10v8M4 24v-6h38v6"/><rect x="17" width="12" height="10" rx="2"/>
+    <rect x="0" y="24" width="9" height="9" rx="2"/><rect x="19" y="24" width="9" height="9" rx="2"/><rect x="38" y="24" width="9" height="9" rx="2"/><path d="M23 18v6"/>
+  </g>
+  <text x="273" y="286" class="heading">Kaveon Engine</text>
+  <text x="273" y="312" class="detail">Coordinator and Arrow workers</text>
+  <text x="586" y="286" class="label">Read lake tables in place</text>
+  <text x="586" y="312" class="detail">Parquet and Delta on local disk or ADLS.</text>
+
+  <path d="M86 351h796" stroke="#2c3742"/>
+  <g transform="translate(212 389)" class="icon" color="#63cbb8">
+    <ellipse cx="20" cy="7" rx="18" ry="6"/><path d="M2 7v22c0 8 36 8 36 0V7M2 18c0 8 36 8 36 0"/>
+  </g>
+  <text x="273" y="405" class="heading">KaveonDB</text>
+  <text x="273" y="431" class="detail">Commit a product edit</text>
+  <text x="586" y="405" class="label">Versioned product records</text>
+  <text x="586" y="431" class="detail">Datasets, saved queries, charts, dashboards.</text>
 </svg>
