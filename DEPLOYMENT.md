@@ -1,77 +1,18 @@
-# Kaveon — Deployment Guide
+# Deploy Kaveon
 
-> **Stack:** Vercel (kaveon-studio) + Azure Container Apps (kaveon-api) + KaveonDB (native catalog, transaction log, and product state)
-> **Live:** [kaveon.io](https://kaveon.io)
+A self-hosted installation runs Studio, the platform API, the Engine coordinator and its workers in your environment. Studio exposes the browser interface. Its authenticated server-side proxy calls the API over the private network.
 
----
+| Environment | How to install |
+| --- | --- |
+| Local Docker | Run `bash scripts/kaveon-up.sh` from a checkout. Open Studio on port 3000 and run `SELECT 1 AS ready;` in SQL Lab. [Quickstart](https://kaveon.io/docs/quickstart) |
+| Linux VM | Use Docker Compose, a persistent disk, configured sign-in and an HTTPS reverse proxy for Studio. [Self-hosting guide](docs/guides/self-hosting.md) |
+| Azure Kubernetes Service | Provision the cluster, storage and Microsoft Entra registration with the [guided Azure preview](https://kaveon.io/docs/installation#azure). Install the Engine Helm release, then the platform release containing the API and Studio. |
+| AWS | Coming soon. |
 
-## Shipping Studio + API deployment
+## Verify an Azure installation
 
-```mermaid
-flowchart TD
-    B["🌐 Browser"]
-    V["▲ Vercel · kaveon-studio<br/><small>NextAuth: GitHub / Google / Entra<br/>/api/kaveon proxy → X-User-* + secret</small>"]
-    A["⚙️ Azure Container Apps · kaveon-api<br/><small>KaveonDB client / DefaultAzureCredential</small>"]
-    K[("🗄️ KaveonDB<br/><small>catalog + product state + DLM records</small>")]
-    L[("📦 customer lake<br/><small>Parquet / Delta / Iceberg</small>")]
-    X[("🔌 registered data sources")]
-    B --> V --> A
-    A --> K
-    A --> L
-    A --> X
-```
+1. Configure Studio ingress for the reserved hostname, attach a valid HTTPS certificate and open Studio.
+2. Sign in with the assigned Microsoft Entra administrator. Run `SELECT 1 AS ready;` in SQL Lab to verify the coordinator can execute a statement.
+3. Register a lake table and sample its rows to verify the storage identity and data path. Save a chart and reopen it to verify product persistence.
 
-Vercel hosts the Next.js frontend. Azure Container Apps hosts the FastAPI backend. KaveonDB owns the catalog, product state, DLM definitions/runs, query records, and transactional metadata; analytical data remains in customer-controlled Parquet/Delta/Iceberg storage and is read by the Engine. Registered external SQL sources are optional passthrough connectors, not hidden application dependencies. IaC lives in `infra/bicep/`.
-
-## Full Walkthrough
-
-The retired database deployment is not a supported path. Use
-**[docs/guides/azure-production-deployment.md](docs/guides/azure-production-deployment.md)**
-for the AKS infrastructure, the Engine and platform Helm charts for runtime
-installation, and the reviewed GitHub Actions workflows for immutable-image
-deployment. The [local-stack guide](docs/guides/local-stack.md) remains the
-canonical local path. The old database migration guide is historical context
-only and must not be used to provision a runtime authority.
-
-1. **KaveonDB and lake storage** — configure the native catalog and customer-owned Parquet/Delta/Iceberg roots
-2. **Azure Container Registry** — build and push the API and Engine images
-3. **Azure Container Apps** — deploy kaveon-api and the Engine bridge via Bicep
-4. **Vercel** — deploy kaveon-studio and configure OAuth/provider env vars
-5. **Wire together** — configure callback URLs, proxy identity, allowed origins, and secrets
-6. **Verify** — sign in, inspect the catalog, run SQL, and build a chart
-
-The checked-in automation is split across two workflows: `.github/workflows/deploy.yml`
-builds and deploys the API on pushes to `dev`, while `.github/workflows/ci.yml` deploys
-Studio to Vercel after its web job on pushes to `dev`. Both depend on repository secrets;
-see [configuration reference](docs/reference/configuration.md).
-
-## Auth Flow
-
-The recommended production path sends browser traffic through Vercel. `kaveon-studio`'s `/api/kaveon/*` route reads the NextAuth session server-side and forwards `X-User-*` headers to the Container App, stamped with `KAVEON_PROXY_SECRET`. See [SECURITY.md](SECURITY.md) for provider bearer-token access, the explicitly configured development-only identity bypass, and current hardening gaps. Kaveon has no local-password authentication.
-
-## Engine deployment
-
-`engine/docker-compose.yml` starts one coordinator and two workers against a shared local volume. It validates packaging, node discovery, heartbeats, stage scheduling, Arrow exchange/shuffle, bounded retries, and node-local Parquet/Delta queries. Populate the shared data volume before starting the stack; the repository does not ship production data. Production deployments must add the configured Engine authentication/TLS boundary and durable customer storage.
-
-```bash
-cd engine
-docker compose up --build
-```
-
-See [ARCHITECTURE.md](ARCHITECTURE.md#delivery-topology) for current-versus-target behavior.
-
-## Operational gaps
-
-- The Container App Bicep module enables public ingress. Restrict ingress to the
-  trusted Studio/proxy path before treating the topology as hardened production.
-- Legacy SQL connector infrastructure, if enabled for a migration, must be
-  isolated from the native KaveonDB authority and removed after reconciliation.
-- The deployment does not provision Redis. Without `REDIS_URL`, rate limiting and
-  query/job state are process-local and do not coordinate across replicas.
-- Engine execution state is separate from KaveonDB product state; query cancellation
-  is propagated through the Engine bridge, while durable product/query records are
-  committed by the API in KaveonDB.
-
----
-
-*See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [API reference](docs/reference/api.md) · [configuration reference](docs/reference/configuration.md) · [infra/bicep/](infra/bicep/) · [studio/vercel.json](studio/vercel.json)*
+Keep the API and coordinator private. Back up the coordinator catalog volume as well as the product store. [Authentication](https://kaveon.io/docs/auth) · [Operations and recovery](https://kaveon.io/docs/operations) · [Troubleshooting](https://kaveon.io/docs/troubleshooting)

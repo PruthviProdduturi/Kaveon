@@ -14,8 +14,7 @@ export default function StudioDocs() {
       <p>
         Studio is the user-facing surface of Kaveon. It authenticates the user, sends trusted requests through
         the platform proxy, and presents results from the KaveonDB transactional plane, the distributed Engine,
-        or a deterministic DLM context artifact. Hosting is portable: Studio can run on Vercel or as a container
-        in the same AKS or VM deployment as the API and Engine.
+        or a deterministic DLM context artifact. Studio runs alongside the API and Engine in your Docker Compose or AKS deployment.
       </p>
 
       <h2>Choose the surface</h2>
@@ -36,8 +35,7 @@ export default function StudioDocs() {
       <p>
         The browser session never supplies trusted identity headers. Studio resolves the authenticated session
         server-side, calls the API through <code>/api/kaveon/*</code>, and the proxy stamps the verified principal
-        before the API routes work to KaveonDB, the DLM, or the Engine. The same contract works when Studio is
-        hosted by Vercel or by the AKS portal chart.
+        before the API routes work to KaveonDB, the DLM, or the Engine.
       </p>
       <Callout type="note">
         Studio is the product experience; it is not the storage engine. Product records are committed through
@@ -47,7 +45,7 @@ export default function StudioDocs() {
 
       <h2>Deploy Studio</h2>
       <p>
-        For a local run, use <a href="/docs/quickstart">Quickstart</a>. For Vercel, AKS, or a Linux
+        For a local run, use <a href="/docs/quickstart">Quickstart</a>. For AKS or a Linux
         VM, follow <a href="/docs/installation">Deploy Kaveon</a>, then verify the request path in
         <a href="/docs/deployment">Deployment topology</a> and <a href="/docs/operations">Operations</a>.
       </p>

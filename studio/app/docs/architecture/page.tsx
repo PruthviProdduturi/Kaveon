@@ -25,7 +25,7 @@ export default function ArchitectureDocs() {
       <Code lang="text">{`Browser
   │ same-origin Auth.js session
   ▼
-Kaveon Studio (Vercel, AKS, or VM)
+Kaveon Studio (local Docker, Linux VM or AKS)
   │ /api/kaveon/* proxy · authenticated identity headers
   ▼
 Platform API + DLM (FastAPI)
@@ -43,7 +43,7 @@ Coordinator: durable catalog → SQL → optimizer → stage graph
 Versioned fragments → worker tasks → Arrow IPC exchanges
   ▼
 local Parquet / Delta splits → root Arrow result`}</Code>
-      <p>The Engine executes distributed scans, partial and final aggregates, Sort/TopN, and repartitioned or broadcast joins, with retry, cancellation, exchange cleanup and bounded Sort/TopN spill. A cube-shaped aggregate skips execution entirely and is answered from precomputed cells and HyperLogLog sketches; the record says which lane a statement took. Parquet and Delta on declared ADLS Gen2 datasets are qualified, while the cloud deployment gate remains staged. S3, Iceberg deployment, aggregate and join spill, and engine HTTP authentication with TLS remain target work.</p>
+      <p>The Engine executes distributed scans, partial and final aggregates, Sort/TopN, and repartitioned or broadcast joins, with retry, cancellation, exchange cleanup and bounded Sort/TopN spill. A cube-shaped aggregate skips execution entirely and is answered from precomputed cells and HyperLogLog sketches; the record says which lane a statement took. Parquet and Delta on declared ADLS Gen2 datasets are qualified, while the cloud deployment gate remains staged. Live S3 and broader Iceberg deployment qualification remain open. See the <a href="/docs/engine/distributed">distributed runtime</a> for spill and retry boundaries and the <a href="/docs/cli/install">CLI installation guide</a> for authenticated TLS connections.</p>
       <Callout type="warn">Internal exchange and catalog-mutation routes carry bearer tokens, but statement clients still have no end-user authentication, authorization or TLS of their own. In the reference deployment the Engine&rsquo;s ports are bound to localhost and only the API reaches them. Keep it behind a trusted boundary.</Callout>
 
       <h2>Data and control planes</h2>

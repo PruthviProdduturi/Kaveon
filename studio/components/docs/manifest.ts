@@ -35,7 +35,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     items: [
       { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"], status: "Stable" },
       { title: "Quickstart", href: "/docs/quickstart", description: "Start Docker Compose and run your first SQL query.", keywords: ["install", "start"], status: "Stable" },
-      { title: "Deploy Kaveon", href: "/docs/installation", description: "Run locally, provision Azure infrastructure, and bring Studio online. AWS deployment is coming soon.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "vercel", "azure", "aws"], status: "Reference" },
+      { title: "Deploy Kaveon", href: "/docs/installation", description: "Run locally, provision Azure infrastructure, and bring Studio online. AWS deployment is coming soon.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "azure", "aws"], status: "Reference" },
       { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions.", status: "Stable" },
     ],
   },

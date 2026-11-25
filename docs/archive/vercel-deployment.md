@@ -1,3 +1,5 @@
+> Historical showcase deployment. For customer installations, see [Deploy Kaveon](../../DEPLOYMENT.md).
+
 # Deploying kaveon-studio to Vercel
 
 `kaveon-studio` (Next.js 15) is an optional Vercel hosting path for the Studio frontend. The API and DLM run as long-lived containers on the chosen VM or AKS deployment, and the native KaveonDB profile stores product records in the configured local or ADLS-backed system store without PostgreSQL. A hosted migration deployment may still expose explicitly labelled legacy PostgreSQL authorities until its cutover evidence passes; verify that boundary before describing the deployment as native.

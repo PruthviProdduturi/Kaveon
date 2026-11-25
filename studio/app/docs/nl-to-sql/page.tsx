@@ -15,14 +15,14 @@ export default function NlToSqlDocs() {
         There is no hosted model call in either deterministic path, so there is no model-inference charge. Resolution is reproducible for the same request and context version; source results may change as data changes. Kaveon ships no hosted-model path at all.
       </Callout>
 
-      <Diagram src="/docs/architecture/kaveon-intelligence-loop.svg" alt="Natural-language intelligence and analytical compute paths in Kaveon" caption="The current DLM path resolves against registered SQL sources. Routing its compiled SQL into Kaveon Engine is target architecture, not a shipping integration." />
+      <Diagram src="/docs/architecture/kaveon-intelligence-loop.svg" alt="Natural-language intelligence and analytical compute paths in Kaveon" caption="Fresh context can answer a covered question directly. Live SQL for a native lake dataset runs on Kaveon Engine. Registered external databases use the API connection to that source." />
 
       <h2>The DLM — primary path</h2>
       <p>
         The primary engine is the <strong>DLM (Data Language Model)</strong>: a per-dataset compiled context artifact in
         the API (<code>api/dlm/</code>). It routes the question to a dataset, resolves the natural-language terms
         to columns and values, and — for the common shapes — returns a{" "}
-        <strong>precomputed answer with no database scan at all</strong>. Only novel slices touch the warehouse.
+        <strong>precomputed answer with no database scan at all</strong>. A supported slice outside the available context can run as a live query.
       </p>
       <Code lang="text">{`Question  →  POST /api/v1/dlm/ask
    route → which dataset · resolve terms → columns/values (value index)
@@ -30,7 +30,7 @@ export default function NlToSqlDocs() {
         ├─ precomputed shape?  →  ⚡ From context · no DB scan   (in-memory dict hit)
         │      totals · by-dimension · single-dimension filter
         │
-        └─ novel slice/combo   →  Live query · Xs   (assemble ONE warehouse query → cache)`}</Code>
+        └─ novel slice/combo   →  Live query · Xs   (generate SQL for the selected source)`}</Code>
       <p>
         Every answer is badged honestly — <strong>⚡ From context · no DB scan</strong> or{" "}
         <strong>Live query · Xs</strong> — with the real timing. Because the <code>kaveonmeta</code> context plane is

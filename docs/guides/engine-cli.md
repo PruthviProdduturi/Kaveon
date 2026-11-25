@@ -177,56 +177,23 @@ kaveon https://localhost:18443/OpenSource/nyc_taxi --ca-cert ./kaveon-ca.crt
 The [Azure deployment guide](../engineering/azure-deployment-guide.md) covers
 the certificate, Azure login and the full qualification procedure.
 
-### Connect to the production-shaped AKS Engine
+### Connect to an Engine on AKS
 
-The currently qualified cloud Engine is `kaveon-aks` in `kaveon-rg`. Studio
-on Vercel is a separate deployment; this command connects the CLI directly to
-the Engine through a local port-forward. It does not expose the coordinator to
-the public internet.
+Use the cluster, namespace and coordinator service supplied by the operator. The following PowerShell commands open a loopback port-forward. The Kubernetes identity needs permission to forward the service port.
 
 ```powershell
-az login
-az account set --subscription 00000000-0000-4000-8000-000000000000
-az aks get-credentials --resource-group kaveon-rg --name kaveon-aks --overwrite-existing
-kubelogin convert-kubeconfig -l azurecli
-
-# Keep this terminal open while using the CLI.
-kubectl --context kaveon-aks -n kaveon port-forward `
-  service/kaveon 18443:8080 --address 127.0.0.1
+az aks get-credentials --resource-group <resource-group> --name <cluster>
+kubectl -n <namespace> get services
+kubectl -n <namespace> port-forward service/<coordinator-service> 18443:8080 --address 127.0.0.1
 ```
 
-In a second terminal, obtain the operator token and CA bundle from the
-deployment's private credential handoff. Do not paste either value into a
-ticket, source file or shell transcript:
+Keep that terminal open. With a coordinator certificate valid for localhost, its trusted CA, and an Azure CLI login for the installation's tenant, use a second terminal:
 
 ```powershell
-$bundle = "tmp/kaveon-production-private-205"
-$tokens = Get-Content "$bundle/tokens.json" -Raw | ConvertFrom-Json
-$env:KAVEON_ACCESS_TOKEN = $tokens.principal
-$ca = (Resolve-Path "$bundle/ca.crt").Path
-$env:NO_PROXY = "localhost,127.0.0.1,::1"
-
-kaveon --server https://localhost:18443 `
-  --ca-cert $ca `
-  --catalog OpenSource --schema nyc_taxi
+kaveon --server https://localhost:18443 --ca-cert <ca-file> --auth azure-cli
 ```
 
-For a public installation, replace the private operator token with the
-Entra access token issued for the configured Kaveon API and use the public
-HTTPS hostname and its CA chain. The AKS deployment currently qualifies the
-Engine path; a public API/Ingress cutover for Vercel is a separate release
-step. Verify the connection before running a query:
-
-```sql
-SELECT 1;
-SHOW CATALOGS;
-SHOW SCHEMAS IN OpenSource;
-```
-
-The coordinator volume starts empty after a new AKS cluster is created. Run
-the [catalog restore](register-engine-catalog.md#restore-after-a-cluster-rebuild)
-from the API/curation job before using the `OpenSource` example; the CLI cannot
-discover a catalog that has not been registered.
+If the certificate covers a private DNS name instead, connect through that hostname over your private network. Run `SELECT 1;` to verify SQL and `SHOW CATALOGS;` to see the catalogs available to your principal.
 
 ## Authentication
 

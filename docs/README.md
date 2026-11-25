@@ -37,9 +37,8 @@ are planned rather than executable.
 - [Build dashboards](guides/dashboards.md)
 - [Run the OpenSource product showcase](guides/product-showcase.md)
 - [Natural-language query flow](guides/nl-to-sql.md)
-- [Deploy Studio to Vercel](guides/vercel-deployment.md)
 - [Restore the hosted demo cluster](guides/demo-cluster-restart.md) — why it is offline, what a restart costs, and the shape decision to make first
-- [Deploy the production Engine/API plane on AKS](engineering/azure-deployment-guide.md) — Vercel is an optional Studio hosting path, not the Engine deployment
+- [Deploy Kaveon](../DEPLOYMENT.md) — local Docker, Linux VM and Azure Kubernetes Service
 
 ## References
 

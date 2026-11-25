@@ -89,7 +89,4 @@ object-store reader and not qualified. The `Optimized` access pattern
 
 ## Deployment secrets
 
-GitHub workflows additionally expect Azure service-principal/subscription secrets
-for the API deployment and `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and
-`VERCEL_PROJECT_ID` for Studio deployment. Those values belong in the repository's
-secret store, not `.env` or Bicep parameter files committed to source control.
+For AKS, configure the Azure identity and registry permissions required by the selected deployment workflow. Install the Engine and platform charts in the same cluster. Store deployment credentials in the configured secret store. [Deploy Kaveon](../../DEPLOYMENT.md)

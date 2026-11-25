@@ -47,8 +47,7 @@ export default function SqlCompatibilityDocs() {
     <p>
       SQL support is independent of what the Engine can read. Local and object-store Parquet/Delta readers
       and a restricted Iceberg snapshot reader are implemented. Delta supports classic and multipart
-      checkpoints, while unsupported table features fail explicitly. Live ADLS/S3 qualification remains
-      pending. See{" "}
+      checkpoints, while unsupported table features fail explicitly. ADLS Gen2 has been verified on the declared lake datasets. Live S3 qualification is pending. See{" "}
       <a href="/docs/engine/storage">Storage &amp; Catalogs</a>.
     </p>
 

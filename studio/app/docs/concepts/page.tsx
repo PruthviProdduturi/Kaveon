@@ -116,7 +116,7 @@ SELECT count(*) FROM orders;`}</Code>
       <Diagram
         src="/docs/architecture/kaveon-intelligence-loop.svg"
         alt="Kaveon intelligence loop separating deterministic DLM and analytical compute paths"
-        caption="Natural-language resolution and analytical execution are complementary paths. Engine integration into the shipping Studio request path is target architecture."
+        caption="A supported question can use fresh dataset context or run SQL through the Engine against a registered lake table."
       />
       <p>
         Questions are resolved by the <strong>DLM</strong> — a compiled per-dataset context artifact — not by

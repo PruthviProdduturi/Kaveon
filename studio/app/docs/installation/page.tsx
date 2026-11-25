@@ -45,7 +45,7 @@ export default function InstallationDocs() {
     <Code lang="bash">{`docker compose ps
 curl -fsS http://localhost:8082/api/health
 curl -fsS http://localhost:8081/health`}</Code>
-    <p>Studio can also be hosted on Vercel if its server can securely reach the API. See <a href="/docs/deployment">Deployment topology</a> for service placement, <a href="/docs/auth">Auth &amp; RBAC</a> for identity, and <a href="/docs/operations">Operations</a> for backups and recovery.</p>
+    <p>See <a href="/docs/deployment">Deployment topology</a> for service placement, <a href="/docs/auth">Auth &amp; RBAC</a> for identity, and <a href="/docs/operations">Operations</a> for backups and recovery.</p>
 
     <Pager prev={{ href: "/docs/quickstart", title: "Quickstart" }} next={{ href: "/docs/concepts", title: "Core concepts" }} />
   </div>;

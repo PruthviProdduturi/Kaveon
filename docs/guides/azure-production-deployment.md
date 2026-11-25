@@ -1,6 +1,6 @@
 # Kaveon production-shaped Azure deployment
 
-Kaveon's production-shaped Azure resource is named `kaveon-aks` in the
+For a new installation, use the [deployment guide](../../DEPLOYMENT.md). The following existing reference environment is named `kaveon-aks` in the
 `kaveon-rg` resource group. It is an AKS Free-tier control plane with one
 system node and an autoscaled worker pool. The worker pool starts at one node,
 scales to four, and uses the existing `kaveonlake` ADLS Gen2 account and
@@ -38,9 +38,7 @@ It does not create credentials or place secrets in GitHub logs. Helm release
 deployment remains a separate gated step because Engine TLS and Entra secrets
 must be supplied through the deployment environment's secret manager.
 
-Studio deployment is already handled by the Vercel job in `ci.yml`; Vercel
-receives the web build while AKS hosts the Engine/API workload. They are
-separate deployment targets connected by the configured API/Engine URL.
+For a customer installation, deploy the Engine Helm release first, followed by the platform release for Studio and the API. Expose Studio through HTTPS ingress and keep the API and coordinator private.
 
 ## How an image reaches the cluster
 
@@ -87,45 +85,9 @@ the `cargo-chef` base carries, which is how a change can pass `cargo fmt`,
 `cargo clippy -D warnings` and the whole test suite and still fail in the
 registry.
 
-## Pausing the hosted demo
+## Availability
 
-When the cluster is deliberately offline, the application surfaces say so
-rather than failing silently. Two Studio variables control it:
-
-| Variable | Purpose |
-|---|---|
-| `NEXT_PUBLIC_KAVEON_SERVICE_NOTICE` | The message. Unset, nothing renders. |
-| `NEXT_PUBLIC_KAVEON_SERVICE_NOTICE_RETURNS` | When it is expected back, e.g. `12 November 2026`. |
-
-Ending the window is a configuration change rather than a deploy of new code.
-A dismissal is keyed on the message text, so changing the message shows it
-again to people who dismissed the previous one.
-
-The notice appears only on the application surfaces. `ClientLayout` serves
-`/`, `/login` and `/docs` outside the shell and those are unaffected by the
-cluster being down -- interrupting someone reading the documentation to tell
-them a cluster they were not using is offline would be noise.
-
-Studio is deployed to Vercel and does not depend on the AKS cluster, so the
-product overview and the whole documentation site stay available while the
-cluster is stopped. What stops is everything that reads data: SQL Lab, the
-catalog, charts, dashboards and chat.
-
-### One hostname
-
-`KAVEON_CANONICAL_HOST` (e.g. `kaveon.io`) redirects every `*.vercel.app`
-alias to it permanently. Vercel mints a production alias on every push --
-`kaveon-<hash>-prodduturi-labs.vercel.app` -- and each one is public and
-indexable, so left alone the product accumulates hundreds of addresses, none
-of them the brand.
-
-Unset by default, and deliberately so: arming it before the canonical host
-actually serves would redirect every working address to a dead one. Set it
-once the apex resolves to Vercel, not before.
-
-It is a config redirect rather than middleware because redirects run first
-and therefore cover `/`, `/docs` and `/login`, which the auth matcher
-excludes and which are exactly the public pages that need a canonical host.
+Stopping a cluster that hosts the entire stack also stops Studio and its documentation. Before planned maintenance, verify your catalog backup and the retention settings for the coordinator volume and object storage. After restart, verify HTTPS sign-in, a SQL query and a read from a registered lake table.
 
 ## Manual operator check
 

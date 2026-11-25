@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="loop-title loop-desc">
   <title id="loop-title">Kaveon intelligence and compute paths</title>
-  <desc id="loop-desc">Natural language currently uses DLM for a context answer or inspectable SQL against a selected registered source. Direct SQL and BI integration with the separate alpha Engine and its lake path are targets.</desc>
+  <desc id="loop-desc">Studio can return fresh DLM context or execute live SQL. Native lake queries use the Engine; the API handles registered external SQL sources.</desc>
   <defs>
     <marker id="loop-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker>
     <style>
@@ -10,7 +10,7 @@
   <rect width="1200" height="680" rx="20" fill="#0b0f15"/>
 
   <text x="600" y="76" text-anchor="middle" class="note">Talk to your data.</text>
-  <text x="600" y="112" text-anchor="middle" class="heading" font-size="25">One platform. Two fast paths.</text>
+  <text x="600" y="112" text-anchor="middle" class="heading" font-size="25">Question and SQL execution paths</text>
   <g transform="translate(502.125 20) scale(.15)" fill="#f8fafc">
     <rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/>
     <path d="M260 235 330 70h20l70 165h-23l-57-131-57 131Z"/><path d="M465 70h23l57 131 57-131h23l-70 165h-20Z"/>
@@ -31,7 +31,7 @@
   </g>
   <g transform="translate(470 384)">
     <rect width="260" height="120" rx="14" class="box active"/>
-    <text x="28" y="40" class="eyebrow">COMPUTE PATH · ALPHA</text><text x="28" y="70" class="heading">Engine</text><text x="28" y="96" class="body">Vectorized analytics</text>
+    <text x="28" y="40" class="eyebrow">COMPUTE PATH</text><text x="28" y="70" class="heading">Engine</text><text x="28" y="96" class="body">Vectorized analytics</text>
   </g>
 
   <g transform="translate(924 302)">
@@ -44,13 +44,13 @@
     <text x="28" y="34" class="eyebrow">CUSTOMER-OWNED DATA</text><text x="28" y="62" class="heading">Live Lake Path</text>
   </g>
 
-  <path d="M276 334h92c24 0 44-20 44-44s20-44 44-44h6" class="rail"/><text x="300" y="316" class="note">NATURAL LANGUAGE · CURRENT</text>
-  <path d="M276 390h92c24 0 44 20 44 44s20 44 44 44h6" class="rail motion"/><text x="310" y="416" class="note">DIRECT SQL + BI · TARGET</text>
-  <path d="M600 340v36" class="rail motion"/><text x="618" y="363" class="note">ENGINE SQL · TARGET</text>
-  <path d="M738 246h6c24 0 44 20 44 44s20 44 44 44h84" class="rail"/><text x="782" y="274" class="note">CONTEXT ANSWER · CURRENT</text>
-  <path d="M738 478h6c24 0 44-20 44-44s20-44 44-44h84" class="rail motion"/><text x="810" y="462" class="note">RESULTS · TARGET</text>
-  <path d="M600 540v-28" class="rail motion"/><text x="618" y="532" class="note">ARROW BATCHES · TARGET</text>
+  <path d="M276 334h92c24 0 44-20 44-44s20-44 44-44h6" class="rail"/><text x="300" y="316" class="note">QUESTION</text>
+  <path d="M276 390h92c24 0 44 20 44 44s20 44 44 44h6" class="rail"/><text x="310" y="416" class="note">SQL LAB AND CHARTS</text>
+  <path d="M600 340v36" class="rail"/><text x="618" y="363" class="note">GENERATED SQL</text>
+  <path d="M738 246h6c24 0 44 20 44 44s20 44 44 44h84" class="rail"/><text x="782" y="274" class="note">CONTEXT ANSWER</text>
+  <path d="M738 478h6c24 0 44-20 44-44s20-44 44-44h84" class="rail"/><text x="810" y="462" class="note">RESULTS</text>
+  <path d="M600 540v-28" class="rail"/><text x="618" y="532" class="note">ARROW BATCHES</text>
 
-  <text x="56" y="646" class="note">CURRENT · ENGINE IS A SEPARATE ALPHA RUNTIME</text>
-  <text x="1144" y="646" text-anchor="end" class="note">TARGET · ONE CONTROL PLANE, DISTRIBUTED ENGINE</text>
+  <text x="56" y="646" class="note">Native lake queries use the Engine.</text>
+  <text x="1144" y="646" text-anchor="end" class="note">Registered external SQL uses the API connection.</text>
 </svg>
