@@ -11,6 +11,14 @@ export default function AuthDocs() {
         lead="Sign-in is provider-based with no local passwords. Roles gate what you can do, and visibility gates what you can see. The recommended web path sends identity through a shared-secret-authenticated frontend proxy."
       />
 
+      <h2>Azure installation</h2>
+      <p>Run <code>python scripts/install-entra.py --help</code> from the Kaveon checkout to provision sign-in in your own Microsoft Entra tenant.
+        Supply your Studio HTTPS origin and an initial administrator. The installer creates the application, enterprise application, delegated scope and built-in roles.
+        Use the generated values for both Engine and Studio.</p>
+      <p>Assign groups to Viewer, Analyst, Editor or Admin in Entra. A catalog group can receive query access to a single lake catalog.
+        Each signed-in user can check their effective permissions in Settings → Access control. Group changes take effect with a fresh token.
+        ADLS access uses the Engine workload identity. AWS IAM integration is coming soon.</p>
+
       <h2>Sign-in providers</h2>
       <p>
         Authentication is <a href="https://authjs.dev" target="_blank" rel="noreferrer">NextAuth (Auth.js v5)</a>, entirely

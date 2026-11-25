@@ -14,7 +14,8 @@ Required environment:
   KAVEON_ENGINE_CA_FILE or KAVEON_ENGINE_CA_B64
   KAVEON_ENGINE_BRIDGE_TOKEN KAVEON_ENGINE_CATALOG_TOKEN
   KAVEON_CREDENTIAL_ACTIVE_KEY KAVEON_CREDENTIAL_KEYS
-  AUTH_MICROSOFT_ENTRA_ID_ID AUTH_MICROSOFT_ENTRA_ID_ISSUER AUTH_ENTRA_ADMIN_OBJECT_IDS
+  KAVEON_ENTRA_VALUES from scripts/install-entra.py for a directory-managed installation
+  or AUTH_MICROSOFT_ENTRA_ID_ID AUTH_MICROSOFT_ENTRA_ID_ISSUER AUTH_ENTRA_ADMIN_OBJECT_IDS
 
 For retirement or rehearsal mode, KAVEON_EVIDENCE_PVC, KAVEON_AUTHORITY_FAMILIES,
 and KAVEON_READ_AUTHORITY_FAMILIES are required. Secret values are never printed.
@@ -32,7 +33,7 @@ done
 need_cmd() { command -v "$1" >/dev/null || { echo "Missing required command: $1" >&2; exit 1; }; }
 for c in az kubectl kubelogin helm jq openssl base64; do need_cmd "$c"; done
 need() { [[ -n "${!1:-}" ]] || { echo "Missing required environment variable: $1" >&2; exit 1; }; }
-for v in AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_AKS_NAME KAVEON_ACR_NAME API_IMAGE_DIGEST STUDIO_IMAGE_DIGEST KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID KAVEON_KEY_VAULT_URL KAVEON_ADLS_ACCOUNT KAVEON_ADLS_CONTAINER KAVEON_ADLS_ROOT_PATH KAVEON_ENGINE_BRIDGE_TOKEN KAVEON_ENGINE_CATALOG_TOKEN KAVEON_CREDENTIAL_ACTIVE_KEY KAVEON_CREDENTIAL_KEYS AUTH_MICROSOFT_ENTRA_ID_ID AUTH_MICROSOFT_ENTRA_ID_ISSUER AUTH_ENTRA_ADMIN_OBJECT_IDS; do need "$v"; done
+for v in AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP AZURE_AKS_NAME KAVEON_ACR_NAME API_IMAGE_DIGEST STUDIO_IMAGE_DIGEST KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID KAVEON_KEY_VAULT_URL KAVEON_ADLS_ACCOUNT KAVEON_ADLS_CONTAINER KAVEON_ADLS_ROOT_PATH KAVEON_ENGINE_BRIDGE_TOKEN KAVEON_ENGINE_CATALOG_TOKEN KAVEON_CREDENTIAL_ACTIVE_KEY KAVEON_CREDENTIAL_KEYS; do need "$v"; done
 [[ "$API_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'API_IMAGE_DIGEST must be an immutable sha256 digest' >&2; exit 1; }
 [[ "$STUDIO_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'STUDIO_IMAGE_DIGEST must be an immutable sha256 digest' >&2; exit 1; }
 if [[ "$MODE" == retirement || "$MODE" == rehearsal ]]; then
@@ -57,6 +58,37 @@ az aks show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_AKS_NAME" --query '{state:prov
 az aks get-credentials -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_AKS_NAME" --overwrite-existing >/dev/null
 if command -v kubelogin >/dev/null; then kubelogin convert-kubeconfig -l azurecli >/dev/null; fi
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE" >/dev/null
+KAVEON_ENTRA_VALUES="${KAVEON_ENTRA_VALUES:-}"
+# A routine image upgrade must retain the installed directory authority.
+if [[ -z "$KAVEON_ENTRA_VALUES" ]]; then
+  releases="$(helm list -n "$NAMESPACE" --all -o json)"
+  if jq -e --arg name "$RELEASE" 'any(.[]; .name == $name)' <<<"$releases" >/dev/null; then
+    helm get values "$RELEASE" -n "$NAMESPACE" -o json | jq '{portal:{entraAccess:.portal.entraAccess,publicUrl:.portal.publicUrl,entraPublicClient:.portal.entraPublicClient},entraAccess:.portal.entraAccess}' > "$tmp/installed-directory.json"
+    if jq -e '.portal.entraAccess.clientId' "$tmp/installed-directory.json" >/dev/null; then
+      KAVEON_ENTRA_VALUES="$tmp/installed-directory.json"
+    fi
+  fi
+fi
+directory_values=()
+if [[ -n "${KAVEON_ENTRA_VALUES:-}" ]]; then
+  file="$KAVEON_ENTRA_VALUES"
+  jq -e '.entraAccess.tenantId == .portal.entraAccess.tenantId and .entraAccess.clientId == .portal.entraAccess.clientId' "$file" >/dev/null
+  AUTH_MICROSOFT_ENTRA_ID_ID="$(jq -er '.entraAccess.clientId' "$file")"
+  tenant="$(jq -er '.entraAccess.tenantId' "$file")"
+  [[ "$tenant" == "$(az account show --subscription "$AZURE_SUBSCRIPTION_ID" --query tenantId -o tsv)" ]] || { echo 'Directory receipt tenant does not match the subscription' >&2; exit 1; }
+  AUTH_MICROSOFT_ENTRA_ID_ISSUER="https://login.microsoftonline.com/$tenant/v2.0"
+  AUTH_ENTRA_ADMIN_OBJECT_IDS=""
+  # Refuse a mixed rollout in which Studio accepts groups but Engine still uses individual grants.
+  coord="$(kubectl -n "$NAMESPACE" get statefulset kaveon-coordinator -o json)"
+  jq -e --arg tenant "$tenant" --arg client "$AUTH_MICROSOFT_ENTRA_ID_ID" '
+    .spec.template.spec.containers[].env[] | select(.name == "KAVEON_ENTRA_ACCESS_CONFIG") |
+    .value | fromjson | .tenant_id == $tenant and .client_id == $client and (.app_role_catalogs | type == "array")
+  ' <<<"$coord" >/dev/null || { echo "Deploy Engine with the matching Entra receipt before Studio." >&2; exit 1; }
+  kubectl -n "$NAMESPACE" rollout status statefulset/kaveon-coordinator --timeout=5m
+  directory_values=(-f "$file")
+else
+  for v in AUTH_MICROSOFT_ENTRA_ID_ID AUTH_MICROSOFT_ENTRA_ID_ISSUER AUTH_ENTRA_ADMIN_OBJECT_IDS; do need "$v"; done
+fi
 read_existing_secret() {
   local key="$1"
   kubectl -n "$NAMESPACE" get secret "$AUTH_SECRET_NAME" -o "jsonpath={.data.$key}" 2>/dev/null | base64 --decode 2>/dev/null || true
@@ -168,13 +200,13 @@ EOF
 
 echo "Rendering and validating PostgreSQL-free release..."
 render="$tmp/rendered.yaml"
-helm lint "$CHART" -n "$NAMESPACE" -f "$tmp/values.yaml" >/dev/null
-helm template "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$tmp/values.yaml" > "$render"
+helm lint "$CHART" -n "$NAMESPACE" -f "$tmp/values.yaml" "${directory_values[@]}" >/dev/null
+helm template "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$tmp/values.yaml" "${directory_values[@]}" > "$render"
 if grep -q 'kind: StatefulSet' "$render" || grep -q 'kaveon-postgres' "$render"; then echo 'Refusing deployment: rendered PostgreSQL resources are present' >&2; exit 1; fi
 grep -q 'KAVEON_POSTGRESQL_RETIREMENT_MODE' "$render" || { echo 'Retirement flag missing from render' >&2; exit 1; }
 
 echo "Deploying $RELEASE atomically..."
-helm upgrade --install "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$tmp/values.yaml" --create-namespace --atomic --wait --timeout "${KAVEON_HELM_TIMEOUT:-15m}"
+helm upgrade --install "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$tmp/values.yaml" "${directory_values[@]}" --create-namespace --atomic --wait --timeout "${KAVEON_HELM_TIMEOUT:-15m}"
 kubectl -n "$NAMESPACE" rollout status deployment/kaveon-api --timeout=5m
 kubectl -n "$NAMESPACE" rollout status deployment/kaveon-portal --timeout=5m
 kubectl -n "$NAMESPACE" get pods -o wide

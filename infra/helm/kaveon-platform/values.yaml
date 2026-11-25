@@ -27,6 +27,7 @@ portal:
   # cannot be blocked by a pop-up blocker. Set true only for a registration
   # that has no secret to hold.
   entraPublicClient: false
+  entraAccess: {}
 
 ingress:
   enabled: false

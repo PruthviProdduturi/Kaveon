@@ -77,6 +77,8 @@ pub struct AuditRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthSource>,
@@ -154,6 +156,7 @@ impl AuditRecord {
 
     pub fn by(mut self, identity: &Identity) -> Self {
         self.principal = Some(identity.principal.clone());
+        self.display_identity.clone_from(&identity.display_identity);
         self.role = Some(identity.role);
         self
     }

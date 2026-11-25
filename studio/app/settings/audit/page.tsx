@@ -11,7 +11,7 @@ import { readError } from "../readError";
 
 interface AuditRecord {
   seq: number; ts_ms: number; kind: string;
-  principal?: string; role?: string; route?: string; query_id?: string;
+  principal?: string; display_identity?: string; role?: string; route?: string; query_id?: string;
   client?: string; source?: string; catalog?: string; schema?: string;
   statement?: string; resource_group?: string;
   admission_wait_ms?: number; elapsed_ms?: number; rows?: number; bytes_scanned?: number; mode?: string;
@@ -129,7 +129,7 @@ function AuditCard() {
           <div className={s.mark}><i className="fas fa-clipboard-list" /></div>
           <div style={{ minWidth: 0 }}>
             <h2 id="audit-title" className={s.cardTitle}>Audit</h2>
-            <p className={s.cardSub}>Who did what on the coordinator: statements, catalog changes, settings changes and refused sign-ins, oldest first, kept for the configured retention.</p>
+            <p className={s.cardSub}>Statements, configuration changes and sign-in attempts. Automated actions show the account that ran them.</p>
           </div>
         </div>
         <a className={s.ghost} href={exportHref} download="kaveon-audit.jsonl"><i className="fas fa-download" aria-hidden="true" />Export JSONL</a>
@@ -148,14 +148,14 @@ function AuditCard() {
       {error && <div className={g.problem} role="alert">{error}</div>}
       <div className={g.tableWrap}>
         <table className={g.table}>
-          <thead><tr><th>When</th><th>Kind</th><th>Principal</th><th>What</th></tr></thead>
+          <thead><tr><th>When</th><th>Kind</th><th>Account</th><th>What</th></tr></thead>
           <tbody>
             {loaded && records.length === 0 && <tr><td colSpan={4} className={g.empty}>Nothing in the ledger matches these filters.</td></tr>}
             {records.map(r => (
               <tr key={r.seq}>
                 <td className="mono" title={`seq ${r.seq}`}>{when(r.ts_ms)}</td>
                 <td><span className={`${g.kind} ${kindClass(r.kind)}`}>{r.kind}</span></td>
-                <td>{r.principal ?? <span className={g.detail}>anonymous</span>}{r.role ? <span className={g.detail}> · {r.role}</span> : null}</td>
+                <td>{r.display_identity ?? r.principal ?? <span className={g.detail}>Not recorded</span>}{r.display_identity && r.principal && <div className={g.detail}>{r.principal}</div>}{r.kind.startsWith("auth.") && <div className={g.detail}>Presented at sign-in</div>}{r.role ? <span className={g.detail}> · {r.role}</span> : null}</td>
                 <td className="wrap"><What r={r} /></td>
               </tr>
             ))}

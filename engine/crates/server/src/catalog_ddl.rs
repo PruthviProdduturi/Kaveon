@@ -1341,6 +1341,7 @@ mod tests {
                 Role::Analyst => "analyst@example.com".into(),
                 Role::Reader => "reader@example.com".into(),
             },
+            catalog_claims: Vec::new(),
             display_identity: None,
             role,
         }

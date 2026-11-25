@@ -4,7 +4,20 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 let cachedJwks: { tenantId: string; key: JWTVerifyGetKey } | undefined;
 
 export type EntraPublicConfig = { clientId: string; tenantId: string; issuer: string };
-export type EntraIdentity = { id: string; objectId: string; email: string | null; name: string | null; expiresAt: number };
+export const entraRoles = ["Admin", "Editor", "Analyst", "Viewer"] as const;
+export function assignedEntraRole(roles: unknown) {
+  return Array.isArray(roles) ? entraRoles.find(role => roles.includes(role)) : undefined;
+}
+
+export function grantedCatalogs(roles: unknown): string[] {
+  if (!Array.isArray(roles)) return [];
+  return roles.flatMap(role => {
+    const name = typeof role === "string" && role.startsWith("Kaveon.Query.") ? role.slice("Kaveon.Query.".length) : "";
+    return /^[A-Za-z0-9_]{1,64}$/.test(name) && name.toLowerCase() !== "kaveondb" ? [name] : [];
+  });
+}
+
+export type EntraIdentity = { id: string; objectId: string; email: string | null; name: string | null; expiresAt: number; catalogs: string[]; role?: typeof entraRoles[number] };
 
 export function isEntraObjectId(value: string | undefined): value is string {
   return typeof value === "string" && UUID.test(value);
@@ -45,7 +58,7 @@ export async function verifyEntraAccessTokenWithKey(token: string, config: Entra
     // what narrows these claims for the return, and a diagnostic must never be
     // what decides whether a token is accepted.
     if (!objectId || !tid || !expiresAt || expiresAt <= Date.now() || tid.toLowerCase() !== config.tenantId || !scopes.includes("access_as_user")) return null;
-    return { id: `${config.tenantId}:${objectId}`, objectId, email: typeof payload.preferred_username === "string" ? payload.preferred_username : null, name: typeof payload.name === "string" ? payload.name : null, expiresAt };
+    return { id: `${config.tenantId}:${objectId}`, objectId, role: assignedEntraRole(payload.roles), catalogs: grantedCatalogs(payload.roles), email: typeof payload.preferred_username === "string" ? payload.preferred_username : null, name: typeof payload.name === "string" ? payload.name : null, expiresAt };
   } catch (error) {
     // jwtVerify checks signature, issuer and audience, and its message says
     // which of them failed. Swallowing it turned the whole diagnosis into

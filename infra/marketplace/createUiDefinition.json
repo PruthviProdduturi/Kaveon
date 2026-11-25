@@ -4,7 +4,7 @@
   "version": "0.1.2-preview",
   "parameters": {
     "basics": [
-      { "name": "operatorObjectId", "type": "Microsoft.Common.TextBox", "label": "Initial administrator object ID", "toolTip": "Microsoft Entra object ID granted AKS administrator access.", "constraints": { "required": true, "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "validationMessage": "Enter a Microsoft Entra object ID." } },
+      { "name": "operatorObjectId", "type": "Microsoft.Common.TextBox", "label": "AKS administrator object ID", "toolTip": "Microsoft Entra object ID granted AKS administrator access.", "constraints": { "required": true, "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "validationMessage": "Enter a Microsoft Entra object ID." } },
       { "name": "environment", "type": "Microsoft.Common.DropDown", "label": "Environment", "defaultValue": "dev", "constraints": { "required": true, "allowedValues": [ { "label": "dev", "value": "dev" }, { "label": "stage", "value": "stage" }, { "label": "prod", "value": "prod" } ] } }
     ],
     "steps": [

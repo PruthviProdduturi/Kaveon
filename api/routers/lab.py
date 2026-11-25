@@ -91,7 +91,7 @@ def _engine_source_grants(actor: str, role: str) -> set[str]:
     # Tests and local adapters can replace the bridge per call; keep that
     # deterministic path uncached.  The deployed product authority is the
     # stable path where the short TTL removes the repeated round-trip.
-    cache_enabled = product_read_authority.enabled("sources")
+    cache_enabled = not settings.KAVEON_ENTRA_APP_ROLES and product_read_authority.enabled("sources")
     with _ENGINE_SOURCE_GRANTS_LOCK:
         cached = _ENGINE_SOURCE_GRANTS.get(key)
         if cache_enabled and cached and now - cached[0] < _ENGINE_SOURCE_GRANTS_TTL:

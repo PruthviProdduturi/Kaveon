@@ -42,6 +42,7 @@ env:
   # Optional. With it, Studio signs in through the server-side redirect flow;
   # without it, through the browser pop-up flow.
   AUTH_MICROSOFT_ENTRA_ID_SECRET: ${{ secrets.AUTH_MICROSOFT_ENTRA_ID_SECRET }}
+  KAVEON_ENTRA_RECEIPT: ${{ vars.KAVEON_ENTRA_RECEIPT }}
   AUTH_ENTRA_ADMIN_OBJECT_IDS: ${{ vars.AUTH_ENTRA_ADMIN_OBJECT_IDS }}
   KAVEON_AUTHORITY_FAMILIES: ${{ vars.KAVEON_AUTHORITY_FAMILIES }}
   KAVEON_READ_AUTHORITY_FAMILIES: ${{ vars.KAVEON_READ_AUTHORITY_FAMILIES }}
@@ -173,7 +174,7 @@ jobs:
       - name: Verify required deployment inputs without printing secrets
         shell: bash
         run: |
-          required=(AZURE_SUBSCRIPTION_ID KAVEON_ADLS_ROOT_PATH KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID KAVEON_KEY_VAULT_URL API_IMAGE_DIGEST STUDIO_IMAGE_DIGEST AUTH_MICROSOFT_ENTRA_ID_ID AUTH_MICROSOFT_ENTRA_ID_ISSUER AUTH_ENTRA_ADMIN_OBJECT_IDS KAVEON_AUTHORITY_FAMILIES KAVEON_READ_AUTHORITY_FAMILIES KAVEON_ENGINE_CA_B64)
+          required=(AZURE_SUBSCRIPTION_ID KAVEON_ADLS_ROOT_PATH KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID KAVEON_KEY_VAULT_URL API_IMAGE_DIGEST STUDIO_IMAGE_DIGEST KAVEON_AUTHORITY_FAMILIES KAVEON_READ_AUTHORITY_FAMILIES KAVEON_ENGINE_CA_B64)
           for name in "${required[@]}"; do
             [[ -n "${!name:-}" ]] || { echo "Missing Actions variable/secret: $name" >&2; exit 1; }
           done
@@ -183,5 +184,9 @@ jobs:
         env:
           DEPLOY_MODE: ${{ inputs.mode || 'retirement' }}
         run: |
+          if [[ -n "$KAVEON_ENTRA_RECEIPT" ]]; then
+            export KAVEON_ENTRA_VALUES="$RUNNER_TEMP/kaveon-directory.json"
+            printf '%s\n' "$KAVEON_ENTRA_RECEIPT" > "$KAVEON_ENTRA_VALUES"
+          fi
           chmod +x scripts/deploy-kaveon-aks.sh
           ./scripts/deploy-kaveon-aks.sh --mode "$DEPLOY_MODE"

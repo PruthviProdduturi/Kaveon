@@ -20,6 +20,11 @@
 {{- define "portal.apiEnv" -}}
 {{- $retirement := .Values.api.cutover.retirementMode -}}
 {{- $rehearsal := .Values.api.cutover.restartRehearsalMode -}}
+{{- if .Values.portal.entraAccess }}
+- {name: KAVEON_ENTRA_APP_ROLES, value: "true"}
+- {name: KAVEON_ENTRA_TENANT_ID, value: {{ required "portal.entraAccess.tenantId required" .Values.portal.entraAccess.tenantId | quote }}}
+- {name: KAVEON_ENTRA_CLIENT_ID, value: {{ required "portal.entraAccess.clientId required" .Values.portal.entraAccess.clientId | quote }}}
+{{- end }}
 - {name: NODE_ENV, value: production}
 - {name: KAVEON_DEMO_MODE, value: {{ .Values.api.demoMode | quote }}}
 {{- if not (or $retirement $rehearsal) }}

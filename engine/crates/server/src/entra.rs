@@ -16,6 +16,10 @@ pub struct EntraConfig {
     pub tenant_id: String,
     pub client_id: String,
     pub required_scope: String,
+    /// Present for deployments using Entra app roles. An empty list exposes no lake catalogs.
+    #[serde(default)]
+    pub app_role_catalogs: Option<Vec<String>>,
+    #[serde(default)]
     pub principals: HashMap<String, Role>,
     #[serde(skip)]
     cache: Arc<Mutex<KeyCache>>,
@@ -31,6 +35,8 @@ struct Claims {
     tid: String,
     oid: String,
     scp: String,
+    #[serde(default)]
+    roles: Vec<String>,
     // Typed required claims also prevent accepting malformed NumericDate values.
     exp: u64,
     nbf: u64,
@@ -47,6 +53,13 @@ fn display_identity(value: Option<&serde_json::Value>) -> Option<String> {
         && !value.chars().any(char::is_control))
     .then(|| value.to_owned())
 }
+pub(crate) fn valid_catalog(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        && !crate::catalog_access::is_reserved(name)
+}
+
 impl EntraConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         for id in [&self.tenant_id, &self.client_id] {
@@ -60,9 +73,22 @@ impl EntraConfig {
             "Entra requires access_as_user delegated scope"
         );
         anyhow::ensure!(
-            !self.principals.is_empty(),
-            "Entra requires an explicit principal allowlist"
+            self.app_role_catalogs.is_some() == self.principals.is_empty(),
+            "configure Entra app-role catalogs or an explicit principal allowlist"
         );
+        if let Some(catalogs) = &self.app_role_catalogs {
+            for catalog in catalogs {
+                anyhow::ensure!(
+                    !catalog.is_empty()
+                        && catalog.len() <= 64
+                        && catalog
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        && !crate::catalog_access::is_reserved(catalog),
+                    "invalid Entra lake catalog"
+                );
+            }
+        }
         for oid in self.principals.keys() {
             anyhow::ensure!(
                 uuid::Uuid::parse_str(oid)?.to_string() == *oid,
@@ -100,13 +126,37 @@ impl EntraConfig {
         {
             return Err(StatusCode::UNAUTHORIZED);
         }
-        let role = self
-            .principals
-            .get(&claims.oid)
-            .copied()
-            .ok_or(StatusCode::FORBIDDEN)?;
+        if uuid::Uuid::parse_str(&claims.oid)
+            .ok()
+            .map(|id| id.to_string())
+            .as_deref()
+            != Some(claims.oid.as_str())
+        {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        let role = if self.app_role_catalogs.is_some() {
+            [
+                ("Admin", Role::Admin),
+                ("Editor", Role::Analyst),
+                ("Analyst", Role::Analyst),
+                ("Viewer", Role::Reader),
+            ]
+            .into_iter()
+            .find(|(name, _)| claims.roles.iter().any(|role| role == name))
+            .map(|(_, role)| role)
+        } else {
+            self.principals.get(&claims.oid).copied()
+        }
+        .ok_or(StatusCode::FORBIDDEN)?;
         Ok(Identity {
             principal: format!("entra:{}:{}", claims.tid, claims.oid),
+            catalog_claims: claims
+                .roles
+                .iter()
+                .filter_map(|role| role.strip_prefix("Kaveon.Query."))
+                .filter(|name| valid_catalog(name))
+                .map(str::to_owned)
+                .collect(),
             display_identity: display_identity(claims.preferred_username.as_ref())
                 .or_else(|| display_identity(claims.name.as_ref())),
             role,
@@ -232,6 +282,7 @@ mod tests {
             tenant_id: TENANT.into(),
             client_id: CLIENT.into(),
             required_scope: "access_as_user".into(),
+            app_role_catalogs: None,
             principals: HashMap::from([(OID.into(), Role::Analyst)]),
             cache: Default::default(),
         };
@@ -297,6 +348,37 @@ mod tests {
             config
                 .verify(std::str::from_utf8(&token).unwrap(), &keys)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn managed_roles_follow_the_current_token() {
+        let (mut config, keys, mut claims) = setup();
+        config.principals.clear();
+        config.app_role_catalogs = Some(vec!["OpenSource".into()]);
+        config.validate().unwrap();
+        for (role, expected) in [
+            ("Viewer", Role::Reader),
+            ("Analyst", Role::Analyst),
+            ("Editor", Role::Analyst),
+            ("Admin", Role::Admin),
+        ] {
+            claims["roles"] = serde_json::json!(["unrelated", "Viewer", role]);
+            assert_eq!(config.verify(&sign(&claims), &keys).unwrap().role, expected);
+        }
+        claims["roles"] = serde_json::json!([
+            "Analyst",
+            "Kaveon.Query.OpenSource",
+            "Kaveon.Query.KaveonDB"
+        ]);
+        assert_eq!(
+            config.verify(&sign(&claims), &keys).unwrap().catalog_claims,
+            vec!["OpenSource"]
+        );
+        claims["roles"] = serde_json::json!([]);
+        assert_eq!(
+            config.verify(&sign(&claims), &keys).unwrap_err(),
+            StatusCode::FORBIDDEN
         );
     }
 

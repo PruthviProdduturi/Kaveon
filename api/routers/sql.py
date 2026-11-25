@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Request, Response, HTTPException, Query, Depends
+from config import settings
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
@@ -666,7 +667,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
     chart_type = data.chart_type
     dataset_id = data.dataset_id
     row_limit = data.row_limit
-    use_cache = data.use_cache or False
+    use_cache = bool(data.use_cache) and not settings.KAVEON_ENTRA_APP_ROLES
     cache_ttl = data.cache_ttl or 300
 
     trigger_source = canonical_source(source)
@@ -882,7 +883,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     # otherwise every dashboard refresh reruns identical distributed work.
     cache_key = _cache_key(source["engine_catalog"], data.sql_text)
     cache_ttl = data.cache_ttl or 300
-    if data.use_cache:
+    if data.use_cache and not settings.KAVEON_ENTRA_APP_ROLES:
         cached = _cache_get(cache_key, cache_ttl)
         if cached is not None:
             return {
@@ -944,7 +945,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     truncated = len(rows) > hard_limit
     rows = rows[:hard_limit]
     approximate = _engine_approximate(result)
-    if data.use_cache:
+    if data.use_cache and not settings.KAVEON_ENTRA_APP_ROLES:
         _cache_set(cache_key, {"columns": columns, "rows": rows,
                                "row_count": len(rows), "approx": approximate,
                                "truncated": truncated})

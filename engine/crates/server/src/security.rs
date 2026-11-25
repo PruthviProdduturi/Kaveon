@@ -70,6 +70,8 @@ pub struct Identity {
     pub principal: String,
     /// Display-only identity from a validated authentication source. Never use for authorization.
     pub display_identity: Option<String>,
+    /// Catalog scopes from the verified directory token or authenticated bridge.
+    pub catalog_claims: Vec<String>,
     pub role: Role,
 }
 impl Identity {
@@ -153,7 +155,9 @@ impl SecurityConfig {
         let mut tokens = std::collections::HashSet::new();
         for credential in &self.principals {
             anyhow::ensure!(
-                credential.token.len() >= 32 && !credential.principal.trim().is_empty(),
+                credential.token.len() >= 32
+                    && !credential.principal.trim().is_empty()
+                    && !credential.principal.starts_with("entra:"),
                 "security principals require nonempty names and tokens of at least 32 bytes"
             );
             anyhow::ensure!(
@@ -193,7 +197,26 @@ impl SecurityConfig {
             return Ok((
                 Identity {
                     principal: principal.into(),
-                    display_identity: None,
+                    catalog_claims: headers
+                        .get("x-kaveon-catalog-claims")
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| {
+                            value
+                                .split(',')
+                                .filter(|name| crate::entra::valid_catalog(name))
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    display_identity: headers
+                        .get("x-kaveon-display-identity")
+                        .and_then(|v| v.to_str().ok())
+                        .filter(|value| {
+                            value.len() <= 256
+                                && !value.is_empty()
+                                && !value.chars().any(char::is_control)
+                        })
+                        .map(str::to_owned),
                     role,
                 },
                 AuthSource::Bridge,
@@ -204,6 +227,7 @@ impl SecurityConfig {
                 return Ok((
                     Identity {
                         principal: credential.principal.clone(),
+                        catalog_claims: Vec::new(),
                         display_identity: None,
                         role: credential.role,
                     },
@@ -215,6 +239,7 @@ impl SecurityConfig {
             return Ok((
                 Identity {
                     principal: "development".into(),
+                    catalog_claims: Vec::new(),
                     display_identity: None,
                     role: Role::Admin,
                 },
@@ -255,6 +280,7 @@ pub async fn authorize(
         }
         request.extensions_mut().insert(Identity {
             principal: "internal".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Admin,
         });

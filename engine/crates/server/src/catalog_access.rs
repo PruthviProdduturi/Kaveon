@@ -406,6 +406,7 @@ pub struct GrantOutcome {
 
 /// The store and evaluator.
 pub struct CatalogAccess {
+    pub directory: Option<(String, Vec<String>)>,
     store: Option<ProductCatalogCommit>,
     current: RwLock<Arc<GrantSet>>,
     /// Local mutations one at a time, so two grants from this coordinator
@@ -418,6 +419,7 @@ impl CatalogAccess {
     pub fn disabled() -> Self {
         Self {
             store: None,
+            directory: None,
             current: RwLock::new(Arc::new(GrantSet::default())),
             writes: Mutex::new(()),
         }
@@ -427,6 +429,7 @@ impl CatalogAccess {
     pub async fn open(store: ProductCatalogCommit) -> Result<Self, AccessError> {
         let access = Self {
             store: Some(store),
+            directory: None,
             current: RwLock::new(Arc::new(GrantSet::default())),
             writes: Mutex::new(()),
         };
@@ -458,6 +461,7 @@ impl CatalogAccess {
         }
         Self {
             store: None,
+            directory: None,
             current: RwLock::new(Arc::new(set)),
             writes: Mutex::new(()),
         }
@@ -489,6 +493,25 @@ impl CatalogAccess {
     // --- the evaluator ---
 
     pub fn evaluate(&self, identity: &Identity) -> Scope {
+        if let Some((tenant, catalogs)) = &self.directory {
+            let mut scope = Scope {
+                role: identity.role,
+                levels: BTreeMap::new(),
+            };
+            let prefix = format!("entra:{tenant}:");
+            if let Some(oid) = identity.principal.strip_prefix(&prefix)
+                && uuid::Uuid::parse_str(oid).is_ok()
+                && let Some(ceiling) = role_ceiling(identity.role)
+            {
+                scope.levels = catalogs
+                    .iter()
+                    .chain(identity.catalog_claims.iter())
+                    .filter(|name| crate::entra::valid_catalog(name))
+                    .map(|name| (name.clone(), Access::Query.min(ceiling)))
+                    .collect();
+            }
+            return scope;
+        }
         Scope::new(identity, &self.current())
     }
 
@@ -856,9 +879,33 @@ pub(crate) mod tests {
     use kaveon_storage::AdlsConditionalCommit;
     use object_store::memory::InMemory;
 
+    #[test]
+    fn directory_policy_ignores_individual_grants_and_isolates_catalogs() {
+        let tenant = "11111111-1111-1111-1111-111111111111";
+        let person = format!("entra:{tenant}:22222222-2222-2222-2222-222222222222");
+        let mut policy = CatalogAccess::preset([(&*person, "private", Access::Manage)]);
+        policy.directory = Some((tenant.to_owned(), vec!["OpenSource".into()]));
+        let analyst = policy.evaluate(&identity(&person, Role::Analyst));
+        assert!(analyst.can_query("OpenSource"));
+        assert!(!analyst.can_manage("OpenSource"));
+        assert!(!analyst.can_see("private"));
+        assert!(!analyst.can_see("KaveonDB"));
+        let mut scoped = identity(&person, Role::Analyst);
+        scoped.catalog_claims = vec!["team".to_owned(), "KaveonDB".to_owned()];
+        assert!(policy.can_query(&scoped, "team"));
+        assert!(!policy.can_see(&scoped, "KaveonDB"));
+        assert!(!analyst.can_query("team"));
+        let viewer = policy.evaluate(&identity(&person, Role::Reader));
+        assert!(viewer.can_see("OpenSource"));
+        assert!(!viewer.can_query("OpenSource"));
+        assert_ne!(analyst.cache_key(), viewer.cache_key());
+        assert!(!policy.can_see(&identity("legacy@example.com", Role::Analyst), "OpenSource"));
+    }
+
     pub(crate) fn identity(principal: &str, role: Role) -> Identity {
         Identity {
             principal: principal.into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role,
         }

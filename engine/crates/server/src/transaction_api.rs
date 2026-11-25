@@ -4018,6 +4018,7 @@ mod tests {
             .read_product(
                 &Identity {
                     principal: "alice".into(),
+                    catalog_claims: Vec::new(),
                     display_identity: None,
                     role: crate::security::Role::Analyst,
                 },
@@ -4568,6 +4569,7 @@ mod tests {
         ));
         let alice = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -4674,6 +4676,7 @@ mod tests {
 
         let alice = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -4842,6 +4845,7 @@ mod tests {
 
         let identity = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -7311,6 +7315,7 @@ mod tests {
 
         let identity = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -7351,6 +7356,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let identity = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -7427,6 +7433,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let identity = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -7696,6 +7703,7 @@ mod tests {
 
         let alice = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -7706,6 +7714,7 @@ mod tests {
         let admin = Identity {
             principal: "admin".into(),
             role: crate::security::Role::Admin,
+            catalog_claims: Vec::new(),
             display_identity: None,
         };
         let record = registry
@@ -7739,6 +7748,7 @@ mod tests {
         let admin = Identity {
             principal: "admin".into(),
             role: crate::security::Role::Admin,
+            catalog_claims: Vec::new(),
             display_identity: None,
         };
         assert_eq!(
@@ -7780,11 +7790,13 @@ mod tests {
         }
         let alice = Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
         let admin = Identity {
             principal: "admin".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Admin,
         };
@@ -7865,6 +7877,7 @@ mod tests {
         let admin = Identity {
             principal: "admin".into(),
             role: crate::security::Role::Admin,
+            catalog_claims: Vec::new(),
             display_identity: None,
         };
         assert_eq!(

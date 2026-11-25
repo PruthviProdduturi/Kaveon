@@ -463,6 +463,7 @@ mod tests {
     fn analyst(principal: &str) -> Identity {
         Identity {
             principal: principal.into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         }

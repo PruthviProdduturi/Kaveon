@@ -120,6 +120,7 @@ env:
   # certificate SANs are `kaveon-coordinator.kaveon.svc.cluster.local` and
   # `*.kaveon-workers.kaveon.svc.cluster.local`. A different release name
   # renders different DNS and the certificate stops covering it.
+  KAVEON_ENTRA_RECEIPT: ${{ vars.KAVEON_ENTRA_RECEIPT }}
   NAMESPACE: kaveon
   RELEASE: kaveon
   CHART: infra/helm/kaveon-engine
@@ -318,6 +319,15 @@ jobs:
             container: "$pt_container"
             prefix: "$pt_prefix"
           EOF
+          if [[ -n "$KAVEON_ENTRA_RECEIPT" ]]; then
+            directory="$(jq -ce '.entraAccess | select(.tenantId and .clientId and (.catalogs | type == "array"))' <<<"$KAVEON_ENTRA_RECEIPT")"
+            [[ "$(jq -r '.tenantId' <<<"$directory")" == "$(az account show --query tenantId -o tsv)" ]] || { echo "Directory receipt tenant mismatch" >&2; exit 1; }
+            printf 'entraAccess: %s\n' "$directory" >> tmp/engine-values.yaml
+          elif [[ -n "$live_image" ]]; then
+            # Rebuilding image values must preserve the installed directory boundary.
+            directory="$(helm get values "$RELEASE" -n "$NAMESPACE" -o json | jq -c '.entraAccess // {}')"
+            printf 'entraAccess: %s\n' "$directory" >> tmp/engine-values.yaml
+          fi
           echo '--- values this run supplies (no secrets; the chart reads tokens and TLS from existing Secrets) ---'
           cat tmp/engine-values.yaml
           {

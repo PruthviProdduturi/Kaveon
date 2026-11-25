@@ -284,7 +284,7 @@ async fn main() {
     };
     // Grants live in the same authority as the product records. Without it
     // no grant can exist: Admins keep every catalog, nobody else sees one.
-    let catalog_access = match &product_catalog {
+    let mut catalog_access = match &product_catalog {
         Some(product_catalog) => {
             match catalog_access::CatalogAccess::open(product_catalog.clone()).await {
                 Ok(access) => {
@@ -309,6 +309,11 @@ async fn main() {
             catalog_access::CatalogAccess::disabled()
         }
     };
+    if let Some(entra) = &config.security.entra
+        && let Some(catalogs) = &entra.app_role_catalogs
+    {
+        catalog_access.directory = Some((entra.tenant_id.clone(), catalogs.clone()));
+    }
     let state = Arc::new(AppState {
         disk_exchange_store,
         results: results::ResultStore::with_limits(
