@@ -5,6 +5,7 @@ import { KaveonMark } from "../../components/KaveonMark";
 import { LastKnown, UnknownPanel, reasonFromStatus } from "../../components/Reading";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import s from "./engine.module.css";
+import { useAuth } from "../../auth/useAuth";
 import {
   Cluster, EngineUnavailable, QueryRecord,
   absoluteTime, bytes, clientLabel, errorExcerpt, fetchCluster, fetchQueries,
@@ -77,10 +78,20 @@ export default function EngineConsolePage() {
   }, [refresh]);
 
   const counts = useMemo(() => {
-    const c = { ALL: 0, RUNNING: 0, FINISHED: 0, FAILED: 0 } as Record<Filter, number>;
+    const c = { ALL: 0, RUNNING: 0, FINISHED: 0, FAILED: 0, CANCELED: 0 } as Record<Filter, number>;
     for (const q of queries || []) { c.ALL++; c[bucket(q)]++; }
     return c;
   }, [queries]);
+
+  // Whose statements to show. The console is cluster-wide, which is right for
+  // an operator and wrong for the common case of wanting your own back.
+  const [mineOnly, setMineOnly] = useState(false);
+  const { account } = useAuth();
+  const viewer = account?.email || account?.username || null;
+  const mineCount = useMemo(
+    () => (viewer ? (queries || []).filter(q => userLabel(q) === viewer).length : 0),
+    [queries, viewer],
+  );
 
   const queued = cluster?.coordinator.admission?.queue_depth || 0;
 
@@ -88,11 +99,12 @@ export default function EngineConsolePage() {
     const term = search.trim().toLowerCase();
     return (queries || []).filter(q => {
       if (filter !== "ALL" && bucket(q) !== filter) return false;
+      if (mineOnly && userLabel(q) !== viewer) return false;
       if (!term) return true;
       return [q.id, q.sql, userLabel(q), clientLabel(q), q.context?.catalog, q.context?.schema, q.error]
         .some(v => (v || "").toLowerCase().includes(term));
     });
-  }, [queries, filter, search]);
+  }, [queries, filter, search, mineOnly, viewer]);
 
   const slowest = useMemo(() => Math.max(1, ...visible.map(q => q.elapsed_ms || 0)), [visible]);
   const rss = memory.current[memory.current.length - 1];
@@ -104,7 +116,7 @@ export default function EngineConsolePage() {
         <div className={s.mastLeft}>
           <div className={s.mark} aria-hidden="true"><KaveonMark size={26} /></div>
           <div style={{ minWidth: 0 }}>
-            <h1 className={s.title}>KaveonDB</h1>
+            <h1 className={s.title}>Cluster overview</h1>
             <p className={s.sub}>
               {cluster
                 ? <>Environment <b>{cluster.environment}</b> · coordinator v{cluster.coordinator.version} · up {uptime(cluster.coordinator.uptime_secs)}</>
@@ -181,6 +193,17 @@ export default function EngineConsolePage() {
               <small>{counts.ALL ? `${Math.round((counts.FAILED / counts.ALL) * 100)}% of history` : ""}</small>
             </div>
           </button>
+          {/* Cancelled had a bucket and no way to click it. It is counted
+              apart from Failed because stopping a query is a decision, not a
+              fault, and an operator reading a failure rate wants one number
+              and not the other. */}
+          <button type="button" className={`${s.cell} ${s.cellBtn}`} aria-pressed={filter === "CANCELED"} onClick={() => setFilter(f => f === "CANCELED" ? "ALL" : "CANCELED")}>
+            <div className={s.cellLabel}>Cancelled</div>
+            <div className={`${s.cellValue} ${counts.CANCELED ? "" : s.zero}`}>
+              {counts.CANCELED}
+              <small>{counts.CANCELED ? "stopped by a person" : "none"}</small>
+            </div>
+          </button>
         </section>
       )}
 
@@ -191,15 +214,41 @@ export default function EngineConsolePage() {
               className={s.search} type="search" value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search SQL, query ID, user, client, catalog or error" aria-label="Search query history"
             />
+            {/* The console is cluster-wide. Most of the time you are looking
+                for something you ran yourself, and scanning everyone's
+                statements for it is the wrong job to give a person. */}
+            {viewer && (
+              <button
+                type="button"
+                className={s.segBtn}
+                aria-pressed={mineOnly}
+                onClick={() => setMineOnly(v => !v)}
+                title={`Only statements run by ${viewer}`}
+              >
+                Mine
+                <span className={s.segCount}>{mineCount}</span>
+              </button>
+            )}
             <div className={s.seg} role="group" aria-label="Filter by state">
-              {(["ALL", "RUNNING", "FINISHED", "FAILED"] as Filter[]).map(f => (
+              {(["ALL", "RUNNING", "FINISHED", "FAILED", "CANCELED"] as Filter[]).map(f => (
                 <button key={f} type="button" className={s.segBtn} data-state={f} aria-pressed={filter === f} onClick={() => setFilter(f)}>
-                  {f === "ALL" ? "All" : f[0] + f.slice(1).toLowerCase()}
+                  {f === "ALL" ? "All" : f === "CANCELED" ? "Cancelled"
+                    : f[0] + f.slice(1).toLowerCase()}
                   <span className={s.segCount}>{counts[f]}</span>
                 </button>
               ))}
             </div>
-            {visible.length !== counts.ALL && <span className={s.meta}>{visible.length} of {counts.ALL}</span>}
+            {/* What the list is showing, said in terms of the narrowing that
+                produced it. "0 of 100" is literally true and reads as a
+                broken page: it names a total nobody asked for and says
+                nothing about the filter that emptied the list. */}
+            {visible.length !== counts.ALL && (
+              <span className={s.meta}>
+                {visible.length === 0
+                  ? `no ${filter === "ALL" ? "" : filter.toLowerCase()} statements${mineOnly ? " of yours" : ""}`.replace(/\s+/g, " ").trim()
+                  : `${visible.length} of ${counts.ALL}`}
+              </span>
+            )}
           </div>
 
           {visible.length === 0 ? (
