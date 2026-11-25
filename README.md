@@ -7,19 +7,15 @@
 
 # Talk to your data
 
-Kaveon is an open-source data intelligence platform. Connect your lake, define the metrics your team uses, and turn those definitions into answers, charts and interactive dashboards. Kaveon Studio brings that work together with a deterministic Data Language Model (DLM), a distributed Rust engine and KaveonDB for transactional product state.
+Kaveon is an open-source analytics platform for data you own. Define what *revenue*, *sessions*, or an *active user* means in a semantic dataset. Use that definition to answer questions in chat, explore your lake in SQL, and publish interactive dashboards.
 
-[Open Studio](https://kaveon.io) · [Read the docs](https://kaveon.io/docs) · [Run locally](#run-locally)
+[Open Studio](https://kaveon.io) · [Run locally](#run-locally) · [Deploy Kaveon](#deploy) · [Documentation](https://kaveon.io/docs)
 
 ## Inside Kaveon
 
 [![Exploded architecture of Kaveon Studio, the Data Language Model, the distributed SQL engine and KaveonDB over your lake.](docs/reference/kaveon-platform-architecture.svg)](docs/reference/kaveon-platform-architecture.svg)
 
-**Build a semantic dataset.** Start with a registered lake table. Define a metric such as *sessions*, choose dimensions such as *country* and *platform*, and compile its DLM context. That context captures vocabulary and precomputed breakdowns for the dataset. [Semantic datasets](https://kaveon.io/docs/datasets) · [Inside the DLM](https://kaveon.io/docs/dlm)
-
-**Explore in chat or SQL.** Ask *“Which three countries had the most sessions?”* A fresh country breakdown can answer immediately from context. When supported questions need live data, the DLM can generate SQL. Analysts can also write SQL directly in SQL Lab and inspect how the Engine executed it. [SQL Lab](https://kaveon.io/docs/sql-lab)
-
-**Build and publish dashboards.** Turn the country breakdown into a chart, add a platform comparison, and arrange both on a dashboard. Viewers can select a country in one chart to filter compatible charts on the same dashboard. KaveonDB persists the chart definitions and layout while the underlying tables stay in your lake. [Dashboards](https://kaveon.io/docs/dashboards)
+The **Data Language Model (DLM)** compiles each dataset’s metrics, dimensions and vocabulary into context it can use to answer supported questions without a hosted language model. A question such as *“Which three countries had the most sessions?”* can use a fresh, precomputed breakdown. When live data is needed, the DLM can generate SQL for the **Kaveon Engine**, whose Rust coordinator and Arrow workers query lake tables in place. **KaveonDB** keeps the definitions, saved queries, charts and dashboard layouts as versioned product records.
 
 [Architecture](ARCHITECTURE.md) · [Engine manual](https://kaveon.io/docs/engine) · [CLI guide](docs/guides/engine-cli.md) · [Project status](STATUS.md)
 
@@ -39,7 +35,13 @@ Open [Studio on localhost](http://localhost:3000), choose **SQL Lab**, and run:
 SELECT 1 AS ready;
 ```
 
-You should see one row with the value `1`. To query your own files, restart the launcher with `--data /absolute/path/to/warehouse`, then register a table under the mounted `/data` directory. [Local quickstart](https://kaveon.io/docs/quickstart)
+The result is one row with `ready = 1`. [Local quickstart](https://kaveon.io/docs/quickstart)
+
+### Build your first dashboard
+
+1. **Connect a table.** Run `bash scripts/kaveon-up.sh --data /absolute/path/to/warehouse` with a directory containing your Parquet files or Delta tables. Register a local catalog source and a table at its mounted path under `/data`. Verify a few rows in SQL Lab.
+2. **Define a dataset.** Choose the table, a metric to measure, and dimensions to group by. For a table with one row per session, for example, use a row count for *sessions* and *country* as a dimension. Generate DLM context to explore that dataset in chat. [Semantic datasets](https://kaveon.io/docs/datasets) · [DLM guide](https://kaveon.io/docs/dlm)
+3. **Publish a dashboard.** In Chart Builder, make a bar chart with *country* on the axis and *sessions* as the metric. Save it, add it to a dashboard, and publish. Add another chart on a compatible dimension to explore both with a shared filter. [Chart Builder](https://kaveon.io/docs/charts) · [Dashboards](https://kaveon.io/docs/dashboards)
 
 ## Deploy
 
