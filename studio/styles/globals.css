@@ -4492,6 +4492,45 @@ main.main-wide {
   line-height: 1.5;
 }
 
+/* Size the workspace against the space left by Studio navigation. */
+.sql-workbench {
+  container: lab / inline-size;
+  min-width: 0;
+  position: relative;
+}
+.sql-workbench .content-area { min-width: 0; }
+.lab-catalog-toggle { display: none; }
+@container lab (max-width: 44rem) {
+  .lab-catalog-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    position: absolute;
+    top: .65rem;
+    left: .65rem;
+    z-index: 12;
+    height: 1.8rem;
+  }
+  .lab-catalog-toggle ~ .content-area { padding-top: 2.4rem; }
+  .sql-workbench .sidebar, .lab-sidebar-resizer { display: none; }
+  .sql-workbench .sidebar.is-open {
+    display: flex;
+    position: absolute;
+    inset: 2.5rem auto .5rem .4rem;
+    max-width: calc(100% - .8rem) !important;
+    min-width: 0 !important;
+    z-index: 11;
+  }
+}
+.lab-toolbar-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .375rem;
+  max-width: 100%;
+}
+.lab-toolbar-group button { white-space: nowrap; }
+.lab-toolbar-tools { margin-inline-start: auto; }
 .query-templates {
   padding: 0 1.25rem 0.75rem;
   display: flex;
@@ -4547,8 +4586,9 @@ main.main-wide {
    the same grid, grouped by what it does. */
 .results-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
+  gap: .45rem .85rem;
   flex-shrink: 0;
   padding: 0.5rem 0.9rem 0.5rem 1.1rem;
   background: var(--bg-elevated);
@@ -4557,10 +4597,11 @@ main.main-wide {
 
 .results-bar__lead {
   display: flex;
-  align-items: baseline;
-  gap: 0.85rem;
-  min-width: 0;
-  flex: 1;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .35rem .75rem;
+  max-width: 100%;
+  flex: 1 1 max-content;
 }
 
 .results-bar__title {
@@ -4590,6 +4631,7 @@ main.main-wide {
 
 /* Each following fact is separated by one middot, so the summary stays a
    sentence of facts rather than a row of chips. */
+.results-bar__lede, .results-bar__fact { white-space: nowrap; }
 .results-bar__fact::before {
   content: "·";
   margin: 0 0.45rem;
@@ -4599,14 +4641,17 @@ main.main-wide {
 .results-bar__controls {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  flex-shrink: 0;
+  gap: .4rem .65rem;
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 /* Controls that belong together sit together; the gap between groups is the
    only separator, which is quieter than a rule and never misaligns. */
 .results-bar__group {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   gap: 0.3rem;
 }
