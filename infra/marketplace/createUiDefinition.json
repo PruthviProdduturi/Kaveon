@@ -5,7 +5,7 @@
   "parameters": {
     "config": {
       "basics": {
-        "description": "Provision the Azure infrastructure and Microsoft Entra registration for Kaveon. Your signed-in account becomes the first administrator. Studio installation is a separate step in this preview.",
+        "description": "Choose an existing resource group or create one, for example `rg-kaveon-dev`. Kaveon uses the name you choose. This preview provisions Azure infrastructure and Microsoft Entra sign-in. Your account becomes the first administrator. Studio installation is a separate step.",
         "location": {
           "label": "Region",
           "resourceTypes": [
