@@ -2,10 +2,12 @@ targetScope = 'resourceGroup'
 
 @description('Azure region for the Kaveon deployment.')
 param location string = resourceGroup().location
+@allowed(['dev', 'stage', 'prod'])
+param environment string = 'dev'
 @description('Globally unique ADLS Gen2 storage account name.')
-param storageAccountName string
+param storageAccountName string = 'stkv${environment}${uniqueString(resourceGroup().id)}'
 @description('Globally unique Azure Container Registry name.')
-param registryName string
+param registryName string = 'acrkaveon${environment}${uniqueString(resourceGroup().id)}'
 @description('Object ID of the initial Azure RBAC cluster operator.')
 param operatorObjectId string
 @description('AKS worker VM size.')
@@ -17,7 +19,8 @@ param maxWorkers int = 2
 @description('Create a dedicated NAT Gateway. Disabled by default to avoid unnecessary monthly cost.')
 param enableNatGateway bool = false
 
-var tags = { product: 'kaveon', managedBy: 'kaveon-marketplace', architecture: 'kaveondb' }
+var resourcePrefix = 'kaveon-${environment}'
+var tags = { product: 'kaveon', environment: environment, managedBy: 'kaveon-marketplace', architecture: 'kaveondb' }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
@@ -67,6 +70,11 @@ module aks '../bicep/environments/aks-production.bicep' = {
     registryName: registry.name
     location: location
     operatorObjectId: operatorObjectId
+    resourcePrefix: resourcePrefix
+    nodeResourceGroupName: 'rg-${resourcePrefix}-nodes'
+    systemNodeSize: 'Standard_D4s_v5'
+    systemNodeCount: 2
+    tags: tags
     nodeSize: nodeSize
     minWorkers: minWorkers
     maxWorkers: maxWorkers
@@ -82,4 +90,4 @@ output adlsOpenSourceContainer string = openSourceContainer.name
 output adlsProductContainer string = productContainer.name
 output adlsBackupContainer string = backupContainer.name
 output readerClientId string = aks.outputs.readerClientId
-output deploymentMode string = 'PostgreSQL-free KaveonDB authority'
+output deploymentMode string = 'KaveonDB'

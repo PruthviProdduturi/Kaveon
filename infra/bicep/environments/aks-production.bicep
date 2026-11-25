@@ -15,7 +15,11 @@ param maxWorkers int = 2
 @description('Provision a dedicated NAT gateway only with an approved cost estimate. The default uses the AKS managed load-balancer egress path.')
 param enableNatGateway bool = false
 
-var tags = {
+param resourcePrefix string = 'kaveon'
+param nodeResourceGroupName string?
+param systemNodeSize string = nodeSize
+param systemNodeCount int = 1
+param tags object = {
   project: 'kaveon'
   environment: 'production'
   owner: 'prproddu'
@@ -37,20 +41,20 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
 }
 
 resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
-  name: 'kaveon-vnet'
+  name: '${resourcePrefix}-vnet'
   location: location
   tags: tags
   properties: { addressSpace: { addressPrefixes: ['10.225.0.0/16'] } }
 }
 resource egressIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (enableNatGateway) {
-  name: 'kaveon-egress-ip'
+  name: '${resourcePrefix}-egress-ip'
   location: location
   tags: tags
   sku: { name: 'Standard', tier: 'Regional' }
   properties: { publicIPAllocationMethod: 'Static', publicIPAddressVersion: 'IPv4' }
 }
 resource egress 'Microsoft.Network/natGateways@2024-05-01' = if (enableNatGateway) {
-  name: 'kaveon-egress'
+  name: '${resourcePrefix}-egress'
   location: location
   tags: tags
   sku: { name: 'Standard' }
@@ -74,7 +78,7 @@ resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
 }
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: 'kaveon-cluster'
+  name: '${resourcePrefix}-cluster'
   location: location
   tags: tags
 }
@@ -89,7 +93,7 @@ resource networkRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
-  name: 'kaveon-aks'
+  name: '${resourcePrefix}-aks'
   location: location
   tags: tags
   sku: { name: 'Base', tier: 'Free' }
@@ -97,6 +101,7 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
   properties: {
     dnsPrefix: 'kaveon-${uniqueString(resourceGroup().id)}'
     kubernetesVersion: kubernetesVersion
+    ...(!empty(nodeResourceGroupName) ? { nodeResourceGroup: nodeResourceGroupName! } : {})
     enableRBAC: true
     disableLocalAccounts: true
     aadProfile: { managed: true, enableAzureRBAC: true, tenantID: tenant().tenantId }
@@ -106,8 +111,8 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
     agentPoolProfiles: [
       {
         name: 'system'
-        count: 1
-        vmSize: nodeSize
+        count: systemNodeCount
+        vmSize: systemNodeSize
         osType: 'Linux'
         osSKU: 'Ubuntu'
         mode: 'System'
@@ -165,7 +170,7 @@ resource operatorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 resource readerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: 'kaveon-reader'
+  name: '${resourcePrefix}-reader'
   location: location
   tags: tags
 }

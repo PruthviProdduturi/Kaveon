@@ -3,8 +3,7 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "location": { "value": "westus2" },
-    "storageAccountName": { "value": "" },
-    "registryName": { "value": "" },
+    "environment": { "value": "dev" },
     "operatorObjectId": { "value": "" },
     "nodeSize": { "value": "Standard_B2s" },
     "minWorkers": { "value": 1 },

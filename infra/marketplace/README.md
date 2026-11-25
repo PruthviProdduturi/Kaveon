@@ -34,8 +34,18 @@ AKS Bicep template plus the two reviewed Helm deployment workflows.
 
 - `main.bicep` creates secure ADLS Gen2 containers and ACR, then invokes the
   supported AKS infrastructure template.
-- `main.parameters.json` is a deployment example; replace the empty globally
-  unique names and administrator object ID before deployment.
+- `main.parameters.json` is a resource-group deployment example. Supply the administrator object ID.
+- `subscription.bicep` creates the application resource group and runs the same foundation in it. Use a dedicated work subscription and an unused environment name for a fresh install. The AKS service creates its own node resource group.
+
+### Preview a work installation
+
+Run from the repository root using the work subscription ID and the work administrator's Entra user object ID. This command previews changes, including creation of the resource group.
+
+```powershell
+az deployment sub what-if --subscription $workSubscriptionId --location westus2 --template-file infra/marketplace/subscription.bicep --parameters location=westus2 environment=dev operatorObjectId=$workOperatorObjectId
+```
+
+In this example the application group is `rg-kaveon-dev` and the AKS-managed node group is `rg-kaveon-dev-nodes`. AKS, the VNet, and the two explicit managed identities use the prefix `kaveon-dev-`. The storage and registry names include a deterministic 13-character suffix derived from the application resource group ID. AKS assigns names to its child compute, disk, and load-balancer resources. The system pool requests two Standard_D4s_v5 nodes and the worker pool starts at one Standard_B2s node. Verify regional capacity and the cost for the planned uptime before applying.
 - `createUiDefinition.json` is the Marketplace-style portal form with explicit
   worker and NAT cost choices.
 

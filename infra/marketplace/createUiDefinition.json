@@ -4,10 +4,8 @@
   "version": "0.1.2-preview",
   "parameters": {
     "basics": [
-      { "name": "location", "type": "Microsoft.Common.Location", "label": "Azure region", "defaultValue": "westus2", "toolTip": "Keep Kaveon, ADLS and the registry in the same region." },
       { "name": "operatorObjectId", "type": "Microsoft.Common.TextBox", "label": "Initial administrator object ID", "toolTip": "Microsoft Entra object ID granted AKS administrator access.", "constraints": { "required": true, "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "validationMessage": "Enter a Microsoft Entra object ID." } },
-      { "name": "storageAccountName", "type": "Microsoft.Common.TextBox", "label": "ADLS Gen2 account name", "toolTip": "Globally unique, 3–24 lowercase letters and numbers.", "constraints": { "required": true, "regex": "^[a-z0-9]{3,24}$", "validationMessage": "Use 3–24 lowercase letters and numbers." } },
-      { "name": "registryName", "type": "Microsoft.Common.TextBox", "label": "Container Registry name", "toolTip": "Globally unique, 5–50 alphanumeric characters.", "constraints": { "required": true, "regex": "^[a-zA-Z0-9]{5,50}$", "validationMessage": "Use 5–50 alphanumeric characters." } }
+      { "name": "environment", "type": "Microsoft.Common.DropDown", "label": "Environment", "defaultValue": "dev", "constraints": { "required": true, "allowedValues": [ { "label": "dev", "value": "dev" }, { "label": "stage", "value": "stage" }, { "label": "prod", "value": "prod" } ] } }
     ],
     "steps": [
       { "name": "capacity", "label": "Capacity and cost", "subLabel": "Budget-safe defaults", "elements": [
@@ -18,8 +16,7 @@
     ],
     "outputs": {
       "location": "[location()]",
-      "storageAccountName": "[basics('storageAccountName')]",
-      "registryName": "[basics('registryName')]",
+      "environment": "[basics('environment')]",
       "operatorObjectId": "[basics('operatorObjectId')]",
       "nodeSize": "[steps('capacity').nodeSize]",
       "minWorkers": 1,
