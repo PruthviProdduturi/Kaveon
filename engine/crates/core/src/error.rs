@@ -11,6 +11,9 @@ pub enum KaveonError {
     #[error("execution: {0}")]
     MemoryLimit(String),
 
+    #[error("column '{0}' cannot be resolved")]
+    ColumnNotFound(String),
+
     #[error("sql: {0}")]
     Sql(String),
 

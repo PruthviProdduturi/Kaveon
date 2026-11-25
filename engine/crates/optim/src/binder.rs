@@ -252,6 +252,20 @@ impl Binder<'_> {
             LogicalPlan::Project { input, columns } => {
                 let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
+                // A named projection and UNNEST declare all their output fields in SQL.
+                // Other scopes can omit runtime-generated names (e.g. window outputs).
+                let complete_names = outer.is_empty()
+                    && match &input.plan {
+                        LogicalPlan::Project { columns, .. } => {
+                            columns.iter().all(|expr| match expr {
+                                Expr::Alias { .. } => true,
+                                Expr::Column(name) => name != "*" && !name.ends_with(".*"),
+                                _ => false,
+                            })
+                        }
+                        LogicalPlan::Unnest { .. } => true,
+                        _ => false,
+                    };
                 let mut columns = columns
                     .into_iter()
                     .flat_map(|column| match column {
@@ -264,7 +278,12 @@ impl Binder<'_> {
                         other => vec![other],
                     })
                     .map(|column| {
-                        self.bind_projected(column, &scope, input.aggregate_input.as_ref())
+                        self.bind_projected(
+                            column,
+                            &scope,
+                            input.aggregate_input.as_ref(),
+                            complete_names,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 // A correlated column rides through the projection under a
@@ -982,7 +1001,7 @@ impl Binder<'_> {
             let (inner, outer_column) = if scope.holds(a) { (a, b) } else { (b, a) };
             if let (true, Some(depth)) = (scope.holds(inner), enclosing(outer_column)) {
                 return Ok(Some(Correlation::Key {
-                    inner: self.bind_name(inner, scope)?,
+                    inner: self.bind_name(inner, scope, false)?,
                     outer: outer_column.clone(),
                     depth,
                 }));
@@ -1001,7 +1020,7 @@ impl Binder<'_> {
         let mut inner = Vec::new();
         for reference in &references {
             match scope.resolve(reference) {
-                Resolution::Unique(_) => inner.push(self.bind_name(reference, scope)?),
+                Resolution::Unique(_) => inner.push(self.bind_name(reference, scope, false)?),
                 Resolution::Ambiguous => {
                     return Err(KaveonError::Sql(format!(
                         "column '{reference}' is ambiguous"
@@ -1418,7 +1437,7 @@ impl Binder<'_> {
             input: Box::new(subquery),
             columns,
         };
-        let left_key = Expr::Column(self.bind_name(&key_outer, &left_scope)?);
+        let left_key = Expr::Column(self.bind_name(&key_outer, &left_scope, false)?);
         Ok(BoundSemiJoin {
             left: Box::new(left.plan),
             right: Box::new(subquery),
@@ -1566,10 +1585,11 @@ impl Binder<'_> {
         expr: Expr,
         scope: &Scope,
         aggregate_input: Option<&Scope>,
+        complete_names: bool,
     ) -> Result<Expr> {
         match expr {
             Expr::Column(name) if name != "*" => {
-                let bound = self.bind_name(&name, scope)?;
+                let bound = self.bind_name(&name, scope, complete_names)?;
                 Ok(if bound == name {
                     Expr::Column(name)
                 } else {
@@ -1629,12 +1649,15 @@ impl Binder<'_> {
         })
     }
 
-    fn bind_name(&self, name: &str, scope: &Scope) -> Result<String> {
+    fn bind_name(&self, name: &str, scope: &Scope, complete_names: bool) -> Result<String> {
         if name == "*" {
             return Ok(name.to_owned());
         }
         match scope.resolve(name) {
             Resolution::Unique(physical) if scope.joined => Ok(physical),
+            Resolution::Unresolved if complete_names && !name.contains('.') => {
+                Err(KaveonError::ColumnNotFound(name.to_owned()))
+            }
             Resolution::Unique(_) | Resolution::Unresolved => Ok(name.to_owned()),
             Resolution::Ambiguous => Err(KaveonError::Sql(format!("column '{name}' is ambiguous"))),
         }
@@ -1650,7 +1673,7 @@ impl Binder<'_> {
             self.bind_expr(*expr, scope, aggregate_input).map(Box::new)
         };
         Ok(match expr {
-            Expr::Column(name) => Expr::Column(self.bind_name(&name, scope)?),
+            Expr::Column(name) => Expr::Column(self.bind_name(&name, scope, false)?),
             Expr::Literal(_) | Expr::Star => expr,
             Expr::Alias { expr, name } => Expr::Alias {
                 expr: bind(expr)?,

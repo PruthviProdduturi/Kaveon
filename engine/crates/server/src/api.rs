@@ -3712,10 +3712,11 @@ async fn submit_trino_statement_parts(
         result_delivery: Some("paged".to_owned()),
         settings: session_settings,
     };
-    let response = run_statement(state, identity, request, Uuid::new_v4().to_string())
+    let query_id = Uuid::new_v4().to_string();
+    let response = run_statement(state, identity, request, query_id.clone())
         .await
         .into_response();
-    trino_response_shape(response).await
+    shape_trino_response(response, Some(&query_id)).await
 }
 
 fn trino_header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -5448,6 +5449,10 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
 }
 
 async fn trino_response_shape(response: Response) -> Response {
+    shape_trino_response(response, None).await
+}
+
+async fn shape_trino_response(response: Response, submitted_id: Option<&str>) -> Response {
     let status = response.status();
     let bytes = match to_bytes(response.into_body(), 16 * 1024 * 1024).await {
         Ok(bytes) => bytes,
@@ -5465,6 +5470,43 @@ async fn trino_response_shape(response: Response) -> Response {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return (status, [(header::CONTENT_TYPE, "application/json")], bytes).into_response();
     };
+    // These codes are emitted after run_statement has accepted the query.
+    // Keep HTTP failures from auth, admission and page retrieval on their own paths.
+    if let (Some(id), Some(message), Some(code)) = (
+        submitted_id,
+        value["error"].as_str(),
+        value["code"].as_str(),
+    ) {
+        let wire_error = match (status, code) {
+            (StatusCode::BAD_REQUEST, "COLUMN_NOT_FOUND") => {
+                Some((47, "COLUMN_NOT_FOUND", "USER_ERROR"))
+            }
+            (StatusCode::BAD_REQUEST, "SYNTAX_ERROR") => Some((1, "SYNTAX_ERROR", "USER_ERROR")),
+            (StatusCode::BAD_REQUEST, "ANALYSIS_ERROR" | "PLANNING_ERROR") => {
+                Some((0, "GENERIC_USER_ERROR", "USER_ERROR"))
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "EXECUTION_ERROR" | "DISTRIBUTED_EXECUTION_ERROR",
+            ) => Some((65536, "GENERIC_INTERNAL_ERROR", "INTERNAL_ERROR")),
+            _ => None,
+        };
+        if let Some((number, name, kind)) = wire_error {
+            let mut error = serde_json::json!({
+                "message": message, "errorCode": number, "errorName": name, "errorType": kind
+            });
+            if let Some(position) = value.get("position") {
+                error["errorLocation"] = serde_json::json!({
+                    "lineNumber": position["line"], "columnNumber": position["column"]
+                });
+            }
+            return Json(serde_json::json!({
+                "id": id, "infoUri": format!("/v1/trino/query/{id}"), "state": "FAILED",
+                "stats": {"state": "FAILED"}, "warnings": [], "code": code, "error": error
+            }))
+            .into_response();
+        }
+    }
     if let Some(object) = value.as_object_mut() {
         if let Some(query_id) = object
             .get("id")
@@ -6399,13 +6441,18 @@ async fn run_statement(
     let plan = match kaveon_optim::binder::bind(plan, &catalog_snapshot) {
         Ok(plan) => plan,
         Err(error) => {
+            let code = if matches!(error, kaveon_core::KaveonError::ColumnNotFound(_)) {
+                "COLUMN_NOT_FOUND"
+            } else {
+                "ANALYSIS_ERROR"
+            };
             let message = format!("SQL analysis error: {error}");
             finish_failed_query(&query_id, message.clone(), start, None, None, None).await;
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
                     "error": message,
-                    "code": "ANALYSIS_ERROR"
+                    "code": code
                 })),
             )
                 .into_response();
@@ -26320,6 +26367,75 @@ mod streamed_root_tests {
                 .unwrap()
                 .contains("must target /v1/query")
         );
+    }
+
+    #[tokio::test]
+    async fn trino_failed_statement_is_terminal_and_does_not_poison_next_query() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-failed-statement-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        let submit = |sql: &'static str| {
+            submit_trino_statement_parts(state.clone(), alice(), HeaderMap::new(), Bytes::from(sql))
+        };
+        let response = submit("SELECT missing_column FROM (SELECT 1 AS known_column) t").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 16384).await.unwrap();
+        let failed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = failed["id"].as_str().unwrap();
+        assert!(Uuid::parse_str(id).is_ok());
+        assert_eq!(failed["infoUri"], format!("/v1/trino/query/{id}"));
+        assert_eq!(failed["stats"]["state"], "FAILED");
+        assert!(failed.get("nextUri").is_none());
+        assert_eq!(failed["error"]["errorCode"], 47);
+        assert_eq!(failed["error"]["errorName"], "COLUMN_NOT_FOUND");
+        assert_eq!(failed["error"]["errorType"], "USER_ERROR");
+        assert!(
+            failed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing_column")
+        );
+        let success = submit("SELECT 1 AS ready").await;
+        assert_eq!(success.status(), StatusCode::OK);
+        let body = to_bytes(success.into_body(), 16384).await.unwrap();
+        let success: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(success["error"].is_null());
+        assert_ne!(success["id"], failed["id"]);
+        drop(state);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn trino_wire_failure_mapping_requires_an_accepted_statement_and_matching_status() {
+        for (status, id, expected) in [
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Some("q1"),
+                StatusCode::OK,
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (StatusCode::FORBIDDEN, Some("q1"), StatusCode::FORBIDDEN),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Some("q1"),
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+        ] {
+            let native = (
+                status,
+                Json(serde_json::json!({
+                    "code":"DISTRIBUTED_EXECUTION_ERROR", "error":"worker task failed"
+                })),
+            )
+                .into_response();
+            let response = shape_trino_response(native, id).await;
+            assert_eq!(response.status(), expected);
+        }
     }
 
     #[tokio::test]
