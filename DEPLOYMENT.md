@@ -25,7 +25,13 @@ Vercel hosts the Next.js frontend. Azure Container Apps hosts the FastAPI backen
 
 ## Full Walkthrough
 
-See **[docs/guides/deploy-vercel-azure-postgres.md](docs/guides/deploy-vercel-azure-postgres.md)** for the historical PostgreSQL migration profile. For a native deployment, use the checked-in IaC under `infra/bicep/` and the [local-stack guide](docs/guides/local-stack.md); the legacy guide must not be used to provision a runtime authority.
+The retired database deployment is not a supported path. Use
+**[docs/guides/azure-production-deployment.md](docs/guides/azure-production-deployment.md)**
+for the AKS infrastructure, the Engine and platform Helm charts for runtime
+installation, and the reviewed GitHub Actions workflows for immutable-image
+deployment. The [local-stack guide](docs/guides/local-stack.md) remains the
+canonical local path. The old database migration guide is historical context
+only and must not be used to provision a runtime authority.
 
 1. **KaveonDB and lake storage** — configure the native catalog and customer-owned Parquet/Delta/Iceberg roots
 2. **Azure Container Registry** — build and push the API and Engine images

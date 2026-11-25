@@ -1,12 +1,26 @@
-# Superseded: Vercel + Azure PostgreSQL deployment
+# Retired: Vercel + Azure PostgreSQL deployment
 
 > This guide describes the retired PostgreSQL architecture and must not be used
 > for a new deployment. KaveonDB is now the product metadata and transaction
 > authority. Use [the AKS deployment guide](azure-production-deployment.md) for
 > the Engine/API plane and [the Vercel guide](vercel-deployment.md) for Studio.
 
-The historical instructions below are retained only to explain older
-installations and migration evidence.
+This architecture is retired and is no longer deployable from the repository.
+The PostgreSQL Bicep entry point and module have been removed. Do not recreate
+this stack for a new installation. Use the PostgreSQL-free deployment contract
+instead:
+
+- [Azure production deployment](azure-production-deployment.md) for the AKS
+  infrastructure and identity boundary;
+- [Kaveon platform Helm chart](../../infra/helm/kaveon-platform/README.md) for
+  the API and Studio workloads;
+- [Kaveon Engine Helm chart](../../infra/helm/kaveon-engine/README.md) for the
+  distributed runtime; and
+- the reviewed `deploy-aks-platform.yml` and `deploy-aks-engine.yml` workflows
+  for immutable-image deployment.
+
+The remainder of this file is retained as historical migration context only.
+It must not be used as an installation procedure.
 
 The production cloud stack:
 
