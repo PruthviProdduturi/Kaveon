@@ -2045,6 +2045,35 @@ fn array_join_large_utf8(
     Ok(Arc::new(result))
 }
 
+fn array_distinct_large_utf8(list: &LargeListArray) -> Result<ArrayRef> {
+    let mut builder = LargeListBuilder::new(LargeStringBuilder::new());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            builder.append(false);
+            continue;
+        }
+        let inner = list.value(row);
+        let values = inner.as_string::<i64>();
+        let mut seen = std::collections::HashSet::<String>::new();
+        let mut saw_null = false;
+        for index in 0..values.len() {
+            if values.is_null(index) {
+                if !saw_null {
+                    builder.values().append_null();
+                    saw_null = true;
+                }
+                continue;
+            }
+            let value = values.value(index);
+            if seen.insert(value.to_owned()) {
+                builder.values().append_value(value);
+            }
+        }
+        builder.append(true);
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 fn array_position_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -7447,8 +7476,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     ) {
                         return array_distinct_nested(list);
                     }
+                    if list.value_type() == DataType::LargeUtf8 {
+                        return array_distinct_large_utf8(list);
+                    }
                     let element_type = match list.value_type() {
-                        DataType::LargeUtf8 => DataType::Utf8,
                         other => other.clone(),
                     };
                     let field = Field::new("item", element_type, true);
@@ -15089,6 +15120,36 @@ mod tests {
         let inner = list.value(0);
         let values = inner.as_primitive::<Int32Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2)]);
+    }
+
+    #[test]
+    fn array_distinct_accepts_large_utf8_lists_without_narrowing_offsets() {
+        let mut builder = LargeListBuilder::new(LargeStringBuilder::new());
+        builder.values().append_value("alpha");
+        builder.values().append_null();
+        builder.values().append_value("alpha");
+        builder.values().append_value("beta");
+        builder.append(true);
+        let batch = RecordBatch::try_from_iter([("value", Arc::new(builder.finish()) as ArrayRef)])
+            .unwrap();
+        eprintln!("ARRAY_DISTINCT large utf8 input type: {:?}", batch.column(0).data_type());
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        eprintln!("ARRAY_DISTINCT large utf8 result type: {:?}", value.data_type());
+        let list = value.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::LargeUtf8);
+        let inner = list.value(0);
+        let values = inner.as_string::<i64>();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("alpha"), None, Some("beta")]
+        );
     }
 
     #[test]
