@@ -43,6 +43,24 @@ def _patch(body, stored=None):
     return result, update, validate
 
 
+class CatalogRegistrationTests(unittest.TestCase):
+    def test_new_registrations_use_kaveondb_and_reject_external_catalogs(self):
+        from fastapi import HTTPException
+        source = {"name": "Lake", "engine_catalog": "lake", "storage_type": "local",
+                  "storage_config": {"base_path": "/lake"}}
+        with patch.object(cs.source_cutover_mutations, "enabled", return_value=True), \
+             patch.object(cs.source_cutover_mutations, "create") as create:
+            result = cs.create_catalog_source(source, ADMIN)
+            self.assertEqual(result["catalogSource"]["adapter_type"], "native")
+            for option in ({"adapter_type": "hive_metastore"}, {"adapter_type": "aws_glue"},
+                           {"adapter_type": "unity_catalog"}, {"adapter_type": "iceberg_rest"},
+                           {"adapter_config": {"endpoint": "external"}}):
+                with self.subTest(option=option), self.assertRaises(HTTPException) as error:
+                    cs.create_catalog_source({**source, **option}, ADMIN)
+                self.assertEqual(error.exception.status_code, 400)
+            self.assertEqual(create.call_count, 1)
+
+
 class APlatformSuppliedIdentityNeedsNoSecret(unittest.TestCase):
     def test_a_workload_identity_reference_is_not_validated_as_a_secret(self):
         result, update, validate = _patch({"credential_ref": "a-reader"})

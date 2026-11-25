@@ -21,6 +21,14 @@ export default function ConnectorDocs() {
       storing anything if no keyring is configured. A catalog source keeps a credential reference — a Key Vault URI —
       or no credential at all, where the host&rsquo;s own managed or workload identity is what reaches the storage.
     </p>
+    <h2 id="migrate-catalog-metadata">Move existing table definitions to KaveonDB</h2>
+    <p>KaveonDB manages the schemas and table definitions. For tables already in supported storage, you can register the existing files in place.</p>
+    <ol>
+      <li>Inventory the schema names, table names, formats and storage locations in the original catalog. For Iceberg, record the committed metadata file.</li>
+      <li>In Settings → Storage, register the storage location, activate the source and synchronize it. In Catalog, add the schemas and register each table at its existing location.</li>
+      <li>Grant access in Kaveon, then compare schemas, row counts and representative SQL results before moving readers. Review views and permissions separately.</li>
+    </ol>
+    <p>Registration is manual today. Automated imports from Hive Metastore, AWS Glue, Unity Catalog and Iceberg REST are possible future migration tools.</p>
     <Pager prev={{ href: "/docs/api-reference", title: "API Reference" }} next={{ href: "/docs/sql-lab", title: "SQL Lab" }} />
   </div>;
 }

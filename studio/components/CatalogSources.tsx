@@ -20,7 +20,6 @@ interface CatalogSource {
   credential_kind: string | null;
   credential_ref: string | null;
   adapter_type: string;
-  adapter_config: string;
   lifecycle: string;
   description: string | null;
   created_by: string;
@@ -102,14 +101,6 @@ const FORMAT_META: Record<string, { label: string; paint: Paint }> = {
   parquet: { label: "Parquet", paint: PURPLE },
   delta:   { label: "Delta",   paint: CYAN },
   iceberg: { label: "Iceberg", paint: INDIGO },
-};
-
-const ADAPTER_META: Record<string, { label: string }> = {
-  native:          { label: "KaveonDB" },
-  hive_metastore:  { label: "Hive Metastore" },
-  aws_glue:        { label: "AWS Glue" },
-  unity_catalog:   { label: "Unity Catalog" },
-  iceberg_rest:    { label: "Iceberg REST" },
 };
 
 const CREDENTIAL_META: { kind: string; label: string; paint: Paint }[] = [
@@ -422,7 +413,6 @@ export function CatalogSources({ localInstallation }: { localInstallation: boole
                   <th><span className="column-header-label">Engine Catalog</span></th>
                   <th><span className="column-header-label">Storage</span></th>
                   <th><span className="column-header-label">Format</span></th>
-                  <th><span className="column-header-label">Metadata catalog</span></th>
                   <th><span className="column-header-label">Credential</span></th>
                   <th><span className="column-header-label">Status</span></th>
                   <th><span className="column-header-label">Actions</span></th>
@@ -438,6 +428,7 @@ export function CatalogSources({ localInstallation }: { localInstallation: boole
                     <tr key={cs.id}>
                       <td>
                         <strong>{cs.name}</strong>
+                        {cs.adapter_type !== "native" && <div className="muted">Legacy registration · {cs.adapter_type}</div>}
                         {cs.description && <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>{cs.description}</div>}
                       </td>
                       <td style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-secondary)" }}>{cs.engine_catalog}</td>
@@ -448,9 +439,6 @@ export function CatalogSources({ localInstallation }: { localInstallation: boole
                         </div>
                       </td>
                       <td><Badge label={fmtMeta.label} swatch={paint(fmtMeta.paint, theme)} /></td>
-                      <td style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                        {ADAPTER_META[cs.adapter_type]?.label || cs.adapter_type}
-                      </td>
                       <td>
                         {cs.credential_kind ? (
                           // Same reason as the active count above: `--success`
@@ -567,16 +555,10 @@ function CatalogSourceModal({ source, onClose, onSuccess, localInstallation }: M
     if (!s) return {};
     try { return JSON.parse(s.storage_config) || {}; } catch { return {}; }
   };
-  const parseAdapterConfig = (s: CatalogSource | null) => {
-    if (!s) return {};
-    try { return JSON.parse(s.adapter_config) || {}; } catch { return {}; }
-  };
-
   const [name, setName] = useState(source?.name || "");
   const [engineCatalog, setEngineCatalog] = useState(source?.engine_catalog || "");
   const [storageType, setStorageType] = useState<string>(source?.storage_type || (localInstallation ? "local" : "adls_gen2"));
   const [dataFormat, setDataFormat] = useState<string>(source?.data_format || "parquet");
-  const [adapterType, setAdapterType] = useState<string>(source?.adapter_type || "native");
   const [description, setDescription] = useState(source?.description || "");
   const [credentialKind, setCredentialKind] = useState<string>(source?.credential_kind || "");
   const [credentialRef, setCredentialRef] = useState(source?.credential_ref || "");
@@ -611,23 +593,11 @@ function CatalogSourceModal({ source, onClose, onSuccess, localInstallation }: M
   const storageChanged = storedStorage !== currentStorage;
   const [storageChangeConfirmed, setStorageChangeConfirmed] = useState(false);
 
-  const initAC = parseAdapterConfig(source);
-  const [adapterEndpoint, setAdapterEndpoint] = useState(initAC.endpoint || "");
-  const [adapterDatabase, setAdapterDatabase] = useState(initAC.database || "");
-
   const buildStorageConfig = () => {
     if (storageType === "local") return JSON.stringify({ base_path: basePath });
     if (storageType === "adls_gen2") return JSON.stringify({ account: adlsAccount, container: adlsContainer, root_path: adlsRootPath });
     if (storageType === "s3") return JSON.stringify({ bucket: s3Bucket, region: s3Region, prefix: s3Prefix });
     return "{}";
-  };
-
-  const buildAdapterConfig = () => {
-    if (adapterType === "native") return "{}";
-    const cfg: Record<string, string> = {};
-    if (adapterEndpoint) cfg.endpoint = adapterEndpoint;
-    if (adapterDatabase) cfg.database = adapterDatabase;
-    return JSON.stringify(cfg);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -641,8 +611,6 @@ function CatalogSourceModal({ source, onClose, onSuccess, localInstallation }: M
         storage_type: storageType,
         storage_config: buildStorageConfig(),
         data_format: dataFormat,
-        adapter_type: adapterType,
-        adapter_config: buildAdapterConfig(),
         description: description.trim() || null,
       };
       // A cleared credential has to be sent as an explicit null, and it was
@@ -869,56 +837,17 @@ function CatalogSourceModal({ source, onClose, onSuccess, localInstallation }: M
               </div>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
-              <div>
-                <label style={labelStyle}>Catalog file format *</label>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  {Object.entries(FORMAT_META).map(([key, meta]) => (
-                    <button key={key} type="button" aria-pressed={dataFormat === key} style={chipStyle(dataFormat === key, paint(meta.paint, theme))} onClick={() => setDataFormat(key)}>
-                      {meta.label}
-                    </button>
-                  ))}
-                </div>
-                <small>Recorded for this source. Choose each table’s format when you register it.</small>
+            <div style={fieldStyle}>
+              <label style={labelStyle}>Catalog file format *</label>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {Object.entries(FORMAT_META).map(([key, meta]) => (
+                  <button key={key} type="button" aria-pressed={dataFormat === key} style={chipStyle(dataFormat === key, paint(meta.paint, theme))} onClick={() => setDataFormat(key)}>
+                    {meta.label}
+                  </button>
+                ))}
               </div>
-              <div>
-                {/* Who says which tables exist. Native means Kaveon's own
-                    catalog over the storage below; the rest defer to an
-                    external metastore. Only native can be synchronized today
-                    — engine_bridge refuses the others with "Only native
-                    catalog adapters can currently be synchronized" — so they
-                    are shown as unavailable rather than offered and then
-                    rejected after the form is filled in. */}
-                <label htmlFor="source-metadata-catalog" style={labelStyle}>Metadata catalog</label>
-                <select
-                  id="source-metadata-catalog"
-                  aria-describedby="source-metadata-help"
-                  value={adapterType}
-                  onChange={e => setAdapterType(e.target.value)}
-                  style={{ ...inputStyle, cursor: "pointer" }}
-                >
-                  {Object.entries(ADAPTER_META).map(([key, meta]) => (
-                    <option key={key} value={key} disabled={key !== "native"}>
-                      {key === "native" ? meta.label : `${meta.label} · Coming soon`}
-                    </option>
-                  ))}
-                </select>
-                <small id="source-metadata-help">KaveonDB manages the schema and table definitions. Data stays in the storage location you choose.</small>
-              </div>
+              <small>Recorded for this source. Choose each table’s format when you register it.</small>
             </div>
-
-            {adapterType !== "native" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", ...fieldStyle }}>
-                <div>
-                  <label style={labelStyle}>{ADAPTER_META[adapterType]?.label} Endpoint</label>
-                  <input style={{ ...inputStyle, fontFamily: "monospace" }} placeholder="thrift://metastore:9083" value={adapterEndpoint} onChange={e => setAdapterEndpoint(e.target.value)} />
-                </div>
-                <div>
-                  <label style={labelStyle}>Database / Namespace</label>
-                  <input style={{ ...inputStyle, fontFamily: "monospace" }} placeholder="default" value={adapterDatabase} onChange={e => setAdapterDatabase(e.target.value)} />
-                </div>
-              </div>
-            )}
 
             {(storageType !== "local" || credentialKind) && <div style={fieldStyle}>
               <label style={labelStyle}>Storage identity</label>
