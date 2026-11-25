@@ -398,6 +398,11 @@ impl ResultCache {
             Self::remove(&mut inner, &oldest);
             self.evictions.fetch_add(1, Ordering::Relaxed);
         }
+        // If the cache was restored with an inflated byte counter, removing
+        // its last entry repairs the empty-cache invariant before admission.
+        if inner.entries.is_empty() && inner.order.is_empty() {
+            inner.bytes = 0;
+        }
         inner.tick += 1;
         let tick = inner.tick;
         inner.order.insert(tick, Arc::clone(&key));
@@ -609,6 +614,22 @@ mod tests {
         ] {
             assert_ne!(base, other);
         }
+    }
+
+    #[test]
+    fn a_source_identity_change_misses_without_clearing_unrelated_entry() {
+        let cache = ResultCache::new(1 << 20, Duration::from_secs(60));
+        let original = key("SELECT 1");
+        assert!(cache.insert(original.clone(), &columns(), &rows(1, 1), 1, "q1"));
+
+        let mut changed_source = original.clone();
+        changed_source
+            .source_versions
+            .insert("file:///table".into(), "source-2".into());
+
+        assert!(cache.get(&changed_source).is_none());
+        assert!(cache.get(&original).is_some());
+        assert_eq!(cache.stats().entries, 1);
     }
 
     #[test]
