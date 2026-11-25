@@ -133,12 +133,11 @@ curl -s http://kaveon-api:8080/api/v1/datasets \\
       A separate service with its own base path. The statement body takes <code>query</code>, optionally
       scoped by <code>catalog</code> and <code>schema</code>:
     </p>
-    <Code lang="bash">{`curl -s localhost:8080/v1/statement \\
+    <Code lang="bash">{`curl -fsS http://localhost:8081/v1/statement \\
   -H 'content-type: application/json' \\
-  -d '{"query":"SELECT count(*) FROM warehouse.default.orders"}'`}</Code>
+  -d '{"query":"SELECT 1 AS ready"}'`}</Code>
     <p>
-      Responses carry a query id, state, columns, rows, and elapsed time. Results are materialized in
-      process memory and history is process-local, so do not assume durability or retention across restarts.
+      This example uses the local Compose coordinator. Responses include the statement ID, state, column metadata and result data. Paged results expire separately from the query history.
       Full endpoint list: <a href="/docs/engine">Kaveon Engine</a>.
     </p>
 

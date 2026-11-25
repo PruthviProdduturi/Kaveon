@@ -9,6 +9,8 @@ export default function TroubleshootingDocs() {
     <Code lang="text">{`FastAPI: GET /api/health
 Engine:  GET /health
 Engine:  GET /ready   # requires a loaded catalog`}</Code>
+    <h2>Azure reports success but Studio does not open</h2>
+    <p>The guided preview provisions infrastructure and directory registration. Check the Engine and platform Helm releases in the selected cluster, the Studio ingress, the certificate and the hostname in <code>plannedStudioOrigin</code>. Follow <a href="/docs/installation#azure">Deploy Kaveon</a> for the workload installation and the first query.</p>
     <h2>Authentication and proxy</h2>
     <p>Verify <code>API_URL</code>, matching <code>KAVEON_PROXY_SECRET</code> values, <code>AUTH_URL</code>, and provider callback URLs. Set <code>WEB_URL</code> to the exact Studio origin. Never expose the proxy secret to browser code.</p>
     <h2>Storage and catalog connectivity</h2>

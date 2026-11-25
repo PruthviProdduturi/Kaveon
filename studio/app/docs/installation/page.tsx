@@ -1,75 +1,52 @@
-import { Callout, Code, PageHeader } from "../../../components/docs/prose";
+import { Callout, Code, PageHeader, Pager } from "../../../components/docs/prose";
 
-export const metadata = { title: "Installation" };
+export const metadata = { title: "Deploy Kaveon" };
+
+const azureInstaller = "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fa2c4d3f99f4bf9e49f77726b856a59182e8d29ef%2Finfra%2Fmarketplace%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fa2c4d3f99f4bf9e49f77726b856a59182e8d29ef%2Finfra%2Fmarketplace%2FcreateUiDefinition.json";
+const azurePackage = "https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/marketplace";
 
 export default function InstallationDocs() {
-  return (
-    <div className="docs-prose">
-      <PageHeader
-        eyebrow="Deploy &amp; Operate"
-        title="Install and deploy Kaveon"
-        lead="Choose a hosting shape, install the same Kaveon contracts, verify the request path, and then hand off to operations."
-      />
+  return <div className="docs-prose">
+    <PageHeader eyebrow="Getting Started" title="Deploy Kaveon" lead="Start a local workspace with Docker, run it on a Linux server, or provision an Azure installation in your own subscription." />
 
-      <p>
-        A Kaveon deployment has an Engine coordinator, optional Engine workers, the API and Studio. Table data stays in
-        Parquet, Delta or Iceberg storage; KaveonDB stores the platform records transactionally. Studio is portable: it
-        can run on Vercel for managed frontend hosting or inside the same AKS or VM deployment as the API and Engine.
-      </p>
+    <h2>Choose where to run</h2>
+    <table>
+      <thead><tr><th>Target</th><th>What you get</th><th>Start here</th></tr></thead>
+      <tbody>
+        <tr><td>Local Docker</td><td>Studio, API and a two-worker Engine on your machine.</td><td><a href="/docs/quickstart">Run the quickstart</a></td></tr>
+        <tr><td>Azure Kubernetes Service</td><td>A guided infrastructure and sign-in preview, followed by an operator-managed application install.</td><td><a href={azureInstaller}>Open the Azure installer</a></td></tr>
+        <tr><td>Linux VM</td><td>The Compose stack behind your HTTPS endpoint.</td><td><a href="#linux-vm">Configure a Linux VM</a></td></tr>
+      </tbody>
+    </table>
 
-      <h2>Choose a deployment</h2>
-      <table>
-        <thead><tr><th>Target</th><th>Use it for</th><th>Start here</th></tr></thead>
-        <tbody>
-          <tr><td>Docker Compose</td><td>Local development, demos and a single host</td><td><a href="/docs/quickstart">Quickstart</a> · <a href="/docs/deployment">Deployment</a></td></tr>
-          <tr><td>Linux VM</td><td>A small, controlled deployment with Docker and a reverse proxy</td><td><a href="/docs/deployment">Deployment</a> · <a href="/docs/operations">Operations</a></td></tr>
-          <tr><td>Kubernetes with Helm</td><td>Worker replacement, autoscaling and repeatable releases</td><td><a href="/docs/deployment">Deployment</a></td></tr>
-          <tr><td>Kaveon CLI</td><td>Interactive SQL and scripts from another machine</td><td><a href="/docs/engine">Engine</a></td></tr>
-        </tbody>
-      </table>
+    <Callout type="note"><strong>AWS deployment · Coming soon.</strong> The guided cloud installer currently targets Azure. An AWS installation path for EKS, IAM and S3 is planned.</Callout>
 
-      <h2>Docker Compose</h2>
-      <p>Docker is the shortest path. It starts the coordinator, workers, API and Studio without requiring PostgreSQL.</p>
-      <Code lang="bash">{`git clone https://github.com/PruthviProdduturi/Kaveon.git
-cd Kaveon
-./scripts/kaveon-up.sh
+    <h2 id="azure">Deploy to Azure</h2>
+    <p>You need access to create resources and role assignments in the target subscription and permission to register an application and assign its administrator in the target Microsoft Entra tenant.</p>
+    <ol>
+      <li><a href={azureInstaller}>Open the guided Azure form</a>. On <strong>Basics</strong>, select the subscription, resource group and region. Choose an existing group or enter your own name, such as <code>rg-kaveon-prod</code>.</li>
+      <li>Enter an installation name such as <code>kaveon</code>. The environment defaults to <strong>Production</strong>. Select Development or Staging when appropriate. When updating an existing installation, use its original group, installation name and environment.</li>
+      <li>On <strong>Compute</strong>, review the worker size and autoscaling limit. The defaults start two D4s v5 system nodes and one B2s worker, with a maximum of two workers. The system nodes and workers incur compute charges while running.</li>
+      <li>On <strong>Review + create</strong>, review the settings, then select <strong>Create</strong> to provision infrastructure. Kaveon derives the storage and registry names. The signed-in installer is the initial Kaveon administrator.</li>
+    </ol>
+    <p>The deployment creates AKS, a container registry, ADLS Gen2 containers, managed identities, networking and the Entra registration. In the deployment’s <strong>Outputs</strong>, keep <code>clusterName</code>, <code>studioPublicIpName</code>, <code>plannedStudioOrigin</code> and <code>entraHelmValues</code> for the application install.</p>
 
-# Studio       http://localhost:3000
-# API health   http://localhost:8082/api/health
-# Engine       http://localhost:8081/health`}</Code>
-      <p>Use <code>./scripts/kaveon-up.sh --data /path/to/lake</code> to mount a local lake read-only. See the self-hosting guide for storage, backups and sign-in.</p>
+    <h2>Bring Studio online on AKS</h2>
+    <p>A successful template deployment completes the infrastructure step. The Studio URL becomes usable after an operator deploys the workloads and configures HTTPS.</p>
+    <ol>
+      <li>Prepare compatible Engine, API and Studio images pinned by digest, the workload identities, the Engine credentials and CA, and the product storage settings. The <a href={azurePackage}>Azure package guide</a> documents the inputs and installation boundaries.</li>
+      <li>Install the Engine Helm chart, then the platform chart for API and Studio. Supply the directory values from the template to both releases. Configure the Studio ingress to use the reserved IP, with a certificate for the planned Studio hostname.</li>
+      <li>Open the HTTPS Studio origin, sign in with Microsoft and run <code>SELECT 1 AS ready;</code> in SQL Lab. Then register a lake catalog and read a table to verify storage identity and data access.</li>
+    </ol>
+    <p>For Kubernetes configuration, see the <a href="https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/helm/kaveon-engine">Engine chart</a> and <a href="https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/helm/kaveon-platform">platform chart</a>. The public Azure form and its workload identity settings are specific to AKS.</p>
 
-      <h2>Linux VM</h2>
-      <p>Use the same Compose stack on a Linux VM, bind the public entry point to a TLS reverse proxy, and keep the Engine and API private. A VM is the simplest persistent cloud deployment and is independent of Kubernetes.</p>
-      <Callout type="warn">Do not publish the Engine or API ports directly. Put TLS and authentication at Studio or the reverse proxy, and back up both the KaveonDB system store and the Engine catalog.</Callout>
+    <h2 id="linux-vm">Linux VM</h2>
+    <p>Install Git, Bash and Docker with Compose v2, then follow the <a href="/docs/quickstart">local quickstart</a> on the VM. Use a persistent disk for the coordinator volume and any local data. For shared access, configure Studio sign-in, set its public HTTPS origin and point a TLS reverse proxy at Studio on port 3000. Keep the API and Engine on the private interface.</p>
+    <Code lang="bash">{`docker compose ps
+curl -fsS http://localhost:8082/api/health
+curl -fsS http://localhost:8081/health`}</Code>
+    <p>Studio can also be hosted on Vercel if its server can securely reach the API. See <a href="/docs/deployment">Deployment topology</a> for service placement, <a href="/docs/auth">Auth &amp; RBAC</a> for identity, and <a href="/docs/operations">Operations</a> for backups and recovery.</p>
 
-      <h2>Kubernetes with Helm</h2>
-      <p>The Helm charts pin every image by immutable digest. The production-shaped Azure template creates <code>kaveon-aks</code> with one system node and a worker pool autoscaled from one to four nodes. It preserves the existing ADLS account and ACR; it does not change subscription policies.</p>
-      <Code lang="powershell">{`az aks get-credentials --resource-group kaveon-rg --name kaveon-aks --overwrite-existing
-kubelogin convert-kubeconfig -l azurecli
-helm upgrade --install kaveon infra/helm/kaveon-engine --namespace kaveon --create-namespace \`
-  --set image.repository=kaveonacr.azurecr.io/kaveon-engine \`
-  --set image.digest=sha256:<immutable-digest>`}</Code>
-      <p>Use the Azure deployment guide for the Bicep workflow, workload identity, secrets, TLS and autoscaler verification. The chart is deliberately separate from infrastructure creation so credentials never enter source control.</p>
-
-      <h2>Studio hosting choices</h2>
-      <p>Vercel is optional managed frontend hosting for previews, CDN delivery and a low-operations public site. It does not replace the API or Engine, and its Hobby tier has provider usage and commercial limits. The same Studio image can run inside AKS with the portal Helm chart, alongside the API and Engine, when one cluster should own the complete product surface.</p>
-      <Code lang="bash">{`helm upgrade --install kaveon-portal infra/helm/kaveon-platform \\
-  --namespace kaveon --create-namespace \\
-  --set images.studio.repository=<registry>/kaveon-studio \\
-  --set images.studio.digest=sha256:<immutable-digest> \\
-  --set images.api.repository=<registry>/kaveon-api \\
-  --set images.api.digest=sha256:<immutable-digest> \\
-  --set secrets.portalAuth=kaveon-portal-auth`}</Code>
-      <p>Vercel and AKS can coexist during migration. Switch traffic only after the AKS ingress, OAuth callbacks, API health, catalog restore and dashboard smoke tests pass. Continue with <a href="/docs/deployment">Deployment topology</a>, then <a href="/docs/operations">Operations</a>.</p>
-
-      <h2>After installation</h2>
-      <ol>
-        <li>Open Catalog and register a Parquet, Delta or Iceberg location.</li>
-        <li>Run <code>ANALYZE</code> so the planner can use exact source statistics.</li>
-        <li>Run a bounded SQL query from SQL Lab or the CLI.</li>
-        <li>Configure authentication before exposing Studio to other users.</li>
-      </ol>
-    </div>
-  );
+    <Pager prev={{ href: "/docs/quickstart", title: "Quickstart" }} next={{ href: "/docs/concepts", title: "Core concepts" }} />
+  </div>;
 }

@@ -33,28 +33,22 @@ location you choose at deployment.
 
 ```bash
 ./scripts/kaveon-up.sh                                       # local disk
-./scripts/kaveon-up.sh --storage s3://my-bucket/kaveon
 ./scripts/kaveon-up.sh --storage adls://myaccount/system/kaveon
 ```
 
 | | use it when |
 |---|---|
 | `file:///path` | a laptop, a single server, an evaluation. The default. |
-| `s3://bucket/prefix` | AWS, or anything S3-compatible with conditional writes |
+| AWS | Coming soon. The launcher currently rejects S3 as the system store. |
 | `adls://account/container/prefix` | Azure |
 
-**Table data is a separate question.** A catalog can point at any location the
-deployment can reach — another bucket, another account, a mounted directory,
-someone else's Delta or Iceberg tables. The *record* of those catalogs is always
-written to the system store. So you can keep the system store on Azure and query
-data in S3, or the other way round.
+**Table data and system storage are configured separately.** Register a catalog over a mounted directory or an authorized ADLS location. See the [Azure installation preview](https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/marketplace) for the portal form, directory registration and Helm handoff.
 
 Choose it once. Moving it later is a migration, not a setting — see
 [system storage](../engineering/system-storage.md).
 
 Credentials never go in the URL and never go in `.env`. ADLS uses workload
-identity, falling back to managed identity; S3 uses the standard provider chain
-(environment, web identity, instance profile). The host supplies them; Kaveon
+identity, falling back to managed identity. The host supplies them; Kaveon
 reads them.
 
 ## Bringing your data
@@ -82,7 +76,7 @@ metastore, no external catalog service.
 Without an OAuth provider the stack runs in local mode with a single development
 identity. That is fine on a laptop and **not fine on a network**.
 
-To require real sign-in, set any one of GitHub, Google or Microsoft Entra in
+To require real sign-in, configure the Microsoft Entra settings supported by Compose in
 `.env` and restart:
 
 ```bash
@@ -126,8 +120,7 @@ backed up wherever it lives.
 | System store | the `--storage` location | dashboards, charts, datasets, saved statements, chat history, favourites, permissions, audit |
 | Engine catalog | `/var/lib/kaveon/catalog.db` on the coordinator (the `catalog-data` volume) | catalogs, schemas, every table definition, planner statistics, cubes |
 
-With `file://` the system store is a directory — copy it. With `s3://` or
-`adls://` use the provider's own versioning and retention. The catalog database
+With `file://` the system store is a directory — copy it. With `adls://` use the provider's own versioning and retention. The catalog database
 is a file on a Docker volume; copy it while the coordinator is stopped, or
 `sqlite3 catalog.db ".backup"` while it is running — a plain copy of a live
 SQLite database with a write-ahead log can be torn.
@@ -141,8 +134,7 @@ rebuilt by hand.
 ## Replacing the host
 
 Losing the machine is not the same as losing the data. Table data in object
-storage is untouched, and the system store with it if you chose `s3://` or
-`adls://`. What does not come back on its own is the Engine catalog, so a new
+storage is untouched, and the system store with it if you chose `adls://`. What does not come back on its own is the Engine catalog, so a new
 host comes up able to read everything and knowing about nothing.
 
 With the catalog database restored from backup, the stack comes up as it was.

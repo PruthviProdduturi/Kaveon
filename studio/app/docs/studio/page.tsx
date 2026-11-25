@@ -47,8 +47,8 @@ export default function StudioDocs() {
 
       <h2>Deploy Studio</h2>
       <p>
-        For a five-minute local run, use <a href="/docs/quickstart">Quickstart</a>. For Vercel, AKS, or a Linux
-        VM, follow <a href="/docs/installation">Install &amp; deploy</a>, then verify the request path in
+        For a local run, use <a href="/docs/quickstart">Quickstart</a>. For Vercel, AKS, or a Linux
+        VM, follow <a href="/docs/installation">Deploy Kaveon</a>, then verify the request path in
         <a href="/docs/deployment">Deployment topology</a> and <a href="/docs/operations">Operations</a>.
       </p>
 
