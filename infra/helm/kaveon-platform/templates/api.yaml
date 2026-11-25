@@ -37,6 +37,11 @@ metadata:
   namespace: kaveon
 spec:
   replicas: 1
+  {{- if and (or $retirement $rehearsal) (or (has "ReadWriteOnce" .Values.api.evidenceStorage.accessModes) (has "ReadWriteOncePod" .Values.api.evidenceStorage.accessModes)) (not (has "ReadWriteMany" .Values.api.evidenceStorage.accessModes)) }}
+  # A single-node disk must detach before its replacement pod can mount it.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app: kaveon-api
