@@ -42,7 +42,7 @@ api:
     restartRehearsalMode: true
     retirementMode: false
     authorityFamilies: activity,ai_configuration,catalog_sources,charts,chat_history,context_cache,dashboards,data_sources,dataset_semantics,datasets,dlm_generation,favorites,query_history,saved_queries,user_recents,user_themes
-    readAuthorityFamilies: activity,charts,chat_history,dashboards,datasets,dlm_definitions,favorites,query_history,saved_queries,sources,user_recents,user_themes
+    readAuthorityFamilies: activity,charts,chat_history,dashboards,datasets,dlm_definitions,dlm_runs,favorites,query_history,saved_queries,sources,user_recents,user_themes
     evidencePvc: kaveon-retirement-evidence
     evidencePath: /retirement/postgresql-reconciliation-evidence.json
     auditPath: /retirement/postgresql-retirement-audit.json
