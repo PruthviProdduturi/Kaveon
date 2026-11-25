@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
+use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -361,6 +361,19 @@ impl ExternalMerge {
     }
 
     pub(crate) fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let result = self.next_batch_inner();
+        if result.is_err() {
+            // A failed consumer may keep the operator alive while deciding
+            // how to report the error. Release cursor reservations and run
+            // handles immediately so cancellation or memory failures do not
+            // retain spill files until that later drop.
+            self.cursors.clear();
+            self._runs.clear();
+        }
+        result
+    }
+
+    fn next_batch_inner(&mut self) -> Result<Option<RecordBatch>> {
         let target = self.remaining.map_or(self.output_batch_size, |remaining| {
             remaining.min(self.output_batch_size)
         });
@@ -502,7 +515,7 @@ mod tests {
     use arrow::array::{Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use kaveon_core::predicate::ScalarValue;
-    use kaveon_core::{BinaryOp, collect_batches};
+    use kaveon_core::{collect_batches, BinaryOp};
 
     use super::*;
 
@@ -657,15 +670,13 @@ mod tests {
         assert!(SortOperator::new(Box::new(source), vec![]).is_err());
 
         let source = MockOperator::new(vec![batch(vec![Some(1)], vec!["a"])]);
-        assert!(
-            SortOperator::new(
-                Box::new(source),
-                vec![SortExpr::new(Expr::Column("id".into()), true)]
-            )
-            .unwrap()
-            .with_output_batch_size(0)
-            .is_err()
-        );
+        assert!(SortOperator::new(
+            Box::new(source),
+            vec![SortExpr::new(Expr::Column("id".into()), true)]
+        )
+        .unwrap()
+        .with_output_batch_size(0)
+        .is_err());
     }
 
     #[test]
@@ -676,24 +687,20 @@ mod tests {
             vec![SortExpr::new(Expr::Column("missing".into()), true)],
         )
         .unwrap();
-        assert!(
-            unknown
-                .next_batch()
-                .unwrap_err()
-                .to_string()
-                .contains("missing")
-        );
+        assert!(unknown
+            .next_batch()
+            .unwrap_err()
+            .to_string()
+            .contains("missing"));
 
         let source = MockOperator::new(vec![batch(vec![Some(1)], vec!["a"])]);
         let mut invalid =
             SortOperator::new(Box::new(source), vec![SortExpr::new(Expr::Star, true)]).unwrap();
-        assert!(
-            invalid
-                .next_batch()
-                .unwrap_err()
-                .to_string()
-                .contains("cannot be evaluated")
-        );
+        assert!(invalid
+            .next_batch()
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be evaluated"));
     }
 
     #[test]
@@ -711,13 +718,11 @@ mod tests {
             )],
         )
         .unwrap();
-        assert!(
-            operator
-                .next_batch()
-                .unwrap_err()
-                .to_string()
-                .contains("arithmetic not supported")
-        );
+        assert!(operator
+            .next_batch()
+            .unwrap_err()
+            .to_string()
+            .contains("arithmetic not supported"));
     }
 
     #[test]
@@ -751,5 +756,31 @@ mod tests {
         );
         assert!(spill_metrics.snapshot().peak_bytes > 0);
         assert!(memory_pool.snapshot().peak_bytes <= memory_limit);
+    }
+
+    #[test]
+    fn external_merge_releases_spill_runs_when_consumption_is_cancelled() {
+        let input = batch(vec![Some(2), Some(1)], vec!["b", "a"]);
+        let schema = input.schema();
+        let spill = SpillManager::new(std::env::temp_dir(), 64 * 1_024).unwrap();
+        let spill_metrics = spill.clone();
+        let run = spill.write_run(&schema, &[input]).unwrap();
+        let memory_pool = kaveon_core::QueryMemoryPool::new("sort-cancel", 64 * 1_024).unwrap();
+        let memory = memory_pool.operator("sort").unwrap();
+        let mut merge = ExternalMerge::new(
+            vec![run],
+            schema,
+            &[SortExpr::new(Expr::Column("id".into()), true)],
+            2,
+            None,
+            Some(memory.clone()),
+        )
+        .unwrap();
+        memory.query().set_cancellation_probe(|| true).unwrap();
+
+        let error = crate::expr_eval::with_expression_memory(Some(&memory), || merge.next_batch())
+            .unwrap_err();
+        assert!(error.to_string().contains("canceled"));
+        assert_eq!(spill_metrics.snapshot().current_bytes, 0);
     }
 }

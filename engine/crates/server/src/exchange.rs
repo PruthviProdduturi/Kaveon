@@ -703,7 +703,7 @@ impl StreamingOutput {
             schema,
             exchange_writer_options()?,
         )
-            .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
+        .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
         Ok(Self {
             identity,
             writer: Some(writer),
@@ -840,8 +840,9 @@ pub fn encode_batches(
     identity.validate()?;
     let mut payload = crate::transport::BoundedBuffer::new(limits.max_payload_bytes);
     {
-        let mut writer = StreamWriter::try_new_with_options(&mut payload, schema, exchange_writer_options()?)
-            .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
+        let mut writer =
+            StreamWriter::try_new_with_options(&mut payload, schema, exchange_writer_options()?)
+                .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
         for batch in batches {
             writer
                 .write(batch)

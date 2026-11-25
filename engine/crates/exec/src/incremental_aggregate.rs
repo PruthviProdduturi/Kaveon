@@ -254,11 +254,7 @@ impl IncrementalAggregateMerger {
     /// path. The columnar path reserves the selected batch's complete growth
     /// before applying it, so a memory refusal cannot leave a partially
     /// applied selection and spill retry remains exact.
-    pub fn push_selected_batch(
-        &mut self,
-        batch: &RecordBatch,
-        selected: &[u32],
-    ) -> Result<bool> {
+    pub fn push_selected_batch(&mut self, batch: &RecordBatch, selected: &[u32]) -> Result<bool> {
         self.applied = 0;
         // Keep the same transient input reservation as `push_batch`.  The
         // exchange source may be waiting for pressure relief; without this

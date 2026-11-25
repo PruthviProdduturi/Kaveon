@@ -353,7 +353,10 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
                 if matches!(agg.func, AggFunc::Min | AggFunc::Max)
                     && matches!(
                         data_type,
-                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32 | DataType::Timestamp(_, _)
+                        DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Date32
+                            | DataType::Timestamp(_, _)
                     )
                 {
                     return Ok(data_type.clone());
@@ -1292,7 +1295,10 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                 AggregateState::IntegerMin(_) | AggregateState::IntegerMax(_)
                     if matches!(
                         data_type,
-                        DataType::Int32 | DataType::Int64 | DataType::Date32 | DataType::Timestamp(_, _)
+                        DataType::Int32
+                            | DataType::Int64
+                            | DataType::Date32
+                            | DataType::Timestamp(_, _)
                     ) =>
                 {
                     data_type.clone()
@@ -1723,23 +1729,81 @@ fn take_compact_group_key_bytes<'a>(input: &mut &'a [u8], length: usize) -> Resu
 pub(crate) fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
     if bytes.starts_with(crate::columnar_aggregate::FIXED_KEY_MAGIC) {
         let mut input = &bytes[crate::columnar_aggregate::FIXED_KEY_MAGIC.len()..];
-        let count = *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() as usize;
+        let count = *take_compact_group_key_bytes(&mut input, 1)?
+            .first()
+            .unwrap() as usize;
         let tagged = input.len() != count * 8 && input.len() != count * 4 && input.len() != count;
-        let tags = if tagged { Some((0..count).map(|_| Ok(*take_compact_group_key_bytes(&mut input, 1)?.first().unwrap())).collect::<Result<Vec<_>>>()?) } else { None };
+        let tags = if tagged {
+            Some(
+                (0..count)
+                    .map(|_| {
+                        Ok(*take_compact_group_key_bytes(&mut input, 1)?
+                            .first()
+                            .unwrap())
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
         let mut keys = Vec::with_capacity(count);
         for position in 0..count {
             let tag = tags.as_ref().map(|tags| tags[position]);
             keys.push(match tag {
-                None if input.len() == (count - position) * 8 => AggregateValue::Int64(i64::from_le_bytes(take_compact_group_key_bytes(&mut input, 8)?.try_into().unwrap())),
-                None if input.len() == (count - position) * 4 => AggregateValue::Int32(i32::from_le_bytes(take_compact_group_key_bytes(&mut input, 4)?.try_into().unwrap())),
-                None if input.len() == count - position => AggregateValue::Bool(match *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() { 0 => false, 1 => true, _ => return Err(exec_err("invalid fixed boolean aggregate key")) }),
-                Some(crate::columnar_aggregate::COMPACT_KEY_INT64) => AggregateValue::Int64(i64::from_le_bytes(take_compact_group_key_bytes(&mut input, 8)?.try_into().unwrap())),
-                Some(crate::columnar_aggregate::COMPACT_KEY_INT32) => AggregateValue::Int32(i32::from_le_bytes(take_compact_group_key_bytes(&mut input, 4)?.try_into().unwrap())),
-                Some(crate::columnar_aggregate::COMPACT_KEY_BOOL) => AggregateValue::Bool(match *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() { 0 => false, 1 => true, _ => return Err(exec_err("invalid fixed boolean aggregate key")) }),
+                None if input.len() == (count - position) * 8 => {
+                    AggregateValue::Int64(i64::from_le_bytes(
+                        take_compact_group_key_bytes(&mut input, 8)?
+                            .try_into()
+                            .unwrap(),
+                    ))
+                }
+                None if input.len() == (count - position) * 4 => {
+                    AggregateValue::Int32(i32::from_le_bytes(
+                        take_compact_group_key_bytes(&mut input, 4)?
+                            .try_into()
+                            .unwrap(),
+                    ))
+                }
+                None if input.len() == count - position => AggregateValue::Bool(
+                    match *take_compact_group_key_bytes(&mut input, 1)?
+                        .first()
+                        .unwrap()
+                    {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(exec_err("invalid fixed boolean aggregate key")),
+                    },
+                ),
+                Some(crate::columnar_aggregate::COMPACT_KEY_INT64) => {
+                    AggregateValue::Int64(i64::from_le_bytes(
+                        take_compact_group_key_bytes(&mut input, 8)?
+                            .try_into()
+                            .unwrap(),
+                    ))
+                }
+                Some(crate::columnar_aggregate::COMPACT_KEY_INT32) => {
+                    AggregateValue::Int32(i32::from_le_bytes(
+                        take_compact_group_key_bytes(&mut input, 4)?
+                            .try_into()
+                            .unwrap(),
+                    ))
+                }
+                Some(crate::columnar_aggregate::COMPACT_KEY_BOOL) => AggregateValue::Bool(
+                    match *take_compact_group_key_bytes(&mut input, 1)?
+                        .first()
+                        .unwrap()
+                    {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(exec_err("invalid fixed boolean aggregate key")),
+                    },
+                ),
                 _ => return Err(exec_err("unknown fixed aggregate group key type")),
             });
         }
-        if !input.is_empty() { return Err(exec_err("aggregate group key has trailing fixed bytes")); }
+        if !input.is_empty() {
+            return Err(exec_err("aggregate group key has trailing fixed bytes"));
+        }
         return Ok(keys);
     }
     if bytes.starts_with(crate::columnar_aggregate::COMPACT_KEY_MAGIC) {
@@ -2487,7 +2551,10 @@ impl HashAggregate {
                     && !(matches!(agg.func, AggFunc::Min | AggFunc::Max)
                         && matches!(
                             data_type,
-                            DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32 | DataType::Timestamp(_, _)
+                            DataType::Utf8
+                                | DataType::LargeUtf8
+                                | DataType::Date32
+                                | DataType::Timestamp(_, _)
                         ))
                 {
                     return Err(exec_err(format!(
@@ -5424,7 +5491,12 @@ mod tests {
     #[test]
     fn timestamp_min_max_preserves_units_timezone_and_exact_values() {
         use arrow::datatypes::TimeUnit;
-        for unit in [TimeUnit::Second, TimeUnit::Millisecond, TimeUnit::Microsecond, TimeUnit::Nanosecond] {
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
             let data_type = DataType::Timestamp(unit, Some("UTC".into()));
             // Adjacent values above f64's exact integer range must stay distinct.
             let low = 9_007_199_254_740_992_i64;
@@ -5432,26 +5504,33 @@ mod tests {
             let timestamps = arrow::compute::cast(
                 &Int64Array::from(vec![Some(high), None, Some(low), None]),
                 &data_type,
-            ).unwrap();
+            )
+            .unwrap();
             let batch = RecordBatch::try_new(
                 Arc::new(Schema::new(vec![
                     Field::new("g", DataType::Int64, false),
                     Field::new("t", data_type.clone(), true),
                 ])),
                 vec![Arc::new(Int64Array::from(vec![1, 1, 1, 2])), timestamps],
-            ).unwrap();
+            )
+            .unwrap();
             for grouped in [false, true] {
                 let mut aggregate = HashAggregate::new(
                     Box::new(Input::new(batch.clone())),
                     if grouped { vec!["g".into()] } else { vec![] },
-                    vec![AggExpr::new(AggFunc::Min, "t"), AggExpr::new(AggFunc::Max, "t")],
-                ).unwrap();
+                    vec![
+                        AggExpr::new(AggFunc::Min, "t"),
+                        AggExpr::new(AggFunc::Max, "t"),
+                    ],
+                )
+                .unwrap();
                 let result = aggregate.next_batch().unwrap().unwrap();
                 let offset = usize::from(grouped);
                 assert_eq!(result.column(offset).data_type(), &data_type);
                 assert_eq!(result.column(offset + 1).data_type(), &data_type);
                 let min = arrow::compute::cast(result.column(offset), &DataType::Int64).unwrap();
-                let max = arrow::compute::cast(result.column(offset + 1), &DataType::Int64).unwrap();
+                let max =
+                    arrow::compute::cast(result.column(offset + 1), &DataType::Int64).unwrap();
                 for row in 0..result.num_rows() {
                     if grouped && result.column(0).as_primitive::<Int64Type>().value(row) == 2 {
                         assert!(min.is_null(row));
