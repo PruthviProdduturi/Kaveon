@@ -14,7 +14,7 @@ If your tenant requires a service management reference on app registrations, set
 
 With directory provisioning enabled, the template reserves a DNS name in the customer's resource group, registers the Studio callback for that name in the customer's Entra tenant, and assigns the initial Admin. Outputs include the reserved IP name and non-secret Helm identity values. Directory permissions are required to register the app and assign roles. A tenant that restricts delegated consent may also require approval of Kaveon's own API scope.
 
-**Preview boundary.** The template provisions the foundation. An operator still deploys the images and Helm releases, attaches ingress to the reserved IP, obtains the HTTPS certificate and verifies first sign-in and SQL execution. The planned Studio origin in deployment outputs only identifies the address. A searchable Marketplace listing is a separate publication step.
+**Preview boundary.** The template provisions the foundation. An operator deploys the images and Helm releases and verifies HTTPS, first sign-in and SQL execution. For AKS, the platform chart can attach its HTTPS endpoint to the reserved IP. Set `azureEdge.enabled`, `azureEdge.publicIpName` and `azureEdge.resourceGroup`, pin the Caddy image repository and digest, and set `portal.publicUrl` to the planned Studio origin. The cluster identity receives permission to bind that IP. Certificate issuance requires the certificate authority to reach the challenge endpoint. For a network with restricted inbound access, use an approved organizational ingress and certificate. The planned Studio origin in deployment outputs only identifies the address. A searchable Marketplace listing is a separate publication step.
 
 ## Open the infrastructure form in Azure Portal
 

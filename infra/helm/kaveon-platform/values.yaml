@@ -361,3 +361,11 @@ studio:
     requests: {cpu: 200m, memory: 512Mi}
     limits: {cpu: "2", memory: 3Gi}
 
+
+# Optional HTTPS edge for an AKS installation with a reserved Azure public IP.
+azureEdge:
+  enabled: false
+  resourceGroup: ""
+  publicIpName: ""
+  repository: ""
+  digest: ""

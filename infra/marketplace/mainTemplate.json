@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "3917176621850708729"
+      "templateHash": "1982022165554092675"
     }
   },
   "parameters": {
@@ -878,6 +878,62 @@
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', 'product')]",
         "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('configureDirectory')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('edge-access-{0}', variables('installKey'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "publicIpName": {
+            "value": "[format('{0}-studio-ip', variables('resourcePrefix'))]"
+          },
+          "clusterIdentityName": {
+            "value": "[format('{0}-cluster', variables('resourcePrefix'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "14851889024914575969"
+            }
+          },
+          "parameters": {
+            "publicIpName": {
+              "type": "string"
+            },
+            "clusterIdentityName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]",
+              "name": "[guid(resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('clusterIdentityName')), 'studio-edge')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('clusterIdentityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', format('aks-{0}', variables('installKey')))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix')))]"
       ]
     }
   ],

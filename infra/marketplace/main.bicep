@@ -126,6 +126,15 @@ module aks '../bicep/environments/aks-production.bicep' = {
   dependsOn: [openSourceContainer, productContainer, backupContainer, directory]
 }
 
+module edgeAccess 'edge-access.bicep' = if (configureDirectory) {
+  name: 'edge-access-${installKey}'
+  params: {
+    publicIpName: studioIp!.name
+    clusterIdentityName: '${resourcePrefix}-cluster'
+  }
+  dependsOn: [aks]
+}
+
 output clusterName string = aks.outputs.clusterName
 output registryName string = registry.name
 output storageAccountName string = storage.name
