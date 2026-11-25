@@ -489,7 +489,7 @@ export function Inventory({ catalogName, schemaName, action, reloadToken = 0 }: 
         <h1 className={s.emptyTitle}>{isAdmin ? "No data catalogs registered" : "No data catalogs available to you"}</h1>
         <p className={s.emptyBody}>
           {isAdmin
-            ? "A catalog is a storage location Kaveon reads in place — a container in ADLS Gen2, a bucket in S3, or a directory on the coordinator. Register one and the schemas and tables under it appear here and in SQL Lab."
+            ? "Register a storage location in Settings, then add its schemas and tables. Registered tables appear here and in SQL Lab."
             : "Catalogs are registered and granted by an administrator. Ask for access to one and its tables appear here and in SQL Lab."}
         </p>
         {isAdmin && (

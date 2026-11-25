@@ -1,4 +1,4 @@
-"use client";
+export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { CatalogSources } from "../../../components/CatalogSources";
@@ -13,13 +13,13 @@ export default function StoragePage() {
             <div className={s.mark}><i className="fas fa-hard-drive" /></div>
             <div style={{ minWidth: 0 }}>
               <h2 className={s.cardTitle}>KaveonDB catalog sources</h2>
-              <p className={s.cardSub}>Storage locations KaveonDB reads in place. Registering one creates the catalog; synchronizing publishes its definition to KaveonDB. Tables are added separately.</p>
+              <p className={s.cardSub}>Register a storage location, then synchronize its catalog definition with KaveonDB. Add its schemas and tables in the Catalog.</p>
             </div>
           </div>
           <Link href="/catalog" className={s.ghost}>Browse the Catalog</Link>
         </div>
       </section>
-      <CatalogSources />
+      <CatalogSources localInstallation={process.env.KAVEON_LOCAL_MODE === "true"} />
     </div>
   );
 }

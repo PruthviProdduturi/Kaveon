@@ -105,7 +105,7 @@ const FORMAT_META: Record<string, { label: string; paint: Paint }> = {
 };
 
 const ADAPTER_META: Record<string, { label: string }> = {
-  native:          { label: "Native" },
+  native:          { label: "KaveonDB" },
   hive_metastore:  { label: "Hive Metastore" },
   aws_glue:        { label: "AWS Glue" },
   unity_catalog:   { label: "Unity Catalog" },
@@ -113,7 +113,7 @@ const ADAPTER_META: Record<string, { label: string }> = {
 };
 
 const CREDENTIAL_META: { kind: string; label: string; paint: Paint }[] = [
-  { kind: "",                   label: "Host identity",     paint: NEUTRAL },
+  { kind: "",                   label: "Deployment default",     paint: NEUTRAL },
   { kind: "managed_identity",   label: "Managed Identity",  paint: GREEN },
   { kind: "workload_identity",  label: "Workload Identity", paint: BLUE },
   { kind: "secret_store",       label: "Key Vault",         paint: PURPLE },
@@ -183,7 +183,7 @@ function storageDisplay(cs: CatalogSource): string {
 /** A listing read that did not answer, kept apart from a listing that was empty. */
 interface ReadFailure { reason: ReadReason | null; detail: string }
 
-export function CatalogSources() {
+export function CatalogSources({ localInstallation }: { localInstallation: boolean }) {
   const { isAuthenticated } = useAuth();
   const { theme } = useTheme();
   const [sources, setSources] = useState<CatalogSource[]>([]);
@@ -422,7 +422,7 @@ export function CatalogSources() {
                   <th><span className="column-header-label">Engine Catalog</span></th>
                   <th><span className="column-header-label">Storage</span></th>
                   <th><span className="column-header-label">Format</span></th>
-                  <th><span className="column-header-label">Adapter</span></th>
+                  <th><span className="column-header-label">Metadata catalog</span></th>
                   <th><span className="column-header-label">Credential</span></th>
                   <th><span className="column-header-label">Status</span></th>
                   <th><span className="column-header-label">Actions</span></th>
@@ -522,6 +522,7 @@ export function CatalogSources() {
 
       {showModal && (
         <CatalogSourceModal
+          localInstallation={localInstallation}
           source={editing}
           onClose={() => { setShowModal(false); setEditing(null); }}
           onSuccess={() => { setShowModal(false); setEditing(null); load(); }}
@@ -533,12 +534,13 @@ export function CatalogSources() {
 
 
 interface ModalProps {
+  localInstallation: boolean;
   source: CatalogSource | null;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
+function CatalogSourceModal({ source, onClose, onSuccess, localInstallation }: ModalProps) {
   const isEditing = !!source;
   const { theme } = useTheme();
   const [saving, setSaving] = useState(false);
@@ -572,7 +574,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
 
   const [name, setName] = useState(source?.name || "");
   const [engineCatalog, setEngineCatalog] = useState(source?.engine_catalog || "");
-  const [storageType, setStorageType] = useState<string>(source?.storage_type || "local");
+  const [storageType, setStorageType] = useState<string>(source?.storage_type || (localInstallation ? "local" : "adls_gen2"));
   const [dataFormat, setDataFormat] = useState<string>(source?.data_format || "parquet");
   const [adapterType, setAdapterType] = useState<string>(source?.adapter_type || "native");
   const [description, setDescription] = useState(source?.description || "");
@@ -592,7 +594,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
   // against this rather than against the inputs' own defaults, so reopening a
   // form and saving it unchanged is never treated as a re-point.
   const storedStorage = JSON.stringify({
-    storage_type: source?.storage_type || "local",
+    storage_type: source?.storage_type || (localInstallation ? "local" : "adls_gen2"),
     base_path: initSC.base_path || "",
     account: initSC.account || "",
     container: initSC.container || "",
@@ -767,11 +769,11 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
               <div>
-                <label style={labelStyle}>Display Name *</label>
+                <label style={labelStyle}>Display name *</label>
                 <input ref={firstFieldRef} style={inputStyle} placeholder="e.g., Production Lakehouse" value={name} onChange={e => setName(e.target.value)} required />
               </div>
               <div>
-                <label style={labelStyle}>Engine Catalog Name *</label>
+                <label style={labelStyle}>SQL catalog name *</label>
                 <input style={{ ...inputStyle, fontFamily: "monospace" }} placeholder="e.g., lakehouse" value={engineCatalog} onChange={e => setEngineCatalog(e.target.value)} required />
               </div>
             </div>
@@ -779,11 +781,23 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
             <div style={fieldStyle}>
               <label style={labelStyle}>Storage Type *</label>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                {Object.entries(STORAGE_META).map(([key, meta]) => (
-                  <button key={key} type="button" aria-pressed={storageType === key} style={chipStyle(storageType === key, paint(meta.paint, theme))} onClick={() => setStorageType(key)}>
-                    {meta.label}
-                  </button>
-                ))}
+                {Object.entries(STORAGE_META).map(([key, meta]) => {
+                  if (key === "local" && !localInstallation && source?.storage_type !== key) return null;
+                  const comingSoon = key === "s3" && source?.storage_type !== key;
+                  return (
+                    <button key={key} type="button" aria-pressed={storageType === key} disabled={comingSoon}
+                      style={{ ...chipStyle(storageType === key, paint(meta.paint, theme)), cursor: comingSoon ? "not-allowed" : "pointer" }}
+                      onClick={() => {
+                        setStorageType(key);
+                        if (key === "local" && storageType !== key) {
+                          setCredentialKind("");
+                          setCredentialRef("");
+                        }
+                      }}>
+                      {meta.label}{comingSoon && " · Coming soon"}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -796,7 +810,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
             {storageType === "adls_gen2" && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", ...fieldStyle }}>
                 <div>
-                  <label style={labelStyle}>Account *</label>
+                  <label style={labelStyle}>Storage account *</label>
                   <input style={{ ...inputStyle, fontFamily: "monospace" }} placeholder="storageaccount" value={adlsAccount} onChange={e => setAdlsAccount(e.target.value)} required />
                 </div>
                 <div>
@@ -857,12 +871,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
               <div>
-                {/* A catalog does not have a format; its tables do, and they
-                    can differ. This is the format a newly registered table is
-                    assumed to be, which is why it is named for what it does
-                    rather than described as a property of the source. The
-                    Catalog page reports each table's real format. */}
-                <label style={labelStyle}>Default format for new tables *</label>
+                <label style={labelStyle}>Catalog file format *</label>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   {Object.entries(FORMAT_META).map(([key, meta]) => (
                     <button key={key} type="button" aria-pressed={dataFormat === key} style={chipStyle(dataFormat === key, paint(meta.paint, theme))} onClick={() => setDataFormat(key)}>
@@ -870,6 +879,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                     </button>
                   ))}
                 </div>
+                <small>Recorded for this source. Choose each table’s format when you register it.</small>
               </div>
               <div>
                 {/* Who says which tables exist. Native means Kaveon's own
@@ -879,8 +889,10 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                     catalog adapters can currently be synchronized" — so they
                     are shown as unavailable rather than offered and then
                     rejected after the form is filled in. */}
-                <label style={labelStyle}>Catalog Adapter</label>
+                <label htmlFor="source-metadata-catalog" style={labelStyle}>Metadata catalog</label>
                 <select
+                  id="source-metadata-catalog"
+                  aria-describedby="source-metadata-help"
                   value={adapterType}
                   onChange={e => setAdapterType(e.target.value)}
                   style={{ ...inputStyle, cursor: "pointer" }}
@@ -891,6 +903,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                     </option>
                   ))}
                 </select>
+                <small id="source-metadata-help">KaveonDB manages the schema and table definitions. Data stays in the storage location you choose.</small>
               </div>
             </div>
 
@@ -907,37 +920,22 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
               </div>
             )}
 
-            <div style={fieldStyle}>
-              <label style={labelStyle}>Credential</label>
+            {(storageType !== "local" || credentialKind) && <div style={fieldStyle}>
+              <label style={labelStyle}>Storage identity</label>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: credentialKind ? "0.75rem" : 0 }}>
-                {/* "Host identity" is not "None": object storage is never read
-                    anonymously. Leaving this unset means the Engine
-                    authenticates as whatever the host already is — on Azure,
-                    the VM's managed identity, picked up through the default
-                    credential chain with nothing configured here. Naming it
-                    "None" invited the reader to believe the storage was open.
-
-                    Only Key Vault has a reference to point at, and only Key
-                    Vault offers a field for one, so every other selection
-                    clears it. Switching an existing Key Vault source to
-                    Managed Identity used to leave `credentialRef` holding the
-                    vault URI and send it with the save, storing a secret
-                    reference against a kind that has no secret — a stale
-                    pointer that outlived the only control that could show it.
-                    Clearing on selection is why this is one loop rather than
-                    four buttons with four different handlers. */}
                 {CREDENTIAL_META.map(({ kind, label, paint: hue }) => (
                   <button
                     key={kind || "host"}
                     type="button"
                     aria-pressed={credentialKind === kind}
+                    disabled={kind === "secret_store" && source?.credential_kind !== kind}
                     style={chipStyle(credentialKind === kind, paint(hue, theme))}
                     onClick={() => {
                       setCredentialKind(kind);
-                      if (kind !== "secret_store") setCredentialRef("");
+                      if (kind !== credentialKind) setCredentialRef("");
                     }}
                   >
-                    {label}
+                    {label}{kind === "secret_store" && source?.credential_kind !== kind && " · Coming soon"}
                   </button>
                 ))}
                 {/* The route also accepts `environment`, which no chip above
@@ -959,13 +957,15 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                 </div>
               )}
               {(credentialKind === "managed_identity" || credentialKind === "workload_identity") && (
-                <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                  {credentialKind === "managed_identity"
-                    ? "Uses the platform Managed Identity — no secret stored."
-                    : "Uses Kubernetes Workload Identity federation — no secret stored."}
+                <div>
+                  <label htmlFor="source-identity-ref" style={labelStyle}>Configured identity reference *</label>
+                  <input id="source-identity-ref" style={inputStyle} required pattern=".*\S.*"
+                    value={credentialRef} onChange={e => setCredentialRef(e.target.value)}
+                    aria-describedby="source-identity-help" />
+                  <small id="source-identity-help">Enter the identity reference configured for this lake on the Engine. Azure grants storage access separately.</small>
                 </div>
               )}
-            </div>
+            </div>}
 
             <div style={fieldStyle}>
               <label style={labelStyle}>Description</label>

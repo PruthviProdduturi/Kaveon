@@ -34,6 +34,8 @@ mismatch between the definition and the files.
 | **Local disk** | `base_path` | None. | Implemented and qualified (Docker Compose stack, `KAVEON_DATA_DIR`). |
 | **S3** | `bucket`, `region`, `prefix` | The AWS environment provider chain. | Reader and catalog storage type implemented through the shared object-store path; **not qualified** — no live S3 bucket has been read in qualification. |
 
+In Studio, **Metadata catalog** identifies which service manages schema and table definitions. **KaveonDB** corresponds to the Engine's `native` adapter. The hosted registration form defaults to ADLS Gen2. Installations running Studio in local mode can also register a directory visible to the Engine. New S3 registrations in Studio are marked **Coming soon** pending a live AWS read. Existing catalog definitions remain editable.
+
 ### Qualification evidence
 
 The current evidence is deliberately format- and environment-specific:
