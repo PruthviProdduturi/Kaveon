@@ -3,7 +3,7 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "location": { "value": "westus2" },
-    "environment": { "value": "dev" },
+    "environment": { "value": "prod" },
     "operatorObjectId": { "value": "" },
     "nodeSize": { "value": "Standard_B2s" },
     "minWorkers": { "value": 1 },

@@ -2,7 +2,7 @@ targetScope = 'subscription'
 
 param location string
 @allowed(['dev', 'stage', 'prod'])
-param environment string = 'dev'
+param environment string = 'prod'
 param operatorObjectId string
 
 resource appGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {

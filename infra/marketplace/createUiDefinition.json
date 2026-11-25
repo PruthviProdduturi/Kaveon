@@ -5,7 +5,7 @@
   "parameters": {
     "config": {
       "basics": {
-        "description": "Choose an existing resource group or create one, for example `rg-kaveon-dev`. Kaveon uses the name you choose. This preview provisions Azure infrastructure and Microsoft Entra sign-in. Your account becomes the first administrator. Studio installation is a separate step.",
+        "description": "Choose an existing resource group or create one, for example `rg-kaveon-prod` for production. Kaveon uses the name you choose. This preview provisions Azure infrastructure and Microsoft Entra sign-in. Your account becomes the first administrator. Studio installation is a separate step.",
         "location": {
           "label": "Region",
           "resourceTypes": [
@@ -34,7 +34,7 @@
         "name": "environment",
         "type": "Microsoft.Common.DropDown",
         "label": "Environment",
-        "defaultValue": "Development",
+        "defaultValue": "Production",
         "toolTip": "Included in resource names. Choose the environment this installation will serve.",
         "constraints": {
           "required": true,

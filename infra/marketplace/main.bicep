@@ -8,7 +8,7 @@ param installationName string = 'kaveon'
 @description('Azure region for the Kaveon deployment.')
 param location string = resourceGroup().location
 @allowed(['dev', 'stage', 'prod'])
-param environment string = 'dev'
+param environment string = 'prod'
 @description('Globally unique ADLS Gen2 storage account name.')
 param storageAccountName string = 'stkv${environment}${installationName == 'kaveon' ? uniqueString(resourceGroup().id) : uniqueString(resourceGroup().id, installationName)}'
 @description('Globally unique Azure Container Registry name.')
