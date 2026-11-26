@@ -115,6 +115,7 @@ def main():
     runner.add_argument("--server-bin", type=Path)
     runner.add_argument("--docker-image", help="Release image to run with the same 4 CPU/8 GiB limits as Trino")
     parser.add_argument("--rows", type=int, default=100_000)
+    parser.add_argument("--dataset-run", help="reuse an existing run_<12 lowercase hex> fixture for exact before/after comparisons")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--customers", type=int, default=10_000)
@@ -141,9 +142,22 @@ def main():
         binary = frozen_binary
     # This location is mounted read-only into the qualification Trino service.
     lake = Path(__file__).resolve().parents[2] / "tmp" / "qualification-lake"
-    run = "run_" + secrets.token_hex(6)
+    if args.dataset_run and not re.fullmatch(r"run_[0-9a-f]{12}", args.dataset_run):
+        parser.error("dataset-run must be a generated run_<12 lowercase hex> identifier")
+    run = args.dataset_run or "run_" + secrets.token_hex(6)
     data = lake / run
-    data.mkdir(parents=True)
+    if args.dataset_run:
+        if not data.is_dir():
+            parser.error(f"dataset run does not exist under the qualification lake: {run}")
+        for name, expected_rows in (("events", args.rows), ("customers", min(args.customers, args.rows))):
+            file = data / name / "data.parquet"
+            log = data / name / "_delta_log" / "00000000000000000000.json"
+            if not file.is_file() or not log.is_file():
+                parser.error(f"dataset run is missing the Delta Parquet fixture for {name}")
+            if pq.read_metadata(file).num_rows != expected_rows:
+                parser.error(f"dataset-run {name} row count differs from the requested fixture size")
+    else:
+        data.mkdir(parents=True)
     report = {"same_file_correctness": True, "fair_performance_comparison": False,
               "limitation": "Kaveon runs natively; Trino runs in Docker with 4 CPUs/8 GiB. Timings cannot establish a relative performance score.",
               "correctness_comparison": "exact for non-floating values; float values use rel_tol=1e-12 and abs_tol=1e-12 to account for distributed reduction order",
@@ -160,7 +174,8 @@ def main():
               "started_at": datetime.now(timezone.utc).isoformat(),
               "host": {"os": platform.platform(), "processor": platform.processor(), "logical_cpus": psutil.cpu_count(), "physical_cores": psutil.cpu_count(logical=False), "ram_bytes": psutil.virtual_memory().total},
               "hardware_details": hardware_details(),
-              "dataset": {"generator_version": 1, "compression": "snappy", "row_group_rows": 16384, "file_count": 2},
+              "dataset": {"generator_version": 1, "compression": "snappy", "row_group_rows": 16384, "file_count": 2,
+                          "reused_run": args.dataset_run},
               "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "workspace_at_invocation": workspace_provenance(),
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None,
@@ -179,13 +194,18 @@ def main():
     with contextlib.ExitStack() as stack:
         db = stack.enter_context(duckdb.connect())
         customers = min(args.customers, args.rows)
-        tables = {
-            "events": db.execute(f"SELECT i::BIGINT AS event_id, (i % {customers})::BIGINT AS customer_id, (i % 17)::BIGINT AS category, (i % 1000)::BIGINT AS amount FROM range({args.rows}) t(i)").to_arrow_table(),
-            "customers": db.execute(f"SELECT i::BIGINT AS customer_id FROM range({customers}) t(i)").to_arrow_table(),
-        }
+        if args.dataset_run:
+            tables = {name: pq.read_table(data / name / "data.parquet") for name in ("events", "customers")}
+        else:
+            tables = {
+                "events": db.execute(f"SELECT i::BIGINT AS event_id, (i % {customers})::BIGINT AS customer_id, (i % 17)::BIGINT AS category, (i % 1000)::BIGINT AS amount FROM range({args.rows}) t(i)").to_arrow_table(),
+                "customers": db.execute(f"SELECT i::BIGINT AS customer_id FROM range({customers}) t(i)").to_arrow_table(),
+            }
         connection = trino.dbapi.connect(host="127.0.0.1", port=18080, user="qualification", catalog="lake", schema=run, request_timeout=120)
         stack.callback(connection.close)
         cursor = connection.cursor()
+        if args.dataset_run:
+            cursor.execute(f"DROP SCHEMA IF EXISTS lake.{run} CASCADE").fetchall()
         cursor.execute(f"CREATE SCHEMA lake.{run}").fetchall()
         report["versions"] = {"trino": cursor.execute("SELECT version()").fetchone()[0], "duckdb": duckdb.__version__, "pyarrow": pa.__version__}
         report["trino_active_nodes"] = cursor.execute("SELECT COUNT(*) FROM system.runtime.nodes WHERE state = 'active'").fetchone()[0]
@@ -194,14 +214,15 @@ def main():
         report["files"] = {}
         for name, table in tables.items():
             folder = data / name
-            (folder / "_delta_log").mkdir(parents=True)
             file = folder / "data.parquet"
-            pq.write_table(table, file, compression="snappy", row_group_size=16_384)
-            schema = {"type": "struct", "fields": [{"name": field.name, "type": "long", "nullable": True, "metadata": {}} for field in table.schema]}
-            actions = [{"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
-                       {"metaData": {"id": secrets.token_hex(16), "format": {"provider": "parquet", "options": {}}, "schemaString": json.dumps(schema), "partitionColumns": [], "configuration": {}}},
-                       {"add": {"path": "data.parquet", "partitionValues": {}, "size": file.stat().st_size, "modificationTime": 0, "dataChange": True}}]
-            (folder / "_delta_log" / "00000000000000000000.json").write_text("\n".join(json.dumps(action) for action in actions), encoding="utf-8")
+            if not args.dataset_run:
+                (folder / "_delta_log").mkdir(parents=True)
+                pq.write_table(table, file, compression="snappy", row_group_size=16_384)
+                schema = {"type": "struct", "fields": [{"name": field.name, "type": "long", "nullable": True, "metadata": {}} for field in table.schema]}
+                actions = [{"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+                           {"metaData": {"id": secrets.token_hex(16), "format": {"provider": "parquet", "options": {}}, "schemaString": json.dumps(schema), "partitionColumns": [], "configuration": {}}},
+                           {"add": {"path": "data.parquet", "partitionValues": {}, "size": file.stat().st_size, "modificationTime": 0, "dataChange": True}}]
+                (folder / "_delta_log" / "00000000000000000000.json").write_text("\n".join(json.dumps(action) for action in actions), encoding="utf-8")
             report["files"][name] = {"path": str(file), "sha256": hashlib.sha256(file.read_bytes()).hexdigest(), "bytes": file.stat().st_size}
             db.execute(f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{file.as_posix()}')")
             columns = ", ".join(f"{field.name} BIGINT" for field in table.schema)

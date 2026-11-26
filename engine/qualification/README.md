@@ -167,6 +167,13 @@ The six-query million-row workload is an optimization diagnostic. For the broade
 publication gate (count, arithmetic projection, low/medium/high-cardinality groups,
 multiple aggregates and grouped join), use the declared scale and repetitions:
 
+For an exact before/after replay, take the `run` value from a prior report and pass
+it to `--dataset-run` with the same `--rows` and `--customers` values. The runner
+checks both Parquet row counts, reads the existing files without rewriting them,
+and records their SHA-256 hashes. It recreates only that run's disposable Trino
+schema. Keep the before and after reports so both executions can be checked against
+the same fixture bytes.
+
 ```powershell
 & engine/qualification/venv/Scripts/python.exe engine/qualification/same_files.py --docker-image kaveon-engine:qualification --suite extended --rows 5000000 --customers 100000 --warmups 5 --repetitions 30 --local-parallelism 4 --throughput-rounds 6 --throughput-repeats 10 --concurrency 4 --output tmp/qualification-extended
 ```
