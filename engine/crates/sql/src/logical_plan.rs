@@ -1739,6 +1739,37 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             subquery, alias, ..
         } => {
             let mut plan = query_to_plan(subquery, ctes)?;
+            // A derived column list names the output slots by position, including
+            // computed slots which have no SQL name to bind in a second projection.
+            if let Some(alias) = alias
+                && !alias.columns.is_empty()
+                && let LogicalPlan::Project { columns, .. } = &mut plan
+                && columns.iter().all(|column| match column {
+                    Expr::Star => false,
+                    Expr::Column(name) => !name.ends_with(".*"),
+                    _ => true,
+                })
+            {
+                if alias.columns.len() != columns.len() {
+                    return Err(sql_err(format!(
+                        "derived relation alias has {} columns but the relation has {}",
+                        alias.columns.len(),
+                        columns.len()
+                    )));
+                }
+                *columns = std::mem::take(columns)
+                    .into_iter()
+                    .zip(&alias.columns)
+                    .map(|(column, alias_column)| Expr::Alias {
+                        expr: match column {
+                            Expr::Alias { expr, .. } => expr,
+                            value => Box::new(value),
+                        },
+                        name: format!("{}.{}", alias.name.value, alias_column.name.value),
+                    })
+                    .collect();
+                return Ok(plan);
+            }
             if let Some(alias) = alias
                 && !alias.columns.is_empty()
                 && let LogicalPlan::Unnest { columns, .. } = &mut plan
@@ -12449,6 +12480,30 @@ mod tests {
             expr,
             Expr::Function { name, args } if name == "ARRAY" && args.len() == 2
         )));
+    }
+
+    #[test]
+    fn derived_column_lists_bind_computed_outputs_by_position() {
+        let plan = sql_to_logical_plan(
+            "SELECT t.a, t.b FROM (SELECT CAST(7 AS BIGINT), 3 AS old_name) t(a,b)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected outer projection")
+        };
+        let LogicalPlan::Project { columns, .. } = *input else {
+            panic!("expected derived projection")
+        };
+        assert!(
+            matches!(&columns[..], [Expr::Alias { name: a, expr }, Expr::Alias { name: b, .. }]
+            if a == "t.a" && b == "t.b" && matches!(expr.as_ref(), Expr::Cast { .. }))
+        );
+        let error = sql_to_logical_plan("SELECT x FROM (SELECT 1, 2) t(x)").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("alias has 1 columns but the relation has 2")
+        );
     }
 
     #[test]
