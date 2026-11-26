@@ -1,0 +1,47 @@
+[
+  {
+    "name": "group and nulls",
+    "sql": "SELECT k, COUNT(*), SUM(v) FROM (VALUES ('a',1),('a',NULL),('b',2)) t(k,v) GROUP BY k ORDER BY k"
+  },
+  {
+    "name": "join with duplicates",
+    "sql": "SELECT a.x,b.y FROM (VALUES (1),(2),(2)) a(x) JOIN (VALUES (2,'p'),(2,'q')) b(k,y) ON a.x=b.k ORDER BY a.x,b.y"
+  },
+  {
+    "name": "distinct null",
+    "sql": "SELECT COUNT(DISTINCT x) FROM (VALUES (1),(1),(2),(NULL)) t(x)"
+  },
+  {
+    "name": "window peers",
+    "sql": "SELECT x, DENSE_RANK() OVER (ORDER BY x) FROM (VALUES (2),(1),(2)) t(x) ORDER BY x"
+  },
+  {
+    "name": "cast failure",
+    "sql": "SELECT TRY_CAST('bad' AS BIGINT)"
+  },
+  {
+    "name": "UTF-8 text",
+    "sql": "SELECT replace('café','é','ø')"
+  },
+  {
+    "name": "decimal multiplication",
+    "sql": "SELECT CAST(1.20 AS DECIMAL(5,2))*CAST(2.50 AS DECIMAL(5,2))"
+  },
+  {
+    "name": "semi join",
+    "sql": "SELECT x FROM (VALUES (1),(2)) a(x) WHERE EXISTS (SELECT 1 FROM (VALUES (2),(3)) b(y) WHERE b.y=a.x) ORDER BY x"
+  },
+  {
+    "name": "except",
+    "sql": "SELECT x FROM (VALUES (1),(2),(2)) a(x) EXCEPT SELECT y FROM (VALUES (1)) b(y)"
+  },
+  {
+    "name": "missing column",
+    "sql": "SELECT absent FROM (SELECT 7 AS present) s",
+    "expected_error": {
+      "name": "COLUMN_NOT_FOUND",
+      "code": 47,
+      "type": "USER_ERROR"
+    }
+  }
+]

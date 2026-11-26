@@ -54,6 +54,23 @@ silently omitted. The five initial failures are fixed; the expanded suite curren
 passes 37 SQL cases. The suite also checks authenticated paging and replay. See the
 [readiness evidence and open gates](../../docs/engineering/engine-readiness-qualification.md).
 
+## Trino client result contract
+
+With a running Kaveon coordinator and Trino 483, compare the ten read-only
+statements in [the client corpus](fixtures/trino-client-contract.json).
+They use inline values. Kaveon needs an accessible default catalog and schema.
+For a local Kaveon coordinator on port 8081 and the reference Compose service,
+run this command with the qualification Python environment active.
+
+```powershell
+python engine/qualification/trino_client_contract.py --kaveon http://127.0.0.1:8081 --trino http://127.0.0.1:18080
+```
+
+The runner fetches every result page and compares ordered rows, column names,
+type names and structured signatures. For the missing-column case it checks
+the error name, number and category. A mismatch produces a failing exit code.
+Pass `--output <path>` to save both observations locally.
+
 ## Result-cache SLO
 
 The coordinator cache has a separate fail-closed harness. It compares an
