@@ -5457,6 +5457,51 @@ async fn trino_response_shape(response: Response) -> Response {
     shape_trino_response(response, None).await
 }
 
+/// Describe the actual result type for Trino clients. A physical string has no
+/// declared length, and a decimal keeps the precision and scale of its values.
+fn shape_trino_scalar_column(column: &mut serde_json::Value) {
+    use serde_json::json;
+    let Some(native) = column["type"].as_str() else {
+        return;
+    };
+    if column.get("typeSignature").is_some() {
+        return;
+    }
+    let raw = match native {
+        "Int8" => "tinyint",
+        "Int16" | "UInt8" => "smallint",
+        "Int32" | "UInt16" => "integer",
+        "Int64" | "UInt32" | "BIGINT" => "bigint",
+        "Boolean" | "BOOLEAN" => "boolean",
+        "Float32" => "real",
+        "Float64" => "double",
+        "Date32" | "Date64" => "date",
+        "Null" => "unknown",
+        "Utf8" | "LargeUtf8" | "Utf8View" | "VARCHAR" => "varchar",
+        _ => {
+            let Ok(arrow::datatypes::DataType::Decimal128(precision, scale)) = native.parse()
+            else {
+                return;
+            };
+            if !(1..=38).contains(&precision) || scale < 0 || scale as u8 > precision {
+                return;
+            }
+            column["type"] = json!(format!("decimal({precision}, {scale})"));
+            column["typeSignature"] = json!({"rawType": "decimal", "arguments": [
+                {"kind": "LONG", "value": precision}, {"kind": "LONG", "value": scale}
+            ]});
+            return;
+        }
+    };
+    let arguments = if raw == "varchar" {
+        json!([{"kind": "LONG", "value": i32::MAX}])
+    } else {
+        json!([])
+    };
+    column["type"] = json!(raw);
+    column["typeSignature"] = json!({"rawType": raw, "arguments": arguments});
+}
+
 async fn shape_trino_response(response: Response, submitted_id: Option<&str>) -> Response {
     let status = response.status();
     let bytes = match to_bytes(response.into_body(), 16 * 1024 * 1024).await {
@@ -5513,6 +5558,12 @@ async fn shape_trino_response(response: Response, submitted_id: Option<&str>) ->
         }
     }
     if let Some(object) = value.as_object_mut() {
+        if let Some(columns) = object
+            .get_mut("columns")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            columns.iter_mut().for_each(shape_trino_scalar_column);
+        }
         if let Some(query_id) = object
             .get("id")
             .and_then(serde_json::Value::as_str)
@@ -26348,6 +26399,34 @@ mod streamed_root_tests {
         assert!(value.get("next_uri").is_none());
         assert_eq!(value["stats"]["elapsedTimeMillis"], 7);
         assert!(value.get("elapsed_ms").is_none());
+    }
+
+    #[tokio::test]
+    async fn trino_scalar_result_schema_describes_values_without_narrowing() {
+        use serde_json::json;
+        let native = Json(json!({
+            "columns": [
+                {"name":"i","type":"Int64"}, {"name":"s","type":"Utf8"},
+                {"name":"d","type":"Decimal128(11, 4)"}, {"name":"u","type":"UInt64"}
+            ],
+            "data": [[-1, "abc", "3.0000", u64::MAX]]
+        }))
+        .into_response();
+        let response = trino_response_shape(native).await;
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            page["columns"],
+            json!([
+                {"name":"i","type":"bigint","typeSignature":{"rawType":"bigint","arguments":[]}},
+                {"name":"s","type":"varchar","typeSignature":{"rawType":"varchar","arguments":[{"kind":"LONG","value":2147483647}]}},
+                {"name":"d","type":"decimal(11, 4)","typeSignature":{"rawType":"decimal","arguments":[{"kind":"LONG","value":11},{"kind":"LONG","value":4}]}},
+                {"name":"u","type":"UInt64"}
+            ])
+        );
+        assert_eq!(page["data"], json!([[-1, "abc", "3.0000", u64::MAX]]));
     }
 
     #[test]
