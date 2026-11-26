@@ -3320,10 +3320,13 @@ fn lower_aggregate_expressions(
                 || aggregates
                     .iter()
                     .any(|a| !matches!(a.argument(), Expr::Column(_) | Expr::Star));
-            let mut output_names = std::collections::HashSet::new();
-            let colliding = aggregates
-                .iter()
-                .any(|aggregate| !output_names.insert(aggregate.output_name()));
+            let mut output_names = std::collections::HashMap::new();
+            let colliding = aggregates.len() > 1
+                && aggregates.iter().any(|aggregate| {
+                    output_names
+                        .insert(aggregate.output_name(), aggregate)
+                        .is_some_and(|previous| previous != aggregate)
+                });
             // The single-column DISTINCT rewrite may already have moved the
             // deduplication below COUNT. Its SELECT still refers to COUNT(DISTINCT).
             let deduplicated_count =
