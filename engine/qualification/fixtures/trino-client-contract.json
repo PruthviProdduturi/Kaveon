@@ -4,7 +4,7 @@
     "sql": "SELECT k, COUNT(*), SUM(v) FROM (VALUES ('a',1),('a',NULL),('b',2)) t(k,v) GROUP BY k ORDER BY k"
   },
   {
-    "name": "join with duplicates",
+    "name": "qualified join labels",
     "sql": "SELECT a.x,b.y FROM (VALUES (1),(2),(2)) a(x) JOIN (VALUES (2,'p'),(2,'q')) b(k,y) ON a.x=b.k ORDER BY a.x,b.y"
   },
   {

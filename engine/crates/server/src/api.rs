@@ -5682,19 +5682,24 @@ async fn shape_trino_response(
     if let Some(object) = value.as_object_mut() {
         // Statement responses have the submitted SQL; history records carry their
         // own SQL. Result pages carry data only.
-        let anonymous = object
+        let label_changes = object
             .get("columns")
             .and_then(serde_json::Value::as_array)
             .filter(|columns| !columns.is_empty())
             .zip(submitted_sql.or_else(|| object.get("sql").and_then(serde_json::Value::as_str)))
-            .map(|(columns, sql)| kaveon_sql::trino_labels::anonymous_columns(sql, columns.len()))
+            .map(|(columns, sql)| {
+                kaveon_sql::trino_labels::column_label_changes(sql, columns.len())
+            })
             .unwrap_or_default();
         if let Some(columns) = object
             .get_mut("columns")
             .and_then(serde_json::Value::as_array_mut)
         {
-            for index in anonymous {
-                columns[index]["name"] = serde_json::json!(format!("_col{index}"));
+            for (index, label) in label_changes {
+                columns[index]["name"] = match label {
+                    Some(name) => serde_json::json!(name),
+                    None => serde_json::json!(format!("_col{index}")),
+                };
             }
             columns.iter_mut().for_each(shape_trino_scalar_column);
         }
@@ -26094,6 +26099,46 @@ mod streamed_root_tests {
                 serde_json::json!({"rawType":"bigint","arguments":[]})
             );
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn trino_wire_labels_qualified_columns_by_their_final_identifier() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-trino-qualified-labels-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        let sql = "SELECT a.x,b.y FROM (VALUES (1),(2),(2)) a(x) JOIN (VALUES (2,'p'),(2,'q')) b(k,y) ON a.x=b.k ORDER BY a.x,b.y";
+        let response = submit_trino_statement_parts(
+            state.clone(),
+            alice(),
+            HeaderMap::new(),
+            Bytes::from(sql),
+        )
+        .await;
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let statement: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(statement["columns"][0]["name"], "x");
+        assert_eq!(statement["columns"][1]["name"], "y");
+
+        let page = get_trino_result_page(
+            State(state),
+            axum::extract::Path((statement["id"].as_str().unwrap().to_owned(), 0)),
+            axum::Extension(alice()),
+        )
+        .await;
+        let body = axum::body::to_bytes(page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            result["data"],
+            serde_json::json!([[2, "p"], [2, "p"], [2, "q"], [2, "q"]])
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
