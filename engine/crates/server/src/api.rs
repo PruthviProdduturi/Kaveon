@@ -3989,6 +3989,7 @@ fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, Str
         .collect::<HashMap<_, _>>();
     let plan = kaveon_sql::logical_plan::trino_logical_plan(query, &positional, &named, false)
         .map_err(|error| error.to_string())?;
+    let varchar_bounds = kaveon_sql::trino_varchar::output_bounds(&plan);
     let mut projected = &plan;
     while let Some(input) = match projected {
         LogicalPlan::Limit { input, .. }
@@ -4019,7 +4020,12 @@ fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, Str
                 Expr::Function { name, .. } => (expression, false, name.to_lowercase()),
                 _ => (expression, false, format!("_col{index}")),
             };
-            (name, trino_expr_type(expression), aliased)
+            let data_type = varchar_bounds
+                .get(index)
+                .copied()
+                .flatten()
+                .map_or_else(|| trino_expr_type(expression), |n| format!("varchar({n})"));
+            (name, data_type, aliased)
         })
         .collect())
 }
@@ -5511,12 +5517,37 @@ async fn trino_response_shape(response: Response) -> Response {
 
 /// Describe the actual result type for Trino clients. A physical string has no
 /// declared length, and a decimal keeps the precision and scale of its values.
+fn apply_trino_varchar_bounds(columns: &mut [ColumnInfo], bounds: &[Option<u32>]) {
+    if columns.len() != bounds.len() {
+        return;
+    }
+    for (column, bound) in columns.iter_mut().zip(bounds) {
+        if let Some(n) = bound
+            && matches!(
+                column.data_type.as_str(),
+                "Utf8" | "LargeUtf8" | "Utf8View" | "VARCHAR"
+            )
+        {
+            column.data_type = format!("varchar({n})");
+        }
+    }
+}
+
 fn shape_trino_scalar_column(column: &mut serde_json::Value) {
     use serde_json::json;
     let Some(native) = column["type"].as_str() else {
         return;
     };
     if column.get("typeSignature").is_some() {
+        return;
+    }
+    if let Some(n) = native
+        .strip_prefix("varchar(")
+        .and_then(|s| s.strip_suffix(')'))
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        column["typeSignature"] =
+            json!({"rawType":"varchar","arguments":[{"kind":"LONG","value":n}]});
         return;
     }
     let raw = match native {
@@ -6655,6 +6686,11 @@ async fn run_statement_dialect(
         )
             .into_response();
     }
+    let varchar_bounds = if trino && explain_kind.is_none() {
+        kaveon_sql::trino_varchar::output_bounds(&plan)
+    } else {
+        Vec::new()
+    };
     let approximate = approximate_notes(&plan);
     let analysis_us = elapsed_us(analysis_start);
     let logical_plan = crate::planner::logical_plan_tree(&plan);
@@ -6865,7 +6901,8 @@ async fn run_statement_dialect(
     let statistics_answer = context_answer(&plan, &planning_statistics)
         .or_else(|| cube_answer(&plan, &planning_statistics));
     let statistics_bypassed = statistics_answer.is_some() && !settings.use_statistics();
-    if let Some(answer) = statistics_answer.filter(|_| settings.use_statistics()) {
+    if let Some(mut answer) = statistics_answer.filter(|_| settings.use_statistics()) {
+        apply_trino_varchar_bounds(&mut answer.columns, &varchar_bounds);
         let mut data = answer.rows.clone();
         let next_uri = if paged {
             match spool_rows(&state, &query_id, result_writer.take(), &mut data) {
@@ -6997,6 +7034,7 @@ async fn run_statement_dialect(
         match distributed {
             Ok((result, stages, planning_us, recovery)) => {
                 let mut result = result;
+                apply_trino_varchar_bounds(&mut result.columns, &varchar_bounds);
                 if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
                     render_explain_analyze_result(
                         &mut result,
@@ -7126,6 +7164,7 @@ async fn run_statement_dialect(
         match distributed {
             Ok((result, stage)) => {
                 let mut result = result;
+                apply_trino_varchar_bounds(&mut result.columns, &varchar_bounds);
                 if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
                     render_explain_analyze_result(
                         &mut result,
@@ -7251,6 +7290,7 @@ async fn run_statement_dialect(
         match distributed {
             Ok((result, stage)) => {
                 let mut result = result;
+                apply_trino_varchar_bounds(&mut result.columns, &varchar_bounds);
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
                     match spool_rows(&state, &query_id, result_writer.take(), &mut result.data) {
@@ -7525,6 +7565,7 @@ async fn run_statement_dialect(
         vec![]
     };
 
+    apply_trino_varchar_bounds(&mut columns, &varchar_bounds);
     let serialization_start = Instant::now();
     let mut rows = batches_to_json(&batches);
     if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
@@ -26287,7 +26328,7 @@ mod streamed_root_tests {
             metadata,
             vec![
                 ("id".to_owned(), "bigint".to_owned(), true),
-                ("state".to_owned(), "varchar".to_owned(), true),
+                ("state".to_owned(), "varchar(5)".to_owned(), true),
                 ("total".to_owned(), "bigint".to_owned(), true),
             ]
         );
