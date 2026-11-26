@@ -2233,13 +2233,36 @@ fn product_document(
         }])
     } else if kind == ProductRecordKind::DlmDefinition {
         let object = value.as_object().expect("object checked above");
-        if object.len() != 2
-            || !object.contains_key("dataset_id")
+        // `dataset_shape_sha256` is optional, and accepting it is what lets a
+        // DLM be generated at all. The API began recording the dataset's shape
+        // beside its revision so that a compiled context is invalidated when
+        // the shape changes rather than only when the record revision moves;
+        // `dlm_compiled_artifact` reads it when present and falls back to the
+        // revision rule when it is absent, so both forms are live by design.
+        // This validator was not widened with it, so every publication through
+        // `dlm_generation_cutover` -- the path `generate_dlm` takes -- was
+        // refused here, and no dataset anywhere could compile a context.
+        let known = ["dataset_id", "dataset_revision", "dataset_shape_sha256"];
+        if !object.contains_key("dataset_id")
             || !object.contains_key("dataset_revision")
+            || object.keys().any(|key| !known.contains(&key.as_str()))
         {
             return Err(RegistryError::Invalid(
-                "DLM definition requires only dataset_id and dataset_revision".into(),
+                "DLM definition takes dataset_id, dataset_revision and an optional \
+                 dataset_shape_sha256"
+                    .into(),
             ));
+        }
+        if let Some(shape) = object.get("dataset_shape_sha256") {
+            // Recorded, so it has to be usable: a blank or non-string shape
+            // would compare unequal on every read and strand the context it
+            // was meant to validate.
+            shape
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    RegistryError::Invalid("DLM definition dataset_shape_sha256 is invalid".into())
+                })?;
         }
         let dataset_id = object["dataset_id"]
             .as_str()
@@ -4354,12 +4377,52 @@ mod tests {
             r#"{"dataset_id":"orders","dataset_revision":0}"#,
             r#"{"dataset_id":"other","dataset_revision":1}"#,
             r#"{"dataset_id":"orders","dataset_revision":1,"run":{}}"#,
+            // Recorded but unusable: a blank or non-string shape compares
+            // unequal on every read and strands the context it should pin.
+            r#"{"dataset_id":"orders","dataset_revision":1,"dataset_shape_sha256":""}"#,
+            r#"{"dataset_id":"orders","dataset_revision":1,"dataset_shape_sha256":7}"#,
         ] {
             assert!(
                 product_document(ProductRecordKind::DlmDefinition, "orders", 1, document).is_err(),
                 "unexpectedly accepted {document}"
             );
         }
+    }
+
+    /// The shape digest is optional, and refusing it stopped every DLM.
+    ///
+    /// `dlm_generation_cutover` records the dataset's shape beside its
+    /// revision so a compiled context is invalidated when the shape changes,
+    /// not only when the record revision moves. This validator accepted two
+    /// keys exactly, so that publication -- the path `generate_dlm` takes --
+    /// was refused here and no dataset could compile a context at all. The
+    /// reader has always handled both forms: it matches on the shape when one
+    /// is recorded and falls back to the revision when it is absent.
+    #[test]
+    fn dlm_definition_accepts_an_optional_dataset_shape() {
+        let with_shape =
+            r#"{"dataset_id":"orders","dataset_revision":3,"dataset_shape_sha256":"abc123"}"#;
+        let (_, (_, bytes), references, _) =
+            product_document(ProductRecordKind::DlmDefinition, "orders", 1, with_shape).unwrap();
+        assert_eq!(
+            bytes,
+            br#"{"dataset_id":"orders","dataset_revision":3,"dataset_shape_sha256":"abc123"}"#
+        );
+        assert_eq!(
+            references,
+            BTreeSet::from([ProductRecordReference {
+                kind: ProductRecordKind::Dataset,
+                id: "orders".into(),
+            }])
+        );
+
+        // The two-key form stays valid: every definition written before the
+        // shape rule uses it, and the reader still falls back to it.
+        let without_shape = r#"{"dataset_id":"orders","dataset_revision":3}"#;
+        assert!(
+            product_document(ProductRecordKind::DlmDefinition, "orders", 1, without_shape).is_ok(),
+            "the revision-only form must remain accepted"
+        );
     }
 
     #[test]
