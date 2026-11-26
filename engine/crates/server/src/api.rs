@@ -3694,7 +3694,7 @@ async fn submit_trino_statement_parts(
         }
     };
     let request = StatementRequest {
-        query,
+        query: query.clone(),
         parameters,
         named_parameters: HashMap::new(),
         catalog: trino_header(&headers, "x-trino-catalog"),
@@ -3722,7 +3722,7 @@ async fn submit_trino_statement_parts(
     let response = run_statement(state, identity, request, query_id.clone())
         .await
         .into_response();
-    shape_trino_response(response, Some(&query_id), origin.as_deref()).await
+    shape_trino_response(response, Some(&query_id), origin.as_deref(), Some(&query)).await
 }
 
 fn trino_header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -5456,7 +5456,7 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
 
 #[cfg(test)]
 async fn trino_response_shape(response: Response) -> Response {
-    shape_trino_response(response, None, None).await
+    shape_trino_response(response, None, None, None).await
 }
 
 /// Describe the actual result type for Trino clients. A physical string has no
@@ -5508,6 +5508,7 @@ async fn shape_trino_response(
     response: Response,
     submitted_id: Option<&str>,
     origin: Option<&str>,
+    submitted_sql: Option<&str>,
 ) -> Response {
     let origin = origin.unwrap_or("");
     let status = response.status();
@@ -5565,10 +5566,22 @@ async fn shape_trino_response(
         }
     }
     if let Some(object) = value.as_object_mut() {
+        // Statement responses have the submitted SQL; history records carry their
+        // own SQL. Result pages carry data only.
+        let anonymous = object
+            .get("columns")
+            .and_then(serde_json::Value::as_array)
+            .filter(|columns| !columns.is_empty())
+            .zip(submitted_sql.or_else(|| object.get("sql").and_then(serde_json::Value::as_str)))
+            .map(|(columns, sql)| kaveon_sql::trino_labels::anonymous_columns(sql, columns.len()))
+            .unwrap_or_default();
         if let Some(columns) = object
             .get_mut("columns")
             .and_then(serde_json::Value::as_array_mut)
         {
+            for index in anonymous {
+                columns[index]["name"] = serde_json::json!(format!("_col{index}"));
+            }
             columns.iter_mut().for_each(shape_trino_scalar_column);
         }
         if let Some(query_id) = object
@@ -5734,6 +5747,7 @@ async fn get_trino_query(
             .into_response(),
         None,
         state.config.trino_public_origin.as_deref(),
+        None,
     )
     .await
 }
@@ -5760,7 +5774,7 @@ async fn get_trino_result_page(
     } else {
         response
     };
-    shape_trino_response(response, None, origin.as_deref()).await
+    shape_trino_response(response, None, origin.as_deref(), None).await
 }
 
 async fn cancel_trino_query(
@@ -25857,7 +25871,7 @@ mod streamed_root_tests {
         let directory = std::env::temp_dir().join(format!("kaveon-trino-count-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let state = state_over(table(&directory), true, "coordinator");
-        let sql = "SELECT COUNT(v) AS n, COUNT(DISTINCT v) AS nd FROM (VALUES (1),(1),(NULL)) t(v)";
+        let sql = "SELECT COUNT(v) AS expr_0, COUNT(DISTINCT v) FROM (VALUES (1),(1),(NULL)) t(v)";
         let response = submit_trino_statement_parts(
             state.clone(),
             alice(),
@@ -25885,7 +25899,7 @@ mod streamed_root_tests {
             .as_array()
             .unwrap()
             .iter()
-            .zip(["n", "nd"])
+            .zip(["expr_0", "_col1"])
         {
             assert_eq!(column["name"], name);
             assert_eq!(column["type"], "bigint");
@@ -26551,7 +26565,8 @@ mod streamed_root_tests {
             "id": "q1", "complete": false, "next_uri": "http://internal.invalid/v1/query/q1/results/1"
         }))
         .into_response();
-        let response = shape_trino_response(native, None, Some("https://engine.example")).await;
+        let response =
+            shape_trino_response(native, None, Some("https://engine.example"), None).await;
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -26677,7 +26692,7 @@ mod streamed_root_tests {
                 })),
             )
                 .into_response();
-            let response = shape_trino_response(native, id, None).await;
+            let response = shape_trino_response(native, id, None, None).await;
             assert_eq!(response.status(), expected);
         }
     }
