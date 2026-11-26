@@ -50,7 +50,12 @@ class SignedTokenTests(unittest.TestCase):
         tenant = "11111111-1111-1111-1111-111111111111"
         claims = {"sub": "subject", "tid": tenant, "iss": f"https://login.microsoftonline.com/{tenant}/v2.0", "aud": "client", "exp": int(time.time()) + 60, "email": "alice@example.test"}
         client = SimpleNamespace(get_signing_key_from_jwt=lambda token: SimpleNamespace(key=self.key.public_key()))
-        with patch.object(auth, "_aad_jwks_client", client), patch.object(auth.settings, "AZURE_TENANT_ID", tenant), patch.object(auth.settings, "AZURE_CLIENT_ID", "client"):
+        with (
+            patch.object(auth, "_aad_jwks_client", client),
+            patch.object(auth, "_TENANT_ID", tenant),
+            patch.object(auth, "_CLIENT_ID", "client"),
+            patch.object(auth.settings, "KAVEON_ENTRA_APP_ROLES", False),
+        ):
             self.assertEqual(auth._decode_azure_ad(jwt.encode(claims, self.key, algorithm="RS256")), ("alice@example.test", []))
             for changed in [{**claims, "iss": "https://evil.test"}, {**claims, "tid": "other"}, {**claims, "aud": "other"}, {k: v for k, v in claims.items() if k != "exp"}]:
                 self.assertIsNone(auth._decode_azure_ad(jwt.encode(changed, self.key, algorithm="RS256")))
