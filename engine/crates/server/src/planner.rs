@@ -3204,7 +3204,7 @@ mod tests {
             batches[0]
                 .column(0)
                 .as_any()
-                .downcast_ref::<arrow::array::UInt64Array>()
+                .downcast_ref::<arrow::array::Int64Array>()
                 .unwrap()
                 .value(0)
         };
@@ -3348,7 +3348,7 @@ mod tests {
                 let count = first
                     .column(0)
                     .as_any()
-                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .downcast_ref::<arrow::array::Int64Array>()
                     .unwrap()
                     .value(0);
                 assert_eq!(
@@ -3666,7 +3666,7 @@ mod tests {
             batches[0]
                 .column(0)
                 .as_any()
-                .downcast_ref::<arrow::array::UInt64Array>()
+                .downcast_ref::<arrow::array::Int64Array>()
                 .unwrap()
                 .value(0),
             4

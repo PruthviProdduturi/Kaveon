@@ -354,7 +354,7 @@ mod tests {
             .execute("SELECT COUNT(*) FROM events")
             .expect("count should run");
         assert_eq!(result.columns.len(), 1);
-        assert_eq!(result.columns[0].1, "UInt64");
+        assert_eq!(result.columns[0].1, "Int64");
         assert_eq!(result.rows, vec![vec![json!(3)]]);
         assert!(result.rows[0][0].is_u64());
         let _ = std::fs::remove_dir_all(dir);

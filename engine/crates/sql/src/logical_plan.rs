@@ -3226,6 +3226,14 @@ fn build_having(
 
 type ExpressionBindings = Vec<(Expr, Expr)>;
 
+/// Keep the SQL quantifier in references until binding selects the accumulator.
+fn distinct_call(call: Expr) -> Expr {
+    Expr::Function {
+        name: "DISTINCT".into(),
+        args: vec![call],
+    }
+}
+
 /// Compute aggregate/group expressions once below aggregation, then bind
 /// references above it to the resulting columns. Both execution paths receive
 /// column-only aggregate arguments while preserving the original SQL types.
@@ -3312,14 +3320,51 @@ fn lower_aggregate_expressions(
                 || aggregates
                     .iter()
                     .any(|a| !matches!(a.argument(), Expr::Column(_) | Expr::Star));
-            if !complex && !force {
+            let mut output_names = std::collections::HashSet::new();
+            let colliding = aggregates
+                .iter()
+                .any(|aggregate| !output_names.insert(aggregate.output_name()));
+            // The single-column DISTINCT rewrite may already have moved the
+            // deduplication below COUNT. Its SELECT still refers to COUNT(DISTINCT).
+            let deduplicated_count =
+                aggregates.len() == 1 && matches!(input.as_ref(), LogicalPlan::Distinct { .. });
+            let projection_reference = |aggregate: &AggregateExpr| {
+                let call = Expr::Function {
+                    name: aggregate.written_name().into(),
+                    args: aggregate.arguments(),
+                };
+                if matches!(
+                    aggregate,
+                    AggregateExpr::Count { distinct: true, .. }
+                        | AggregateExpr::Sum { distinct: true, .. }
+                        | AggregateExpr::Avg { distinct: true, .. }
+                        | AggregateExpr::ApproxDistinct { as_count: true, .. }
+                ) || (deduplicated_count && matches!(aggregate, AggregateExpr::Count { .. }))
+                {
+                    distinct_call(call)
+                } else {
+                    call
+                }
+            };
+            if !complex && !force && !colliding {
+                let bindings = aggregates
+                    .iter()
+                    .filter_map(|aggregate| {
+                        let original = projection_reference(aggregate);
+                        let ordinary = Expr::Function {
+                            name: aggregate.written_name().into(),
+                            args: aggregate.arguments(),
+                        };
+                        (ordinary != original).then_some((original, ordinary))
+                    })
+                    .collect();
                 return Ok((
                     LogicalPlan::Aggregate {
                         input,
                         group_by,
                         aggregates,
                     },
-                    vec![],
+                    bindings,
                 ));
             }
             let mut projection = Vec::new();
@@ -3354,14 +3399,23 @@ fn lower_aggregate_expressions(
                 if matches!(aggregate.argument(), Expr::Star) {
                     continue;
                 }
-                let original = aggregate.as_function();
+                let original = projection_reference(aggregate);
+                // A plain COUNT over a user-written DISTINCT subquery has the
+                // same input shape as the single-aggregate rewrite.
+                let ordinary = (deduplicated_count
+                    && matches!(aggregate, AggregateExpr::Count { .. }))
+                .then(|| aggregate.as_function());
                 let name = format!("__kaveon_arg_{i}");
                 projection.push(Expr::Alias {
                     expr: Box::new(aggregate.argument().clone()),
                     name: name.clone(),
                 });
                 *aggregate.argument_mut() = Expr::Column(name.clone());
-                bindings.push((original, Expr::Column(aggregate.output_name())));
+                let output = Expr::Column(aggregate.output_name());
+                if let Some(ordinary) = ordinary {
+                    bindings.push((ordinary, output.clone()));
+                }
+                bindings.push((original, output));
             }
             Ok((
                 LogicalPlan::Aggregate {
@@ -6497,7 +6551,14 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     if written_name == "LISTAGG" && name == "STRING_AGG" && args.len() == 1 {
         args.push(Expr::Literal(ScalarValue::Utf8(String::new())));
     }
-    Ok(Expr::Function { name, args })
+    let call = Expr::Function { name, args };
+    if matches!(written_name.as_str(), "COUNT" | "SUM" | "AVG")
+        && matches!(&func.args, ast::FunctionArguments::List(list)
+            if list.duplicate_treatment == Some(ast::DuplicateTreatment::Distinct))
+    {
+        return Ok(distinct_call(call));
+    }
+    Ok(call)
 }
 
 /// Normalize SQL Server/Fabric datepart spellings to the canonical Trino
@@ -12302,28 +12363,18 @@ mod tests {
                 if matches!(aggregates[0], AggregateExpr::ApproxDistinct { as_count: true, .. })
                     && matches!(**input, LogicalPlan::Scan { .. })
         ));
-        assert_eq!(
-            approximated[0].output_name(),
-            "count_user_id",
-            "the output keeps COUNT's name so the projection binds"
-        );
-        assert_eq!(
-            approximated,
-            vec![
-                AggregateExpr::ApproxDistinct {
-                    expr: Expr::Column("user_id".into()),
-                    as_count: true,
-                },
+        assert_ne!(approximated[0].output_name(), approximated[1].output_name());
+        assert!(matches!(
+            approximated.as_slice(),
+            [
+                AggregateExpr::ApproxDistinct { as_count: true, .. },
                 AggregateExpr::Count {
-                    expr: Expr::Column("user_id".into()),
-                    distinct: false
+                    distinct: false,
+                    ..
                 },
-                AggregateExpr::Sum {
-                    expr: Expr::Column("n".into()),
-                    distinct: true
-                },
+                AggregateExpr::Sum { distinct: true, .. },
             ]
-        );
+        ));
     }
 
     #[test]

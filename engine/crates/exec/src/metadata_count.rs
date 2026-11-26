@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::UInt64Array,
+    array::Int64Array,
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -54,15 +54,17 @@ impl MetadataCount {
             .transpose()?;
         let name =
             crate::aggregate::AggExpr::new(crate::aggregate::AggFunc::Count, "*").output_name();
+        let rows = i64::try_from(metadata.row_count)
+            .map_err(|_| kaveon_core::KaveonError::Execution("COUNT exceeds BIGINT".into()))?;
         let schema = Arc::new(Schema::new(
             (0..count_expressions)
-                .map(|_| Field::new(&name, DataType::UInt64, true))
+                .map(|_| Field::new(&name, DataType::Int64, true))
                 .collect::<Vec<_>>(),
         ));
         let batch = RecordBatch::try_new(
             schema.clone(),
             (0..count_expressions)
-                .map(|_| Arc::new(UInt64Array::from(vec![metadata.row_count])) as _)
+                .map(|_| Arc::new(Int64Array::from(vec![rows])) as _)
                 .collect(),
         )?;
         Ok(Some(Self {

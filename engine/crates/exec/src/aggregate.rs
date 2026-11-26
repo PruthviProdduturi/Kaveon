@@ -254,7 +254,8 @@ impl AggExpr {
     /// [`aggregate_output_types`].
     pub fn output_type(&self) -> DataType {
         match self.func {
-            AggFunc::Count | AggFunc::ApproxDistinct => DataType::UInt64,
+            AggFunc::Count => DataType::Int64,
+            AggFunc::ApproxDistinct => DataType::UInt64,
             AggFunc::StringAgg => DataType::Utf8,
             AggFunc::ApproxDistinctState | AggFunc::ColumnStatistics => DataType::Utf8,
             AggFunc::ApproxPercentile if self.percentiles.as_ref().is_some_and(|p| p.list) => {
@@ -589,6 +590,7 @@ impl AggregateState {
     }
     pub fn integer_result(&self) -> Result<Option<i128>> {
         match self {
+            Self::Count(_) | Self::CountDistinct(_) => Ok(Some(i128::from(self.count_result()?))),
             Self::IntegerSum { sum, count } => Ok((*count > 0).then_some(*sum)),
             Self::IntegerMin(value) | Self::IntegerMax(value) => Ok(value.map(i128::from)),
             Self::IntegerSumDistinct(values) => {
@@ -1501,9 +1503,14 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                 } if matches!(data_type, DataType::Decimal128(_, actual) if actual == scale) => {
                     data_type.clone()
                 }
-                AggregateState::Count(_)
-                | AggregateState::CountDistinct(_)
-                | AggregateState::ApproxDistinct(_) => DataType::UInt64,
+                // Older workers advertise unsigned COUNT output on partial states.
+                AggregateState::Count(_) | AggregateState::CountDistinct(_)
+                    if data_type == &DataType::UInt64 =>
+                {
+                    DataType::UInt64
+                }
+                AggregateState::Count(_) | AggregateState::CountDistinct(_) => DataType::Int64,
+                AggregateState::ApproxDistinct(_) => DataType::UInt64,
                 AggregateState::ApproxPercentile {
                     percentiles: Percentiles { list: true, .. },
                     ..
@@ -5934,7 +5941,7 @@ mod tests {
         let keys = output.column(0).as_string::<i32>();
         let counts = output
             .column(1)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
+            .as_primitive::<arrow::datatypes::Int64Type>();
         let mut result = HashMap::new();
         for row in 0..output.num_rows() {
             result.insert(keys.value(row).to_owned(), counts.value(row));
@@ -6064,7 +6071,7 @@ mod tests {
         assert_eq!(
             result
                 .column(0)
-                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .as_primitive::<arrow::datatypes::Int64Type>()
                 .value(0),
             2
         );
@@ -6100,7 +6107,7 @@ mod tests {
         assert_eq!(
             result
                 .column(0)
-                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .as_primitive::<arrow::datatypes::Int64Type>()
                 .value(0),
             2
         );
@@ -6251,7 +6258,7 @@ mod tests {
         let keys = output.column(0).as_primitive::<Int64Type>();
         let counts = output
             .column(1)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
+            .as_primitive::<arrow::datatypes::Int64Type>();
         let sums = output.column(2).as_primitive::<Int64Type>();
         let actual = (0..output.num_rows())
             .map(|row| (keys.value(row), (counts.value(row), sums.value(row))))
@@ -6261,7 +6268,7 @@ mod tests {
             assert_eq!(
                 actual[&key],
                 (
-                    expected_values.len() as u64,
+                    expected_values.len() as i64,
                     expected_values.iter().sum::<i64>()
                 )
             );
@@ -6316,7 +6323,7 @@ mod tests {
         let keys = output.column(0).as_primitive::<Int64Type>();
         let counts = output
             .column(1)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
+            .as_primitive::<arrow::datatypes::Int64Type>();
         let sums = output.column(2).as_primitive::<Int64Type>();
         let actual = (0..output.num_rows())
             .map(|row| {
@@ -6371,7 +6378,7 @@ mod tests {
         let keys = output.column(0).as_string::<i32>();
         let counts = output
             .column(1)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
+            .as_primitive::<arrow::datatypes::Int64Type>();
         let sums = output.column(2).as_primitive::<Int64Type>();
         let actual = (0..output.num_rows())
             .map(|row| {
@@ -6799,7 +6806,7 @@ mod tests {
         ])
         .unwrap();
         let expected = [
-            (Some("asia".to_owned()), 2_u64), // in, jp
+            (Some("asia".to_owned()), 2_i64), // in, jp
             (Some("europe".to_owned()), 2),   // de, fr
             (None, 2),                        // in, jp
         ];
@@ -6823,7 +6830,7 @@ mod tests {
                 let keys = output.column(0).as_string::<i32>();
                 let counts = output
                     .column(1)
-                    .as_primitive::<arrow::datatypes::UInt64Type>();
+                    .as_primitive::<arrow::datatypes::Int64Type>();
                 let mut actual = (0..output.num_rows())
                     .map(|row| {
                         (
@@ -6839,7 +6846,7 @@ mod tests {
             } else {
                 let counts = output
                     .column(0)
-                    .as_primitive::<arrow::datatypes::UInt64Type>();
+                    .as_primitive::<arrow::datatypes::Int64Type>();
                 assert_eq!(counts.value(0), 4); // in, jp, de, fr
             }
             drop(output);
@@ -6897,7 +6904,7 @@ mod tests {
         let keys = output.column(0).as_string::<i32>();
         let counts = output
             .column(1)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
+            .as_primitive::<arrow::datatypes::Int64Type>();
         let sums = output.column(2).as_primitive::<Int64Type>();
         let actual = (0..output.num_rows())
             .map(|row| {
@@ -7007,19 +7014,13 @@ mod tests {
                 .find(|row| (!keys.is_null(*row)).then(|| keys.value(*row)) == key)
                 .unwrap()
         };
-        let u64_at = |col: usize, row: usize| {
-            output
-                .column(col)
-                .as_primitive::<arrow::datatypes::UInt64Type>()
-                .value(row)
-        };
         let i64_at =
             |col: usize, row: usize| output.column(col).as_primitive::<Int64Type>().value(row);
         let f64_at =
             |col: usize, row: usize| output.column(col).as_primitive::<Float64Type>().value(row);
 
         let a = row_of(Some("a"));
-        assert_eq!((u64_at(1, a), u64_at(2, a)), (3, 2));
+        assert_eq!((i64_at(1, a), i64_at(2, a)), (3, 2));
         assert_eq!((i64_at(3, a), i64_at(4, a), i64_at(5, a)), (10, 4, 6));
         assert_eq!(
             (f64_at(6, a), f64_at(7, a), f64_at(8, a), f64_at(9, a)),
@@ -7027,7 +7028,7 @@ mod tests {
         );
         assert_eq!(f64_at(10, a), 5.0);
         let b = row_of(Some("b"));
-        assert_eq!((u64_at(1, b), u64_at(2, b)), (2, 2));
+        assert_eq!((i64_at(1, b), i64_at(2, b)), (2, 2));
         assert_eq!((i64_at(3, b), i64_at(4, b), i64_at(5, b)), (8, -2, 10));
         assert_eq!(
             (f64_at(6, b), f64_at(7, b), f64_at(8, b), f64_at(9, b)),
@@ -7035,7 +7036,7 @@ mod tests {
         );
         assert_eq!(f64_at(10, b), 4.0);
         let n = row_of(None);
-        assert_eq!((u64_at(1, n), u64_at(2, n)), (2, 2));
+        assert_eq!((i64_at(1, n), i64_at(2, n)), (2, 2));
         assert_eq!((i64_at(3, n), i64_at(4, n), i64_at(5, n)), (10, 1, 9));
         assert_eq!(
             (f64_at(6, n), f64_at(7, n), f64_at(8, n), f64_at(9, n)),
@@ -7081,7 +7082,7 @@ mod tests {
         let industries = output.column(1).as_string::<i32>();
         let counts = output
             .column(2)
-            .as_primitive::<arrow::datatypes::UInt64Type>();
+            .as_primitive::<arrow::datatypes::Int64Type>();
         let sums = output.column(3).as_primitive::<Int64Type>();
         let actual = (0..output.num_rows())
             .map(|row| {
@@ -7311,7 +7312,7 @@ mod tests {
         assert_eq!(
             result
                 .column(0)
-                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .as_primitive::<arrow::datatypes::Int64Type>()
                 .value(0),
             0
         );

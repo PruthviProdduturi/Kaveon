@@ -604,7 +604,7 @@ pub fn answer(
                 )
             }
             CubeOutput::Rows { .. } => (
-                DataType::UInt64,
+                DataType::Int64,
                 rolled
                     .iter()
                     .map(|cell| Some(StatValue::Int(i128::from(cell.rows))))
@@ -665,13 +665,14 @@ fn axis_type(axis: &ShapeAxis, schema: &SchemaRef) -> Result<DataType> {
 
 /// The output type of an aggregate over a column of `input`, as the
 /// executor types it (`kaveon_exec::aggregate::aggregate_output_types`):
-/// counts unsigned; integer sums as `Int64` (`UInt64` stays), decimal
+/// counts as BIGINT; integer sums as `Int64` (`UInt64` stays), decimal
 /// sums at precision 38, other sums as doubles; bounds in the column's
 /// type for 32- and 64-bit integers, text, dates and decimals, doubles
 /// otherwise.
 pub fn measure_output_type(aggregate: MeasureAggregate, input: &DataType) -> DataType {
     match aggregate {
-        MeasureAggregate::Count | MeasureAggregate::CountDistinct => DataType::UInt64,
+        MeasureAggregate::Count => DataType::Int64,
+        MeasureAggregate::CountDistinct => DataType::UInt64,
         MeasureAggregate::Sum => match input {
             DataType::Int32 | DataType::Int64 => DataType::Int64,
             DataType::UInt64 => DataType::UInt64,
@@ -1248,13 +1249,7 @@ mod tests {
                 .iter()
                 .map(|f| f.data_type().clone())
                 .collect::<Vec<_>>(),
-            vec![
-                DataType::UInt64,
-                DataType::Int64,
-                DataType::Int64,
-                DataType::Int64,
-                DataType::UInt64
-            ]
+            vec![DataType::Int64; 5]
         );
         assert_eq!(rows(&total), vec![vec!["8", "131", "1", "100", "7"]]);
         // A one-dimension breakdown, null key included, keys ordered.
@@ -1353,7 +1348,7 @@ mod tests {
         );
         assert_eq!(
             measure_output_type(MeasureAggregate::Count, &DataType::Utf8),
-            DataType::UInt64
+            DataType::Int64
         );
     }
 }

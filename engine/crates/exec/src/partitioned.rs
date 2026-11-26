@@ -2643,7 +2643,6 @@ mod tests {
     use arrow::{
         array::{
             Array, AsArray, Int64Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-            UInt64Array,
         },
         datatypes::{DataType, Field, Schema},
     };
@@ -4958,7 +4957,7 @@ mod tests {
             let counts = batch
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap();
             assert!(counts.values().iter().all(|n| *n == 1));
         }
@@ -5066,7 +5065,7 @@ mod tests {
             let values = batch
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap();
             for row in 0..batch.num_rows() {
                 counts.insert(keys.value(row), values.value(row));
@@ -5494,7 +5493,7 @@ mod tests {
             batch
                 .column(0)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(0),
             0

@@ -1892,13 +1892,13 @@ fn compile_final_aggregate_in_memory(
 }
 
 fn final_output_types(schema: &SchemaRef, aggregates: &[AggExpr]) -> Result<Vec<DataType>> {
-    let types = kaveon_exec::aggregate::grouped_aggregate_output_types(schema)?;
+    let mut types = kaveon_exec::aggregate::grouped_aggregate_output_types(schema)?;
     if types.is_empty() {
         return Ok(aggregates
             .iter()
             .map(|a| {
                 if matches!(a.func, AggFunc::Count) {
-                    DataType::UInt64
+                    DataType::Int64
                 } else {
                     DataType::Float64
                 }
@@ -1907,6 +1907,12 @@ fn final_output_types(schema: &SchemaRef, aggregates: &[AggExpr]) -> Result<Vec<
     }
     if types.len() != aggregates.len() {
         return Err(exec_err("final aggregate output type count mismatch"));
+    }
+    // Workers from an earlier release may send unsigned COUNT partials.
+    for (data_type, aggregate) in types.iter_mut().zip(aggregates) {
+        if aggregate.func == AggFunc::Count && *data_type == DataType::UInt64 {
+            *data_type = DataType::Int64;
+        }
     }
     Ok(types)
 }
@@ -1976,6 +1982,9 @@ fn finalized_aggregate_batch(
             let values = groups
                 .iter()
                 .map(|group| match group.values.get(index) {
+                    Some(FinalAggregateValue::Count(value)) if aggregate.func == AggFunc::Count => {
+                        Ok(Some(i128::from(*value)))
+                    }
                     Some(FinalAggregateValue::Integer(value)) => Ok(*value),
                     _ => Err(exec_err("integer final state type mismatch")),
                 })
@@ -2626,9 +2635,9 @@ mod tests {
         let counts = execution.result_batches[0]
             .column(1)
             .as_any()
-            .downcast_ref::<UInt64Array>()
+            .downcast_ref::<Int64Array>()
             .unwrap();
-        assert_eq!(counts.values().iter().sum::<u64>(), 4);
+        assert_eq!(counts.values().iter().sum::<i64>(), 4);
     }
 
     #[test]
@@ -2785,7 +2794,7 @@ mod tests {
             result
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(west),
             4
@@ -2830,7 +2839,7 @@ mod tests {
             result
                 .column(6)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(west),
             3
@@ -2986,7 +2995,7 @@ mod tests {
             result
                 .column(0)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(0),
             0
@@ -3051,7 +3060,7 @@ mod tests {
             let counts = batch
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap();
             assert!(counts.values().iter().all(|count| *count == 2));
         }
@@ -3107,7 +3116,7 @@ mod tests {
             batch
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .values()
                 .to_vec()
@@ -3225,7 +3234,7 @@ mod tests {
             output
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(0),
             100
@@ -3287,7 +3296,7 @@ mod tests {
             let counts = batch
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap();
             for row in 0..batch.num_rows() {
                 rows.insert(keys.value(row).to_owned(), counts.value(row));
@@ -3342,7 +3351,7 @@ mod tests {
             batch
                 .column(0)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(0),
             4
@@ -3467,7 +3476,7 @@ mod tests {
             result
                 .column(1)
                 .as_any()
-                .downcast_ref::<UInt64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap()
                 .value(0),
             1

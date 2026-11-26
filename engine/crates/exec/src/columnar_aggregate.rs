@@ -2918,8 +2918,11 @@ fn output_array(
         (AccColumn::Count(counts), DataType::UInt64) => {
             Arc::new(UInt64Array::from(counts[slots].to_vec()))
         }
-        (AccColumn::Count(counts), DataType::Int64) => Arc::new(Int64Array::from_iter(
-            counts[slots].iter().map(|c| Some(*c as i64)),
+        (AccColumn::Count(counts), DataType::Int64) => Arc::new(Int64Array::from(
+            counts[slots]
+                .iter()
+                .map(|&count| i64::try_from(count).map_err(|_| exec_err("COUNT exceeds BIGINT")))
+                .collect::<Result<Vec<_>>>()?,
         )),
         (AccColumn::IntegerSum { sums, counts }, DataType::Int64) => {
             Arc::new(Int64Array::from_iter(
@@ -3033,6 +3036,19 @@ pub fn exchanged_key_types(
 mod tests {
     use super::*;
     use arrow::array::{DictionaryArray, Int32Array};
+
+    #[test]
+    fn signed_count_accepts_bigint_limit_and_rejects_overflow() {
+        let counts = AccColumn::Count(vec![i64::MAX as u64, i64::MAX as u64 + 1]);
+        let values = output_array(&counts, &DataType::Int64, 0..1).unwrap();
+        assert_eq!(values.as_primitive::<Int64Type>().value(0), i64::MAX);
+        assert!(
+            output_array(&counts, &DataType::Int64, 1..2)
+                .unwrap_err()
+                .to_string()
+                .contains("COUNT exceeds BIGINT")
+        );
+    }
 
     fn template() -> Vec<AggregateState> {
         vec![

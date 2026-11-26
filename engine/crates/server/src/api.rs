@@ -11503,14 +11503,14 @@ fn context_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<C
     for (aggregate, name) in shape.iter().zip(names) {
         let (data_type, value) = match aggregate {
             ContextAggregate::Count => (
-                presented_type(&arrow::datatypes::DataType::UInt64),
-                serde_json::json!(statistics.rows),
+                presented_type(&arrow::datatypes::DataType::Int64),
+                serde_json::json!(i64::try_from(statistics.rows).ok()?),
             ),
             ContextAggregate::ExactDistinct(column) => {
                 let column = statistics_column(column)?;
-                let value = column.distinct_exact?;
+                let value = i64::try_from(column.distinct_exact?).ok()?;
                 (
-                    presented_type(&arrow::datatypes::DataType::UInt64),
+                    presented_type(&arrow::datatypes::DataType::Int64),
                     serde_json::json!(value),
                 )
             }
@@ -25850,6 +25850,51 @@ mod streamed_root_tests {
             serde_json::from_slice(&page_body).expect("array sort wire result page JSON");
         assert_eq!(page_json["data"], serde_json::json!([[[3, 2, 1, null]]]));
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn trino_count_and_distinct_count_bind_separately_and_return_bigints() {
+        let directory = std::env::temp_dir().join(format!("kaveon-trino-count-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        let sql = "SELECT COUNT(v) AS n, COUNT(DISTINCT v) AS nd FROM (VALUES (1),(1),(NULL)) t(v)";
+        let response = submit_trino_statement_parts(
+            state.clone(),
+            alice(),
+            HeaderMap::new(),
+            Bytes::from(sql),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let statement: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let page = get_trino_result_page(
+            State(state),
+            axum::extract::Path((statement["id"].as_str().unwrap().to_owned(), 0)),
+            axum::Extension(alice()),
+        )
+        .await;
+        let body = axum::body::to_bytes(page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(result["data"], serde_json::json!([[2, 1]]));
+        assert_eq!(statement["columns"].as_array().unwrap().len(), 2);
+        for (column, name) in statement["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(["n", "nd"])
+        {
+            assert_eq!(column["name"], name);
+            assert_eq!(column["type"], "bigint");
+            assert_eq!(
+                column["typeSignature"],
+                serde_json::json!({"rawType":"bigint","arguments":[]})
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
