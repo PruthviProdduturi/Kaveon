@@ -488,8 +488,8 @@ node, when it is exactly:
 `ORDER BY`, `LIMIT`, `HAVING`, expressions over aggregates, joins and
 everything else take the row path, unchanged. `settings.use_statistics =
 false` stands the cube aside like every statistics answer. The answer's
-columns are typed as the executor types them (counts unsigned, integer
-sums as `BIGINT`, decimal sums at precision 38, bounds in the column's
+columns use the executor’s result types (exact counts as `BIGINT`, distinct
+sketch estimates as `UInt64`, signed integer sums as `BIGINT`, decimal sums at precision 38, bounds in the column's
 type), and the differential sweep holds every cube-answered statement to
 the scanned answer: exactly for the row count and the additive measures,
 bit-identically for the distinct sketches against
