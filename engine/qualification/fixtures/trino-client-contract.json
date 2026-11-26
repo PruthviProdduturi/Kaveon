@@ -8,6 +8,18 @@
     "sql": "SELECT a.x,b.y FROM (VALUES (1),(2),(2)) a(x) JOIN (VALUES (2,'p'),(2,'q')) b(k,y) ON a.x=b.k ORDER BY a.x,b.y"
   },
   {
+    "name": "parenthesized qualified label",
+    "sql": "SELECT (a.x) FROM (VALUES (1),(2)) a(x) ORDER BY a.x"
+  },
+  {
+    "name": "quoted qualified label",
+    "sql": "SELECT a.\"MixedCase\" FROM (VALUES (1),(2)) a(\"MixedCase\") ORDER BY a.\"MixedCase\""
+  },
+  {
+    "name": "explicit alias with qualified label",
+    "sql": "SELECT a.x AS \"Case Label\",b.y FROM (VALUES (1)) a(x) JOIN (VALUES (2,'p')) b(k,y) ON a.x < b.k"
+  },
+  {
     "name": "distinct null",
     "sql": "SELECT COUNT(DISTINCT x) FROM (VALUES (1),(1),(2),(NULL)) t(x)"
   },
