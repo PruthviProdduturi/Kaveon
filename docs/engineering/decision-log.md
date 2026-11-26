@@ -252,7 +252,7 @@ Reference pages: [The learning engine](../engine/learning-engine.md),
 [Governance](../engine/governance.md),
 [Storage and catalogs](../engine/storage-and-catalogs.md),
 [the 9/10 program](nine-of-ten-program.md),
-[the benchmark program](../qualification/benchmark-program.md).
+the benchmark program.
 
 ## 2026-09-16
 
@@ -314,7 +314,7 @@ Reference pages: [The learning engine](../engine/learning-engine.md),
   (below) does not change the record. Note: `benchmark-program.md` and
   `aks-suspend-resume.md` still print the path as
   `opensource/benchmarks/tpch/delta/sf100/`, while the Job and the
-  manifest (`docs/qualification/tpch/tables.json`) use
+  manifest (`engine/qualification/fixtures/tpch/tables.json`) use
   `benchmarks/tpch/v2/sf100/`; the manifest is what was registered.
   Record: `802ccd1a` (Delta), `fc63d6dc` and `7935ad0e` (column names,
   2026-09-18), `b9e9fcc9` (docs); HANDSHAKE Log 2026-09-17, directory

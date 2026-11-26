@@ -53,7 +53,7 @@ Run the DLM corpus and save its evidence:
 ```powershell
 python scripts/qualify-dlm-questions.py `
   --portal http://127.0.0.1:3000 `
-  --corpus docs/qualification/dlm-question-corpus.json `
+  --corpus engine/qualification/fixtures/dlm-question-corpus.json `
   --execute-live `
   --report tmp/kaveon-iq-dlm-local.json
 ```

@@ -7,7 +7,7 @@
 #     --from-file=generate-tpch-trino.py=scripts/generate-tpch-trino.py
 #
 # The manifest is read from the Job log (TPCH_GENERATE=) and kept as
-# docs/qualification/tpch/tables.json for both engines' registrations.
+# engine/qualification/fixtures/tpch/tables.json for both engines' registrations.
 apiVersion: batch/v1
 kind: Job
 metadata:

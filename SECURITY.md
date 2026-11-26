@@ -4,14 +4,9 @@
 
 Kaveon is an **open-source, self-hosted analytics platform**. You run it on your own
 infrastructure and point it at your own databases; there is also a hosted preview at
-[kaveon.io](https://kaveon.io). It's built to be deployed however you
-like — a private internal tool *or* a public site. The Studio/API path includes
-application controls, but the alpha Engine HTTP server must remain behind a trusted
-boundary because it has no authentication, authorization, or TLS.
+[kaveon.io](https://kaveon.io). Shared deployments expose Studio over HTTPS and keep the API and Engine on the private network. The Engine supports authenticated statements, role checks, resource groups and configurable TLS.
 
-Sign-in uses GitHub, Google, or Microsoft Entra ID through NextAuth (Auth.js v5), with
-the browser calling FastAPI through the shared-secret-authenticated Next.js proxy. Kaveon has no local-password
-login or bootstrap password. FastAPI can additionally validate provider-issued bearer
+On the guided Azure installation, Studio uses a single-tenant Microsoft Entra public client. Studio verifies the delegated access token before creating the session. Other installations can configure supported OAuth providers. The Studio server authenticates requests to FastAPI through its proxy. FastAPI can additionally validate provider-issued bearer
 tokens for explicit direct-API clients. Kaveon queries Microsoft Fabric SQL, Azure SQL,
 PostgreSQL, MySQL, and StarRocks one selected source at a time.
 
@@ -59,9 +54,7 @@ kaveon-api  (FastAPI, middleware/auth.py)
 
 The same `KAVEON_PROXY_SECRET` must be set on both `kaveon-studio` and `kaveon-api`.
 
-> **Note:** the API retains a legacy Azure-AD/JWKS + `azure-identity` path used only when
-> connecting to **Microsoft Fabric / Azure SQL** data sources via managed identity. It is
-> not part of the sign-in flow, which is NextAuth OAuth end-to-end.
+Azure storage access uses the deployment identity. It is separate from the identity used to sign in to Studio.
 
 ---
 
@@ -69,10 +62,7 @@ The same `KAVEON_PROXY_SECRET` must be set on both `kaveon-studio` and `kaveon-a
 
 ### Role-Based Access Control
 
-The API defines four roles, ordered `Viewer < Analyst < Editor < Admin`. Through the
-NextAuth sign-in, a user is **Admin** if their email is listed in `AUTH_ADMIN_EMAILS`,
-otherwise **Viewer**; the Analyst/Editor tiers exist in the API's authorization layer for
-finer-grained deployments.
+The API defines four roles, ordered `Viewer < Analyst < Editor < Admin`. The method for assigning a role depends on the sign-in configuration. Use the [authentication guide](https://kaveon.io/docs/auth) for the selected deployment.
 
 | Role | Can read | Can create | Can publish | Can manage users/sources |
 |---|---|---|---|---|
@@ -128,9 +118,7 @@ Filter operators (`=`, `<`, `LIKE`, …) are validated against a strict allowlis
 | **RBAC** | `require_min_role()` on all create/update/admin endpoints |
 | **Content visibility** | `private` / `internal` / `published` enforced in every list/get query |
 
-The Engine HTTP API is outside these controls. It currently uses permissive CORS and
-has no authentication, TLS, query quotas, or authorization. Do not expose it directly
-to an untrusted network.
+Keep the coordinator and worker endpoints private. Configure Engine authentication and TLS for shared installations and limit access to the identities used by the API, CLI and workers.
 
 ---
 

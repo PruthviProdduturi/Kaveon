@@ -11,6 +11,11 @@ const ignoredDirectories = new Set([
   ".git", ".next", ".claude", "node_modules", "target", "tmp", "dist",
   "build", "coverage", ".pytest_cache",
 ]);
+const localOnlyPaths = new Set([
+  join(repositoryRoot, "docs", "qualification"),
+  join(repositoryRoot, ".local", "tracking"),
+  join(repositoryRoot, "CLAUDE.md"),
+]);
 const markdownLinkPattern = /\[[^\]]+\]\(([^)\s]+)\)/g;
 const docsRoutePattern = /href:\s*"(\/docs[^"]*)"/g;
 const failures = [];
@@ -20,6 +25,7 @@ function collectFiles(directory, extension) {
   for (const entry of readdirSync(directory)) {
     if (ignoredDirectories.has(entry)) continue;
     const fullPath = join(directory, entry);
+    if (localOnlyPaths.has(fullPath)) continue;
     if (statSync(fullPath).isDirectory()) files.push(...collectFiles(fullPath, extension));
     else if (fullPath.endsWith(extension)) files.push(fullPath);
   }

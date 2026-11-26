@@ -330,7 +330,6 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 | **Cloud qualification** | Iceberg ADLS qualification, S3 live-bucket qualification, workload-identity rotation, node/disk failure, sustained soak, backup/restore, upgrade/rollback, and multi-coordinator consistency |
 | **Next capability work** | Broader Delta protocol support, schema evolution, deletion vectors, time travel, cost-based join planning, dynamic filtering, and richer operator telemetry |
 | **Post-launch direction** | Cross-source federation, catalog-service adapters, optimized ingest, SIMD/JIT candidates, and broader lake-format protocol support |
-| **Post-launch** | Cross-source federation, catalog-service adapters, optimized ingest, SIMD/JIT candidates, and broader lake-format protocol support |
 
 ## Architectural decisions
 
@@ -347,7 +346,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 ## Known architectural debt
 
 - Python bindings remain a scaffold; Studio/FastAPI identity reaches native Engine routes through the authenticated bridge, while broader tenant and cloud identity qualification remains open.
-- The platform PostgreSQL source registry and Engine native catalog need a revision-aware synchronization bridge.
+- Catalog source records and their published Engine definitions must remain consistent when a source is renamed or rebound.
 - ADLS Gen2 Parquet/Delta reads are executable and qualified for their declared paths. S3 reads are implemented through the shared object-store reader but remain unqualified; Iceberg is locally qualified but has no completed ADLS/AKS qualification. Broader Delta/Iceberg protocol semantics remain unsupported.
 - Aggregate/join spill, coordinator admission, bounded exchanges, retries, cancellation, and paged delivery are implemented and locally qualified; dynamic filtering, cost-based optimization breadth, and full live operator telemetry remain bounded work.
 - Engine statement HTTP has authenticated identity, role checks, quotas, and bounded resource groups in the qualified local path; TLS, workload-identity rotation, and adversarial cloud deployment evidence remain open.

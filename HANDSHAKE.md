@@ -6,7 +6,7 @@ progress updates, or agent activity here.
 ## Source of truth
 
 - Use Git commits and pull requests for implementation history.
-- Use focused tests and files under `docs/qualification/` for reproducible evidence.
+- Commit reproducible tests and fixtures. Keep run reports and operator notes local under `docs/qualification/`.
 - Use `STATUS.md` for the current product capability ledger.
 - Use `docs/engineering/trino-parity-tracker.md` for the current Trino parity matrix
   and acceptance gates.

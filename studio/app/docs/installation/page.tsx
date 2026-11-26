@@ -2,8 +2,8 @@ import { Callout, Code, PageHeader, Pager } from "../../../components/docs/prose
 
 export const metadata = { title: "Deploy Kaveon" };
 
-const azureInstaller = "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fa2c4d3f99f4bf9e49f77726b856a59182e8d29ef%2Finfra%2Fmarketplace%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fa2c4d3f99f4bf9e49f77726b856a59182e8d29ef%2Finfra%2Fmarketplace%2FcreateUiDefinition.json";
-const azurePackage = "https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/marketplace";
+const azureInstaller = "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Ff1304715ea753d4f800e54c8f4ba092afa6ddaf3%2Finfra%2Fmarketplace%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Ff1304715ea753d4f800e54c8f4ba092afa6ddaf3%2Finfra%2Fmarketplace%2FcreateUiDefinition.json";
+const azurePackage = "https://github.com/PruthviProdduturi/Kaveon/tree/f1304715ea753d4f800e54c8f4ba092afa6ddaf3/infra/marketplace";
 
 export default function InstallationDocs() {
   return <div className="docs-prose">
@@ -35,10 +35,10 @@ export default function InstallationDocs() {
     <p>A successful template deployment completes the infrastructure step. The Studio URL becomes usable after an operator deploys the workloads and configures HTTPS.</p>
     <ol>
       <li>Prepare compatible Engine, API and Studio images pinned by digest, the workload identities, the Engine credentials and CA, and the product storage settings. The <a href={azurePackage}>Azure package guide</a> documents the inputs and installation boundaries.</li>
-      <li>Install the Engine Helm chart, then the platform chart for API and Studio. Supply the directory values from the template to both releases. Configure the Studio ingress to use the reserved IP, with a certificate for the planned Studio hostname.</li>
+      <li>Install the Engine Helm chart, then the platform chart for API and Studio. Supply the directory values from the template to both releases. Configure the Studio ingress to use the reserved IP and a trusted certificate for its hostname. If your network restricts public certificate challenges, supply an approved Kubernetes TLS Secret through <code>azureEdge.tlsSecretName</code>.</li>
       <li>Open the HTTPS Studio origin, sign in with Microsoft and run <code>SELECT 1 AS ready;</code> in SQL Lab. Then register a lake catalog and read a table to verify storage identity and data access.</li>
     </ol>
-    <p>For Kubernetes configuration, see the <a href="https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/helm/kaveon-engine">Engine chart</a> and <a href="https://github.com/PruthviProdduturi/Kaveon/tree/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/infra/helm/kaveon-platform">platform chart</a>. The public Azure form and its workload identity settings are specific to AKS.</p>
+    <p>For Kubernetes configuration, see the <a href="https://github.com/PruthviProdduturi/Kaveon/tree/f1304715ea753d4f800e54c8f4ba092afa6ddaf3/infra/helm/kaveon-engine">Engine chart</a> and <a href="https://github.com/PruthviProdduturi/Kaveon/tree/f1304715ea753d4f800e54c8f4ba092afa6ddaf3/infra/helm/kaveon-platform">platform chart</a>. The public Azure form and its workload identity settings are specific to AKS.</p>
 
     <h2 id="linux-vm">Linux VM</h2>
     <p>Install Git, Bash and Docker with Compose v2, then follow the <a href="/docs/quickstart">local quickstart</a> on the VM. Use a persistent disk for the coordinator volume and any local data. For shared access, configure Studio sign-in, set its public HTTPS origin and point a TLS reverse proxy at Studio on port 3000. Keep the API and Engine on the private interface.</p>

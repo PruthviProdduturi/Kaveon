@@ -1,13 +1,13 @@
 # Contributing to Kaveon
 
-Thanks for your interest in contributing to Kaveon — the Analyze module of the Kaveon suite. This guide will get you set up.
+Thanks for your interest in contributing to Kaveon. This guide will get you set up.
 
 ## Prerequisites
 
-- Node.js 22.x (required by the root `package.json`; `.nvmrc` is currently stale at Node 20)
-- pnpm 10 (`corepack prepare pnpm@10 --activate`)
+- Node.js 22.x (pinned in `.nvmrc` and the root `package.json`)
+- pnpm 10.34.5 (the root `packageManager` pin)
 - Python 3.11+
-- ODBC Driver 18 for SQL Server (Fabric SQL / Azure SQL)
+- ODBC Driver 18 for work on Fabric SQL or Azure SQL connections
 
 ## Local Development
 

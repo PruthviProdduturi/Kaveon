@@ -2,7 +2,7 @@
 
 Runs from an API pod with the Engine catalog credential, like
 register-curated-catalog.py. The column list is the upstream Trino schema
-(docs/qualification/clickbench/trino-create.sql) mapped to Arrow types; the
+(engine/qualification/fixtures/clickbench/trino-create.sql) mapped to Arrow types; the
 registration is verified by an exact COUNT(*) against the published row count.
 No credentials or rows are printed.
 """

@@ -34,10 +34,10 @@ for the qualified local Docker scope; unsupported syntax is rejected explicitly.
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
 | `HAVING` | Alpha | Post-aggregation filter |
 | Aggregate `FILTER (WHERE ...)` | Alpha | Supported on aggregate functions, including `COUNT`, `SUM`, and `COUNT_IF`; the predicate is evaluated with SQL three-valued semantics before the aggregate state is updated |
-| Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `NTILE`, `PERCENT_RANK`, `CUME_DIST`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, and `NTH_VALUE`, plus aggregates with `OVER (PARTITION BY … ORDER BY …)` and `ROWS`/`RANGE`/`GROUPS` frames. Value windows support the qualified `IGNORE NULLS` forms; partitioned and unpartitioned shapes have exact local/three-worker coverage (see the [value-window](../qualification/track2-window-value-functions-distributed-2026-10-18.md), [NTILE](../qualification/track1-window-ntile-ties-nulls-2026-10-18.md), and [percent-rank/CUME_DIST](../qualification/track1-window-percent-rank-cume-dist-2026-10-18.md) gates), while remaining mixed-key and fully parallel window shapes stay bounded/qualified separately |
+| Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `NTILE`, `PERCENT_RANK`, `CUME_DIST`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, and `NTH_VALUE`, plus aggregates with `OVER (PARTITION BY … ORDER BY …)` and `ROWS`/`RANGE`/`GROUPS` frames. Value windows support the qualified `IGNORE NULLS` forms; partitioned and unpartitioned shapes have exact local/three-worker coverage (see the value-window, NTILE, and percent-rank/CUME_DIST gates), while remaining mixed-key and fully parallel window shapes stay bounded/qualified separately |
 | `QUALIFY` | Alpha | Filters supported window results after window evaluation; partitioned `ROW_NUMBER` shapes are qualified across local and distributed execution |
 | Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, `INTERSECT ALL`, and `EXCEPT ALL`; distributed exact duplicate-count semantics are covered by the differential sweep |
-| Date/time | Alpha | `EXTRACT`, `DATE_TRUNC` over DATE calendar units and second/millisecond/microsecond/nanosecond timestamps with unit and timezone preservation, `DATE_PART`/`DATEPART`, `DATE_DIFF`/`DATEDIFF`/`DATEDIFF_BIG` from nanoseconds through weeks plus calendar month/quarter/year boundaries, `DATE_ADD`/`DATEADD` (including SQL Server datepart abbreviations through microseconds and nanoseconds), bounded `DATE_BUCKET` using the SQL Server default origin, typed literal origin, or bounded row-local DATE/TIMESTAMP origin with literal or bounded row-local BIGINT widths (invalid dynamic widths return typed NULL; millisecond and microsecond buckets are qualified for timestamp inputs; nanosecond buckets remain rejected because execution timestamps are microsecond precision; unsupported origin shapes remain rejected), bounded `CONVERT`/`TRY_CONVERT` DATE styles `0`, `1`, `23`, `101`, `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`, `120`, `121`, and `126` over text columns, plus runtime timestamp style `113` (`dd mon yyyy hh:mi:ss:mmm`), bounded fixed-offset SQL Server `AT TIME ZONE` for `UTC`, `Z`, and `±HH:MM` offsets (naive DATE/timestamp values are interpreted in that offset and normalized to UTC; zoned inputs preserve their instant; NULLs remain NULL; named zones, DST rules, and dynamic/mixed zone expressions are rejected), `DATEFROMPARTS`, `DATETIMEFROMPARTS`, bounded `DATETIME2FROMPARTS` precisions `0`–`6`, bounded UTC-normalized `DATETIMEOFFSETFROMPARTS` precisions `0`–`6`, bounded `TIMEFROMPARTS` precisions `0`–`6`, `SMALLDATETIMEFROMPARTS`, `TO_CHAR`/`FORMAT` for temporal values with invariant date/time patterns, bounded invariant numeric `FORMAT` (`N0`–`N6`, `F0`–`F6`, and fixed decimal patterns), `FROM_UNIXTIME`, `TO_UNIXTIME`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` and `TIMESTAMP '…'` literals, typed timestamp `± INTERVAL 'n'` HOUR/MINUTE/SECOND and typed `DATE`/timestamp `± INTERVAL 'n'` DAY/WEEK/MONTH/QUARTER/YEAR; month/year shifts use calendar arithmetic and clamp month-end days. SQL Server `DATEPART(dw|weekday|w, ...)` uses the explicit default `DATEFIRST 7` numbering (Sunday=1 through Saturday=7). The common `SET DATEFIRST 7;` prefix is accepted as a no-op, and bounded `SET DATEFIRST 1` through `7` is carried immutably through local and distributed planning. General mutable session state remains outside the contract. See [DATEFIRST qualification](../qualification/track2-tsql-datefirst-default-2026-11-03.md) and [custom DATEFIRST qualification](../qualification/track2-tsql-datefirst-custom-2026-11-03.md) |
+| Date/time | Alpha | `EXTRACT`, `DATE_TRUNC` over DATE calendar units and second/millisecond/microsecond/nanosecond timestamps with unit and timezone preservation, `DATE_PART`/`DATEPART`, `DATE_DIFF`/`DATEDIFF`/`DATEDIFF_BIG` from nanoseconds through weeks plus calendar month/quarter/year boundaries, `DATE_ADD`/`DATEADD` (including SQL Server datepart abbreviations through microseconds and nanoseconds), bounded `DATE_BUCKET` using the SQL Server default origin, typed literal origin, or bounded row-local DATE/TIMESTAMP origin with literal or bounded row-local BIGINT widths (invalid dynamic widths return typed NULL; millisecond and microsecond buckets are qualified for timestamp inputs; nanosecond buckets remain rejected because execution timestamps are microsecond precision; unsupported origin shapes remain rejected), bounded `CONVERT`/`TRY_CONVERT` DATE styles `0`, `1`, `23`, `101`, `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`, `120`, `121`, and `126` over text columns, plus runtime timestamp style `113` (`dd mon yyyy hh:mi:ss:mmm`), bounded fixed-offset SQL Server `AT TIME ZONE` for `UTC`, `Z`, and `±HH:MM` offsets (naive DATE/timestamp values are interpreted in that offset and normalized to UTC; zoned inputs preserve their instant; NULLs remain NULL; named zones, DST rules, and dynamic/mixed zone expressions are rejected), `DATEFROMPARTS`, `DATETIMEFROMPARTS`, bounded `DATETIME2FROMPARTS` precisions `0`–`6`, bounded UTC-normalized `DATETIMEOFFSETFROMPARTS` precisions `0`–`6`, bounded `TIMEFROMPARTS` precisions `0`–`6`, `SMALLDATETIMEFROMPARTS`, `TO_CHAR`/`FORMAT` for temporal values with invariant date/time patterns, bounded invariant numeric `FORMAT` (`N0`–`N6`, `F0`–`F6`, and fixed decimal patterns), `FROM_UNIXTIME`, `TO_UNIXTIME`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` and `TIMESTAMP '…'` literals, typed timestamp `± INTERVAL 'n'` HOUR/MINUTE/SECOND and typed `DATE`/timestamp `± INTERVAL 'n'` DAY/WEEK/MONTH/QUARTER/YEAR; month/year shifts use calendar arithmetic and clamp month-end days. SQL Server `DATEPART(dw|weekday|w, ...)` uses the explicit default `DATEFIRST 7` numbering (Sunday=1 through Saturday=7). The common `SET DATEFIRST 7;` prefix is accepted as a no-op, and bounded `SET DATEFIRST 1` through `7` is carried immutably through local and distributed planning. General mutable session state remains outside the contract. See DATEFIRST qualification and custom DATEFIRST qualification |
 | Conditional, comparison and strings | Alpha | `CASE`, `IF`/`IIF`, `COALESCE`/`ISNULL`, `GREATEST`, `LEAST`, `NULLIF`, `BETWEEN`, `IN`, `IS DISTINCT FROM`, `IS NOT DISTINCT FROM`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `REGEXP_COUNT`, `REGEXP_EXTRACT`, `REGEXP_EXTRACT_ALL`, `REGEXP_SPLIT`, `CHR`, `CODEPOINT`, `STRPOS`, SQL Server `CHARINDEX`, bounded SQL Server `PATINDEX`, `CAST`, `TRY_CAST` for bounded numeric, DATE, TIME, DATETIME, SMALLDATETIME, and DATETIME2/TIMESTAMP targets with safe NULL-on-error semantics, bounded invariant SQL Server `PARSE` for strict numeric and temporal casts, bounded invariant SQL Server `TRY_PARSE` for numeric, DATE, TIME, DATETIME2, and DATETIMEOFFSET targets, `TRY(CAST(...))`, `TRY(JSON_PARSE(...))`, `CONCAT_WS`, `TRANSLATE`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`LEN`/`TRIM`/`SUBSTR`/`SPLIT`/`SPLIT_PART`/`REVERSE`/`REPEAT`/SQL Server `REPLICATE`/`REPLACE`/`LPAD`/`RPAD`; SQL Server `TRIM` supports qualified BOTH, LEADING, and TRAILING character sets with NULL-preserving Unicode scalar semantics; SQL Server `LEN` counts Unicode characters and excludes trailing U+0020 spaces; `CHARINDEX` uses SQL Server's needle/value argument order, optional one-based start location, Unicode scalar positions, and returns zero when absent; bounded `PATINDEX` supports `%` and `_` wildcards, removes leading `%` before calculating the one-based Unicode position, propagates NULL, and rejects bracket classes; `LEFT`, `RIGHT`, `LPAD`, `RPAD`, `REVERSE`, `REPEAT`, `STARTS_WITH`, and `ENDS_WITH` preserve nullable `LargeUtf8` columns and count Unicode scalars; `CHR` and `CODEPOINT` operate on Unicode code points and preserve NULLs; `CODEPOINT` rejects values containing anything other than one code point; `STRPOS` and `POSITION` accept Utf8/LargeUtf8 inputs, support Unicode character positions, and `STRPOS` supports positive and negative occurrence indexes; zero occurrences fail explicitly; `CONCAT_WS` skips NULL value arguments and returns NULL for a NULL separator; `TRANSLATE` maps Unicode code points by position, keeps unmapped source characters, and removes source characters without a corresponding target; `SPLIT` returns a typed text array (preserving LargeUtf8 input width), preserves NULL inputs, supports a positive limit whose final element contains the remainder, and splits into characters for an empty delimiter; `REGEXP_COUNT` counts non-overlapping matches and preserves NULL inputs; `REGEXP_EXTRACT_ALL` returns a typed text array of non-overlapping matches, or capture group 1 when present, and preserves NULL inputs; `REGEXP_SPLIT` returns a typed text array and preserves trailing empty fields; `SPLIT_PART` preserves LargeUtf8 input width, uses one-based indexes, returns NULL out of range, and rejects non-positive indexes; `GREATEST` and `LEAST` preserve the common input type and return NULL when any argument is NULL; `REGEXP_EXTRACT(string, pattern[, group])` returns capture group 0 by default or the requested zero-based group, and returns NULL for a non-match or missing capture; SQL Server `LOG`, two-argument `LOG`, `LOG10`, and `EXP` support bounded numeric inputs with NULL propagation and non-finite results rejected |
 The bounded invariant SQL Server `TRY_PARSE` and `TRY_CAST` surface also includes
 `TIME`, `DATETIME`, and `SMALLDATETIME`, in addition to `DATETIMEOFFSET`. Time
@@ -45,18 +45,18 @@ and timestamp text use the Engine's microsecond-precision representation;
 `SMALLDATETIME` does not emulate SQL Server minute rounding. Fixed-offset text is normalized to a UTC instant with a
 `+00:00` timezone marker; invalid or NULL input returns NULL, and locale-aware
 `USING` forms remain rejected. See
-[TRY_PARSE qualification](../qualification/track2-tsql-try-parse-2026-10-29.md)
-and [TIME qualification](../qualification/track2-tsql-try-parse-time-2026-11-03.md).
+TRY_PARSE qualification
+and TIME qualification.
 Bounded `TRY_CAST(... AS DECIMAL(p,s))` is also qualified with typed NULL on
-malformed or overflowing input; see the [decimal `TRY_CAST` qualification](../qualification/track2-tsql-try-cast-decimal-2026-11-04.md).
+malformed or overflowing input; see the decimal `TRY_CAST` qualification.
 Strict invariant `PARSE` targets use the same typed cast boundary and are
 qualified locally and across three workers; culture-aware `USING` forms remain
-rejected. See the [PARSE qualification](../qualification/track2-tsql-parse-invariant-2026-11-04.md).
+rejected. See the PARSE qualification.
 
 SQL Server `DATENAME` millisecond, microsecond, and nanosecond parts are also
 qualified for typed timestamp expressions. The nanosecond spelling follows the
 Engine's microsecond execution precision and is not a claim of 100-nanosecond
-`datetime2` storage; see the [subsecond DATENAME qualification](../qualification/track2-tsql-datename-subsecond-2026-11-04.md).
+`datetime2` storage; see the subsecond DATENAME qualification.
 
 | `ROW(...)`, `MAP(...)`, and `MAP_FROM_ENTRIES(...)` constructors | Alpha | Produces typed Arrow `StructArray`/`MapArray` values from list inputs with null-preserving child values; `MAP_FROM_ENTRIES` accepts `ARRAY[ROW(key, value)]`, preserves NULL outer rows, and rejects NULL or duplicate keys; `SPLIT_TO_MAP` parses delimited text into typed text maps, rejects empty delimiters and duplicate keys, and preserves NULL rows; `SPLIT_TO_MULTIMAP` groups repeated keys into ordered text arrays; 32-bit and 64-bit-offset list arrays, including mixed-offset comparisons, share the same semantics; `ROW(...).field`, row equality and lexicographic ordering, null-preserving element-wise array equality/inequality and lexicographic ordering, order-independent map equality, map subscript lookup, `MAP_KEYS`, `MAP_VALUES`, and Trino-compatible `MAP_CONTAINS_KEY(map, key)` (plus the legacy `CONTAINS_KEY` alias) expose typed projections; ordered map comparison remains open |
 | Array and map functions/subscripts | Alpha | Numeric, text, and boolean `ARRAY[...]` literals preserve typed elements, including signed and unsigned 8/16/32/64-bit integers, `Float32`, and microsecond/nanosecond `TIME`; `SEQUENCE` builds bounded BIGINT ranges with inferred or explicit direction; `ZIP` builds typed row arrays and pads shorter inputs with NULL; `ARRAY_FIRST` and `ARRAY_LAST` return typed elements or NULL for empty/NULL arrays; `FLATTEN` concatenates nested typed arrays and preserves outer NULLs; `TRIM_ARRAY` removes a validated non-negative suffix count; `ARRAY_REPEAT` repeats typed numeric, text, boolean, date, and time scalars with a bounded non-negative count and preserves NULL elements; `ARRAY_UNION`, `ARRAY_INTERSECT`, and `ARRAY_EXCEPT` deduplicate typed values with Trino-compatible NULL equality and preserve list offsets; `ARRAY_CONCAT` accepts two or more matching typed lists; `CARDINALITY` over arrays and maps, `CONTAINS`, `ARRAYS_OVERLAP`, `ARRAY_POSITION`, `ARRAY_JOIN`, `ARRAY_APPEND`, `ARRAY_PREPEND`, `ARRAY_REMOVE`, `ARRAY_DISTINCT`, `ARRAY_SORT`, `ARRAY_REVERSE`, positive and negative-stride array slices, and one-based/negative `ELEMENT_AT` over numeric, text, and boolean lists/maps; `ARRAY_HISTOGRAM` preserves integer, floating-point, decimal, date, timezone-less timestamp, boolean, and UTF-8 key types with deterministic ordering and null-element omission; 64-bit-offset lists are normalized for the supported scalar functions when their offsets fit the 32-bit execution representation; date, decimal, and second/millisecond/microsecond/nanosecond timestamp arrays preserve their element types with qualified `CARDINALITY`/`ARRAY_POSITION` coverage; broader element types and function combinations remain open |
@@ -75,13 +75,13 @@ distributed qualification before it can be advertised.
 
 `REGEXP_LIKE(value, pattern)` is qualified for literal-pattern text-column
 predicates with SQL NULL propagation and exact local/three-worker results;
-see [`track2-regexp-like-column-2026-11-03.md`](../qualification/track2-regexp-like-column-2026-11-03.md).
+see `track2-regexp-like-column-2026-11-03.md`.
 
 Result values preserve logical text at the client boundary: Arrow `Utf8View`
 values serialize as ordinary strings in direct rows and nested values, and
 `Utf8View` map keys retain their string keys. This is qualified separately from
 SQL planning and execution in
-[`track5-utf8view-result-serialization-2026-11-02.md`](../qualification/track5-utf8view-result-serialization-2026-11-02.md).
+`track5-utf8view-result-serialization-2026-11-02.md`.
 
 The bounded `DATE_BUCKET` surface also accepts `week` as a seven-day unit and
 normalizes wider calendar widths before arithmetic (for example, two weeks is
@@ -99,24 +99,24 @@ malformed JSON, and returns `false` for valid non-array JSON values.
 The SQL Server/Fabric trigonometric scalar spellings `SIN`, `COS`, `TAN`,
 `ASIN`, `ACOS`, `ATAN`, `DEGREES`, `RADIANS`, and `PI` are qualified for the
 bounded finite numeric contract with NULL propagation; see the
-[`track2-tsql-trigonometric-2026-11-03.md`](../qualification/track2-tsql-trigonometric-2026-11-03.md)
+`track2-tsql-trigonometric-2026-11-03.md`
 qualification record.
 
 SQL Server's `ATN2(y, x)` spelling is also qualified through the same typed
 two-argument arctangent path; `ATAN2` remains the generic Trino-compatible
-name. See [`track2-tsql-atn2-2026-11-03.md`](../qualification/track2-tsql-atn2-2026-11-03.md).
+name. See `track2-tsql-atn2-2026-11-03.md`.
 
 `DATEPART(week|wk|ww, value)` uses SQL Server's default `DATEFIRST 7`
 Sunday-first week-one numbering unless a bounded `SET DATEFIRST 1..7`
 prefix is supplied. The selected value is encoded in the immutable plan so
 local and distributed workers share the same weekday/week semantics; invalid
 values remain explicitly rejected. Evidence is in
-[`track2-tsql-datepart-week-2026-11-03.md`](../qualification/track2-tsql-datepart-week-2026-11-03.md).
+`track2-tsql-datepart-week-2026-11-03.md`.
 
 `DATEPART(tzoffset, value)` is qualified for timestamp values carrying a
 fixed `UTC`, `Z`, or `±HH:MM` offset and returns signed minutes. Naive values,
 named zones, and malformed or out-of-range offsets fail closed; see
-[`track2-tsql-datepart-tzoffset-2026-11-03.md`](../qualification/track2-tsql-datepart-tzoffset-2026-11-03.md).
+`track2-tsql-datepart-tzoffset-2026-11-03.md`.
 
 `JSON_ARRAY(...)` constructs a JSON array from scalar arguments and preserves
 SQL NULL arguments as JSON `null`; its bounded `ABSENT ON NULL` form omits
@@ -305,7 +305,7 @@ rejection of invalid calendar dates or unsupported arities.
 `DATETRUNC(datepart, value)` is a qualified SQL Server alias for the same
 typed `DATE_TRUNC` path, with the identical supported datepart and precision
 boundary. See
-[`track2-tsql-datetrunc-2026-10-30.md`](../qualification/track2-tsql-datetrunc-2026-10-30.md).
+`track2-tsql-datetrunc-2026-10-30.md`.
 SQL `CAST`/`TRY_CAST` and SQL Server `CONVERT`/`TRY_CONVERT` to `TIME` are
 qualified for UTF-8 text and existing Arrow time values at microsecond
 precision. Strict casts reject malformed values; safe forms return typed NULL
@@ -315,18 +315,18 @@ The SQL Server time-text styles `8`/`108` (`HH:MM:SS`) and `114`
 (`HH:MM:SS:mmm`) are also qualified for strict and safe conversion, with
 malformed values rejected or nulled respectively; other time styles remain
 unsupported. See
-[`TIME conversion styles`](../qualification/track2-tsql-convert-time-styles-2026-11-03.md).
+`TIME conversion styles`.
 `DATEADD` over microsecond `TIME` values is qualified for fixed-duration
 hour, minute, second, millisecond, and microsecond units with modulo-day
 wrapping; calendar and nanosecond units remain unsupported. See
-[`TIME DATEADD`](../qualification/track2-tsql-time-dateadd-2026-11-03.md).
+`TIME DATEADD`.
 `DATENAME` is qualified for calendar parts and returns deterministic English
 month/weekday names or textual numeric parts; its bounded `tzoffset` form is
 qualified for timestamps carrying a fixed timezone offset and returns the
 SQL Server-shaped signed `+HH:MM`/`-HH:MM` text. NULL timestamps propagate
 to NULL, while naive timestamps and named zones are rejected explicitly;
 locale/session-language formatting is intentionally not claimed. See
-[`DATENAME(tzoffset)` qualification](../qualification/track2-tsql-datename-tzoffset-2026-11-03.md).
+`DATENAME(tzoffset)` qualification.
 `ISDATE` returns a non-null boolean validity result for text and temporal
 inputs; numeric values are not interpreted as epoch dates.
 `ISNUMERIC` returns a non-null boolean result for native numeric values and
@@ -335,7 +335,7 @@ not claimed.
 Runtime `TRY_CONVERT(DATE, text, style)` for styles `0`, `1`, `23`, `101`, `102`, `103`, `104`, `105`, `106`, `107`, `110`, `111`, `112`, `20`, `21`, `120`, `121`, and `126`
 is qualified across local and three-worker Parquet execution; malformed and
 NULL inputs remain NULL. See
-[`track2-tsql-convert-runtime-styles-2026-10-29.md`](../qualification/track2-tsql-convert-runtime-styles-2026-10-29.md).
+`track2-tsql-convert-runtime-styles-2026-10-29.md`.
 `CONVERT(VARCHAR, expression)` and `TRY_CONVERT(VARCHAR, expression)` are
 also qualified, as is `TRY_CAST(expression AS VARCHAR)`; unbounded
 `NVARCHAR` uses the same Engine UTF-8 text representation at the planner
@@ -347,7 +347,7 @@ The contract is deliberately not a SQL Server code-page or UTF-16 storage
 emulation; binary-style, locale-sensitive, and unbounded expansion semantics
 remain outside the boundary. Lengths above 1,000,000 scalars and sized text
 `CONVERT` style codes fail closed. See
-[`track2-tsql-convert-varchar-2026-11-03.md`](../qualification/track2-tsql-convert-varchar-2026-11-03.md).
+`track2-tsql-convert-varchar-2026-11-03.md`.
 Unstyled `TRY_CONVERT(DATETIMEOFFSET, expression)` is qualified for invariant
 fixed-offset text inputs, with malformed and NULL values returning NULL through
 the safe-cast path. Strict `CONVERT(DATETIMEOFFSET, expression)` uses the same
@@ -359,15 +359,15 @@ have local vectorized evaluator coverage for ISO styles `20`, `21`, `120`,
 (`dd mon yyyy hh:mi:ss:mmm`) with invariant English month names, with
 `TRY_CONVERT` NULL/error behavior. Styles `20`, `21`, `120`, `121`, `126`,
 `101`, and `113` are qualified across the local and three-worker differential. See
-[`track2-tsql-convert-timestamp-literals-2026-10-29.md`](../qualification/track2-tsql-convert-timestamp-literals-2026-10-29.md).
+`track2-tsql-convert-timestamp-literals-2026-10-29.md`.
 See the dedicated strict conversion qualification for the unstyled form:
-[`track2-tsql-convert-datetimeoffset-2026-11-03.md`](../qualification/track2-tsql-convert-datetimeoffset-2026-11-03.md).
+`track2-tsql-convert-datetimeoffset-2026-11-03.md`.
 `LEFT` and `RIGHT` are qualified for bounded Unicode scalar text lengths and
 preserve NULLs across local and three-worker execution.
 `REVERSE` is qualified for the same Unicode scalar and NULL-preserving path.
 Arrow `Utf8View` inputs are accepted and return ordinary `VARCHAR` output;
 the focused executor boundary is recorded in
-[`track2-utf8view-reverse-2026-11-03.md`](../qualification/track2-utf8view-reverse-2026-11-03.md).
+`track2-utf8view-reverse-2026-11-03.md`.
 `TRIM`, `LTRIM`, and `RTRIM` are qualified for ASCII-space boundary trimming
 with NULL preservation.
 `TRANSLATE` is qualified for Unicode scalar position mapping, SQL Server's
@@ -440,7 +440,7 @@ surface; the same ordered boundary is enforced in both paths.
   non-equality predicates are qualified for bounded `EXISTS`/`NOT EXISTS`
   semi/anti joins, including the TPC-H Q21 shape
   (`l2.l_suppkey <> l1.l_suppkey`); see
-  [`docs/qualification/tpch/coverage.md`](../qualification/tpch/coverage.md).
+  `docs/qualification/tpch/coverage.md`.
 - Residual outer joins are supported for the qualified local and distributed
   shapes described above; unqualified outer join forms outside that binder
   surface, recursive CTEs, ordered map and JSON comparison remain unsupported.
@@ -501,16 +501,15 @@ server or a general row-store protocol.
 |---|---|
 | `BEGIN` / `BEGIN TRAN` / `BEGIN TRANSACTION` | Creates an owner-isolated transaction session against the current product snapshot |
 | `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit; bounded `OUTPUT inserted.column` or `OUTPUT inserted.*` is accepted as the `id, revision, document_json` result projection |
-| `UPDATE` | Revision-checked replacement of one product document; an optional simple target alias is accepted, `id` and `revision` are required in `WHERE`, and bounded `OUTPUT inserted.column` or `OUTPUT inserted.*` is accepted. A bounded same-kind source form also accepts one aliased product table with `SET target.document_json = source.document_json`, a literal revision, one literal source id plus one or more literal target ids (including a 1,000-id `IN` list), or a target/source identity join paired with a literal target-id list. The same `RETURNING` contract applies; arbitrary joins and source predicates remain rejected. See [UPDATE FROM qualification](../qualification/track2-native-dml-update-from-2026-11-03.md) |
+| `UPDATE` | Revision-checked replacement of one product document; an optional simple target alias is accepted, `id` and `revision` are required in `WHERE`, and bounded `OUTPUT inserted.column` or `OUTPUT inserted.*` is accepted. A bounded same-kind source form also accepts one aliased product table with `SET target.document_json = source.document_json`, a literal revision, one literal source id plus one or more literal target ids (including a 1,000-id `IN` list), or a target/source identity join paired with a literal target-id list. The same `RETURNING` contract applies; arbitrary joins and source predicates remain rejected. See UPDATE FROM qualification |
 | `DELETE` | Revision-checked deletion of one product document; an optional simple target alias is accepted, `id` and `revision` are required in `WHERE`, and bounded `OUTPUT deleted.column` or `OUTPUT deleted.*` is accepted. A bounded same-kind `DELETE FROM target USING source` form also accepts a literal revision, a target-id list capped at 1,000 ids, and one literal source id; the source is owner-checked before the target CAS deletes are staged. Arbitrary `USING` joins remain rejected. |
-| `MERGE` | One bounded `VALUES` batch (up to 1,000 source rows), with an optional simple target alias, can update-or-insert, delete-or-insert, matched-update-only, matched-delete-only, unmatched-insert-only, or matched update plus `WHEN NOT MATCHED BY SOURCE THEN DELETE`; matched updates may copy `source.document_json` or assign one bounded string literal, while the by-source update form accepts a literal replacement. Matched-only update/delete clauses may additionally use `source.id = 'literal'` or `source.id IN (...)` to select a bounded subset; the update-or-insert form also accepts that bounded matched filter while still inserting absent source rows; insert-only `WHEN NOT MATCHED` clauses accept the same bounded source filter; with a declared target alias, the equivalent `target.id = 'literal'` or `target.id IN (...)` filter is accepted; excluded source rows are no-ops. The `WHEN NOT MATCHED BY SOURCE` action may also use that bounded target-id equality/`IN` filter during snapshot expansion. All forms lower to owner-checked revision/CAS paths; by-source forms cap expanded affected rows at 1,000; SQL Server's explicit `WHEN NOT MATCHED BY TARGET` spelling is accepted as the same bounded clause. The update-or-insert, matched-update-only, and unmatched-insert-only forms accept `OUTPUT inserted.id|revision|document_json`, `OUTPUT inserted.*`, and bounded `OUTPUT $action`; matched-delete-only, delete-or-insert, and bounded not-matched-by-source delete forms accept `OUTPUT deleted.id|revision|document_json`; mixed by-source action batches also accept `OUTPUT inserted.id|revision|document_json`. Deleted documents are captured from the pinned pre-delete snapshot, including staged replacements. Delete-or-insert `inserted` output returns only inserted/update actions and `deleted` output returns only deleted/update actions; no-op source rows produce no output row. Mixed pseudo-table projections reject `MERGE OUTPUT`. General search predicates, other target-column predicates, and arbitrary assignments remain rejected. See [MERGE qualification](../qualification/track2-native-dml-merge-2026-10-28.md), [MERGE OUTPUT qualification](../qualification/track2-tsql-merge-output-2026-11-03.md), [predicate qualification](../qualification/track2-native-dml-merge-predicates-2026-11-03.md), [filtered update-or-insert qualification](../qualification/track2-tsql-merge-filtered-update-insert-2026-11-04.md), and [by-source update qualification](../qualification/track2-native-dml-merge-not-matched-by-source-update-2026-11-03.md) |
+| `MERGE` | One bounded `VALUES` batch (up to 1,000 source rows), with an optional simple target alias, can update-or-insert, delete-or-insert, matched-update-only, matched-delete-only, unmatched-insert-only, or matched update plus `WHEN NOT MATCHED BY SOURCE THEN DELETE`; matched updates may copy `source.document_json` or assign one bounded string literal, while the by-source update form accepts a literal replacement. Matched-only update/delete clauses may additionally use `source.id = 'literal'` or `source.id IN (...)` to select a bounded subset; the update-or-insert form also accepts that bounded matched filter while still inserting absent source rows; insert-only `WHEN NOT MATCHED` clauses accept the same bounded source filter; with a declared target alias, the equivalent `target.id = 'literal'` or `target.id IN (...)` filter is accepted; excluded source rows are no-ops. The `WHEN NOT MATCHED BY SOURCE` action may also use that bounded target-id equality/`IN` filter during snapshot expansion. All forms lower to owner-checked revision/CAS paths; by-source forms cap expanded affected rows at 1,000; SQL Server's explicit `WHEN NOT MATCHED BY TARGET` spelling is accepted as the same bounded clause. The update-or-insert, matched-update-only, and unmatched-insert-only forms accept `OUTPUT inserted.id|revision|document_json`, `OUTPUT inserted.*`, and bounded `OUTPUT $action`; matched-delete-only, delete-or-insert, and bounded not-matched-by-source delete forms accept `OUTPUT deleted.id|revision|document_json`; mixed by-source action batches also accept `OUTPUT inserted.id|revision|document_json`. Deleted documents are captured from the pinned pre-delete snapshot, including staged replacements. Delete-or-insert `inserted` output returns only inserted/update actions and `deleted` output returns only deleted/update actions; no-op source rows produce no output row. Mixed pseudo-table projections reject `MERGE OUTPUT`. General search predicates, other target-column predicates, and arbitrary assignments remain rejected. See MERGE qualification, MERGE OUTPUT qualification, predicate qualification, filtered update-or-insert qualification, and by-source update qualification |
 
 The bounded `MERGE` surface also qualifies a literal source-id filter on a
 matched `DELETE` paired with `WHEN NOT MATCHED THEN INSERT`; selected existing
 rows delete, excluded rows no-op, and absent source rows insert through the
 same pinned revision/CAS path. Its `OUTPUT deleted.*` and bounded `OUTPUT
-$action` projections are also qualified. See [filtered delete-or-insert
-qualification](../qualification/track2-tsql-merge-filtered-delete-insert-2026-11-04.md).
+$action` projections are also qualified.
 | `COMMIT` / `COMMIT TRAN` / `COMMIT TRANSACTION` | Publishes a prepared immutable catalog snapshot through the configured product store |
 | `ROLLBACK` / `ROLLBACK TRAN` / `ROLLBACK TRANSACTION` | Discards the session without publishing its staged changes |
 | `SAVEPOINT name` | Captures the staged product write set inside the transaction |
@@ -534,11 +533,11 @@ The bounded same-kind `UPDATE ... FROM` form also accepts
 `SET target.document_json = CAST(source.document_json AS JSON)` when its
 existing literal revision/source-id or identity-join boundary is satisfied;
 the cast is syntax-only and arbitrary source expressions remain rejected. See
-[UPDATE FROM qualification](../qualification/track2-native-dml-update-from-2026-11-03.md).
+UPDATE FROM qualification.
 The bounded source-backed `INSERT ... SELECT` form likewise accepts
 `CAST(document_json AS JSON)` for its direct document projection and retains
 the same source snapshot and conflict/CAS behavior; arbitrary projections
-remain rejected. See [source-copy qualification](../qualification/track2-native-dml-insert-select-source-2026-10-28.md).
+remain rejected. See source-copy qualification.
 The qualified `MERGE` form is intentionally narrow: one target product table
 with an optional simple alias, one source `VALUES` batch of at most 1,000 rows aliased as
 `(id, document_json)`, an equality

@@ -124,7 +124,7 @@ name, one SQL shape and one answer sentence; the list lives in
 `api/dlm/classes.py` and is what `python -m dlm.coverage` reports per class,
 so the list here and the list the harness measures cannot drift apart. The
 measured numbers are in
-[docs/qualification/dlm/](../qualification/dlm/coverage-2026-09-22.md).
+the local `docs/qualification/dlm/` directory.
 
 **Base classes** — one statement over the slots the router resolved.
 
@@ -314,7 +314,7 @@ and an out-of-scope question — asks each through `/dlm/ask`, and prints per
 class how many were answered, clarified or refused and, of the answered, how
 many came from context, the cache or a live read, every count taken from the
 evidence. The run on the local stack's dataset is recorded in
-[coverage-2026-09-19](../qualification/dlm/coverage-2026-09-19.md); the
+coverage-2026-09-19; the
 contract corpus for the AKS telemetry dataset stays with
 `scripts/qualify-dlm-questions.py`.
 

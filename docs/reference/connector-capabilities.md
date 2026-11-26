@@ -38,10 +38,10 @@ mismatch between the definition and the files.
 
 The current evidence is deliberately format- and environment-specific:
 
-- [ClickBench on AKS](../qualification/clickbench-2026-09-16.md) verifies a
+- ClickBench on AKS verifies a
   14.78 GB Parquet object read from ADLS Gen2 by Kaveon and Trino on the same
   cluster. It does not qualify S3 or Iceberg.
-- [Iceberg local qualification](../qualification/iceberg/local-2026-09-21.md)
+- Iceberg local qualification
   verifies the current snapshot of an Iceberg v2 table on the local Compose
   stack. It does not qualify Iceberg on ADLS Gen2, v1 tables, delete files,
   schema evolution, or S3.

@@ -16,9 +16,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CORPUS = ROOT / "docs" / "qualification" / "tsql-read-compatibility-corpus-2026-10-28.json"
+CORPUS = ROOT / "engine" / "qualification" / "fixtures" / "tsql-read-compatibility-corpus-2026-10-28.json"
 TRACKER = ROOT / "docs" / "engineering" / "trino-parity-tracker.md"
-QUALIFICATION_DIR = ROOT / "docs" / "qualification"
 COUNTED_DOCUMENTS = (
     TRACKER,
     ROOT / "docs" / "engineering" / "sql-compatibility-gap-plan.md",
@@ -114,23 +113,6 @@ def main() -> int:
                     f"stale compatibility count in {document.relative_to(ROOT)}: "
                     f"{match.group(0)!r}; expected {len(cases)}"
                 )
-        for pattern in authoritative_count_patterns:
-            for match in pattern.finditer(text):
-                number = int(match.group(1))
-                if number != len(cases):
-                    fail(
-                        f"stale authoritative compatibility count in {document.relative_to(ROOT)}: "
-                        f"{match.group(0)!r}; expected {len(cases)}"
-                    )
-    # Qualification notes retain historical run sizes, but must never call an
-    # older count authoritative. Scan all notes for only the explicit current/
-    # authoritative forms; historical wording such as "140-case historical
-    # corpus revision" is intentionally allowed.
-    for document in sorted(QUALIFICATION_DIR.glob("**/*.md")):
-        try:
-            text = document.read_text(encoding="utf-8", errors="replace")
-        except OSError as error:
-            fail(f"cannot read qualification document {document.relative_to(ROOT)}: {error}")
         for pattern in authoritative_count_patterns:
             for match in pattern.finditer(text):
                 number = int(match.group(1))

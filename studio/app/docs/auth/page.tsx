@@ -12,7 +12,7 @@ export default function AuthDocs() {
       />
 
       <h2>Azure installation</h2>
-      <p>The <a href="/docs/installation#azure">guided Azure installer</a> creates a single-tenant app registration, records the Studio SPA callback at <code>/auth/microsoft</code> and assigns the first Admin. Use its <code>entraHelmValues</code> output for both releases. For installations provisioned without the directory module, use the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/a2c4d3f99f4bf9e49f77726b856a59182e8d29ef/scripts/install-entra.py">Entra installer supplied with the preview</a> to configure the tenant and final Studio HTTPS origin.</p>
+      <p>The <a href="/docs/installation#azure">guided Azure installer</a> creates a single-tenant app registration, records the Studio SPA callback at <code>/auth/microsoft</code> and assigns the first Admin. Use its <code>entraHelmValues</code> output for both releases. For installations provisioned without the directory module, use the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/f1304715ea753d4f800e54c8f4ba092afa6ddaf3/scripts/install-entra.py">Entra installer supplied with the preview</a> to configure the tenant and final Studio HTTPS origin.</p>
       <p>Assign groups to Viewer, Analyst, Editor or Admin in Entra. A catalog group can receive query access to a single lake catalog.
         Each signed-in user can check their effective permissions in Settings → Access control. Group changes take effect with a fresh token.
         ADLS access uses the Engine workload identity. AWS IAM integration is coming soon.</p>

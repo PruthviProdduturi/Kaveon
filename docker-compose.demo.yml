@@ -33,7 +33,7 @@ services:
     image: ${KAVEON_IMAGE_API:-ghcr.io/pruthviprodduturi/kaveon-api:demo}
     environment:
       NODE_ENV: production
-      WEB_URL: ${KAVEON_WEB_URL:-https://kaveon.vercel.app}
+      WEB_URL: ${KAVEON_WEB_URL:-https://kaveon.io}
       KAVEON_DEV_USER_EMAIL: ""
       KAVEON_DEV_USER_NAME: ""
       KAVEON_DEV_USER_ROLE: ""

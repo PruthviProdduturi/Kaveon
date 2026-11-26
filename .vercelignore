@@ -1,6 +1,7 @@
 # Studio is the Vercel project root. Exclude server, engine, local caches, and
 # repository-only material while preserving the monorepo manifests and studio/.
 /.claude/
+/.local/tracking/
 /.git/
 /.github/
 /.pytest_cache/

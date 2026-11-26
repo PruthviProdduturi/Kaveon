@@ -6,8 +6,8 @@ batch cache; the object store is remote either way) and every Trino round
 from freshly started Trino pods.
 
     python scripts/benchmark-rounds.py --rounds 5 --cold \\
-        --suite docs/qualification/clickbench/kaveon-suite.json \\
-        --tables docs/qualification/clickbench/trino-tables.json \\
+        --suite engine/qualification/fixtures/clickbench/kaveon-suite.json \\
+        --tables engine/qualification/fixtures/clickbench/trino-tables.json \\
         --out docs/qualification/clickbench/runs/rounds-2026-09-17
 
 Writes <out>/kaveon-round<N>.json and <out>/trino-round<N>.json (the

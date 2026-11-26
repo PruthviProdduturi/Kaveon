@@ -152,7 +152,7 @@ def campaign_meta(directory, rounds):
 
 def latency(args, directory):
     kind = SUITES[args.suite]
-    suite_path = args.suite_file or (REPO / "docs" / "qualification" / kind["suite_file"])
+    suite_path = args.suite_file or (REPO / "engine" / "qualification" / "fixtures" / kind["suite_file"])
     suite = json.loads(suite_path.read_text(encoding="utf-8"))
     rounds = load_rounds(directory)
     if not rounds:
@@ -285,7 +285,7 @@ def main():
     parser.add_argument("--suite", choices=sorted(SUITES), default="clickbench",
                         help="which suite the rounds ran: selects the label source and the suite file")
     parser.add_argument("--suite-file", type=pathlib.Path, default=None,
-                        help="statement suite (default: docs/qualification/<suite>/kaveon-suite.json)")
+                        help="statement suite (default: engine/qualification/fixtures/<suite>/kaveon-suite.json)")
     parser.add_argument("--throughput", action="store_true",
                         help="write the concurrency figure from kaveon-throughput-<clients>-round<N>.json instead")
     parser.add_argument("--workers", type=int, default=3, help="worker nodes the engine ran on")

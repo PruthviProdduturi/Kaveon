@@ -176,6 +176,6 @@ infra/oci/*.tfstate*
 # Playwright MCP output
 .playwright-mcp/
 
-# Local operator notes and work cutover ledgers
+# Local operator notes and generated qualification reports
 /.local/tracking/
-/docs/qualification/work-aks-engine-promotion-*.md
+/docs/qualification/

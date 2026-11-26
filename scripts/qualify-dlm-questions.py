@@ -1,5 +1,5 @@
 """Run the DLM question corpus through the Studio front door and report every
-deviation from the contract in docs/qualification/dlm-question-corpus.json.
+deviation from the contract in engine/qualification/fixtures/dlm-question-corpus.json.
 
     kubectl --context kaveon-test-aks -n kaveon port-forward svc/kaveon-portal 13015:3000
     python scripts/qualify-dlm-questions.py --portal http://127.0.0.1:13015 [--only F01,F02] [--execute-live]
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-CORPUS = ROOT / "docs" / "qualification" / "dlm-question-corpus.json"
+CORPUS = ROOT / "engine" / "qualification" / "fixtures" / "dlm-question-corpus.json"
 
 
 def check(expect: dict[str, Any], answer: dict[str, Any], live: dict[str, Any] | None, names: dict[str, str]) -> list[str]:

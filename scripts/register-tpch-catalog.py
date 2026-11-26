@@ -2,7 +2,7 @@
 
 Runs from an API pod with the Engine catalog credential, like
 register-clickbench-catalog.py. The manifest is the generation Job's
-output (docs/qualification/tpch/tables.json): Trino column types mapped to
+output (engine/qualification/fixtures/tpch/tables.json): Trino column types mapped to
 Arrow types, and the exact row count each registration is verified against
 with COUNT(*). No credentials or rows are printed.
 
@@ -61,7 +61,7 @@ def register(collection, path, body):
 def main() -> int:
     manifest = json.loads(Path(sys.argv[1] if len(sys.argv) > 1 else '/scripts/tables.json').read_text(encoding='utf-8'))
     # The generation Job prints {"scale": N, "tables": [...]} (kept as
-    # docs/qualification/tpch/tables.json); its TPCH_OUTPUT file is the bare list.
+    # engine/qualification/fixtures/tpch/tables.json); its TPCH_OUTPUT file is the bare list.
     if isinstance(manifest, dict):
         manifest = manifest['tables']
     register('/v1/catalog/definitions', '/v1/catalog/definitions/' + CATALOG_ID,

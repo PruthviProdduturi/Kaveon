@@ -12,8 +12,8 @@
 #   kubectl -n kaveon create configmap kaveon-trino-suite-input \
 #     --from-file=benchmark-trino-suite.py=scripts/benchmark-trino-suite.py \
 #     --from-file=benchmark-throughput.py=scripts/benchmark-throughput.py \
-#     --from-file=suite.json=docs/qualification/clickbench/kaveon-suite.json \
-#     --from-file=tables.json=docs/qualification/clickbench/trino-tables.json \
+#     --from-file=suite.json=engine/qualification/fixtures/clickbench/kaveon-suite.json \
+#     --from-file=tables.json=engine/qualification/fixtures/clickbench/trino-tables.json \
 #     --dry-run=client -o yaml | kubectl apply -f -
 #
 # Replace the runner image digest and the storage account with the run's

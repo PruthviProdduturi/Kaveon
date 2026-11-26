@@ -4,7 +4,7 @@ contract, in the given API image, against the Engine digest that is deployed.
   python scripts/aks-scale-suite-job.py --image <repo>@sha256:... > tmp/scale-suite-job.json
   kubectl -n kaveon create configmap kaveon-scale-suite-input \\
       --from-file=scale-suite.py=scripts/scale-suite.py \\
-      --from-file=scale-suite.json=docs/qualification/scale-suite.json --dry-run=client -o yaml | kubectl apply -f -
+      --from-file=scale-suite.json=engine/qualification/fixtures/scale-suite.json --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f tmp/scale-suite-job.json
 
 The same contract launches the throughput tier (scripts/benchmark-throughput.py)

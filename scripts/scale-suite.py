@@ -1,4 +1,4 @@
-"""The scale suite: docs/qualification/scale-suite.json on KaveonDB, alone on
+"""The scale suite: engine/qualification/fixtures/scale-suite.json on KaveonDB, alone on
 the worker nodes, through the API bridge. One warm-up then REPETITIONS (three) timed
 executions per statement, median reported beside the Trino column and the
 target. Runs inside the cluster (a Job built from the API pod contract, see

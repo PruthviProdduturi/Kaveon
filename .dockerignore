@@ -49,6 +49,8 @@ temp
 CLAUDE.md
 
 # Docs & local junk
+docs/qualification/
+.local/tracking/
 *.md
 !README.md
 .DS_Store

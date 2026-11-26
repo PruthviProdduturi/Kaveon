@@ -412,122 +412,122 @@ revision: 720/720 server tests, strict server Clippy, formatting, and
 `cargo build --workspace --release --locked`. The release Docker image also
 passed the extended two-worker same-file gate (11/11 cases, zero mismatches,
 distributed stages observed). See
-[`track1-server-suite-2026-11-22.md`](../qualification/track1-server-suite-2026-11-22.md)
+`track1-server-suite-2026-11-22.md`
 and
-[`track1-docker-distributed-2026-11-22.md`](../qualification/track1-docker-distributed-2026-11-22.md).
+`track1-docker-distributed-2026-11-22.md`.
 The complete execution crate is also green in a serial isolation run (645/645
 tests; four explicit benchmark/emulator skips); see
-[`track1-execution-suite-2026-11-22.md`](../qualification/track1-execution-suite-2026-11-22.md).
+`track1-execution-suite-2026-11-22.md`.
 The local object-storage contract is also qualified against Azurite: storage
 2/2 and catalog recovery 4/4 ignored checks passed, with expected conditional
 conflicts and no lost updates; see
-[`track1-azurite-storage-2026-11-22.md`](../qualification/track1-azurite-storage-2026-11-22.md).
+`track1-azurite-storage-2026-11-22.md`.
 The local result-cache SLO also passes its full harness, including a real
 coordinator restart miss and measured warm-hit latency; see
-[`track1-cache-slo-2026-11-22.md`](../qualification/track1-cache-slo-2026-11-22.md).
+`track1-cache-slo-2026-11-22.md`.
 The local query-lifecycle suite also passes 10/10 focused checks for
 owner-scoped state, cancellation, waiter wake-up, bounded registry cleanup,
 capacity release, and terminal DLM-run binding; see
-[`track1-lifecycle-2026-11-22.md`](../qualification/track1-lifecycle-2026-11-22.md).
+`track1-lifecycle-2026-11-22.md`.
 The pinned local differential smoke gate also passes 37/37 exact-result cases
 against DuckDB and Trino 483, including paging and security checks; see
-[`track1-differential-smoke-2026-11-22.md`](../qualification/track1-differential-smoke-2026-11-22.md).
+`track1-differential-smoke-2026-11-22.md`.
 The two-worker differential smoke gate also passes five distributed exact-result
 cases plus paging, with distributed stages observed for every case; see
-[`track1-differential-distributed-smoke-2026-11-22.md`](../qualification/track1-differential-distributed-smoke-2026-11-22.md).
+`track1-differential-distributed-smoke-2026-11-22.md`.
 The optimized execution crate suite also passes 645/645 tests (four explicit
 benchmark skips), including spill, memory, joins, aggregates, windows, and
 partitioned operators; see
-[`track1-exec-release-tests-2026-11-22.md`](../qualification/track1-exec-release-tests-2026-11-22.md).
+`track1-exec-release-tests-2026-11-22.md`.
 Strict release-mode Clippy also passes for every workspace target with
 `-D warnings` under the pinned Rust 1.98.1 toolchain; see
-[`track1-release-clippy-2026-11-22.md`](../qualification/track1-release-clippy-2026-11-22.md).
+`track1-release-clippy-2026-11-22.md`.
 The optimized server suite also passes 721/721 tests serially, including API,
 distributed recovery, transaction, differential SQL, storage, and lifecycle
 coverage; see
-[`track1-server-release-tests-2026-11-22.md`](../qualification/track1-server-release-tests-2026-11-22.md).
+`track1-server-release-tests-2026-11-22.md`.
 The complete non-server workspace also passes in optimized mode after the
 pressure-fixture fix; see
-[`track1-workspace-release-tests-2026-11-22.md`](../qualification/track1-workspace-release-tests-2026-11-22.md).
+`track1-workspace-release-tests-2026-11-22.md`.
 The committed workspace also produces a locked optimized build with a clean
 format check and recorded server/CLI artifact hashes; see
-[`track1-release-build-2026-11-22.md`](../qualification/track1-release-build-2026-11-22.md).
+`track1-release-build-2026-11-22.md`.
 The packaged release CLI also passes its contract workflow for batch, stdin,
 file, output-format, error, metadata, and paged-result behavior; see
-[`track1-cli-contract-2026-11-22.md`](../qualification/track1-cli-contract-2026-11-22.md).
+`track1-cli-contract-2026-11-22.md`.
 The bounded native two-worker mixed-workload soak also passes: 120.11 seconds,
 941 queries, intentional worker loss, zero failures, bounded history, and clean
 retained files; see
-[`track1-local-soak-2026-11-22.md`](../qualification/track1-local-soak-2026-11-22.md).
+`track1-local-soak-2026-11-22.md`.
 The local plain-Parquet directory reader gate also passes 16/16 focused storage
 checks, including partition pruning, schema validation, and exact metadata;
-see [`track1-parquet-directory-2026-11-22.md`](../qualification/track1-parquet-directory-2026-11-22.md).
+see `track1-parquet-directory-2026-11-22.md`.
 The local Iceberg reader contract also passes 6/6 focused checks, including
 snapshot/field-ID resolution and fail-closed delete-manifest handling; see
-[`track1-iceberg-reader-2026-11-22.md`](../qualification/track1-iceberg-reader-2026-11-22.md).
+`track1-iceberg-reader-2026-11-22.md`.
 The local Delta snapshot contract also passes 5/5 focused checks, including
 checkpoint/tail replay, tombstones, multipart completeness, and version-gap
 rejection; see
-[`track1-delta-snapshot-2026-11-22.md`](../qualification/track1-delta-snapshot-2026-11-22.md).
+`track1-delta-snapshot-2026-11-22.md`.
 The bounded KaveonDB product transaction contract also passes 8/8 focused
 checks, including atomic staging, CAS winner selection, savepoints, rollback,
 and principal/snapshot binding; see
-[`track1-product-transactions-2026-11-22.md`](../qualification/track1-product-transactions-2026-11-22.md).
+`track1-product-transactions-2026-11-22.md`.
 The local statistics contract also passes 4/4 focused checks, including
 source-change bounds, Delta version refresh, exact directory metadata, and
 Utf8View bounds/distinct values; see
-[`track1-statistics-2026-11-22.md`](../qualification/track1-statistics-2026-11-22.md).
+`track1-statistics-2026-11-22.md`.
 The statistics-driven optimizer suite also passes 24/24 checks for exact
 source bounds, broadcast selection, join reordering, selectivity, and output
 order preservation; see
-[`track1-optimizer-statistics-2026-11-22.md`](../qualification/track1-optimizer-statistics-2026-11-22.md).
+`track1-optimizer-statistics-2026-11-22.md`.
 The bounded-memory and spill suite also passes 36/36 checks for refusal,
 repartitioning, join/aggregate/sort/Top-N spill, byte accounting, corruption,
 and cleanup; see
-[`track1-spill-memory-2026-11-22.md`](../qualification/track1-spill-memory-2026-11-22.md).
+`track1-spill-memory-2026-11-22.md`.
 The constrained two-worker pressure harness also passes 11/11 cases for
 successful workloads, fail-closed refusals, and cancellation recovery; see
-[`track1-pressure-admission-2026-11-22.md`](../qualification/track1-pressure-admission-2026-11-22.md).
+`track1-pressure-admission-2026-11-22.md`.
 The authenticated transaction API suite also passes 72/72 checks for owner
 isolation, roles, bounded product DML, savepoints/rollback, idempotency, CAS
 recovery, and DLM lifecycle binding; see
-[`track1-transaction-api-security-2026-11-22.md`](../qualification/track1-transaction-api-security-2026-11-22.md).
+`track1-transaction-api-security-2026-11-22.md`.
 The local security and exchange protocol suites also pass 8/8 and 61/61,
 covering strict identity, role/configuration validation, exchange integrity,
 bounded transport, retries, fencing, and cleanup; see
-[`track1-security-exchange-2026-11-22.md`](../qualification/track1-security-exchange-2026-11-22.md).
+`track1-security-exchange-2026-11-22.md`.
 Catalog access and DDL authorization also pass 11/11 and 9/9 checks for
 default-deny visibility, grants/revocation, restart persistence, location
 probing, Parquet/Delta registration, and role-gated changes; see
-[`track1-catalog-access-ddl-2026-11-22.md`](../qualification/track1-catalog-access-ddl-2026-11-22.md).
+`track1-catalog-access-ddl-2026-11-22.md`.
 Repository documentation validation also passes across 768 Markdown files, 40
 routes, and 9 SVGs; see
-[`track1-docs-validation-2026-11-22.md`](../qualification/track1-docs-validation-2026-11-22.md).
+`track1-docs-validation-2026-11-22.md`.
 The local delegated identity-token suite also passes 3/3 checks for cached-key
 validation, required claims, and fail-closed display-claim handling; see
-[`track1-entra-token-validation-2026-11-22.md`](../qualification/track1-entra-token-validation-2026-11-22.md).
+`track1-entra-token-validation-2026-11-22.md`.
 The current release Docker image also passes the extended two-worker same-file
 smoke (12/12 exact cases, zero mismatches, distributed stages observed); see
-[`track1-docker-distributed-2026-11-22-r2.md`](../qualification/track1-docker-distributed-2026-11-22-r2.md).
+`track1-docker-distributed-2026-11-22-r2.md`.
 Paged result restart cleanup is also qualified locally: stale result directories
 older than the 15-minute TTL are reclaimed at startup, fresh neighboring result
 directories are preserved, and the focused result suite passes 7/7; see
-[`track1-result-restart-cleanup-2026-11-22.md`](../qualification/track1-result-restart-cleanup-2026-11-22.md).
+`track1-result-restart-cleanup-2026-11-22.md`.
 The complete optimized workspace release test gate also passes with exit code
 zero across 2,417 listed tests (all non-ignored tests passed), including the
 721-test server suite; see
-[`track1-workspace-release-tests-2026-11-22.md`](../qualification/track1-workspace-release-tests-2026-11-22.md).
+`track1-workspace-release-tests-2026-11-22.md`.
 The Studio bracketed-identifier regression is also verified end-to-end on the
 current two-worker Docker image (`SELECT DISTINCT [year] ...` returns six
 `Int64` rows rather than lowering `[year]` as an `ARRAY` call); see
-[`track1-bracket-distinct-runtime-2026-11-22.md`](../qualification/track1-bracket-distinct-runtime-2026-11-22.md).
+`track1-bracket-distinct-runtime-2026-11-22.md`.
 These close local correctness and packaging evidence only; the cloud gates
 below remain open until an immutable AKS/ADLS rollout is available.
 Any future cloud run is governed by the
-[`cloud qualification budget guardrail`](../qualification/cloud-budget-guardrail.md)
+`cloud qualification budget guardrail`
 and must remain below the approved $100 monthly ceiling.
 The latest read-only subscription inventory is recorded in
-[`cloud-budget-live-check-2026-11-22.md`](../qualification/cloud-budget-live-check-2026-11-22.md);
+`cloud-budget-live-check-2026-11-22.md`;
 because the current-month Cost Management total was unavailable, cloud
 qualification is fail-closed and local Docker remains the default.
 The repeatable read-only preflight is
@@ -537,7 +537,7 @@ on 2026-11-22; no serving cloud compute is active while billing evidence is
 collected.
 
 The consolidated Engine maturity tracker is
-[`engine-public-availability-gate-2026-11-22.md`](../qualification/engine-public-availability-gate-2026-11-22.md).
+`engine-public-availability-gate-2026-11-22.md`.
 The local exchange-loss/retry cleanup check also passed for the current release
 binary; cloud fault-injection and multi-coordinator recovery remain separate
 gates.

@@ -7,7 +7,6 @@ on:
       - "engine/**"
       - "docs/engineering/sql-compatibility-gap-plan.md"
       - "docs/engineering/trino-parity-tracker.md"
-      - "docs/qualification/tsql-read-compatibility-corpus-*.json"
       - ".github/workflows/engine.yml"
   pull_request:
     branches: [dev]
@@ -15,7 +14,6 @@ on:
       - "engine/**"
       - "docs/engineering/sql-compatibility-gap-plan.md"
       - "docs/engineering/trino-parity-tracker.md"
-      - "docs/qualification/tsql-read-compatibility-corpus-*.json"
       - ".github/workflows/engine.yml"
   workflow_dispatch:
 

@@ -1,5 +1,5 @@
 //! TPC-H coverage as a gate: the twenty-two statements of
-//! `docs/qualification/tpch/trino-queries.sql`, run against a tiny
+//! `engine/qualification/fixtures/tpch/trino-queries.sql`, run against a tiny
 //! deterministic TPC-H (every table, Trino's column names and types) through
 //! the node-local planner and, separately, through the distributed stage
 //! planner's fragments executed in this process as two workers would run
@@ -28,7 +28,7 @@ use kaveon_sql::logical_plan::LogicalPlan;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-queries.sql");
+const QUERIES: &str = include_str!("../../../qualification/fixtures/tpch/trino-queries.sql");
 
 /// Statements that do not run today, with the reason. A statement listed
 /// here must still fail at some stage; one that starts working must be

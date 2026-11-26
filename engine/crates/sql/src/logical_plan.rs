@@ -11072,7 +11072,7 @@ mod tests {
     #[test]
     fn versioned_tsql_corpus_matches_declared_boundaries() {
         let corpus: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../docs/qualification/tsql-read-compatibility-corpus-2026-10-28.json"
+            "../../../qualification/fixtures/tsql-read-compatibility-corpus-2026-10-28.json"
         ))
         .expect("T-SQL compatibility corpus must be valid JSON");
         let cases = corpus["cases"].as_array().expect("corpus cases");
