@@ -55,6 +55,7 @@ pub struct ServerConfig {
     pub http_port: u16,
     pub discovery_uri: String,
     pub advertised_uri: Option<String>,
+    pub trino_public_origin: Option<String>,
     pub data_dir: Option<PathBuf>,
     pub catalog_dir: Option<PathBuf>,
     pub catalog_database_path: PathBuf,
@@ -162,6 +163,7 @@ impl Default for ServerConfig {
             http_port: 8080,
             discovery_uri: "http://localhost:8080".into(),
             advertised_uri: None,
+            trino_public_origin: None,
             data_dir: None,
             catalog_dir: None,
             catalog_database_path: PathBuf::from("kaveon-catalog.db"),
@@ -274,6 +276,21 @@ struct ResultCacheConfig {
 struct NativeCatalogConfig {
     database_path: Option<String>,
     admin_token: Option<String>,
+}
+
+fn parse_trino_public_origin(value: &str) -> anyhow::Result<String> {
+    let url = reqwest::Url::parse(value)?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "KAVEON_TRINO_PUBLIC_ORIGIN requires an HTTP(S) origin without credentials, path, query or fragment"
+    );
+    Ok(url.origin().ascii_serialization())
 }
 
 pub fn default_config_path() -> PathBuf {
@@ -452,6 +469,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     }
     if let Ok(v) = std::env::var("KAVEON_ADVERTISED_URI") {
         config.advertised_uri = Some(v);
+    }
+    if let Ok(value) = std::env::var("KAVEON_TRINO_PUBLIC_ORIGIN") {
+        config.trino_public_origin = Some(parse_trino_public_origin(&value)?);
     }
     if let Ok(v) = std::env::var("KAVEON_DATA_DIR") {
         config.data_dir = Some(PathBuf::from(v));
@@ -1249,6 +1269,23 @@ fn parse_kv(line: &str) -> Option<(&str, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trino_public_origin_accepts_only_http_origins() {
+        assert_eq!(
+            super::parse_trino_public_origin("https://example.org:443/").unwrap(),
+            "https://example.org"
+        );
+        for value in [
+            "https://example.org/engine",
+            "https://name@example.org",
+            "file:///tmp",
+            "https://example.org?instance=test",
+            "https://example.org/#x",
+        ] {
+            assert!(super::parse_trino_public_origin(value).is_err(), "{value}");
+        }
+    }
+
     use super::{
         ProductTransactionsConfig, ServerConfig, load_server_config, open_catalog,
         parse_raw_config, parse_security_config, product_catalog_commit,

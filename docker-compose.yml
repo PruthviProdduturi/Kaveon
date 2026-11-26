@@ -81,6 +81,7 @@ services:
       KAVEON_BIND_HOST: "0.0.0.0"
       KAVEON_INSECURE_DEVELOPMENT: "true"
       KAVEON_ADVERTISED_URI: http://engine-coordinator:8080
+      KAVEON_TRINO_PUBLIC_ORIGIN: ${KAVEON_TRINO_PUBLIC_ORIGIN:-http://localhost:8081}
       KAVEON_SECURITY_JSON: >-
         {"principals":[{"token":"${KAVEON_ENGINE_ADMIN_TOKEN:-kaveon-local-admin-token-not-for-production}","principal":"local-admin","role":"admin"}],"bridge_token":"${KAVEON_ENGINE_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}"}
       KAVEON_DATA_DIR: /data

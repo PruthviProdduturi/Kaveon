@@ -129,6 +129,7 @@ replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 | `KAVEON_BIND_HOST` | none | `127.0.0.1` | IP address | The listening address. A non-loopback address requires TLS, `KAVEON_TLS_PROXY_BOUNDARY=true`, or insecure development mode. | both | `0.0.0.0` |
 | `KAVEON_DISCOVERY_URI` | `discovery.uri` | `http://localhost:8080` | URI | Where a worker finds the coordinator for heartbeats and where the coordinator publishes catalog snapshots. | worker | the coordinator service URI over HTTPS |
 | `KAVEON_ADVERTISED_URI` | `discovery.advertised_uri` | none: `http(s)://127.0.0.1:<port>` | URI | The address other nodes use to reach this one (task and exchange traffic). | both | the pod's DNS name |
+| `KAVEON_TRINO_PUBLIC_ORIGIN` | — | unset (relative links) | HTTP(S) origin | Client-facing origin for Trino result, query information and cancellation links. | coordinator | `https://engine.example.org` |
 | `KAVEON_TLS_CERT_PATH`, `KAVEON_TLS_KEY_PATH` | none | none | file paths | Serve HTTPS; both or neither. | both | `/etc/kaveon/tls/tls.crt`, `/etc/kaveon/tls/tls.key` |
 | `KAVEON_TLS_PROXY_BOUNDARY` | none | unset | `true` | Allows a non-loopback plaintext bind behind a network-isolated TLS proxy. | both | not set |
 | `KAVEON_INSECURE_DEVELOPMENT` | `security.insecure_development` (JSON) | `false` | boolean | Development mode: plaintext external binding and relaxed credential checks. Never set in a deployment. | both | not set |

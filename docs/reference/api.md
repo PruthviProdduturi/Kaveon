@@ -259,6 +259,8 @@ reader counters, not inferred rows for a parent operator. Diagnostics also
 include optional `filter_selectivity` (`admitted / examined`) when the
 examined count is nonzero; ambiguous mappings are intentionally omitted.
 
+For Trino clients that follow absolute result-page URLs, set `KAVEON_TRINO_PUBLIC_ORIGIN` on the coordinator to the address the client uses, which defaults to `http://localhost:8081` in local Docker Compose. Use the public HTTPS origin when an Engine proxy terminates TLS. The coordinator uses that origin for result, information, and cancellation links. With the setting unset, links remain relative. The origin has no path, query string, or credentials.
+
 ### Catalog statements
 
 `POST /v1/statement` accepts the Trino-shaped catalog DDL below. A catalog

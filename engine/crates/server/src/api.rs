@@ -3718,10 +3718,11 @@ async fn submit_trino_statement_parts(
         settings: session_settings,
     };
     let query_id = Uuid::new_v4().to_string();
+    let origin = state.config.trino_public_origin.clone();
     let response = run_statement(state, identity, request, query_id.clone())
         .await
         .into_response();
-    shape_trino_response(response, Some(&query_id)).await
+    shape_trino_response(response, Some(&query_id), origin.as_deref()).await
 }
 
 fn trino_header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -5453,8 +5454,9 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
     ))
 }
 
+#[cfg(test)]
 async fn trino_response_shape(response: Response) -> Response {
-    shape_trino_response(response, None).await
+    shape_trino_response(response, None, None).await
 }
 
 /// Describe the actual result type for Trino clients. A physical string has no
@@ -5502,7 +5504,12 @@ fn shape_trino_scalar_column(column: &mut serde_json::Value) {
     column["typeSignature"] = json!({"rawType": raw, "arguments": arguments});
 }
 
-async fn shape_trino_response(response: Response, submitted_id: Option<&str>) -> Response {
+async fn shape_trino_response(
+    response: Response,
+    submitted_id: Option<&str>,
+    origin: Option<&str>,
+) -> Response {
+    let origin = origin.unwrap_or("");
     let status = response.status();
     let bytes = match to_bytes(response.into_body(), 16 * 1024 * 1024).await {
         Ok(bytes) => bytes,
@@ -5551,7 +5558,7 @@ async fn shape_trino_response(response: Response, submitted_id: Option<&str>) ->
                 });
             }
             return Json(serde_json::json!({
-                "id": id, "infoUri": format!("/v1/trino/query/{id}"), "state": "FAILED",
+                "id": id, "infoUri": format!("{origin}/v1/trino/query/{id}"), "state": "FAILED",
                 "stats": {"state": "FAILED"}, "warnings": [], "code": code, "error": error
             }))
             .into_response();
@@ -5573,12 +5580,12 @@ async fn shape_trino_response(response: Response, submitted_id: Option<&str>) ->
             // compatibility routes so clients can inspect or cancel a query
             // without knowing Kaveon's native endpoint names.
             object.entry("infoUri".to_owned()).or_insert_with(|| {
-                serde_json::Value::String(format!("/v1/trino/query/{query_id}"))
+                serde_json::Value::String(format!("{origin}/v1/trino/query/{query_id}"))
             });
             object
                 .entry("partialCancelUri".to_owned())
                 .or_insert_with(|| {
-                    serde_json::Value::String(format!("/v1/trino/query/{query_id}"))
+                    serde_json::Value::String(format!("{origin}/v1/trino/query/{query_id}"))
                 });
         }
         if let Some(next_uri) = object.remove("next_uri") {
@@ -5614,8 +5621,17 @@ async fn shape_trino_response(response: Response, submitted_id: Option<&str>) ->
                             .into_response();
                     }
                 };
-                object.insert("nextUri".to_owned(), serde_json::Value::String(next_uri));
+                object.insert(
+                    "nextUri".to_owned(),
+                    serde_json::Value::String(format!("{origin}{next_uri}")),
+                );
             }
+        }
+        if let Some(complete) = object.get("complete").and_then(serde_json::Value::as_bool) {
+            let state = if complete { "FINISHED" } else { "RUNNING" };
+            object
+                .entry("stats")
+                .or_insert_with(|| serde_json::json!({ "state": state }));
         }
         if let Some(elapsed_ms) = object.remove("elapsed_ms") {
             object.insert(
@@ -5708,13 +5724,16 @@ fn normalize_trino_next_uri(raw: &str) -> Result<String, String> {
 }
 
 async fn get_trino_query(
+    State(state): State<Arc<AppState>>,
     Path(query_id): Path<String>,
     Extension(identity): Extension<Identity>,
 ) -> Response {
-    trino_response_shape(
+    shape_trino_response(
         get_query(Path(query_id), Extension(identity))
             .await
             .into_response(),
+        None,
+        state.config.trino_public_origin.as_deref(),
     )
     .await
 }
@@ -5724,10 +5743,24 @@ async fn get_trino_result_page(
     Path((query_id, page)): Path<(String, usize)>,
     Extension(identity): Extension<Identity>,
 ) -> Response {
-    trino_response_shape(
-        get_result_page(State(state), Path((query_id, page)), Extension(identity)).await,
+    let origin = state.config.trino_public_origin.clone();
+    let response = get_result_page(
+        State(state),
+        Path((query_id.clone(), page)),
+        Extension(identity),
     )
-    .await
+    .await;
+    // Native callers retry HTTP 202. Trino clients follow a nextUri on HTTP 200.
+    let response = if response.status() == StatusCode::ACCEPTED {
+        Json(serde_json::json!({
+            "id": query_id, "complete": false,
+            "next_uri": format!("/v1/query/{query_id}/results/{page}")
+        }))
+        .into_response()
+    } else {
+        response
+    };
+    shape_trino_response(response, None, origin.as_deref()).await
 }
 
 async fn cancel_trino_query(
@@ -26429,6 +26462,61 @@ mod streamed_root_tests {
         assert_eq!(page["data"], json!([[-1, "abc", "3.0000", u64::MAX]]));
     }
 
+    #[tokio::test]
+    async fn trino_pending_page_polls_same_index_then_returns_terminal_rows() {
+        let directory = std::env::temp_dir().join(format!("kaveon-trino-poll-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        let mut writer = state.results.begin("poll", "alice").unwrap();
+        let fetch = || {
+            get_trino_result_page(
+                State(Arc::clone(&state)),
+                Path(("poll".into(), 0)),
+                Extension(alice()),
+            )
+        };
+        let pending = fetch().await;
+        assert_eq!(pending.status(), StatusCode::OK);
+        let bytes = to_bytes(pending.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["nextUri"], "/v1/trino/query/poll/results/0");
+        assert_eq!(body["stats"]["state"], "RUNNING");
+        writer.push(vec![serde_json::json!(42)]).unwrap();
+        state.results.publish("poll", writer).unwrap();
+        let bytes = to_bytes(fetch().await.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["data"], serde_json::json!([[42]]));
+        assert_eq!(body["stats"]["state"], "FINISHED");
+        assert!(body["nextUri"].is_null());
+        drop(state);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn trino_pages_use_only_the_configured_public_origin() {
+        let native = Json(serde_json::json!({
+            "id": "q1", "complete": false, "next_uri": "http://internal.invalid/v1/query/q1/results/1"
+        }))
+        .into_response();
+        let response = shape_trino_response(native, None, Some("https://engine.example")).await;
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            page["nextUri"],
+            "https://engine.example/v1/trino/query/q1/results/1"
+        );
+        assert_eq!(
+            page["partialCancelUri"],
+            "https://engine.example/v1/trino/query/q1"
+        );
+        assert_eq!(page["infoUri"], "https://engine.example/v1/trino/query/q1");
+        assert_eq!(page["stats"]["state"], "RUNNING");
+    }
+
     #[test]
     fn trino_next_uri_accepts_only_result_pages_and_drops_authority() {
         assert_eq!(
@@ -26538,7 +26626,7 @@ mod streamed_root_tests {
                 })),
             )
                 .into_response();
-            let response = shape_trino_response(native, id).await;
+            let response = shape_trino_response(native, id, None).await;
             assert_eq!(response.status(), expected);
         }
     }
