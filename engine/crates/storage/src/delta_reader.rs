@@ -142,6 +142,12 @@ impl DeltaTableReader {
     }
 
     pub fn read(&self) -> Result<DeltaBatchIterator> {
+        self.read_for_grouping(&[])
+    }
+
+    /// The immediate aggregate can consume dictionary keys directly. Other
+    /// readers, including metadata and result projections, use logical types.
+    pub fn read_for_grouping(&self, keys: &[String]) -> Result<DeltaBatchIterator> {
         if self.batch_size == 0 {
             return Err(delta_error("batch size must be greater than zero"));
         }
@@ -162,6 +168,7 @@ impl DeltaTableReader {
             )?;
             return Ok(DeltaBatchIterator {
                 files: vec![],
+                dictionary_keys: Vec::new(),
                 next_file: 0,
                 current: None,
                 schema,
@@ -203,29 +210,21 @@ impl DeltaTableReader {
         // Keep the first file unopened until the first batch. A partitioned
         // join can then push its exact build-side keys into this iterator
         // before any footer/row-group reader is created.
-        let current = None;
-        let mut schema = projected_schema(
-            configured_reader(
-                &schema_file,
-                self.batch_size,
-                None,
-                None,
-                ScanMetrics::default(),
-            )
-            .metadata()?
-            .schema,
-            self.columns.as_deref(),
-        )?;
-        if let Some(logical_schema) = snapshot.schema {
-            let physical_schema = ParquetReader::new(&schema_file).metadata()?.schema;
-            crate::delta_snapshot::validate_physical_schema(&logical_schema, &physical_schema)?;
-            schema = projected_schema(logical_schema, self.columns.as_deref())?;
-        }
+        let (physical, dictionary_keys) = ParquetReader::new(&schema_file).grouped_schema(keys)?;
+        let logical = if let Some(schema) = snapshot.schema {
+            crate::delta_snapshot::validate_physical_schema(&schema, &physical)?;
+            schema
+        } else {
+            physical
+        };
+        let projected = projected_schema(logical, self.columns.as_deref())?;
+        let schema = crate::parquet_reader::dictionary_key_schema(&projected, &dictionary_keys);
         Ok(DeltaBatchIterator {
             files,
-            next_file: usize::from(current.is_some()),
-            current,
+            next_file: 0,
+            current: None,
             schema,
+            dictionary_keys,
             batch_size: self.batch_size,
             columns: self.columns.clone(),
             predicate: self.predicate.clone(),
@@ -243,6 +242,7 @@ fn projected_schema(schema: SchemaRef, columns: Option<&[String]>) -> Result<Sch
 }
 
 pub struct DeltaBatchIterator {
+    dictionary_keys: Vec<String>,
     files: Vec<PathBuf>,
     next_file: usize,
     current: Option<ParquetBatchIterator>,
@@ -280,6 +280,7 @@ impl BatchSource for DeltaBatchIterator {
                     self.predicate.as_ref(),
                     self.metrics.clone(),
                 )
+                .with_dictionary_keys(&self.dictionary_keys)
                 .read()?,
             );
             self.next_file += 1;
@@ -393,6 +394,83 @@ mod tests {
         let name = format!("{version:0DELTA_VERSION_WIDTH$}.json");
         fs::write(table.join("_delta_log").join(name), actions)
             .expect("test Delta commit should be written");
+    }
+
+    #[test]
+    fn grouped_delta_scan_preserves_values_across_dictionary_and_plain_files() {
+        use arrow::{
+            array::{Array, StringArray},
+            datatypes::{DataType, Field, Schema},
+        };
+        use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
+        use std::sync::Arc;
+        let table = test_table();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "region",
+            DataType::Utf8,
+            true,
+        )]));
+        let mut expected = Vec::new();
+        for (file, values) in [
+            ("a", [Some("north"), None, Some("west")]),
+            ("b", [None, Some("east"), Some("north")]),
+        ] {
+            let rows: Vec<_> = values.into_iter().cycle().take(12_000).collect();
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(StringArray::from(rows.clone()))],
+            )
+            .unwrap();
+            expected.extend(rows);
+            let props = WriterProperties::builder()
+                .set_dictionary_enabled(file == "a")
+                .set_max_row_group_size(6000)
+                .build();
+            let mut writer = ArrowWriter::try_new(
+                fs::File::create(table.join(format!("{file}.parquet"))).unwrap(),
+                schema.clone(),
+                Some(props),
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+        write_commit(
+            &table,
+            0,
+            "{\"add\":{\"path\":\"a.parquet\"}}\n{\"add\":{\"path\":\"b.parquet\"}}",
+        );
+        let reader = DeltaTableReader::new(&table);
+        assert_eq!(reader.read().unwrap().schema(), &schema);
+        let mut source = reader.read_for_grouping(&["region".into()]).unwrap();
+        assert!(matches!(
+            source.schema().field(0).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        let mut actual = Vec::new();
+        while let Some(batch) = source.next_batch().unwrap() {
+            assert_eq!(batch.schema(), *source.schema());
+            let text = arrow::compute::cast(batch.column(0), &DataType::Utf8).unwrap();
+            actual.extend(
+                text.as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|s| s.map(str::to_owned)),
+            );
+        }
+        assert!(actual.iter().map(Option::as_deref).eq(expected));
+        // File b has plain pages. A snapshot containing only b retains
+        // ordinary strings even when the aggregate can consume dictionaries.
+        write_commit(&table, 1, r#"{"remove":{"path":"a.parquet"}}"#);
+        assert_eq!(
+            reader
+                .read_for_grouping(&["region".into()])
+                .unwrap()
+                .schema(),
+            &schema
+        );
+        fs::remove_dir_all(&table).unwrap();
     }
 
     #[test]

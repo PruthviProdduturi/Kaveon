@@ -389,6 +389,48 @@ fn directory_read(
     })))
 }
 
+/// Only change the scan representation when its sole consumer folds the
+/// keys into partial states. Projections and exchange output retain their
+/// declared types. Leave computed aggregate arguments on their usual path.
+fn direct_grouping_keys(
+    scan: FragmentNodeId,
+    nodes: &HashMap<FragmentNodeId, &FragmentNode>,
+) -> Vec<String> {
+    let mut consumers = nodes.values().filter(|n| n.inputs.contains(&scan));
+    let Some(node) = consumers.next() else {
+        return Vec::new();
+    };
+    if consumers.next().is_some() {
+        return Vec::new();
+    }
+    let FragmentOperator::Aggregate {
+        mode: AggregateMode::Partial,
+        group_by,
+        aggregates,
+    } = &node.operator
+    else {
+        return Vec::new();
+    };
+    group_by
+        .iter()
+        .filter_map(|key| {
+            let Expr::Column(name) = &key.expression else {
+                return None;
+            };
+            aggregates
+                .iter()
+                .all(|agg| match &agg.argument {
+                    None | Some(Expr::Star) => true,
+                    Some(Expr::Column(column)) => {
+                        column.rsplit('.').next() != name.rsplit('.').next()
+                    }
+                    _ => false,
+                })
+                .then(|| name.clone())
+        })
+        .collect()
+}
+
 fn compile_node(
     id: FragmentNodeId,
     nodes: &HashMap<FragmentNodeId, &FragmentNode>,
@@ -574,7 +616,8 @@ fn compile_node(
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
                     }
-                    let source = reader.read()?;
+                    let keys = direct_grouping_keys(id, nodes);
+                    let source = reader.read_for_grouping(&keys)?;
                     scan_metrics.push(metrics);
                     Box::new(source)
                 }

@@ -350,6 +350,8 @@ impl ParquetBatchIterator {
             return Ok(());
         };
         let reader = ParquetReader {
+            // The deferred builder already carries the physical schema.
+            dictionary_keys: Vec::new(),
             path: self.path.clone(),
             batch_size: self.batch_size,
             columns: self.columns.clone(),
@@ -380,6 +382,7 @@ impl ParquetBatchIterator {
 /// Configuration for a synchronous local Parquet read: one file, or a
 /// directory of files.
 pub struct ParquetReader {
+    dictionary_keys: Vec<String>,
     path: PathBuf,
     batch_size: usize,
     columns: Option<Vec<String>>,
@@ -394,9 +397,31 @@ pub struct ParquetReader {
     catalog_schema: Option<SchemaRef>,
 }
 
+pub(crate) fn dictionary_key_schema(schema: &SchemaRef, keys: &[String]) -> SchemaRef {
+    if keys.is_empty() {
+        return Arc::clone(schema);
+    }
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.data_type() == &DataType::Utf8 && keys.contains(field.name()) {
+                Arc::new(field.as_ref().clone().with_data_type(DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8),
+                )))
+            } else {
+                Arc::clone(field)
+            }
+        })
+        .collect::<Vec<_>>();
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
 impl ParquetReader {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
+            dictionary_keys: Vec::new(),
             path: path.as_ref().to_path_buf(),
             batch_size: DEFAULT_BATCH_SIZE,
             columns: None,
@@ -454,6 +479,44 @@ impl ParquetReader {
     pub fn with_batch_size(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
+    }
+
+    pub(crate) fn with_dictionary_keys(mut self, keys: &[String]) -> Self {
+        self.dictionary_keys = keys.to_vec();
+        self
+    }
+
+    /// Select a physical representation for a downstream grouped aggregate.
+    /// A dictionary page plus less than one uncompressed byte per row is a
+    /// cheap indication of repeated keys. This estimate affects speed only.
+    pub(crate) fn grouped_schema(&self, candidates: &[String]) -> Result<(SchemaRef, Vec<String>)> {
+        let builder = self.open_builder()?;
+        let schema = Arc::clone(builder.schema());
+        let metadata = builder.metadata();
+        if metadata.file_metadata().num_rows() < 0 {
+            return Err(storage_error(
+                "Parquet metadata contains a negative row count",
+            ));
+        }
+        let keys = candidates
+            .iter()
+            .filter(|name| {
+                schema
+                    .field_with_name(name)
+                    .is_ok_and(|f| f.data_type() == &DataType::Utf8)
+                    && !metadata.row_groups().is_empty()
+                    && metadata.row_groups().iter().all(|group| {
+                        group.columns().iter().any(|column| {
+                            column.column_path().parts() == std::slice::from_ref(*name)
+                                && column.dictionary_page_offset().is_some()
+                                && column.uncompressed_size() > 0
+                                && column.uncompressed_size() < group.num_rows()
+                        })
+                    })
+            })
+            .cloned()
+            .collect();
+        Ok((schema, keys))
     }
 
     pub fn with_columns(mut self, columns: Vec<String>) -> Self {
@@ -727,7 +790,29 @@ impl ParquetReader {
         } else {
             metadata
         };
-        let options = if std::env::var_os("KAVEON_USE_UTF8_VIEW").is_some() {
+        let options = if !self.dictionary_keys.is_empty() {
+            let schema = parquet::arrow::parquet_to_arrow_schema(
+                metadata.file_metadata().schema_descr(),
+                metadata.file_metadata().key_value_metadata(),
+            )
+            .map_err(parquet_error)?;
+            // Preserve schema drift errors even if the changed column happens
+            // to have the same type as the internal dictionary representation.
+            for key in &self.dictionary_keys {
+                if schema
+                    .field_with_name(key)
+                    .is_ok_and(|f| f.data_type() != &DataType::Utf8)
+                {
+                    return Err(storage_error(format!(
+                        "grouping column '{key}' is no longer Utf8"
+                    )));
+                }
+            }
+            ArrowReaderOptions::new().with_schema(dictionary_key_schema(
+                &Arc::new(schema),
+                &self.dictionary_keys,
+            ))
+        } else if std::env::var_os("KAVEON_USE_UTF8_VIEW").is_some() {
             Self::utf8_view_reader_options(&metadata)
         } else {
             ArrowReaderOptions::new()
