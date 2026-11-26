@@ -15,6 +15,9 @@ data:
       https_port 8443
     }
     {{ $host }} {
+      {{- if .Values.azureEdge.tlsSecretName }}
+      tls /etc/kaveon-tls/tls.crt /etc/kaveon-tls/tls.key
+      {{- end }}
       reverse_proxy kaveon-portal:3000
     }
 ---
@@ -89,6 +92,11 @@ spec:
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:
+        {{- if .Values.azureEdge.tlsSecretName }}
+        - name: studio-tls
+          mountPath: /etc/kaveon-tls
+          readOnly: true
+        {{- end }}
         - mountPath: /etc/caddy
           name: cfg
           readOnly: true
@@ -99,6 +107,15 @@ spec:
         - mountPath: /tmp
           name: tmp
       volumes:
+      {{- if .Values.azureEdge.tlsSecretName }}
+      - name: studio-tls
+        secret:
+          secretName: {{ .Values.azureEdge.tlsSecretName | quote }}
+          defaultMode: 0440
+          items:
+          - {key: tls.crt, path: tls.crt}
+          - {key: tls.key, path: tls.key}
+      {{- end }}
       - configMap:
           defaultMode: 420
           name: kaveon-edge

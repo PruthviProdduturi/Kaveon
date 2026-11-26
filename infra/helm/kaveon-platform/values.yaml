@@ -369,3 +369,5 @@ azureEdge:
   publicIpName: ""
   repository: ""
   digest: ""
+  # Existing kubernetes.io/tls Secret in the release namespace for this Studio hostname.
+  tlsSecretName: ""
