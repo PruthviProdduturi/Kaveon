@@ -1488,7 +1488,16 @@ where
 }
 
 fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
-    let (left, right) = coerce_numeric_pair(left, right)?;
+    // Arrow decimal arithmetic uses both declared precisions and scales to
+    // derive the result type. Aligning or widening them here changes it.
+    let (left, right) = if matches!(
+        (left.data_type(), right.data_type()),
+        (DataType::Decimal128(..), DataType::Decimal128(..))
+    ) {
+        (Arc::clone(left), Arc::clone(right))
+    } else {
+        coerce_numeric_pair(left, right)?
+    };
     let result: ArrayRef = match (left.data_type(), right.data_type()) {
         (DataType::Int32, DataType::Int32)
         | (DataType::Int64, DataType::Int64)
@@ -1525,6 +1534,29 @@ fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, A
     }
     if left.data_type() == right.data_type() {
         return Ok((Arc::clone(left), Arc::clone(right)));
+    }
+    // Comparisons need a shared scale, including BETWEEN and IN. Reserve
+    // enough digits for both integer parts before rescaling either side.
+    if let (DataType::Decimal128(lp, ls), DataType::Decimal128(rp, rs)) =
+        (left.data_type(), right.data_type())
+    {
+        let scale = *ls.max(rs);
+        let integral_digits =
+            (i16::from(*lp) - i16::from(*ls)).max(i16::from(*rp) - i16::from(*rs));
+        let precision = integral_digits + i16::from(scale);
+        let target = match precision {
+            1..=38 => DataType::Decimal128(precision as u8, scale),
+            39..=76 => DataType::Decimal256(precision as u8, scale),
+            _ => {
+                return Err(KaveonError::Execution(format!(
+                    "an exact common decimal at scale {scale} needs {precision} digits"
+                )));
+            }
+        };
+        return Ok((
+            compute::cast(left, &target)?,
+            compute::cast(right, &target)?,
+        ));
     }
     // Text against a day-number date is read as a date, the way SQL
     // coerces `date_col BETWEEN '2026-07-10' AND '2026-07-12'`; text that
@@ -27174,6 +27206,43 @@ mod tests {
         assert_eq!(
             result.values().iter().collect::<Vec<_>>(),
             vec![false, true, true, false]
+        );
+    }
+
+    #[test]
+    fn mixed_decimal_arithmetic_and_comparisons_preserve_all_digits() {
+        let decimal = |values, precision, scale| -> ArrayRef {
+            Arc::new(
+                Decimal128Array::from(values)
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap(),
+            )
+        };
+        let left = decimal(vec![Some(9_007_199_254_740_993_i128), None], 18, 0);
+        let cent = decimal(vec![Some(1_i128), Some(1)], 3, 2);
+        let sum = arithmetic(&left, BinaryOp::Plus, &cent).unwrap();
+        let sum = sum.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(
+            sum.iter().collect::<Vec<_>>(),
+            vec![Some(900_719_925_474_099_301_i128), None]
+        );
+        assert_eq!(sum.data_type(), &DataType::Decimal128(21, 2));
+        let adjacent = decimal(vec![Some(9_007_199_254_740_992_i128), Some(0)], 19, 0);
+        assert_eq!(
+            comparison(&left, &adjacent, CompareKind::Eq)
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(false), None]
+        );
+        let integral = decimal(vec![Some(10_i128.pow(37)), Some(-1)], 38, 0);
+        let fraction = decimal(vec![Some(1), Some(-1)], 38, 38);
+        assert_eq!(
+            comparison(&integral, &fraction, CompareKind::Gt)
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false)]
         );
     }
 
