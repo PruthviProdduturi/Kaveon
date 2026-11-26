@@ -42,7 +42,7 @@ location you choose at deployment.
 | AWS | Coming soon. The launcher currently rejects S3 as the system store. |
 | `adls://account/container/prefix` | Azure |
 
-**Table data and system storage are configured separately.** Register a catalog over a mounted directory or an authorized ADLS location. See the [Azure installation preview](https://github.com/PruthviProdduturi/Kaveon/tree/f1304715ea753d4f800e54c8f4ba092afa6ddaf3/infra/marketplace) for the portal form, directory registration and Helm handoff.
+**Table data and system storage are configured separately.** Register a catalog over a mounted directory or an authorized ADLS location. See the [Azure installation preview](https://github.com/PruthviProdduturi/Kaveon/tree/b5a2a026109e0ffa10c1c19ddebd41e163c48110/infra/marketplace) for the portal form, directory registration and Helm handoff.
 
 Choose it once. Moving it later is a migration, not a setting — see
 [system storage](../engineering/system-storage.md).

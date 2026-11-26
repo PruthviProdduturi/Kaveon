@@ -50,7 +50,7 @@ The result is one row with `ready = 1`. [Local quickstart](https://kaveon.io/doc
 | Environment | Start here |
 | --- | --- |
 | **Local machine or Linux VM** | Start with Docker Compose. Configure authentication and HTTPS before sharing a VM installation. [Self-hosting guide](docs/guides/self-hosting.md) |
-| **Azure Kubernetes Service** | The guided preview provisions infrastructure and Microsoft Entra sign-in. Install the Engine and Studio/API Helm releases to bring the application online. [Azure installation package](https://github.com/PruthviProdduturi/Kaveon/tree/f1304715ea753d4f800e54c8f4ba092afa6ddaf3/infra/marketplace) |
+| **Azure Kubernetes Service** | The guided preview provisions infrastructure and Microsoft Entra sign-in. Install the Engine and Studio/API Helm releases to bring the application online. [Azure installation package](https://github.com/PruthviProdduturi/Kaveon/tree/b5a2a026109e0ffa10c1c19ddebd41e163c48110/infra/marketplace) |
 | **AWS** | Coming soon. |
 
 ## Contribute

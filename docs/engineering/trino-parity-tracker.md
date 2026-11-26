@@ -8,7 +8,7 @@ evidence passes against exact-result references.
 
 The authoritative T-SQL read corpus currently contains 199 unique cases; the
 validator checks this count against the corpus and its engine commit pin. The
-corpus qualification pin is `93d0e706` (the qualification commit),
+corpus qualification pin is `529d4ad2` (the qualification commit),
 which includes strict invariant SQL Server `PARSE`
 and SQL Server's configurable-datefirst week
 numbering and fixed-offset
@@ -203,7 +203,7 @@ are recorded in the corresponding `track2-tsql-*` documents, including
 `track2-tsql-datepart-aliases-2026-10-29.md`.
 The versioned T-SQL corpus is the authoritative
 `engine/qualification/fixtures/tsql-read-compatibility-corpus-2026-10-28.json`, with the
-corpus pinned at `93d0e706`;
+corpus pinned at `529d4ad2`;
 later
 changes must update the pin only after the declared tests and qualification
 evidence pass.
