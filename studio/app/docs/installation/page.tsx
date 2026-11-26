@@ -2,8 +2,8 @@ import { Callout, Code, PageHeader, Pager } from "../../../components/docs/prose
 
 export const metadata = { title: "Deploy Kaveon" };
 
-const azureInstaller = "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fb5a2a026109e0ffa10c1c19ddebd41e163c48110%2Finfra%2Fmarketplace%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2Fb5a2a026109e0ffa10c1c19ddebd41e163c48110%2Finfra%2Fmarketplace%2FcreateUiDefinition.json";
-const azurePackage = "https://github.com/PruthviProdduturi/Kaveon/tree/b5a2a026109e0ffa10c1c19ddebd41e163c48110/infra/marketplace";
+const azureInstaller = "https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2F5513011212006c4e7f22f46ba7f6951fcf2700dd%2Finfra%2Fmarketplace%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FPruthviProdduturi%2FKaveon%2F5513011212006c4e7f22f46ba7f6951fcf2700dd%2Finfra%2Fmarketplace%2FcreateUiDefinition.json";
+const azurePackage = "https://github.com/PruthviProdduturi/Kaveon/tree/5513011212006c4e7f22f46ba7f6951fcf2700dd/infra/marketplace";
 
 export default function InstallationDocs() {
   return <div className="docs-prose">
@@ -38,7 +38,7 @@ export default function InstallationDocs() {
       <li>Install the Engine Helm chart, then the platform chart for API and Studio. Supply the directory values from the template to both releases. Configure the Studio ingress to use the reserved IP and a trusted certificate for its hostname. If your network restricts public certificate challenges, supply an approved Kubernetes TLS Secret through <code>azureEdge.tlsSecretName</code>.</li>
       <li>Open the HTTPS Studio origin, sign in with Microsoft and run <code>SELECT 1 AS ready;</code> in SQL Lab. Then register a lake catalog and read a table to verify storage identity and data access.</li>
     </ol>
-    <p>For Kubernetes configuration, see the <a href="https://github.com/PruthviProdduturi/Kaveon/tree/b5a2a026109e0ffa10c1c19ddebd41e163c48110/infra/helm/kaveon-engine">Engine chart</a> and <a href="https://github.com/PruthviProdduturi/Kaveon/tree/b5a2a026109e0ffa10c1c19ddebd41e163c48110/infra/helm/kaveon-platform">platform chart</a>. The public Azure form and its workload identity settings are specific to AKS.</p>
+    <p>For Kubernetes configuration, see the <a href="https://github.com/PruthviProdduturi/Kaveon/tree/5513011212006c4e7f22f46ba7f6951fcf2700dd/infra/helm/kaveon-engine">Engine chart</a> and <a href="https://github.com/PruthviProdduturi/Kaveon/tree/5513011212006c4e7f22f46ba7f6951fcf2700dd/infra/helm/kaveon-platform">platform chart</a>. The public Azure form and its workload identity settings are specific to AKS.</p>
 
     <h2 id="linux-vm">Linux VM</h2>
     <p>Install Git, Bash and Docker with Compose v2, then follow the <a href="/docs/quickstart">local quickstart</a> on the VM. Use a persistent disk for the coordinator volume and any local data. For shared access, configure Studio sign-in, set its public HTTPS origin and point a TLS reverse proxy at Studio on port 3000. Keep the API and Engine on the private interface.</p>
