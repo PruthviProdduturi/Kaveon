@@ -595,6 +595,8 @@ struct TaskScanMetrics {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct QueryContext {
+    #[serde(default)]
+    trino_protocol: bool,
     engine_version: String,
     environment: String,
     principal: Option<String>,
@@ -1539,6 +1541,9 @@ struct TaskRequest {
     /// for an older coordinator, which gets the collected result as before.
     #[serde(default)]
     stream_result: bool,
+    /// Dialect for legacy task shapes that transport SQL instead of a bound fragment.
+    #[serde(default)]
+    trino_protocol: bool,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -1768,7 +1773,18 @@ async fn execute_owned_task(
         }
         return complete_owned_task(owner, started, result);
     }
-    let mut plan = match sql_to_logical_plan_for_binder(req.query.trim().trim_end_matches(';')) {
+    let sql = req.query.trim().trim_end_matches(';');
+    let plan = if req.trino_protocol {
+        kaveon_sql::logical_plan::trino_logical_plan(
+            sql,
+            &[],
+            &HashMap::new(),
+            req.settings.approximate(),
+        )
+    } else {
+        sql_to_logical_plan_for_binder(sql)
+    };
+    let mut plan = match plan {
         Ok(plan) => plan,
         Err(error) => {
             let message = error.to_string();
@@ -3082,7 +3098,44 @@ fn lifecycle_error_response(message: String) -> Response {
     task_failure_response(StatusCode::SERVICE_UNAVAILABLE, &message)
 }
 
+/// Fragment tasks and their retained outcomes store Arrow errors as Display
+/// strings. Only recognize the original, unwrapped Arrow diagnostic here.
+fn task_arithmetic_code(message: &str) -> Option<&'static str> {
+    if message.starts_with("arrow: Arithmetic overflow: ") {
+        Some("NUMERIC_VALUE_OUT_OF_RANGE")
+    } else if message == "arrow: Divide by zero error" {
+        Some("DIVISION_BY_ZERO")
+    } else {
+        None
+    }
+}
+
+async fn distributed_error_response(query_id: &str, message: &str) -> Response {
+    let (status, code) = match task_arithmetic_code(message) {
+        Some(code) => {
+            note_error_code(query_id, code).await;
+            (StatusCode::BAD_REQUEST, code)
+        }
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DISTRIBUTED_EXECUTION_ERROR",
+        ),
+    };
+    (
+        status,
+        Json(serde_json::json!({"error":message,"code":code})),
+    )
+        .into_response()
+}
+
 fn task_failure_response(status: StatusCode, message: &str) -> Response {
+    if let Some(code) = task_arithmetic_code(message) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"code":code, "error":message})),
+        )
+            .into_response();
+    }
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
@@ -3719,7 +3772,7 @@ async fn submit_trino_statement_parts(
     };
     let query_id = Uuid::new_v4().to_string();
     let origin = state.config.trino_public_origin.clone();
-    let response = run_statement(state, identity, request, query_id.clone())
+    let response = run_statement_dialect(state, identity, request, query_id.clone(), true)
         .await
         .into_response();
     shape_trino_response(response, Some(&query_id), origin.as_deref(), Some(&query)).await
@@ -3934,16 +3987,8 @@ fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, Str
         .filter(|name| *name != "?" && !name.starts_with('$'))
         .map(|name| (name.clone(), ParameterValue::Scalar(ScalarValue::Null)))
         .collect::<HashMap<_, _>>();
-    let plan = if parameter_names.is_empty() {
-        sql_to_logical_plan_for_binder(query)
-    } else {
-        kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_values(
-            query,
-            &positional,
-            &named,
-        )
-    }
-    .map_err(|error| error.to_string())?;
+    let plan = kaveon_sql::logical_plan::trino_logical_plan(query, &positional, &named, false)
+        .map_err(|error| error.to_string())?;
     let mut projected = &plan;
     while let Some(input) = match projected {
         LogicalPlan::Limit { input, .. }
@@ -4095,6 +4140,9 @@ fn trino_expr_type(expression: &Expr) -> String {
             };
             fields.split(',').nth(index).unwrap_or("unknown").to_owned()
         }
+        Expr::Function { name, args } if name == "TRY_ARITHMETIC" && args.len() == 1 => {
+            trino_expr_type(&args[0])
+        }
         Expr::Function { name, .. } if name.eq_ignore_ascii_case("JSON_FORMAT") => {
             "varchar".to_owned()
         }
@@ -4115,6 +4163,8 @@ fn trino_expr_type(expression: &Expr) -> String {
                 let right_type = trino_expr_type(right);
                 if left_type == "double" || right_type == "double" {
                     "double".to_owned()
+                } else if left_type == "integer" && right_type == "integer" {
+                    "integer".to_owned()
                 } else if left_type == "bigint" || right_type == "bigint" {
                     "bigint".to_owned()
                 } else {
@@ -5536,6 +5586,12 @@ async fn shape_trino_response(
         value["code"].as_str(),
     ) {
         let wire_error = match (status, code) {
+            (StatusCode::BAD_REQUEST, "NUMERIC_VALUE_OUT_OF_RANGE") => {
+                Some((19, "NUMERIC_VALUE_OUT_OF_RANGE", "USER_ERROR"))
+            }
+            (StatusCode::BAD_REQUEST, "DIVISION_BY_ZERO") => {
+                Some((8, "DIVISION_BY_ZERO", "USER_ERROR"))
+            }
             (StatusCode::BAD_REQUEST, "COLUMN_NOT_FOUND") => {
                 Some((47, "COLUMN_NOT_FOUND", "USER_ERROR"))
             }
@@ -6035,6 +6091,16 @@ async fn run_statement(
     req: StatementRequest,
     query_id: String,
 ) -> Response {
+    run_statement_dialect(state, identity, req, query_id, false).await
+}
+
+async fn run_statement_dialect(
+    state: Arc<AppState>,
+    identity: Identity,
+    req: StatementRequest,
+    query_id: String,
+    trino: bool,
+) -> Response {
     let _submitted_user = req.user.as_deref();
     if !state.config.coordinator {
         return (
@@ -6202,6 +6268,7 @@ async fn run_statement(
                 .into_response();
         }
         QueryContext {
+            trino_protocol: trino,
             engine_version: env!("CARGO_PKG_VERSION").to_owned(),
             environment: state.config.environment.clone(),
             principal: Some(identity.principal.clone()),
@@ -6516,7 +6583,14 @@ async fn run_statement(
     };
     // `settings.approximate`: every plain COUNT(DISTINCT) lowers as a
     // sketch, as APPROX_COUNT_DISTINCT would; the record says so.
-    let lowered = if settings.approximate() {
+    let lowered = if trino {
+        kaveon_sql::logical_plan::trino_logical_plan(
+            &sql,
+            &parameters,
+            &named_parameters,
+            settings.approximate(),
+        )
+    } else if settings.approximate() {
         sql_to_logical_plan_for_binder_approximate_with_parameter_values(
             &sql,
             &parameters,
@@ -6683,7 +6757,7 @@ async fn run_statement(
         && state.result_cache.enabled()
         && !matches!(explain_kind, Some(ExplainPlanKind::Analyze)))
     .then(|| {
-        crate::result_cache::ResultCacheKey::new(
+        let mut key = crate::result_cache::ResultCacheKey::new(
             &sql,
             &context.catalog,
             &context.schema,
@@ -6693,7 +6767,9 @@ async fn run_statement(
             &planning_source_pins.source_versions,
             &planning_source_pins.delta_versions,
             context.time_zone.as_deref(),
-        )
+        );
+        key.trino = trino;
+        key
     });
     let cache_lookup_start = Instant::now();
     if let Some(hit) = cache_key
@@ -7027,11 +7103,7 @@ async fn run_statement(
                 if cancellation.is_cancelled() {
                     return canceled_task_response();
                 }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
-                )
-                    .into_response();
+                return distributed_error_response(&query_id, &error).await;
             }
         }
     }
@@ -7160,11 +7232,7 @@ async fn run_statement(
                 if cancellation.is_cancelled() {
                     return canceled_task_response();
                 }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
-                )
-                    .into_response();
+                return distributed_error_response(&query_id, &error).await;
             }
         }
     }
@@ -7280,11 +7348,7 @@ async fn run_statement(
                 if cancellation.is_cancelled() {
                     return canceled_task_response();
                 }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": error, "code": "DISTRIBUTED_EXECUTION_ERROR" })),
-                )
-                    .into_response();
+                return distributed_error_response(&query_id, &error).await;
             }
         }
     }
@@ -7381,6 +7445,15 @@ async fn run_statement(
     let batches = match exec_result {
         Ok(b) => b,
         Err(e) => {
+            let (status, code) = match &e {
+                kaveon_core::KaveonError::Arrow(arrow::error::ArrowError::ArithmeticOverflow(
+                    _,
+                )) => (StatusCode::BAD_REQUEST, "NUMERIC_VALUE_OUT_OF_RANGE"),
+                kaveon_core::KaveonError::Arrow(arrow::error::ArrowError::DivideByZero) => {
+                    (StatusCode::BAD_REQUEST, "DIVISION_BY_ZERO")
+                }
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "EXECUTION_ERROR"),
+            };
             let elapsed = start.elapsed().as_millis() as u64;
             let record = QueryRecord {
                 rows_are_preview: true,
@@ -7401,7 +7474,7 @@ async fn run_statement(
                 rows: vec![],
                 row_count: None,
                 error: Some(format!("{e}")),
-                error_code: None,
+                error_code: Some(code.to_owned()),
                 elapsed_ms: elapsed,
                 submitted_at_ms,
                 completed_at_ms: unix_time_ms(),
@@ -7426,10 +7499,10 @@ async fn run_statement(
                 return canceled_task_response();
             }
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status,
                 Json(serde_json::json!({
                     "error": format!("execution error: {e}"),
-                    "code": "EXECUTION_ERROR"
+                    "code": code
                 })),
             )
                 .into_response();
@@ -13780,6 +13853,18 @@ async fn send_task_request(
             .flatten()
             .map(|chunk| String::from_utf8_lossy(&chunk[..chunk.len().min(8192)]).into_owned())
             .unwrap_or_default();
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&message)
+            && let Some(detail) = body["error"].as_str()
+            && let Some(code) = task_arithmetic_code(detail)
+            && (body["code"].as_str() == Some(code) || body.get("code").is_none())
+        {
+            return Err(RemoteTaskFailure {
+                message: detail.to_owned(),
+                retryable: false,
+                rows_delivered: 0,
+                connection_lost: false,
+            });
+        }
         return Err(RemoteTaskFailure {
             message: format!(
                 "worker '{}' failed task with {status}: {message}",
@@ -13948,7 +14033,7 @@ async fn fetch_task_metrics(
                 })));
             }
             StatusCode::ACCEPTED => continue,
-            StatusCode::INTERNAL_SERVER_ERROR => {
+            StatusCode::BAD_REQUEST | StatusCode::INTERNAL_SERVER_ERROR => {
                 return Ok(TaskMetricsAnswer::Failed(
                     body["error"].as_str().unwrap_or("task failed").to_owned(),
                 ));
@@ -13980,6 +14065,14 @@ async fn streamed_task_failure(
         && let Ok(TaskMetricsAnswer::Failed(error)) =
             fetch_task_metrics(client, worker, request, exchange_token).await
     {
+        if task_arithmetic_code(&error).is_some() {
+            return RemoteTaskFailure {
+                message: error,
+                retryable: false,
+                rows_delivered,
+                connection_lost: false,
+            };
+        }
         return RemoteTaskFailure {
             message: format!("worker '{}' failed task: {error}", worker.node_id),
             retryable: true,
@@ -14627,6 +14720,10 @@ async fn execute_distributed_fragments(
                     eprintln!("distributed task {task_id} failed: {}", failure.message);
                     task_failures.push(failure.message.clone());
                     release_dispatch_outputs(&client, &token, &dispatch).await;
+                    if task_arithmetic_code(&failure.message).is_some() {
+                        orchestrator.cancel();
+                        return Some(Err(failure.message));
+                    }
                     // Rows of a streamed root task are already in the pages:
                     // running it again would deliver them twice.
                     if failure.retryable && failure.rows_delivered > 0 {
@@ -14849,6 +14946,7 @@ fn task_request_from_dispatch(dispatch: &TaskDispatch, context: &QueryContext) -
             })
             .collect(),
         stream_result: false,
+        trino_protocol: false,
     }
 }
 
@@ -14989,6 +15087,7 @@ async fn execute_distributed_top_n(
         let schema_name = context.schema.clone();
         let catalog_snapshot_id = context.catalog_snapshot_id.clone();
         let settings = context.settings.clone();
+        let trino_protocol = context.trino_protocol;
         tasks.spawn(async move {
             let mut failures = Vec::new();
             for (attempt, worker) in candidates {
@@ -15008,6 +15107,7 @@ async fn execute_distributed_top_n(
                     exchange_outputs: vec![],
                     settings: settings.clone(),
                     stream_result: false,
+                    trino_protocol,
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -15035,6 +15135,9 @@ async fn execute_distributed_top_n(
                         return Ok((schema, batches, telemetry));
                     }
                     Err(error) => {
+                        if task_arithmetic_code(&error.message).is_some() {
+                            return Err(error.message);
+                        }
                         failures.push(error.message);
                         if !error.retryable {
                             break;
@@ -15276,6 +15379,7 @@ async fn execute_distributed_aggregate(
         let schema_name = context.schema.clone();
         let catalog_snapshot_id = context.catalog_snapshot_id.clone();
         let settings = context.settings.clone();
+        let trino_protocol = context.trino_protocol;
         tasks.spawn(async move {
             let mut failures = Vec::new();
             for (attempt, worker) in candidates {
@@ -15295,6 +15399,7 @@ async fn execute_distributed_aggregate(
                     exchange_outputs: vec![],
                     settings: settings.clone(),
                     stream_result: false,
+                    trino_protocol,
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -15329,6 +15434,9 @@ async fn execute_distributed_aggregate(
                         ));
                     }
                     Err(error) => {
+                        if task_arithmetic_code(&error.message).is_some() {
+                            return Err(error.message);
+                        }
                         failures.push(error.message);
                         if !error.retryable {
                             break;
@@ -17406,6 +17514,7 @@ mod tests {
             exchange_outputs: vec![],
             settings,
             stream_result: false,
+            trino_protocol: false,
         };
         let wire = serde_json::to_value(&request).unwrap();
         assert_eq!(
@@ -17729,6 +17838,7 @@ mod tests {
             execution_mode: "distributed".to_owned(),
             execution_detail: Some("fragments".to_owned()),
             context: super::QueryContext {
+                trino_protocol: false,
                 engine_version: "test".into(),
                 environment: "test".into(),
                 principal: Some("analyst@example.com".into()),
@@ -20668,6 +20778,7 @@ mod tests {
         // The record a paged statement gets the moment it runs links its
         // first page; a queued record and an inline statement's do not.
         let context = |delivery: Option<&str>| super::QueryContext {
+            trino_protocol: false,
             engine_version: String::new(),
             environment: String::new(),
             principal: None,
@@ -21025,6 +21136,7 @@ mod tests {
 
     fn analyze_context() -> super::QueryContext {
         super::QueryContext {
+            trino_protocol: false,
             engine_version: "test".into(),
             environment: "test".into(),
             principal: Some("admin".into()),
@@ -23422,6 +23534,7 @@ mod tests {
         let state = Arc::new(catalog_test_state());
         let plan = kaveon_sql::logical_plan::sql_to_logical_plan("SELECT id FROM events").unwrap();
         let context = QueryContext {
+            trino_protocol: false,
             engine_version: "test".into(),
             environment: "test".into(),
             principal: None,
@@ -23528,6 +23641,7 @@ mod tests {
             exchange_outputs: vec![],
             settings: crate::settings::QuerySettings::default(),
             stream_result: false,
+            trino_protocol: false,
         };
 
         assert!(
@@ -23666,6 +23780,7 @@ mod tests {
             exchange_outputs: vec![],
         };
         let context = super::QueryContext {
+            trino_protocol: false,
             engine_version: "test".into(),
             environment: "test".into(),
             principal: None,
@@ -24166,6 +24281,7 @@ mod tests {
             &super::QuerySettings::default(),
             0,
             &super::QueryContext {
+                trino_protocol: false,
                 engine_version: String::new(),
                 environment: String::new(),
                 principal: None,
@@ -24629,6 +24745,7 @@ mod streamed_root_tests {
 
     fn context() -> QueryContext {
         QueryContext {
+            trino_protocol: false,
             engine_version: "test".into(),
             environment: "test".into(),
             principal: None,
@@ -24706,6 +24823,7 @@ mod streamed_root_tests {
             exchange_outputs: vec![],
             settings: QuerySettings::default(),
             stream_result: true,
+            trino_protocol: false,
         }
     }
 
@@ -25911,6 +26029,85 @@ mod streamed_root_tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    #[tokio::test]
+    async fn trino_integer_arithmetic_returns_typed_results_and_row_local_errors() {
+        let directory = std::env::temp_dir().join(format!("kaveon-trino-int-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
+        // A native caller can cache a BIGINT result for this same statement.
+        // A Trino session must still evaluate it with INTEGER semantics.
+        let native_request =
+            serde_json::from_value(serde_json::json!({"query":"SELECT 2147483647 + 1"})).unwrap();
+        let native = super::run_statement(
+            state.clone(),
+            alice(),
+            native_request,
+            Uuid::new_v4().to_string(),
+        )
+        .await;
+        let bytes = axum::body::to_bytes(native.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let native: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(native["data"], serde_json::json!([[2147483648_i64]]));
+        assert_eq!(state.result_cache.stats().entries, 1);
+        for (sql, expected_code) in [
+            ("SELECT 2147483647 + 1", 19),
+            ("SELECT 50000 * 50000", 19),
+            ("SELECT 1 / 0", 8),
+        ] {
+            let response = submit_trino_statement_parts(
+                state.clone(),
+                alice(),
+                HeaderMap::new(),
+                Bytes::from(sql),
+            )
+            .await;
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let statement: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                statement["error"]["errorCode"], expected_code,
+                "{sql}: {statement}"
+            );
+        }
+        let sql = "SELECT v, TRY((v+1)*2), CAST(v AS BIGINT)+1 FROM (VALUES (2147483647),(3),(NULL)) t(v) ORDER BY v NULLS LAST";
+        let response = submit_trino_statement_parts(
+            state.clone(),
+            alice(),
+            HeaderMap::new(),
+            Bytes::from(sql),
+        )
+        .await;
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let statement: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(statement["columns"][0]["type"], "integer", "{statement}");
+        assert_eq!(statement["columns"][1]["type"], "integer");
+        assert_eq!(statement["columns"][2]["type"], "bigint");
+        let page = get_trino_result_page(
+            State(state),
+            axum::extract::Path((statement["id"].as_str().unwrap().to_owned(), 0)),
+            axum::Extension(alice()),
+        )
+        .await;
+        let bytes = axum::body::to_bytes(page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            page["data"],
+            serde_json::json!([
+                [3, 8, 4],
+                [2147483647, null, 2147483648_i64],
+                [null, null, null]
+            ])
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn trino_prepared_statements_select_named_entry() {
         let mut headers = HeaderMap::new();
@@ -26121,7 +26318,7 @@ mod streamed_root_tests {
         assert_eq!(
             metadata,
             vec![
-                ("total".to_owned(), "bigint".to_owned(), true),
+                ("total".to_owned(), "integer".to_owned(), true),
                 ("is_ordered".to_owned(), "boolean".to_owned(), true),
                 ("label".to_owned(), "varchar".to_owned(), true),
             ]

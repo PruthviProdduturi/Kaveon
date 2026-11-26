@@ -31,6 +31,7 @@ use std::{
 /// What decides a result. Two statements with equal keys return equal rows.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ResultCacheKey {
+    pub trino: bool,
     /// The statement, normalised: trimmed, whitespace collapsed to one
     /// space and letters lowercased outside `'...'` and `"..."`.
     pub sql: String,
@@ -71,6 +72,7 @@ impl ResultCacheKey {
         time_zone: Option<&str>,
     ) -> Self {
         Self {
+            trino: false,
             sql: normalize_sql(sql),
             catalog: catalog.to_owned(),
             schema: schema.to_owned(),

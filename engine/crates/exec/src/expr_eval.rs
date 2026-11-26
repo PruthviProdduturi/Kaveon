@@ -224,6 +224,11 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         } => eval_in_list(expr, list, *negated, batch),
         Expr::Cast { expr, data_type } => eval_cast(expr, data_type.clone(), batch),
         Expr::Function { name, args } => {
+            if name == "TRY_ARITHMETIC"
+                && let [argument] = args.as_slice()
+            {
+                return try_arithmetic(argument, batch);
+            }
             if name.eq_ignore_ascii_case("ARRAY_SORT")
                 && args.len() == 2
                 && let Expr::Function {
@@ -1395,36 +1400,100 @@ fn arithmetic_with_literal(
     Ok(Some(result))
 }
 
+/// Evaluate operands once, including volatile inputs. TRY masks arithmetic
+/// errors per row while preserving the other rows and their result type.
+fn try_arithmetic(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
+    if let Expr::BinaryOp { left, op, right } = expr
+        && matches!(
+            op,
+            BinaryOp::Plus
+                | BinaryOp::Minus
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Modulo
+        )
+    {
+        let left = try_arithmetic(left, batch)?;
+        let right = try_arithmetic(right, batch)?;
+        return mask_arithmetic_errors(&left, *op, &right);
+    }
+    evaluate(expr, batch)
+}
+
+fn mask_arithmetic_errors(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
+    match arithmetic(left, op, right) {
+        Err(KaveonError::Arrow(
+            arrow::error::ArrowError::ArithmeticOverflow(_)
+            | arrow::error::ArrowError::DivideByZero,
+        )) if !left.is_empty() => {
+            check_expression_cancelled()?;
+            let (l, r) = coerce_numeric_pair(left, right)?;
+            match l.data_type() {
+                DataType::Int32 => {
+                    return Ok(checked_integer_rows(
+                        l.as_primitive::<Int32Type>(),
+                        op,
+                        r.as_primitive(),
+                    ));
+                }
+                DataType::Int64 => {
+                    return Ok(checked_integer_rows(
+                        l.as_primitive::<Int64Type>(),
+                        op,
+                        r.as_primitive(),
+                    ));
+                }
+                _ => {}
+            }
+            // Decimal kernels derive their result precision and scale. Keep
+            // that derivation even for a batch containing only failing rows.
+            if left.len() == 1 {
+                let empty = arithmetic(&left.slice(0, 0), op, &right.slice(0, 0))?;
+                return Ok(arrow::array::new_null_array(empty.data_type(), 1));
+            }
+            let mid = left.len() / 2;
+            let rest = left.len() - mid;
+            let first = mask_arithmetic_errors(&left.slice(0, mid), op, &right.slice(0, mid))?;
+            let second =
+                mask_arithmetic_errors(&left.slice(mid, rest), op, &right.slice(mid, rest))?;
+            Ok(compute::concat(&[first.as_ref(), second.as_ref()])?)
+        }
+        result => result,
+    }
+}
+
+fn checked_integer_rows<T: ArrowPrimitiveType>(
+    left: &PrimitiveArray<T>,
+    op: BinaryOp,
+    right: &PrimitiveArray<T>,
+) -> ArrayRef
+where
+    T::Native: arrow::array::ArrowNativeTypeOp,
+{
+    use arrow::array::ArrowNativeTypeOp;
+    let checked = match op {
+        BinaryOp::Plus => T::Native::add_checked,
+        BinaryOp::Minus => T::Native::sub_checked,
+        BinaryOp::Multiply => T::Native::mul_checked,
+        BinaryOp::Divide => T::Native::div_checked,
+        BinaryOp::Modulo => T::Native::mod_checked,
+        _ => unreachable!(),
+    };
+    Arc::new(
+        left.iter()
+            .zip(right.iter())
+            .map(|(l, r)| checked(l?, r?).ok())
+            .collect::<PrimitiveArray<T>>(),
+    )
+}
+
 fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
     let (left, right) = coerce_numeric_pair(left, right)?;
     let result: ArrayRef = match (left.data_type(), right.data_type()) {
-        (DataType::Int64, DataType::Int64) => {
-            let l = left.as_primitive::<Int64Type>();
-            let r = right.as_primitive::<Int64Type>();
-            match op {
-                BinaryOp::Plus => Arc::new(compute::kernels::numeric::add(l, r)?),
-                BinaryOp::Minus => Arc::new(compute::kernels::numeric::sub(l, r)?),
-                BinaryOp::Multiply => Arc::new(compute::kernels::numeric::mul(l, r)?),
-                BinaryOp::Divide => Arc::new(compute::kernels::numeric::div(l, r)?),
-                BinaryOp::Modulo => Arc::new(compute::kernels::numeric::rem(l, r)?),
-                _ => unreachable!(),
-            }
-        }
-        (DataType::Float64, DataType::Float64) => {
-            let l = left.as_primitive::<Float64Type>();
-            let r = right.as_primitive::<Float64Type>();
-            match op {
-                BinaryOp::Plus => Arc::new(compute::kernels::numeric::add(l, r)?),
-                BinaryOp::Minus => Arc::new(compute::kernels::numeric::sub(l, r)?),
-                BinaryOp::Multiply => Arc::new(compute::kernels::numeric::mul(l, r)?),
-                BinaryOp::Divide => Arc::new(compute::kernels::numeric::div(l, r)?),
-                BinaryOp::Modulo => Arc::new(compute::kernels::numeric::rem(l, r)?),
-                _ => unreachable!(),
-            }
-        }
-        // Decimals stay exact: `0.06 - 0.01` is the decimal 0.05, with the
-        // precision and scale the kernels derive for the operation.
-        (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => match op {
+        (DataType::Int32, DataType::Int32)
+        | (DataType::Int64, DataType::Int64)
+        | (DataType::Float64, DataType::Float64)
+        | (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => match op {
             BinaryOp::Plus => compute::kernels::numeric::add(&left, &right)?,
             BinaryOp::Minus => compute::kernels::numeric::sub(&left, &right)?,
             BinaryOp::Multiply => compute::kernels::numeric::mul(&left, &right)?,

@@ -517,6 +517,20 @@ pub fn sql_to_logical_plan_for_binder_with_parameter_values(
     lower_statements(statements, true, false)
 }
 
+/// Lower Trino protocol SQL with its integer literal widths before binding it
+/// to the same relational operators and worker expressions as native SQL.
+pub fn trino_logical_plan(
+    sql: &str,
+    parameters: &[ParameterValue],
+    named_parameters: &HashMap<String, ParameterValue>,
+    approximate: bool,
+) -> Result<LogicalPlan> {
+    let mut statements = parse_sql(sql)?;
+    bind_parameters(&mut statements, parameters, named_parameters)?;
+    crate::trino_integers::bind(&mut statements);
+    lower_statements(statements, true, approximate)
+}
+
 /// Parameterized form of [`sql_to_logical_plan_for_binder_approximate`].
 pub fn sql_to_logical_plan_for_binder_approximate_with_parameters(
     sql: &str,
@@ -6314,6 +6328,18 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             return Err(sql_err("TRY requires exactly one argument"));
         };
         return match argument.clone() {
+            Expr::BinaryOp {
+                op:
+                    BinaryOp::Plus
+                    | BinaryOp::Minus
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Modulo,
+                ..
+            } => Ok(Expr::Function {
+                name: "TRY_ARITHMETIC".into(),
+                args: vec![argument.clone()],
+            }),
             Expr::Cast { expr, data_type } => Ok(Expr::Function {
                 name: format!("TRY_CAST_{}", cast_target_name(data_type)),
                 args: vec![*expr],
@@ -6341,7 +6367,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 })
             }
             _ => Err(sql_err(
-                "TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET expressions",
+                "TRY currently supports arithmetic, CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET expressions",
             )),
         };
     }
