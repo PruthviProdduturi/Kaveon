@@ -215,11 +215,18 @@ export function ContextBanner() {
   }
 
   // Reached only when the server answered and reported nothing compiled.
+  //
+  // This used to read "open a dataset and Generate DLM". Creating a dataset
+  // now schedules its own compile, so that line sent the reader after a button
+  // for work already under way. A compile takes about half a minute on a few
+  // million rows, and this strip is most likely to be read inside exactly that
+  // window: what is true there is that nothing is compiled yet, that a dataset
+  // compiles itself once created, and that the button remains for a refresh.
   if (ready.length === 0) {
     return (
       <div style={wrap}>
         <span style={label}><i className="fas fa-database" /> Context</span>
-        <span>No context compiled yet — open a dataset and <b>Generate DLM</b> to make it queryable here.</span>
+        <span>No context compiled yet — a dataset compiles itself when you create one, which takes a moment on a large table. <b>Generate DLM</b> on a dataset forces a refresh.</span>
         <button type="button" style={closeBtn} title="Hide this strip" aria-label="Hide the context strip" onClick={dismiss}>
           <i className="fas fa-times" aria-hidden="true" />
         </button>
