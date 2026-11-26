@@ -35,7 +35,7 @@ ENERGY_COLUMNS = [
 INTEGER_COLUMNS = {"year", "population"}
 TEXT_COLUMNS = {"country", "iso_code"}
 
-PINNED_GIT_REF = "bee3de4"
+PINNED_GIT_REF = "a48cc1920db2f639ec3237bad626082db81fe60a"
 PINNED_SOURCES = {
     "climate_temperature.csv": "5ae308a82e62f6ad6590748d333ac8441cfbd8590df3f0ec96cc76083753ec31",
     "energy_global.csv": "df2d09921db08c17b4fde048c7f2cb543f668dec3dbeb8d7cca8b99a2891e34e",
