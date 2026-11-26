@@ -129,9 +129,9 @@ services:
       # improve both scan/aggregate workloads without increasing the query
       # memory budget.
       KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
-      # Split large Parquet files into row-group tasks in this local benchmark
-      # stack; deployments default to one unless explicitly configured.
-      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
+      # Each scan task reserves a worker memory budget. One per worker leaves
+      # room for concurrent queries. Increase for dedicated large-file scans.
+      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-1}
       # Keep the aggregate merge fan-in bounded while scan tasks fan out.
       # Four destination partitions are enough for the two-worker benchmark.
       KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
@@ -185,7 +185,7 @@ services:
       KAVEON_HASH_SPILL_MODE: ${KAVEON_HASH_SPILL_MODE:-disk}
       KAVEON_SPILL_COMPRESSION: ${KAVEON_SPILL_COMPRESSION:-}
       KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
-      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
+      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-1}
       KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
       KAVEON_EXCHANGE_COMPRESSION: ${KAVEON_EXCHANGE_COMPRESSION:-}
       KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
