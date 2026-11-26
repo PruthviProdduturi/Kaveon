@@ -237,9 +237,18 @@ dataset = call("POST", "/datasets", {
 print(call("POST", f"/datasets/{dataset['id']}/dlm/generate?force=true", {}))
 ```
 
+Creating the dataset already scheduled that compile, so the call above is a
+forced refresh rather than the step that first makes the dataset answerable.
+It stays in the walkthrough because it returns the build summary and because
+`force=true` recompiles a source that has changed; a plain create compiles
+once in the background, and a second compile of an unchanged source
+short-circuits on its `source_hash`.
+
 Generation scans the table on the coordinator (about half a minute for the
 3M-row table on a laptop) and reports `status: ready`, the values it indexed
-and the answers it precomputed. Then ask, from the CLI or from Studio:
+and the answers it precomputed. That half minute is why a create schedules
+the compile after its response rather than running it inside the request.
+Then ask, from the CLI or from Studio:
 
 ```powershell
 $env:KAVEON_TOKEN = "kaveon-local-admin-token-not-for-production"

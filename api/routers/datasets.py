@@ -1,6 +1,8 @@
 """Datasets router — /api/v1/datasets."""
 
-from fastapi import APIRouter, Response, HTTPException, Depends
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Response, HTTPException, Depends
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role, can_read, can_write, can_publish
 from middleware.demo import allowed_in_demo
@@ -13,6 +15,43 @@ from routers import reference_guard
 from services import engine_datasets
 
 router = APIRouter()
+log = logging.getLogger(__name__)
+
+
+def _compile_dlm(dataset_id: str, actor: str, role: str) -> None:
+    """Compile a new dataset's DLM artifact, out of the request's way.
+
+    A dataset with no artifact answers nothing on the DLM path, which is the
+    product's primary path: until something compiles it, the context banner
+    reads "No context compiled yet" and every question falls through. Nothing
+    was compiling it. `create_dataset` returned the row and stopped, and the
+    only caller of the generate endpoint was the bulk repair action in
+    Settings, so a dataset created the ordinary way stayed mute until someone
+    noticed and pressed a button.
+
+    Failure is logged, never raised. The dataset exists and is valid either
+    way, and a background task that raises would turn a successful create into
+    a 500 the client has already been told did not happen. A dataset whose
+    compile failed is recoverable -- the generate endpoint is idempotent and
+    still there -- so the honest outcome is a created dataset and a logged
+    reason, not a lost one.
+    """
+    try:
+        from dlm import engine as dlm_engine
+
+        result = dlm_engine.generate_dlm(dataset_id, actor=actor, role=role)
+        if not result.get("ok"):
+            log.warning(
+                "dlm_autocompile_declined dataset=%s reason=%s",
+                dataset_id, result.get("reason"),
+            )
+    except Exception as error:  # noqa: BLE001 - the create must still stand
+        log.warning(
+            "dlm_autocompile_failed dataset=%s type=%s",
+            dataset_id, type(error).__name__,
+        )
+
+
 NO_CACHE = {
     "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache",
@@ -95,6 +134,12 @@ def get_columns(dataset_id: str, response: Response, ctx: UserContext = Depends(
 def create_dataset(
     data: DatasetCreate,
     ctx: UserContext = Depends(require_min_role("Analyst")),
+    # Last, and optional, so `create_dataset(body, ctx)` keeps working: this
+    # route is called directly by tests and internal callers, and taking the
+    # second position would have silently bound a UserContext to it. FastAPI
+    # injects by annotation rather than position, so the served path is
+    # unaffected; `lab.py` carries the same shape for the same reason.
+    background_tasks: BackgroundTasks = None,
 ):
     # A create has no prior value for any field, so "omitted" and "sent as
     # null" mean the same thing here — the field has no value — and dropping
@@ -109,7 +154,15 @@ def create_dataset(
     # An Engine-backed dataset takes its names, columns and semantics from
     # the Engine's table definition; the caller names the table by its id.
     payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role)
-    return svc.create_dataset(payload, ctx.email)
+    created = svc.create_dataset(payload, ctx.email)
+    # Compiled after the response, not during it: profiling a dataset reads
+    # its source, and a create that blocked on that would be slow in exactly
+    # the case the DLM matters most -- a large table. The client gets its 201
+    # immediately and the artifact appears behind it.
+    dataset_id = created.get("id") if isinstance(created, dict) else None
+    if dataset_id and background_tasks is not None:
+        background_tasks.add_task(_compile_dlm, str(dataset_id), ctx.email, ctx.role)
+    return created
 
 
 def _apply_dataset_update(dataset_id: str, data: DatasetUpdate, ctx: UserContext) -> dict:
