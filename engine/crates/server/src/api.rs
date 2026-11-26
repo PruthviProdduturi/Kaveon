@@ -16297,6 +16297,8 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             total.rows_emitted += scan.rows_emitted;
             total.compressed_bytes_selected += scan.compressed_bytes_selected;
             total.compressed_bytes_read += scan.compressed_bytes_read;
+            total.remote_bytes_read += scan.remote_bytes_read;
+            total.local_bytes_read += scan.local_bytes_read;
             total.row_filter_rows_examined += scan.row_filter_rows_examined;
             total.row_filter_rows_admitted += scan.row_filter_rows_admitted;
             total.runtime_filters_applied += scan.runtime_filters_applied;
@@ -24086,6 +24088,8 @@ mod tests {
             rows_selected,
             compressed_bytes_selected: 12,
             compressed_bytes_read: 5,
+            remote_bytes_read: 1,
+            local_bytes_read: 4,
             row_filter_rows_examined: rows_selected,
             row_filter_rows_admitted: rows_emitted,
             runtime_filters_applied: 1,
@@ -24108,6 +24112,8 @@ mod tests {
         assert_eq!(scans[0].rows_emitted, 70);
         assert_eq!(scans[0].rows_selected, 110);
         assert_eq!(scans[0].compressed_bytes_read, 10);
+        assert_eq!(scans[0].remote_bytes_read, 2);
+        assert_eq!(scans[0].local_bytes_read, 8);
         assert_eq!(scans[0].row_filter_rows_examined, 110);
         assert_eq!(scans[0].row_filter_rows_admitted, 70);
         assert_eq!(scans[0].runtime_filters_applied, 2);
