@@ -134,6 +134,47 @@ fn patindex_regex(pattern: &str) -> Result<regex::Regex> {
     compiled_regex_for("PATINDEX", &source)
 }
 
+fn replace_text<O: OffsetSizeTrait>(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    let row_values = |row| -> Result<_> {
+        let source = text_value(&args[0], row)?;
+        let search = text_value(&args[1], row)?;
+        let replacement = match args.get(2) {
+            Some(arg) => text_value(arg, row)?,
+            None => Some(""),
+        };
+        Ok(source.zip(search).zip(replacement))
+    };
+    let bytes = (0..num_rows).try_fold(0usize, |total, row| {
+        let Some(((source, search), replacement)) = row_values(row)? else {
+            return Ok(total);
+        };
+        let size = if search.len() == replacement.len() {
+            Some(source.len())
+        } else {
+            // match_indices also visits each Unicode scalar boundary for an
+            // empty search, including the end of the string.
+            let count = source.match_indices(search).count();
+            let kept = source.len() - count * search.len();
+            count
+                .checked_mul(replacement.len())
+                .and_then(|n| kept.checked_add(n))
+        };
+        size.and_then(|n| total.checked_add(n))
+            .ok_or_else(|| KaveonError::Execution("REPLACE output size overflow".into()))
+    })?;
+    reserve_string_expansion(bytes as u64, num_rows)?;
+    let mut result = GenericStringBuilder::<O>::with_capacity(num_rows, bytes);
+    for row in 0..num_rows {
+        match row_values(row)? {
+            Some(((source, search), replacement)) => {
+                result.append_value(source.replace(search, replacement))
+            }
+            None => result.append_null(),
+        }
+    }
+    Ok(Arc::new(result.finish()))
+}
+
 fn reserve_string_expansion(bytes: u64, rows: usize) -> Result<()> {
     const MAX_EXPANSION_BYTES: u64 = 64 * 1024 * 1024;
     if bytes > MAX_EXPANSION_BYTES {
@@ -10300,46 +10341,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             Ok(Arc::new(builder.finish()))
         }
         "REPLACE" => {
-            check_arity(name, args, 3)?;
-            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
-                let Some(source) = text_value(&args[0], index)? else {
-                    return Ok(total);
-                };
-                total
-                    .checked_add(source.len() as u64)
-                    .ok_or_else(|| KaveonError::Execution("REPLACE output size overflow".into()))
-            })?;
-            reserve_string_expansion(bytes, num_rows)?;
+            if !(2..=3).contains(&args.len()) {
+                return Err(KaveonError::Execution(
+                    "REPLACE requires 2 or 3 arguments".into(),
+                ));
+            }
             if args[0].data_type() == &DataType::LargeUtf8 {
-                let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
-                for row in 0..num_rows {
-                    match (
-                        text_value(&args[0], row)?,
-                        text_value(&args[1], row)?,
-                        text_value(&args[2], row)?,
-                    ) {
-                        (Some(source), Some(from), Some(to)) => {
-                            result.append_value(source.replace(from, to))
-                        }
-                        _ => result.append_null(),
-                    }
-                }
-                Ok(Arc::new(result.finish()))
+                replace_text::<i64>(args, num_rows)
             } else {
-                let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
-                for row in 0..num_rows {
-                    match (
-                        text_value(&args[0], row)?,
-                        text_value(&args[1], row)?,
-                        text_value(&args[2], row)?,
-                    ) {
-                        (Some(source), Some(from), Some(to)) => {
-                            result.append_value(source.replace(from, to))
-                        }
-                        _ => result.append_null(),
-                    }
-                }
-                Ok(Arc::new(result.finish()))
+                replace_text::<i32>(args, num_rows)
             }
         }
         "TRANSLATE" => {
@@ -26741,6 +26751,26 @@ mod tests {
             values.iter().collect::<Vec<_>>(),
             vec![Some(true), Some(true), None]
         );
+    }
+
+    #[test]
+    fn replace_checks_the_expanded_size_and_supports_removal() {
+        let strings = |s: &str| -> ArrayRef { Arc::new(StringArray::from(vec![s])) };
+        let result = replace_text::<i32>(&[strings("é漢漢"), strings("漢")], 1).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "é");
+        let args = [
+            strings(&"a".repeat(8193)),
+            strings("a"),
+            strings(&"b".repeat(8192)),
+        ];
+        assert!(
+            replace_text::<i32>(&args, 1)
+                .unwrap_err()
+                .to_string()
+                .contains("output exceeds")
+        );
+        let result = replace_text::<i32>(&[strings("é漢"), strings(""), strings("ab")], 1).unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "abéab漢ab");
     }
 
     #[test]
