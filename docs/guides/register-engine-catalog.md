@@ -183,9 +183,7 @@ datasets, and **nothing in the installer does either**: the platform chart's
 `init-job.yaml` only applies the schema and writes one `catalog_sources` row,
 and it is gated off entirely in retirement and rehearsal mode — the modes
 `deploy-kaveon-aks.sh` always runs in. A new cluster over the same lake comes up
-with a queryable catalog and an empty dataset list. The `demo/` loaders do not
-fill it either; they target the retired Neon Postgres demo
-(`NEON_URL`), not the Engine.
+with a queryable catalog and an empty dataset list.
 
 Exactly two scripts create datasets, and they answer different needs:
 
