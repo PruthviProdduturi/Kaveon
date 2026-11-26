@@ -4030,6 +4030,22 @@ fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, Str
         .collect())
 }
 
+fn trino_decimal_operand(ty: &str) -> Option<(u8, i8)> {
+    match ty {
+        "tinyint" => Some((3, 0)),
+        "smallint" => Some((5, 0)),
+        "integer" => Some((10, 0)),
+        "bigint" => Some((19, 0)),
+        _ => {
+            let (p, s) = ty
+                .strip_prefix("decimal(")?
+                .strip_suffix(')')?
+                .split_once(',')?;
+            Some((p.trim().parse().ok()?, s.trim().parse().ok()?))
+        }
+    }
+}
+
 fn trino_expr_type(expression: &Expr) -> String {
     match expression {
         Expr::Cast { data_type, .. } => match data_type {
@@ -4163,10 +4179,21 @@ fn trino_expr_type(expression: &Expr) -> String {
             BinaryOp::Plus
             | BinaryOp::Minus
             | BinaryOp::Multiply
+            | BinaryOp::TrinoMultiply
             | BinaryOp::Divide
             | BinaryOp::Modulo => {
                 let left_type = trino_expr_type(left);
                 let right_type = trino_expr_type(right);
+                if *op == BinaryOp::TrinoMultiply
+                    && (left_type.starts_with("decimal(") || right_type.starts_with("decimal("))
+                    && let (Some((lp, ls)), Some((rp, rs))) = (
+                        trino_decimal_operand(&left_type),
+                        trino_decimal_operand(&right_type),
+                    )
+                {
+                    let (p, s) = kaveon_core::expr::trino_product_type(lp, ls, rp, rs);
+                    return format!("decimal({p},{s})");
+                }
                 if left_type == "double" || right_type == "double" {
                     "double".to_owned()
                 } else if left_type == "integer" && right_type == "integer" {
@@ -26333,6 +26360,14 @@ mod streamed_root_tests {
             ]
         );
         assert!(trino_output_metadata("SELECT * FROM orders").is_err());
+        let product = trino_output_metadata(
+            "SELECT CAST(2 AS BIGINT) * CAST(0.01 AS DECIMAL(3,2)) AS scaled",
+        )
+        .unwrap();
+        assert_eq!(
+            product,
+            vec![("scaled".to_owned(), "decimal(22,2)".to_owned(), true)]
+        );
     }
 
     #[test]

@@ -1190,6 +1190,7 @@ fn to_compare_op(op: BinaryOp) -> Option<CompareOp> {
         BinaryOp::Plus
         | BinaryOp::Minus
         | BinaryOp::Multiply
+        | BinaryOp::TrinoMultiply
         | BinaryOp::Divide
         | BinaryOp::Modulo
         | BinaryOp::StringConcat => None,

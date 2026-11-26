@@ -1051,6 +1051,7 @@ fn eval_binary_op(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<Arr
         BinaryOp::Ge => Ok(Arc::new(comparison(left, right, CompareKind::Ge)?)),
         BinaryOp::Plus
         | BinaryOp::Minus
+        | BinaryOp::TrinoMultiply
         | BinaryOp::Multiply
         | BinaryOp::Divide
         | BinaryOp::Modulo => arithmetic(left, op, right),
@@ -1383,7 +1384,12 @@ fn arithmetic_with_literal(
     use arrow::array::{Datum, Scalar};
     if !matches!(
         op,
-        BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo
+        BinaryOp::Plus
+            | BinaryOp::Minus
+            | BinaryOp::TrinoMultiply
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Modulo
     ) {
         return Ok(None);
     }
@@ -1398,6 +1404,15 @@ fn arithmetic_with_literal(
         _ => return Ok(None),
     };
     let array = decode_dictionary(&evaluate(expression, batch)?)?;
+    if matches!(array.data_type(), DataType::Decimal128(..)) && literal_type == DataType::Int64 {
+        let constant = literal_to_array(literal, array.len())?;
+        return if literal_on_left {
+            arithmetic(&constant, op, &array)
+        } else {
+            arithmetic(&array, op, &constant)
+        }
+        .map(Some);
+    }
     let integer_like =
         |data_type: &DataType| is_integer(data_type) || matches!(data_type, DataType::Date32);
     // The same meeting types as coerce_numeric_pair: integers with an
@@ -1433,7 +1448,7 @@ fn arithmetic_with_literal(
     let result = match op {
         BinaryOp::Plus => compute::kernels::numeric::add(l, r)?,
         BinaryOp::Minus => compute::kernels::numeric::sub(l, r)?,
-        BinaryOp::Multiply => compute::kernels::numeric::mul(l, r)?,
+        BinaryOp::TrinoMultiply | BinaryOp::Multiply => compute::kernels::numeric::mul(l, r)?,
         BinaryOp::Divide => compute::kernels::numeric::div(l, r)?,
         BinaryOp::Modulo => compute::kernels::numeric::rem(l, r)?,
         _ => unreachable!(),
@@ -1449,6 +1464,7 @@ fn try_arithmetic(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             op,
             BinaryOp::Plus
                 | BinaryOp::Minus
+                | BinaryOp::TrinoMultiply
                 | BinaryOp::Multiply
                 | BinaryOp::Divide
                 | BinaryOp::Modulo
@@ -1515,7 +1531,7 @@ where
     let checked = match op {
         BinaryOp::Plus => T::Native::add_checked,
         BinaryOp::Minus => T::Native::sub_checked,
-        BinaryOp::Multiply => T::Native::mul_checked,
+        BinaryOp::TrinoMultiply | BinaryOp::Multiply => T::Native::mul_checked,
         BinaryOp::Divide => T::Native::div_checked,
         BinaryOp::Modulo => T::Native::mod_checked,
         _ => unreachable!(),
@@ -1528,6 +1544,78 @@ where
     )
 }
 
+// Match the full range of the integer type, independently of the values in
+// this particular batch. A signed BIGINT fits into DECIMAL(19,0).
+fn integer_as_decimal(array: &ArrayRef) -> Result<Option<ArrayRef>> {
+    let precision = match array.data_type() {
+        DataType::Int8 | DataType::UInt8 => 3,
+        DataType::Int16 | DataType::UInt16 => 5,
+        DataType::Int32 | DataType::UInt32 => 10,
+        DataType::Int64 => 19,
+        DataType::UInt64 => 20,
+        _ => return Ok(None),
+    };
+    Ok(Some(compute::cast(
+        array,
+        &DataType::Decimal128(precision, 0),
+    )?))
+}
+
+fn mixed_integer_decimal(
+    left: &ArrayRef,
+    right: &ArrayRef,
+) -> Result<Option<(ArrayRef, ArrayRef)>> {
+    if matches!(left.data_type(), DataType::Decimal128(..)) {
+        return Ok(integer_as_decimal(right)?.map(|r| (Arc::clone(left), r)));
+    }
+    if matches!(right.data_type(), DataType::Decimal128(..)) {
+        return Ok(integer_as_decimal(left)?.map(|l| (l, Arc::clone(right))));
+    }
+    Ok(None)
+}
+
+fn trino_decimal_product(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    precision: u8,
+    scale: i8,
+    reduction: i8,
+) -> Result<ArrayRef> {
+    let values = if reduction == 0 {
+        let product = compute::kernels::numeric::mul(left, right)?;
+        product
+            .as_primitive::<arrow::datatypes::Decimal128Type>()
+            .clone()
+    } else {
+        // The reference checks the 128-bit product before rounding it.
+        // Divide once, rounding halfway cases away from zero.
+        let divisor = 10_i128.pow(reduction as u32);
+        let mut out = Decimal128Builder::with_capacity(left.len());
+        let l = left.as_primitive::<arrow::datatypes::Decimal128Type>();
+        let r = right.as_primitive::<arrow::datatypes::Decimal128Type>();
+        for (a, b) in l.iter().zip(r.iter()) {
+            if let (Some(a), Some(b)) = (a, b) {
+                let value = a.checked_mul(b).ok_or_else(|| {
+                    arrow::error::ArrowError::ArithmeticOverflow(
+                        "decimal multiplication overflow".into(),
+                    )
+                })?;
+                let rounded = value / divisor
+                    + if (value % divisor).abs() >= divisor / 2 {
+                        value.signum()
+                    } else {
+                        0
+                    };
+                out.append_value(rounded);
+            } else {
+                out.append_null();
+            }
+        }
+        out.finish()
+    };
+    Ok(Arc::new(values.with_precision_and_scale(precision, scale)?))
+}
+
 fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRef> {
     // Arrow decimal arithmetic uses both declared precisions and scales to
     // derive the result type. Aligning or widening them here changes it.
@@ -1536,17 +1624,27 @@ fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRe
         (DataType::Decimal128(..), DataType::Decimal128(..))
     ) {
         (Arc::clone(left), Arc::clone(right))
+    } else if let Some(pair) = mixed_integer_decimal(left, right)? {
+        pair
     } else {
         coerce_numeric_pair(left, right)?
     };
     let result: ArrayRef = match (left.data_type(), right.data_type()) {
+        (DataType::Decimal128(lp, ls), DataType::Decimal128(rp, rs))
+            if op == BinaryOp::TrinoMultiply && *ls >= 0 && *rs >= 0 =>
+        {
+            let (precision, scale) = kaveon_core::expr::trino_product_type(*lp, *ls, *rp, *rs);
+            trino_decimal_product(&left, &right, precision, scale, ls + rs - scale)?
+        }
         (DataType::Int32, DataType::Int32)
         | (DataType::Int64, DataType::Int64)
         | (DataType::Float64, DataType::Float64)
         | (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => match op {
             BinaryOp::Plus => compute::kernels::numeric::add(&left, &right)?,
             BinaryOp::Minus => compute::kernels::numeric::sub(&left, &right)?,
-            BinaryOp::Multiply => compute::kernels::numeric::mul(&left, &right)?,
+            BinaryOp::TrinoMultiply | BinaryOp::Multiply => {
+                compute::kernels::numeric::mul(&left, &right)?
+            }
             BinaryOp::Divide => compute::kernels::numeric::div(&left, &right)?,
             BinaryOp::Modulo => compute::kernels::numeric::rem(&left, &right)?,
             _ => unreachable!(),
@@ -1557,6 +1655,14 @@ fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRe
             )));
         }
     };
+    // Arrow checks the signed i128 range. It includes 39-digit numbers
+    // that cannot be represented by a SQL DECIMAL(38,s).
+    if matches!(result.data_type(), DataType::Decimal128(38, _)) {
+        result
+            .as_primitive::<arrow::datatypes::Decimal128Type>()
+            .validate_decimal_precision(38)
+            .map_err(|e| arrow::error::ArrowError::ArithmeticOverflow(e.to_string()))?;
+    }
     Ok(result)
 }
 
@@ -1575,6 +1681,9 @@ fn coerce_numeric_pair(left: &ArrayRef, right: &ArrayRef) -> Result<(ArrayRef, A
     }
     if left.data_type() == right.data_type() {
         return Ok((Arc::clone(left), Arc::clone(right)));
+    }
+    if let Some((l, r)) = mixed_integer_decimal(left, right)? {
+        return coerce_numeric_pair(&l, &r);
     }
     // Comparisons need a shared scale, including BETWEEN and IN. Reserve
     // enough digits for both integer parts before rescaling either side.
@@ -27236,6 +27345,75 @@ mod tests {
         assert_eq!(
             result.values().iter().collect::<Vec<_>>(),
             vec![false, true, true, false]
+        );
+    }
+
+    #[test]
+    fn trino_product_rounds_both_signs_and_preserves_the_native_product_type() {
+        let decimal = |v, p, s| -> ArrayRef {
+            Arc::new(
+                Decimal128Array::from(v)
+                    .with_precision_and_scale(p, s)
+                    .unwrap(),
+            )
+        };
+        let left = decimal(vec![Some(1_i128), Some(-1), None], 21, 20);
+        let right = decimal(vec![Some(5000_i128); 3], 21, 20);
+        let values = arithmetic(&left, BinaryOp::TrinoMultiply, &right).unwrap();
+        assert_eq!(values.data_type(), &DataType::Decimal128(38, 36));
+        assert_eq!(
+            values
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(-1), None]
+        );
+        let x = decimal(vec![Some(120_i128)], 5, 2);
+        assert_eq!(
+            arithmetic(&x, BinaryOp::TrinoMultiply, &x)
+                .unwrap()
+                .data_type(),
+            &DataType::Decimal128(10, 4)
+        );
+        assert_eq!(
+            arithmetic(&x, BinaryOp::Multiply, &x).unwrap().data_type(),
+            &DataType::Decimal128(11, 4)
+        );
+    }
+
+    #[test]
+    fn decimal_integer_math_checks_sql_precision_and_preserves_integer_digits() {
+        let integral: ArrayRef = Arc::new(Int64Array::from(vec![9_007_199_254_740_993_i64]));
+        let cent: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![1])
+                .with_precision_and_scale(3, 2)
+                .unwrap(),
+        );
+        let product = arithmetic(&integral, BinaryOp::Multiply, &cent).unwrap();
+        assert_eq!(
+            product
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(0),
+            9_007_199_254_740_993
+        );
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![5 * 10_i128.pow(37), 12])
+                .with_precision_and_scale(38, 0)
+                .unwrap(),
+        );
+        let twos: ArrayRef = Arc::new(Int32Array::from(vec![2, 2]));
+        assert!(matches!(
+            arithmetic(&values, BinaryOp::Multiply, &twos),
+            Err(KaveonError::Arrow(
+                arrow::error::ArrowError::ArithmeticOverflow(_)
+            ))
+        ));
+        let safe = mask_arithmetic_errors(&values, BinaryOp::Multiply, &twos).unwrap();
+        assert_eq!(
+            safe.as_primitive::<arrow::datatypes::Decimal128Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None, Some(24)]
         );
     }
 

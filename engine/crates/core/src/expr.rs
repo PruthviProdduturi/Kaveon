@@ -347,6 +347,21 @@ pub enum BinaryOp {
     Divide,
     Modulo,
     StringConcat,
+    /// Uses Trino's decimal precision and scale rules. Other numeric types
+    /// use the same checked multiplication as the native SQL dialect.
+    TrinoMultiply,
+}
+
+/// Trino 483 caps precision at 38 and retains up to six fractional digits
+/// when the two operands require more than 32 integral digits.
+pub fn trino_product_type(lp: u8, ls: i8, rp: u8, rs: i8) -> (u8, i8) {
+    let precision = i16::from(lp) + i16::from(rp);
+    let scale = i16::from(ls) + i16::from(rs);
+    let integral = precision - scale;
+    (
+        precision.min(38) as u8,
+        scale.min(if integral > 32 { 6 } else { 38 - integral }) as i8,
+    )
 }
 
 /// The aggregate functions the SQL front end recognises, by their

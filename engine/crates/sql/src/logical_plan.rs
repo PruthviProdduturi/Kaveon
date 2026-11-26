@@ -527,7 +527,7 @@ pub fn trino_logical_plan(
 ) -> Result<LogicalPlan> {
     let mut statements = parse_sql(sql)?;
     bind_parameters(&mut statements, parameters, named_parameters)?;
-    crate::trino_integers::bind(&mut statements);
+    crate::trino_arithmetic::bind(&mut statements);
     lower_statements(statements, true, approximate)
 }
 
@@ -5376,6 +5376,7 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
         ast::BinaryOperator::Plus => Some(BinaryOp::Plus),
         ast::BinaryOperator::Minus => Some(BinaryOp::Minus),
         ast::BinaryOperator::Multiply => Some(BinaryOp::Multiply),
+        ast::BinaryOperator::Custom(symbol) if symbol == "*" => Some(BinaryOp::TrinoMultiply),
         ast::BinaryOperator::Divide => Some(BinaryOp::Divide),
         ast::BinaryOperator::Modulo => Some(BinaryOp::Modulo),
         ast::BinaryOperator::StringConcat => Some(BinaryOp::StringConcat),
@@ -6333,6 +6334,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                     BinaryOp::Plus
                     | BinaryOp::Minus
                     | BinaryOp::Multiply
+                    | BinaryOp::TrinoMultiply
                     | BinaryOp::Divide
                     | BinaryOp::Modulo,
                 ..

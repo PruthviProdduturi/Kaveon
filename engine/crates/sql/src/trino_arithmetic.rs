@@ -1,4 +1,4 @@
-//! Give integer literals their Trino type in value projections and arithmetic.
+//! Bind Trino integer literal widths and decimal multiplication semantics.
 //! Structural numbers such as ORDER BY ordinals and LIMIT must stay literals.
 use std::ops::ControlFlow;
 
@@ -9,13 +9,13 @@ use sqlparser::ast::{
 
 pub(crate) fn bind(statements: &mut [Statement]) {
     for statement in statements {
-        let _ = statement.visit(&mut IntegerLiterals);
+        let _ = statement.visit(&mut TrinoArithmetic);
     }
 }
 
-struct IntegerLiterals;
+struct TrinoArithmetic;
 
-impl VisitorMut for IntegerLiterals {
+impl VisitorMut for TrinoArithmetic {
     type Break = ();
 
     fn post_visit_expr(&mut self, expr: &mut Expr) -> ControlFlow<()> {
@@ -31,6 +31,11 @@ impl VisitorMut for IntegerLiterals {
         {
             type_literal(left);
             type_literal(right);
+            // Preserve the printed SQL while passing the dialect through
+            // lowering into worker fragments, including prepared queries.
+            if *op == BinaryOperator::Multiply {
+                *op = BinaryOperator::Custom("*".into());
+            }
         }
         ControlFlow::Continue(())
     }
