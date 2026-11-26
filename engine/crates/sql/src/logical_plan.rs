@@ -9896,12 +9896,10 @@ mod tests {
 
     #[test]
     fn try_rejects_unsupported_expression_with_actionable_error() {
-        let error = sql_to_logical_plan("SELECT TRY(value / divisor) FROM t").unwrap_err();
-        assert!(
-            error.to_string().contains(
-                "TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET"
-            )
-        );
+        let error = sql_to_logical_plan("SELECT TRY(LOWER(value)) FROM t").unwrap_err();
+        assert!(error.to_string().contains(
+            "TRY currently supports arithmetic, CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET"
+        ));
     }
 
     #[test]
