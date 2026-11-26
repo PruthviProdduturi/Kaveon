@@ -17,6 +17,11 @@ Dependencies exported:
 """
 
 import secrets
+import re
+from contextvars import ContextVar
+from uuid import UUID
+
+from services.users import ROLE_LEVELS, resolve_role
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -28,11 +33,55 @@ from config import settings
 
 # ── Azure AD JWKS client (kept for backward compat when provider=azure_ad) ───
 
-_TENANT_ID = settings.AZURE_TENANT_ID or "common"
+_TENANT_ID = (settings.KAVEON_ENTRA_TENANT_ID if settings.KAVEON_ENTRA_APP_ROLES else settings.AZURE_TENANT_ID) or "common"
+_CLIENT_ID = settings.KAVEON_ENTRA_CLIENT_ID if settings.KAVEON_ENTRA_APP_ROLES else settings.AZURE_CLIENT_ID
 _AAD_JWKS_URL = f"https://login.microsoftonline.com/{_TENANT_ID}/discovery/v2.0/keys"
 _GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 
-_AAD_CONFIGURED = bool(settings.AZURE_CLIENT_ID and settings.AZURE_TENANT_ID)
+_AAD_CONFIGURED = bool(_CLIENT_ID and _TENANT_ID != "common")
+
+
+# A request-scoped identity for Engine calls. Background jobs have no user context.
+entra_caller: ContextVar[tuple[str, str, tuple[str, ...]] | None] = ContextVar("entra_caller", default=None)
+
+
+def directory_principal(tid, oid):
+    try:
+        if tid != _TENANT_ID or str(UUID(tid)) != tid:
+            return None
+        return f"entra:{tid}:{UUID(oid)}"
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def trusted_directory_request(request):
+    """Resolve the caller once for API authorization and downstream Engine requests."""
+    headers = request.headers
+    if settings.KAVEON_PROXY_SECRET and secrets.compare_digest(headers.get("x-proxy-secret", ""), settings.KAVEON_PROXY_SECRET):
+        parts = headers.get("x-user-entra-principal", "").split(":")
+        principal = directory_principal(*parts[1:]) if len(parts) == 3 and parts[0] == "entra" else None
+        email = headers.get("x-user-email", "").lower()
+        role = headers.get("x-user-role", "")
+        if principal and "@" in email and role in ROLE_LEVELS:
+            catalogs = headers.get("x-user-catalog-claims", "").split(",")
+            return email, role, principal, _catalogs(catalogs)
+        return None
+    scheme, _, token = headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    claims = _azure_claims(token)
+    if not claims or "access_as_user" not in str(claims.get("scp", "")).split():
+        return None
+    email = _email_from_payload(claims)
+    role = resolve_role(email, _roles_from_payload(claims))
+    principal = directory_principal(claims.get("tid"), claims.get("oid"))
+    roles = claims.get("roles", [])
+    catalogs = (r[len("Kaveon.Query."):] for r in roles if isinstance(r, str) and r.startswith("Kaveon.Query."))
+    return (email, role, principal, _catalogs(catalogs)) if email and role and principal else None
+
+
+def _catalogs(names):
+    return tuple(sorted({name for name in names if re.fullmatch(r"[A-Za-z0-9_]{1,64}", name) and name.lower() != "kaveondb"}))
 
 
 # ── Proxy-injected identity (NextAuth flow, à la Forge) ───────────────────────
@@ -44,6 +93,9 @@ _AAD_CONFIGURED = bool(settings.AZURE_CLIENT_ID and settings.AZURE_TENANT_ID)
 
 def _proxy_identity(request: Request) -> Optional[tuple[str, str, list[str], str]]:
     """Return (email, role, roles, name) from trusted proxy headers, or None."""
+    if settings.KAVEON_ENTRA_APP_ROLES:
+        caller = getattr(request.state, "directory_caller", None)
+        return (caller[0], caller[1], [caller[1]], caller[0]) if caller else None
     # Local dev bypass — no proxy, no secret.
     dev_email = settings.KAVEON_DEV_USER_EMAIL
     if dev_email and "@" in dev_email and settings.NODE_ENV != "production":
@@ -122,17 +174,14 @@ def _roles_from_payload(payload: dict) -> list[str]:
     raw = payload.get("roles", [])
     if not isinstance(raw, list):
         return []
-    return [r for r in raw if r in VALID]
+    return [r for r in raw if isinstance(r, str) and r in VALID]
 
 
-def _decode_azure_ad(token: str) -> Optional[tuple[str, list[str]]]:
-    """Verify an Azure AD RS256 token. Returns (email, roles) or None."""
+def _azure_claims(token: str) -> Optional[dict]:
+    """Verify the deployment tenant, client audience, signature and expiry."""
     if _aad_jwks_client is None:
         return None
-    _valid_audiences = [
-        settings.AZURE_CLIENT_ID,
-        f"api://{settings.AZURE_CLIENT_ID}",
-    ]
+    _valid_audiences = [_CLIENT_ID] if settings.KAVEON_ENTRA_APP_ROLES else [_CLIENT_ID, f"api://{_CLIENT_ID}"]
     try:
         signing_key = _aad_jwks_client.get_signing_key_from_jwt(token)
         payload = jwt.decode(
@@ -142,18 +191,24 @@ def _decode_azure_ad(token: str) -> Optional[tuple[str, list[str]]]:
             audience=_valid_audiences,
             options={"verify_exp": True, "require": ["exp", "iss", "sub", "tid"]},
         )
-        if payload.get("iss") not in (f"https://login.microsoftonline.com/{settings.AZURE_TENANT_ID}/v2.0", f"https://sts.windows.net/{settings.AZURE_TENANT_ID}/"):
+        issuers = [f"https://login.microsoftonline.com/{_TENANT_ID}/v2.0"]
+        if not settings.KAVEON_ENTRA_APP_ROLES:
+            issuers.append(f"https://sts.windows.net/{_TENANT_ID}/")
+        if payload.get("iss") not in issuers:
             return None
-        if payload.get("tid") != settings.AZURE_TENANT_ID:
+        if payload.get("tid") != _TENANT_ID:
             return None
-        email = _email_from_payload(payload)
-        if not email:
-            return None
-        return (email, _roles_from_payload(payload))
+        return payload
     except (ExpiredSignatureError, InvalidTokenError):
         return None
     except Exception:
         return None
+
+
+def _decode_azure_ad(token: str) -> Optional[tuple[str, list[str]]]:
+    payload = _azure_claims(token)
+    email = _email_from_payload(payload) if payload else None
+    return (email, _roles_from_payload(payload)) if email else None
 
 
 def _decode_google(token: str) -> Optional[tuple[str, list[str]]]:
@@ -195,7 +250,7 @@ def _decode_token(token: str) -> Optional[tuple[str, list[str]]]:
     Decode and verify a Bearer JWT using the active provider.
     Returns (email, jwt_roles) or None if invalid/expired.
     """
-    if not token:
+    if settings.KAVEON_ENTRA_APP_ROLES or not token:
         return None
 
     provider = _get_active_provider()

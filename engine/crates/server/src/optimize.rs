@@ -433,6 +433,7 @@ mod tests {
     fn admin() -> Identity {
         Identity {
             principal: "admin@example.com".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Admin,
         }
@@ -441,6 +442,7 @@ mod tests {
     fn analyst() -> Identity {
         Identity {
             principal: "analyst@example.com".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         }

@@ -508,6 +508,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
 
   // Resizable panels
   const [sidebarWidth, setSidebarWidth] = useState(380);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const [editorHeightPx, setEditorHeightPx] = useState<number | null>(null);
 
   const [queries, setQueries] = useState<QueryTab[]>([
@@ -1414,6 +1415,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // wants to edit it rather than just look at the rows. It does not re-run: the
   // preview above already fetched them.
   const insertTableQuery = (table: TableInfo) => {
+    setCatalogOpen(false);
     const qualified = buildQualifiedName(table);
     const snippet = `-- Preview: ${qualified}\n${previewStatement(table)}`;
     const editor = editorRef.current;
@@ -2635,10 +2637,15 @@ return;
       )}
 
       {isAuthenticated && (
-        <div className="main-content" style={embedded ? { height: "calc(100vh - 84px)" } : undefined}>
+        <div className="main-content sql-workbench" style={embedded ? { height: "calc(100vh - 84px)" } : undefined}>
           {/* Sidebar */}
           {!embedded && (
-          <aside className="sidebar" style={{ width: sidebarWidth, minWidth: 240, maxWidth: 600 }}>
+          <>
+          <button type="button" className="template-btn lab-catalog-toggle" aria-controls="lab-catalog-panel"
+            aria-expanded={catalogOpen} onClick={() => setCatalogOpen(!catalogOpen)}>
+            <i className="fas fa-layer-group" aria-hidden="true" /> Catalog
+          </button>
+          <aside id="lab-catalog-panel" className={`sidebar${catalogOpen ? " is-open" : ""}`} style={{ width: sidebarWidth, minWidth: 240, maxWidth: 600 }}>
             {/* The catalog picker is the header: it names what the Lab is
                 reading and is how that is changed, so the panel does not need
                 a heading repeating the product's own name above it. The count
@@ -2940,11 +2947,13 @@ return;
                 ))}
             </div>
           </aside>
+          </>
           )}
 
           {/* Sidebar resize handle */}
           {!embedded && (
           <div
+            className="lab-sidebar-resizer"
             style={{ width: 5, cursor: "col-resize", flexShrink: 0, background: "transparent", zIndex: 10 }}
             onMouseDown={handleSidebarResizeMouseDown}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--border)")}
@@ -3121,7 +3130,8 @@ return;
                 />
               </div>
 
-              <div className="query-templates" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="query-templates">
+                <div className="lab-toolbar-group">
                 {/* ── Execute group ── */}
                 <button
                   type="button"
@@ -3166,14 +3176,16 @@ return;
                 </select>
 
                 {/* ── Templates group (centre) ── */}
-                <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 4px" }} />
+                </div>
+                <div className="lab-toolbar-group">
                 <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Templates</span>
                 <button type="button" className="template-btn" style={{ fontSize: "0.78rem" }} onClick={() => applyTemplate("sample")} title="SELECT TOP 100 * template">Sample</button>
                 <button type="button" className="template-btn" style={{ fontSize: "0.78rem" }} onClick={() => applyTemplate("rowcount")} title="COUNT(*) template">Count</button>
                 <button type="button" className="template-btn" style={{ fontSize: "0.78rem" }} onClick={() => applyTemplate("schema")} title="Schema info template">Schema</button>
 
                 {/* ── Utility group (right) ── */}
-                <div style={{ flex: 1 }} />
+                </div>
+                <div className="lab-toolbar-group lab-toolbar-tools">
                 {/* Offered only where /lab/execute can serve it. A KaveonDB
                     catalog has no estimate route, so the control is absent
                     rather than present and certain to be refused. */}
@@ -3215,7 +3227,6 @@ return;
                     {dialect.label}
                   </a>
                 )}
-                <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
                 <button
                   type="button"
                   className="format-btn"
@@ -3234,6 +3245,7 @@ return;
                 >
                   <i className="fas fa-save" /> Save
                 </button>
+                </div>
               </div>
             </div>
 

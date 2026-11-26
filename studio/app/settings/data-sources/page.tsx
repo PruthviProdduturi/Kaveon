@@ -328,7 +328,7 @@ export default function DataSourcesPage() {
               reads this deployment&rsquo;s lake in place through KaveonDB&rsquo;s catalog
               sources &mdash; see <a href="/settings/storage">Storage</a>. Register a database
               here only to query one that lives outside the lake: Fabric SQL, Azure SQL,
-              PostgreSQL, MySQL or StarRocks.
+              PostgreSQL or StarRocks.
             </p>
           </section>
         ) : !loading && !error && (
@@ -411,7 +411,7 @@ export default function DataSourcesPage() {
                         {tableCounts[ds.id] === undefined
                           ? <i className="fas fa-spinner fa-spin" style={{ fontSize: 11, color: "var(--accent)" }} aria-label="Reading" />
                           : tableCounts[ds.id] ? <span style={{ fontWeight: 600 }}>{tableCounts[ds.id]} tables</span>
-                          : <span style={{ color: "var(--text-muted)" }} title="No table count was taken for this source.">—</span>}
+                          : <span style={{ color: "var(--text-muted)" }} title="External table counts are coming soon.">Coming soon</span>}
                       </td>
                       <td className="actions-cell">
                         <div className="row-actions">
@@ -486,6 +486,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
       setSaving(true);
       setError(null);
 
+      if (formData.type === "Trino") throw new Error("Trino connections are coming soon.");
       const url = isEditing
         ? `${API_BASE}/api/v1/data-sources/${dataSource.id}`
         : `${API_BASE}/api/v1/data-sources`;
@@ -655,10 +656,11 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                     <button
                       key={t}
                       type="button"
+                      disabled={t === "Trino"}
                       onClick={() => setFormData({ ...formData, type: t })}
                       style={{
                         display: "flex", alignItems: "center", gap: "0.5rem",
-                        padding: "0.5rem 0.85rem", borderRadius: 9, cursor: "pointer",
+                        padding: "0.5rem 0.85rem", borderRadius: 9, cursor: t === "Trino" ? "not-allowed" : "pointer",
                         border: `2px solid ${selected ? meta.color : "var(--border)"}`,
                         background: selected ? meta.bg : "var(--bg-surface)",
                         color: selected ? meta.color : "var(--text-secondary)",
@@ -668,7 +670,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
                       }}
                     >
                       {meta.icon}
-                      {meta.label}
+                      {meta.label}{t === "Trino" && " · Coming soon"}
                     </button>
                   );
                 })}
@@ -763,7 +765,7 @@ function AddDataSourceModal({ dataSource, isCopying = false, onClose, onSuccess 
             </Button>
             <Button
               type="submit"
-              disabled={saving}
+              disabled={saving || formData.type === "Trino"}
             >
               {saving ? (
                 <>

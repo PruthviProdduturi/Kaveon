@@ -91,7 +91,7 @@ export function AuthScreen() {
 				const config = await response.json();
 				if (config.enabled) {
 					const token = await preparePublicEntra(config);
-					if (active) setMicrosoftPublicToken(token);
+					if (active) setMicrosoftPublicToken(() => token);
 				}
 			} catch {
 				if (active) setSignInError("Microsoft sign-in could not be prepared. Refresh this page to retry.");
@@ -337,7 +337,7 @@ export function AuthScreen() {
 						{(microsoftProviderEnabled || microsoftPublicToken) && <button
 							type="button"
 							onClick={startMicrosoft}
-							disabled={microsoftPending}
+							disabled={microsoftPending || (!microsoftOAuthEnabled && !microsoftPublicToken)}
 							aria-busy={microsoftPending}
 							style={{ ...btnBase, cursor: microsoftPending ? "wait" : "pointer", opacity: microsoftPending ? 0.7 : 1 }}
 							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}

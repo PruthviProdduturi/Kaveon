@@ -12,6 +12,7 @@ Env keys:
     AUTH_GOOGLE_CLIENT_SECRET   — Fernet-encrypted Google secret
 """
 
+import json
 import os
 import re
 from pathlib import Path
@@ -126,40 +127,7 @@ def upsert_config(data: dict) -> dict:
     return get_config()
 
 
-KAVEON_APP_ROLES = [
-    {
-        "id": "7f6e4b2a-1c3d-4e5f-8a9b-0d1e2f3c4b5a",
-        "displayName": "Viewer",
-        "value": "Viewer",
-        "description": "Read-only access to published content",
-        "allowedMemberTypes": ["User"],
-        "isEnabled": True,
-    },
-    {
-        "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
-        "displayName": "Analyst",
-        "value": "Analyst",
-        "description": "Create and edit own content, SQL Lab access",
-        "allowedMemberTypes": ["User"],
-        "isEnabled": True,
-    },
-    {
-        "id": "9a8b7c6d-5e4f-3a2b-1c0d-ef9a8b7c6d5e",
-        "displayName": "Editor",
-        "value": "Editor",
-        "description": "Create, edit and publish any content",
-        "allowedMemberTypes": ["User"],
-        "isEnabled": True,
-    },
-    {
-        "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-        "displayName": "Admin",
-        "value": "Admin",
-        "description": "Full access including user and data source management",
-        "allowedMemberTypes": ["User"],
-        "isEnabled": True,
-    },
-]
+KAVEON_APP_ROLES = json.loads(Path(__file__).with_name("entra_roles.json").read_text(encoding="utf-8"))
 
 
 # The most this will repeat of an upstream error body.

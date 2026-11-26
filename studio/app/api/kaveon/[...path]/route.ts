@@ -19,7 +19,7 @@ import { hasConfiguredSignInProvider } from "../../../../auth/providerConfig";
 const API_BASE = (process.env.API_URL || "http://localhost:8080").replace(/\/+$/, "");
 const PROXY_SECRET = process.env.KAVEON_PROXY_SECRET || "";
 
-const DEV_BYPASS = !hasConfiguredSignInProvider() &&
+const DEV_BYPASS = process.env.KAVEON_ENTRA_APP_ROLES !== "true" && !hasConfiguredSignInProvider() &&
 	(process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") &&
 	process.env.KAVEON_DEV_USER_EMAIL;
 
@@ -27,6 +27,8 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
 	let email = "";
 	let name = "";
 	let role = "Viewer";
+	let entraPrincipal = "";
+	let catalogs: string[] = [];
 
 	if (DEV_BYPASS) {
 		// Explicit local mode: skip auth() and use the configured development identity.
@@ -38,10 +40,12 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
 		if (!session?.user) {
 			return Response.json({ detail: { code: "unauthorized", message: "Not authenticated" } }, { status: 401 });
 		}
-		const user = session.user as { email?: string | null; name?: string | null; role?: string };
+		const user = session.user as { email?: string | null; name?: string | null; role?: string; entraPrincipal?: string; catalogClaims?: string[] };
 		email = user.email ?? "";
 		name = user.name ?? "";
 		role = user.role ?? "Viewer";
+		entraPrincipal = user.entraPrincipal ?? "";
+		catalogs = user.catalogClaims ?? [];
 	}
 
 	const { path } = await ctx.params;
@@ -50,6 +54,11 @@ async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[]
 	const headers = new Headers(req.headers);
 	headers.delete("host");
 	headers.delete("content-length");
+	headers.delete("x-proxy-secret");
+	headers.delete("x-user-entra-principal");
+	headers.delete("x-user-catalog-claims");
+	if (entraPrincipal && catalogs.length) headers.set("x-user-catalog-claims", catalogs.join(","));
+	if (entraPrincipal) headers.set("x-user-entra-principal", entraPrincipal);
 	headers.set("x-user-email", email);
 	headers.set("x-user-name", name);
 	headers.set("x-user-role", role);

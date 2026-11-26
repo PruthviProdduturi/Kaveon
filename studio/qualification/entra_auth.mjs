@@ -74,3 +74,21 @@ test("rejects wrong audience, issuer, expired token, scope, and object id", asyn
     assert.equal(await verifyEntraAccessTokenWithKey(jwt, config, getKey), null);
   }
 });
+
+test("uses the highest assigned Kaveon role and drops it on a fresh token after revocation", async () => {
+  for (const role of ["Viewer", "Analyst", "Editor", "Admin"]) {
+    const identity = await verifyEntraAccessTokenWithKey(await token({ roles: [role, "Viewer", "other"] }), config, getKey);
+    assert.equal(identity?.role, role);
+  }
+  for (const roles of [[], ["not-a-Kaveon-role"], "Admin"]) {
+    const identity = await verifyEntraAccessTokenWithKey(await token({ roles }), config, getKey);
+    assert.equal(identity?.role, undefined);
+  }
+});
+
+test("extracts only explicit lake catalog roles from a signed token", async () => {
+  const identity = await verifyEntraAccessTokenWithKey(await token({
+    roles: ["Analyst", "Kaveon.Query.OpenSource", "Kaveon.Query.KaveonDB", "Kaveon.Query.*"]
+  }), config, getKey);
+  assert.deepEqual(identity.catalogs, ["OpenSource"]);
+});

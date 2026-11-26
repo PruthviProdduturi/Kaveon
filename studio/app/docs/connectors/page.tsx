@@ -7,10 +7,10 @@ export default function ConnectorDocs() {
     <PageHeader eyebrow="Platform" title="Connector matrix" lead="Registration, query execution, and deterministic context profiling are separate capabilities." />
     <table><thead><tr><th>Source</th><th>Studio</th><th>Execution</th><th>DLM boundary</th></tr></thead><tbody>
       <tr><td>Fabric SQL / Azure SQL</td><td>Current</td><td>Current · pyodbc + Azure identity</td><td>Per-dataset DLM compilation; no statistics/HLL profiling</td></tr>
-      <tr><td>PostgreSQL</td><td>Legacy / retirement-disabled</td><td>Legacy · psycopg2</td><td>Migration and reconciliation only; KaveonDB is authoritative when retirement mode is enabled</td></tr>
+      <tr><td>PostgreSQL</td><td>External SQL source</td><td>psycopg2</td><td>Requires a reachable PostgreSQL database and database credentials</td></tr>
       <tr><td>StarRocks</td><td>Current</td><td>Current · MySQL protocol</td><td>Per-dataset DLM compilation; no statistics/HLL profiling</td></tr>
       <tr><td>MySQL / MariaDB</td><td>API only</td><td>Current · pymysql</td><td>Not in Studio’s source picker</td></tr>
-      <tr><td>Trino</td><td>Registration only</td><td>Target</td><td>No driver</td></tr>
+      <tr><td>Trino</td><td>Coming soon</td><td>Coming soon</td><td>Unavailable</td></tr>
       <tr><td>Parquet, Delta, Iceberg in storage</td><td>Current · registered as a catalog, not a connector</td><td>Current · the Engine, read in place</td><td>Statistics and cube cells per table</td></tr>
     </tbody></table>
     <Callout type="note">Each platform query targets one selected SQL source. Cross-source federation is not implemented. The data-source test endpoint is currently a stub; use SQL Lab or a setup/admin probe for a real connection check.</Callout>
@@ -21,6 +21,14 @@ export default function ConnectorDocs() {
       storing anything if no keyring is configured. A catalog source keeps a credential reference — a Key Vault URI —
       or no credential at all, where the host&rsquo;s own managed or workload identity is what reaches the storage.
     </p>
+    <h2 id="migrate-catalog-metadata">Move existing table definitions to KaveonDB</h2>
+    <p>KaveonDB manages the schemas and table definitions. For tables already in supported storage, you can register the existing files in place.</p>
+    <ol>
+      <li>Inventory the schema names, table names, formats and storage locations in the original catalog. For Iceberg, record the committed metadata file.</li>
+      <li>In Settings → Storage, register the storage location, activate the source and synchronize it. In Catalog, add the schemas and register each table at its existing location.</li>
+      <li>Grant access in Kaveon, then compare schemas, row counts and representative SQL results before moving readers. Review views and permissions separately.</li>
+    </ol>
+    <p>Registration is manual today. Automated imports from Hive Metastore, AWS Glue, Unity Catalog and Iceberg REST are possible future migration tools.</p>
     <Pager prev={{ href: "/docs/api-reference", title: "API Reference" }} next={{ href: "/docs/sql-lab", title: "SQL Lab" }} />
   </div>;
 }

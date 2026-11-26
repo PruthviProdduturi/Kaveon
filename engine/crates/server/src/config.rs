@@ -730,6 +730,14 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         config.result_cache_bytes == 0 || config.result_cache_ttl_seconds > 0,
         "an enabled result cache needs a positive KAVEON_RESULT_CACHE_TTL_SECONDS"
     );
+    if let Ok(value) = std::env::var("KAVEON_ENTRA_ACCESS_CONFIG") {
+        let directory: crate::entra::EntraConfig = serde_json::from_str(&value)?;
+        anyhow::ensure!(
+            directory.app_role_catalogs.is_some(),
+            "managed Entra config requires app_role_catalogs"
+        );
+        config.security.entra = Some(directory);
+    }
     config.security.validate()?;
     validate_product_transactions(&config)?;
     Ok(config)

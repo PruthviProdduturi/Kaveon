@@ -19,12 +19,23 @@ class EngineBridgeTests(unittest.TestCase):
 
     def test_create_retry_is_idempotent(self):
         current = bridge.definition(self.source)
-        with patch.object(bridge, "_request", side_effect=[None, current]) as request:
+        with patch.object(bridge, "_request", side_effect=[None, None, current]) as request:
             self.assertEqual(bridge.sync_catalog(self.source, "admin")["catalog"], current)
-            self.assertEqual(request.call_count, 2)
+            self.assertEqual(request.call_count, 3)
         with patch.object(bridge, "_request", return_value=current) as request:
             self.assertFalse(bridge.sync_catalog(self.source, "admin")["changed"])
             self.assertEqual(request.call_count, 1)
+
+    def test_matching_sql_catalog_retains_its_tables_and_identity(self):
+        existing = {**bridge.definition(self.source), "id": "catalog:warehouse", "revision": 3}
+        with patch.object(bridge, "_request", side_effect=[None, existing]) as request:
+            self.assertEqual(bridge.sync_catalog(self.source, "admin"), {"catalog": existing, "changed": False})
+            self.assertEqual([call.args[0] for call in request.call_args_list], ["GET", "GET"])
+        existing["storage"] = {"Local": {"base_path": "/another-lake"}}
+        with patch.object(bridge, "_request", side_effect=[None, existing]):
+            with self.assertRaises(HTTPException) as error:
+                bridge.sync_catalog(self.source, "admin")
+            self.assertEqual(error.exception.status_code, 409)
 
     def test_revision_conflict_prevents_overwrite(self):
         current = bridge.definition(self.source)

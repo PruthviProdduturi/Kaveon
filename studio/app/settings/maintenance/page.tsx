@@ -28,38 +28,9 @@ interface PreviewRecord {
 	dark: PreviewSlot;
 }
 
-interface PassCopy {
-	title: string;
-	description: string;
-	noun: string;
-	plural: string;
-	scheduleHelp: string;
-}
-
-const COPY: Record<PassId, PassCopy> = {
-	dashboards: {
-		title: "Dashboard previews",
-		description:
-			"Each dashboard is captured once per theme, so the Library shows the preview that matches the viewer's theme. "
-			+ "A capture runs in this browser: it keeps going while you move around Studio, and is recorded as interrupted if the tab is closed or reloaded.",
-		noun: "dashboard",
-		plural: "dashboards",
-		scheduleHelp:
-			"When an administrator opens this page and the previews are older than the chosen interval, the outstanding ones are captured here. "
-			+ "A preview is read off a rendered chart, so there is no server-side schedule that can run it unattended. "
-			+ "Storing a preview needs permission to edit the dashboard, so a run driven by an account that cannot edit one reports it as unstored.",
-	},
-	charts: {
-		title: "Chart previews",
-		description:
-			"A chart's preview is captured when the chart is saved, so this pass covers charts with no preview and charts edited since theirs was taken. "
-			+ "Each capture runs the chart's query, so a full refresh takes several minutes.",
-		noun: "chart",
-		plural: "charts",
-		scheduleHelp:
-			"When an administrator opens this page and the previews are older than the chosen interval, the outstanding ones are captured here. "
-			+ "Captures run one at a time and only for charts that need one, so the pass never floods the Engine.",
-	},
+const COPY = {
+	dashboards: { title: "Dashboard previews", plural: "dashboards", help: "Dashboards have a light and a dark preview. Saving them requires permission to edit the dashboard." },
+	charts: { title: "Chart previews", plural: "charts", help: "Each preview runs the chart query. Refreshing every chart can take several minutes." },
 };
 
 async function loadRecords(pass: PassId): Promise<PreviewRecord[]> {
@@ -362,8 +333,8 @@ function statusLine(pass: Pass): string | null {
 	if (pass.problem) return null;
 	if (!ready) return "Reading the Library…";
 	if (!pass.total) return `There are no ${copy.plural} to preview.`;
-	if (!pending) return "Every preview is current.";
-	return `${pending} ${pending === 1 ? "capture is" : "captures are"} outstanding.`;
+	if (!pending) return null;
+	return null;
 }
 
 const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon }) => {
@@ -383,7 +354,10 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 					<div className={s.mark}>{icon}</div>
 					<div>
 						<h2 className={s.cardTitle}>{copy.title}</h2>
-						<p className={s.cardSub}>{copy.description}</p>
+						{pass.ready && pass.total > 0 && <p className={s.cardSub}>
+							{pass.stored} of {pass.total} {copy.plural} have a preview.
+							{" "}{pending ? `${pending} ${pending === 1 ? "preview needs" : "previews need"} refreshing.` : "No refresh needed."}
+						</p>}
 					</div>
 				</div>
 				<div className={s.actions}>
@@ -393,43 +367,14 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 						<>
 							<button
 								type="button"
-								className={s.ghost}
-								onClick={() => void pass.begin("all")}
-								disabled={unavailable || !pass.total}
-							>
-								Refresh all
-							</button>
-							<button
-								type="button"
 								className={`${s.ghost} ${s.primary}`}
 								onClick={() => void pass.begin("outstanding")}
 								disabled={unavailable || !pending}
 							>
-								{resumable && pending ? "Resume" : "Refresh outstanding"}
+								{resumable && pending ? "Resume" : "Refresh previews"}
 							</button>
 						</>
 					)}
-				</div>
-			</div>
-
-			<div className={s.facts}>
-				<div className={s.fact}>
-					<div className={s.factLabel}>Previews stored</div>
-					<div className={s.factValue}>{pass.ready ? `${pass.stored} of ${pass.total}` : "—"}</div>
-				</div>
-				<div className={s.fact}>
-					<div className={s.factLabel}>Outstanding captures</div>
-					<div className={s.factValue}>{pass.ready ? pending : "—"}</div>
-				</div>
-				<div className={s.fact}>
-					<div className={s.factLabel}>Last refreshed</div>
-					<div className={s.factValue}>
-						{run?.finishedAt ? formatMoment(run.finishedAt) : "Not yet in this browser"}
-					</div>
-				</div>
-				<div className={s.fact}>
-					<div className={s.factLabel}>Last run</div>
-					<div className={s.factValue}>{outcomeOf(run)}</div>
 				</div>
 			</div>
 
@@ -459,11 +404,14 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 				</div>
 			) : null}
 
-			<div className={s.schedule}>
-				<div>
-					<div className={s.rowLabel}>Automatic refresh</div>
-					<div className={s.rowHelp}>{copy.scheduleHelp}</div>
-				</div>
+			<details className={s.previewOptions}>
+				<summary>Refresh options</summary>
+				<p className={s.note}>{copy.help} Keep this browser tab open until the refresh finishes.</p>
+				<div className={s.schedule}>
+					<div>
+						<div className={s.rowLabel}>Refresh when this page opens</div>
+						<div className={s.rowHelp}>Refresh missing or outdated previews when the interval has elapsed.</div>
+					</div>
 				<select
 					className={g.select}
 					value={intervalDays}
@@ -474,7 +422,13 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 						<option key={choice.days} value={choice.days}>{choice.label}</option>
 					))}
 				</select>
-			</div>
+				</div>
+				<div className={s.cardFoot}>
+					{run && <span className={s.note}>Last run in this browser: {outcomeOf(run)}{run.finishedAt ? ` · ${formatMoment(run.finishedAt)}` : ""}</span>}
+					<button type="button" className={s.ghost} onClick={() => void pass.begin("all")}
+						disabled={live || unavailable || !pass.total}>Refresh all</button>
+				</div>
+			</details>
 		</section>
 	);
 };
@@ -492,6 +446,7 @@ export default function MaintenancePage() {
 
 	return (
 		<div className={s.stack}>
+			<p className={s.lead}>Manage the thumbnail images shown in the Library.</p>
 			<PassCard pass={dashboards} icon={<ImagesIcon />} />
 			<PassCard pass={charts} icon={<ChartIcon />} />
 		</div>

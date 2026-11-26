@@ -9,9 +9,9 @@
 .nav { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 18px }
 .navLink { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px; font: 500 13px Inter, sans-serif; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap }
 .navLink:hover { color: var(--text-secondary) }
-.navLink[aria-current="page"] { color: var(--text-primary); border-bottom-color: var(--accent) }
+.navLink[aria-current] { color: var(--text-primary); border-bottom-color: var(--accent) }
 .navLink i { font-size: 12px; color: var(--text-faint) }
-.navLink[aria-current="page"] i { color: var(--accent) }
+.navLink[aria-current] i { color: var(--accent) }
 .navGap { flex: 1 }
 .navTag { align-self: center; flex-shrink: 0; margin-right: 4px; font: 500 10.5px Inter, sans-serif; color: var(--text-faint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px }
 
@@ -74,3 +74,10 @@
 /* Maintenance — a pass's actions sit beside its title; its schedule sits under its facts. */
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
 .schedule { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border) }
+
+.subnav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: -6px 0 16px }
+.subnav a { padding: 6px 10px; border-radius: 6px; font-size: 13px; color: var(--text-secondary); text-decoration: none }
+.subnav a:hover, .subnav a[aria-current] { color: var(--text-primary); background: var(--bg-elevated) }
+.previewOptions { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px }
+.previewOptions summary { color: var(--text-secondary); cursor: pointer; font-size: 13px; width: fit-content }
+.previewOptions p { margin: 8px 0 }

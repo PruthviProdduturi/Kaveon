@@ -3157,6 +3157,11 @@ fn statement_audit_line(record: &QueryRecord) -> crate::audit::AuditRecord {
     AuditRecord {
         query_id: Some(record.id.clone()),
         principal: record.context.principal.clone(),
+        display_identity: record
+            .context
+            .user
+            .clone()
+            .filter(|name| Some(name) != record.context.principal.as_ref()),
         client: record.context.client.clone(),
         source: record.context.source.clone(),
         client_tags: record.context.client_tags.clone(),
@@ -18393,6 +18398,7 @@ mod tests {
         let admin = admin();
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -18870,6 +18876,7 @@ mod tests {
             .unwrap();
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -18943,6 +18950,7 @@ mod tests {
             .unwrap();
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -19053,6 +19061,7 @@ mod tests {
             .unwrap();
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -19192,6 +19201,7 @@ mod tests {
             .unwrap();
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -19294,6 +19304,7 @@ mod tests {
     fn principal(name: &str, role: Role) -> crate::security::Identity {
         crate::security::Identity {
             principal: name.into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role,
         }
@@ -20408,11 +20419,13 @@ mod tests {
         let state = Arc::new(catalog_test_state());
         let admin = crate::security::Identity {
             principal: "admin".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Admin,
         };
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -20523,6 +20536,7 @@ mod tests {
         let (state, _directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -20603,11 +20617,13 @@ mod tests {
         let (state, _directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
         let other = crate::security::Identity {
             principal: "other".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -20710,6 +20726,7 @@ mod tests {
         let (state, directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -20833,6 +20850,7 @@ mod tests {
         assert_eq!(state.result_cache.stats().entries, 2);
         let admin = crate::security::Identity {
             principal: "admin".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Admin,
         };
@@ -20864,6 +20882,7 @@ mod tests {
         let (state, directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };
@@ -20928,6 +20947,7 @@ mod tests {
     fn admin() -> crate::security::Identity {
         crate::security::Identity {
             principal: "admin".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Admin,
         }
@@ -21374,6 +21394,7 @@ mod tests {
         let (state, directory) = analyze_test_state().await;
         let reader = crate::security::Identity {
             principal: "reader".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Reader,
         };
@@ -22823,6 +22844,7 @@ mod tests {
         let (state, directory) = analyze_test_state().await;
         let reader = crate::security::Identity {
             principal: "reader".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Reader,
         };
@@ -22999,6 +23021,7 @@ mod tests {
 
         let other = crate::security::Identity {
             principal: "other-user".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         };
@@ -23581,6 +23604,7 @@ mod tests {
         .unwrap();
         let identity = crate::security::Identity {
             principal: "entra:tenant:object".into(),
+            catalog_claims: Vec::new(),
             display_identity: Some("ada@example.com".into()),
             role: Role::Analyst,
         };
@@ -25097,6 +25121,7 @@ mod streamed_root_tests {
     fn alice() -> Identity {
         Identity {
             principal: "alice".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: crate::security::Role::Analyst,
         }
@@ -25349,6 +25374,7 @@ mod streamed_root_tests {
         let owner = alice();
         let other = Identity {
             principal: "other".into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role: Role::Analyst,
         };

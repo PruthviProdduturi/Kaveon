@@ -107,6 +107,16 @@ def _client():
     return client
 
 
+def _caller_headers(actor, role):
+    from middleware.auth import entra_caller
+
+    caller = entra_caller.get()
+    if caller and caller[0] == actor:
+        return {"x-kaveon-principal": caller[1], "x-kaveon-display-identity": actor, "x-kaveon-role": role,
+                "x-kaveon-catalog-claims": ",".join(caller[2])}
+    return {"x-kaveon-principal": actor, "x-kaveon-role": role}
+
+
 def _send(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
     """One Engine round trip. Returns the raw response; only transport failures raise."""
     token = os.getenv(token_name)
@@ -114,7 +124,7 @@ def _send(method, path, token_name, actor, *, payload=None, revision=None, role=
         raise HTTPException(503, "Engine service credential is not configured")
     headers = {"Authorization": f"Bearer {token}", "x-kaveon-actor": actor}
     if role:
-        headers.update({"x-kaveon-principal": actor, "x-kaveon-role": role})
+        headers.update(_caller_headers(actor, role))
     if revision is not None:
         headers["If-Match"] = str(revision)
     # The endpoint is resolved before the client so a missing or malformed
@@ -240,6 +250,15 @@ def sync_catalog(source, actor, expected_revision=None):
     current = _request("GET", path, token, actor)
     created = current is None
     if current is None:
+        # SQL-created catalogs keep their own stable ID and table registrations.
+        # An identical registration already describes the live catalog.
+        sql_id = "catalog:" + desired["name"]
+        existing = _request("GET", "/v1/catalog/definitions/" + quote(sql_id, safe=""), token, actor)
+        if existing is not None:
+            fields = ("name", "storage", "credential", "adapter", "lifecycle")
+            if existing.get("id") == sql_id and all(existing.get(k) == desired[k] for k in fields):
+                return {"catalog": existing, "changed": False}
+            raise HTTPException(409, "This name belongs to a SQL-created catalog with a different definition")
         if expected_revision is not None:
             raise HTTPException(409, "Mapped Engine catalog no longer exists")
         # Engine catalogs must first be created as draft revision 1.
@@ -496,7 +515,8 @@ def submit_streamed(sql, catalog, actor, role, schema=None, settings=None, on_fi
     tag = "kaveon-api:stream:" + uuid.uuid4().hex
     payload = {**_statement_payload(sql, catalog, schema, tag, settings), "result_delivery": "paged"}
     statement = StreamedStatement(tag)
-    thread = threading.Thread(target=_hold, args=(statement, payload, actor, role, hold, on_finish),
+    from contextvars import copy_context
+    thread = threading.Thread(target=copy_context().run, args=(_hold, statement, payload, actor, role, hold, on_finish),
                               name="kaveon-stream-" + tag[-12:], daemon=True)
     thread.start()
     deadline = time.monotonic() + wait
@@ -582,10 +602,8 @@ def _read_role(role):
 
 
 def catalogs(actor, role):
-    # Catalog metadata is protected by the catalog service credential.  The
-    # bridge credential is intentionally limited to query/control-plane
-    # operations and is not accepted by the Engine catalog surface.
-    return _request("GET", "/v1/catalog", "KAVEON_ENGINE_CATALOG_TOKEN", actor, role=_read_role(role))
+    # Discovery must carry the caller through the Engine catalog access evaluator.
+    return _request("GET", "/v1/catalog", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
 
 
 def cluster(actor, role):
@@ -1161,7 +1179,7 @@ def audit_export(params, actor, role):
         raise HTTPException(503, "Engine service credential is not configured")
     engine_role = _admin_role(role, "the audit ledger")
     headers = {"Authorization": f"Bearer {token}", "x-kaveon-actor": actor,
-               "x-kaveon-principal": actor, "x-kaveon-role": engine_role}
+               **_caller_headers(actor, engine_role)}
     url = _endpoint() + _audit_path({**params, "format": "jsonl"})
     try:
         client = httpx.Client(timeout=httpx.Timeout(600, connect=10), verify=_verify_context())

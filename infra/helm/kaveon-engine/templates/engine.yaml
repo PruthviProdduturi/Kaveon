@@ -169,6 +169,10 @@ spec:
             - name: https
               containerPort: 8080
           env:
+            {{- if and $isCoordinator $.Values.entraAccess }}
+            - name: KAVEON_ENTRA_ACCESS_CONFIG
+              value: {{ dict "tenant_id" (required "entraAccess.tenantId required" $.Values.entraAccess.tenantId) "client_id" (required "entraAccess.clientId required" $.Values.entraAccess.clientId) "required_scope" "access_as_user" "app_role_catalogs" ($.Values.entraAccess.catalogs | default list) | toJson | quote }}
+            {{- end }}
             {{- if or $.Values.externalLake.account $.Values.externalLake.clientId $.Values.externalLake.tenantId }}
             - name: KAVEON_EXTERNAL_LAKE_ACCOUNT
               value: {{ required "externalLake.account is required" $.Values.externalLake.account | quote }}

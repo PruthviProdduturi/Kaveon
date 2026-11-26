@@ -125,6 +125,9 @@ fn effective_by_role(access: Access) -> Value {
 
 async fn document(state: &AppState) -> Value {
     let grants = state.catalog_access.current();
+    if let Some((_, catalogs)) = &state.catalog_access.directory {
+        return json!({"authority":"entra","catalogs":catalogs,"grants":[],"store":{"enabled":false},"roles":role_ceilings(),"reserved":reserved()});
+    }
     json!({
         "store": {
             "enabled": state.catalog_access.is_enabled(),
@@ -159,6 +162,9 @@ pub async fn put_grant(
 ) -> Response {
     if let Err(response) = admin_on_coordinator(&state, &identity) {
         return *response;
+    }
+    if state.catalog_access.directory.is_some() {
+        return (StatusCode::CONFLICT, Json(json!({"code":"ENTRA_MANAGED","error":"This deployment manages assignments in Microsoft Entra."}))).into_response();
     }
     let request: GrantRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -224,6 +230,9 @@ pub async fn delete_grant(
     if let Err(response) = admin_on_coordinator(&state, &identity) {
         return *response;
     }
+    if state.catalog_access.directory.is_some() {
+        return (StatusCode::CONFLICT, Json(json!({"code":"ENTRA_MANAGED","error":"This deployment manages assignments in Microsoft Entra."}))).into_response();
+    }
     let request: RevokeRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
         Err(error) => {
@@ -268,6 +277,9 @@ pub async fn get_effective(
 ) -> Response {
     if let Err(response) = admin_on_coordinator(&state, &identity) {
         return *response;
+    }
+    if state.catalog_access.directory.is_some() {
+        return (StatusCode::CONFLICT, Json(json!({"code":"ENTRA_MANAGED","error":"This deployment manages assignments in Microsoft Entra."}))).into_response();
     }
     let grants = state.catalog_access.current();
     let registered = grantable_catalogs(&state).await;
@@ -324,6 +336,9 @@ pub async fn import_open_policy(
 ) -> Response {
     if let Err(response) = admin_on_coordinator(&state, &identity) {
         return *response;
+    }
+    if state.catalog_access.directory.is_some() {
+        return (StatusCode::CONFLICT, Json(json!({"code":"ENTRA_MANAGED","error":"This deployment manages assignments in Microsoft Entra."}))).into_response();
     }
     let request: ImportRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -456,9 +471,16 @@ pub async fn get_my_access(
     let mut catalogs: Vec<Value> = registered
         .iter()
         .filter_map(|name| {
-            scope
-                .level(name)
-                .map(|level| json!({ "catalog": name, "access": level }))
+            scope.level(name).map(|level| {
+                let mut row = json!({ "catalog": name, "access": level });
+                if state.catalog_access.directory.is_some()
+                    && identity.role != Role::Admin
+                    && identity.catalog_claims.contains(name)
+                {
+                    row["via_app_role"] = json!(format!("Kaveon.Query.{name}"));
+                }
+                row
+            })
         })
         .collect();
     catalogs.sort_by(|a, b| a["catalog"].as_str().cmp(&b["catalog"].as_str()));

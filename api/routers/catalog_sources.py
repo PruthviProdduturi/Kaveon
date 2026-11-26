@@ -27,7 +27,7 @@ _FIELDS = """
 _VALID_STORAGE = {"local", "adls_gen2", "s3"}
 _VALID_FORMAT = {"parquet", "delta", "iceberg"}
 _VALID_CREDENTIAL = {"managed_identity", "workload_identity", "environment", "secret_store"}
-_VALID_ADAPTER = {"native", "hive_metastore", "aws_glue", "unity_catalog", "iceberg_rest"}
+_VALID_ADAPTER = {"native"}
 _VALID_LIFECYCLE = {"draft", "active", "suspended", "deleting", "deleted"}
 
 _TRANSITIONS = {
@@ -256,7 +256,8 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
     adapter_config_raw = data.get("adapter_config") or "{}"
     if isinstance(adapter_config_raw, dict):
         adapter_config_raw = json.dumps(adapter_config_raw)
-    _validate_json(adapter_config_raw, "adapter_config")
+    if _validate_json(adapter_config_raw, "adapter_config"):
+        raise HTTPException(400, "KaveonDB catalogs do not accept external adapter settings")
 
     description = (data.get("description") or "").strip() or None
 
@@ -314,6 +315,10 @@ _NULLABLE_SOURCE_FIELDS = frozenset({"credential_kind", "credential_ref", "descr
 
 @router.patch("/catalog-sources/{cs_id}")
 def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(require_min_role("Admin"))):
+    if "adapter_config" in data:
+        config = data["adapter_config"]
+        if _validate_json(json.dumps(config) if isinstance(config, dict) else config, "adapter_config"):
+            raise HTTPException(400, "KaveonDB catalogs do not accept external adapter settings")
     if source_cutover_mutations.enabled():
         current = product_read_authority.read_document("sources", f"catalog-{cs_id}", ctx.email, "Admin")
         if not current: raise HTTPException(404, {"code": "NOT_FOUND", "message": "Catalog source not found"})

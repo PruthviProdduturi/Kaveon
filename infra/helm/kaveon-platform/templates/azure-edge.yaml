@@ -1,0 +1,151 @@
+{{- if .Values.azureEdge.enabled }}
+{{- $host := required "azureEdge needs a public HTTPS portal.publicUrl" .Values.portal.publicUrl | trimPrefix "https://" }}
+{{- if not (and (hasPrefix "https://" .Values.portal.publicUrl) (regexMatch "^[a-z0-9.-]+$" $host)) }}{{ fail "portal.publicUrl must be HTTPS with a DNS host and no path for azureEdge" }}{{ end }}
+{{- $digest := required "azureEdge.digest is required" .Values.azureEdge.digest }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "azureEdge.digest must be an immutable image digest" }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kaveon-edge
+data:
+  Caddyfile: |
+    {
+      admin off
+      http_port 8080
+      https_port 8443
+    }
+    {{ $host }} {
+      {{- if .Values.azureEdge.tlsSecretName }}
+      tls /etc/kaveon-tls/tls.crt /etc/kaveon-tls/tls.key
+      {{- end }}
+      reverse_proxy kaveon-portal:3000
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kaveon-edge-data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: managed-csi
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kaveon-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kaveon-edge
+  template:
+    metadata:
+      labels:
+        app: kaveon-edge
+      annotations:
+        kaveon.io/studio-host: {{ $host | quote }}
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - image: {{ printf "%s@%s" (required "azureEdge.repository is required" .Values.azureEdge.repository) $digest | quote }}
+        imagePullPolicy: IfNotPresent
+        name: caddy
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          periodSeconds: 10
+          successThreshold: 1
+          tcpSocket:
+            port: https
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 25m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        {{- if .Values.azureEdge.tlsSecretName }}
+        - name: studio-tls
+          mountPath: /etc/kaveon-tls
+          readOnly: true
+        {{- end }}
+        - mountPath: /etc/caddy
+          name: cfg
+          readOnly: true
+        - mountPath: /data
+          name: data
+        - mountPath: /config
+          name: configdata
+        - mountPath: /tmp
+          name: tmp
+      volumes:
+      {{- if .Values.azureEdge.tlsSecretName }}
+      - name: studio-tls
+        secret:
+          secretName: {{ .Values.azureEdge.tlsSecretName | quote }}
+          defaultMode: 0440
+          items:
+          - {key: tls.crt, path: tls.crt}
+          - {key: tls.key, path: tls.key}
+      {{- end }}
+      - configMap:
+          defaultMode: 420
+          name: kaveon-edge
+        name: cfg
+      - name: data
+        persistentVolumeClaim:
+          claimName: kaveon-edge-data
+      - emptyDir: {}
+        name: configdata
+      - emptyDir: {}
+        name: tmp
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kaveon-edge
+  annotations:
+    service.beta.kubernetes.io/azure-pip-name: {{ required "azureEdge.publicIpName is required" .Values.azureEdge.publicIpName | quote }}
+    service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ required "azureEdge.resourceGroup is required" .Values.azureEdge.resourceGroup | quote }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app: kaveon-edge
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+  - name: https
+    port: 443
+    targetPort: https
+{{- end }}

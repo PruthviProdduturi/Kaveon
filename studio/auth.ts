@@ -19,7 +19,7 @@ import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import Credentials from "next-auth/providers/credentials";
-import { isEntraObjectId, verifyEntraAccessToken } from "./auth/verifyEntra";
+import { assignedEntraRole, grantedCatalogs, configuredEntraPublicClient, isEntraObjectId, verifyEntraAccessToken } from "./auth/verifyEntra";
 import { sessionConfig } from "./auth/sessionConfig";
 import { hasConfiguredSignInProvider } from "./auth/providerConfig";
 
@@ -40,8 +40,9 @@ const adminUsernames = (process.env.AUTH_ADMIN_USERNAMES ?? "")
   .split(",")
   .map((name) => name.trim().toLowerCase())
   .filter(Boolean);
-const githubConfigured = Boolean(process.env.GITHUB_ID && process.env.GITHUB_SECRET);
-const googleConfigured = Boolean(process.env.GOOGLE_ID && process.env.GOOGLE_SECRET);
+const managedEntra = process.env.KAVEON_ENTRA_APP_ROLES === "true";
+const githubConfigured = !managedEntra && Boolean(process.env.GITHUB_ID && process.env.GITHUB_SECRET);
+const googleConfigured = !managedEntra && Boolean(process.env.GOOGLE_ID && process.env.GOOGLE_SECRET);
 const microsoftConfigured = Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID && process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET);
 const publicClientEnabled = process.env.KAVEON_ENTRA_PUBLIC_CLIENT === "true";
 
@@ -67,7 +68,7 @@ function servesLoopbackOnly(url: string | undefined): boolean {
   }
 }
 
-const localIdentityEnabled = !hasConfiguredSignInProvider()
+const localIdentityEnabled = !managedEntra && !hasConfiguredSignInProvider()
   && (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true")
   && Boolean(process.env.KAVEON_DEV_USER_EMAIL)
   // Bound to loopback. This provider mints an Admin session with no
@@ -142,12 +143,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       async authorize(credentials) {
         const token = typeof credentials?.token === "string" ? credentials.token : "";
         const identity = await verifyEntraAccessToken(token);
-        if (!identity) return null;
+        if (!identity || (managedEntra && (!identity.role || !identity.email))) return null;
         return {
           id: identity.id,
           email: identity.email,
           name: identity.name,
-          role: entraAdmins.has(identity.objectId) ? "Admin" : "Viewer",
+          role: managedEntra ? identity.role : entraAdmins.has(identity.objectId) ? "Admin" : "Viewer",
+          catalogClaims: identity.catalogs,
+          entraPrincipal: "entra:" + identity.id,
           upstreamExpiresAt: identity.expiresAt,
         };
       },
@@ -179,7 +182,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
-  session: sessionConfig(publicClientEnabled),
+  session: sessionConfig(publicClientEnabled || managedEntra),
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider !== "github" || user.email) return true;
@@ -219,7 +222,26 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // the same person was, and switching between them silently changed what
       // they could see.
       const entraObjectId = typeof identityProfile?.oid === "string" ? identityProfile.oid : undefined;
-      if (profile) {
+      if (managedEntra) {
+        if (account?.provider === "microsoft-entra-id") {
+          // Auth.js supplies this profile from the validated OIDC ID token.
+          const claims = profile as { roles?: unknown; oid?: string; tid?: string; exp?: number } | undefined;
+          const tenant = configuredEntraPublicClient()?.tenantId;
+          const role = assignedEntraRole(claims?.roles);
+          if (!tenant || claims?.tid !== tenant || !isEntraObjectId(claims.oid) || !role ||
+              !email || !Number.isSafeInteger(claims.exp) || !claims.exp || claims.exp * 1000 <= Date.now()) return null;
+          token.catalogClaims = grantedCatalogs(claims.roles);
+          token.entraPrincipal = 'entra:' + tenant + ':' + claims.oid.toLowerCase();
+          token.upstreamExpiresAt = claims.exp * 1000;
+          token.role = role;
+        } else if (account?.provider === "entra-public" && user && "entraPrincipal" in user && "role" in user) {
+          token.catalogClaims = "catalogClaims" in user ? user.catalogClaims : [];
+          token.entraPrincipal = user.entraPrincipal;
+          token.role = user.role;
+        }
+        // Reject sessions issued before the switch, including local or other providers.
+        if (!token.entraPrincipal || !token.upstreamExpiresAt || !token.role) return null;
+      } else if (profile) {
         token.role = entraObjectId && entraAdmins.has(entraObjectId)
           ? "Admin"
           : roleFor(email, username);
@@ -231,6 +253,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     session({ session, token }) {
       if (session.user) {
         (session.user as { role?: string }).role = (token.role as string) ?? "Viewer";
+        (session.user as { catalogClaims?: string[] }).catalogClaims = token.catalogClaims as string[] | undefined;
+        (session.user as { entraPrincipal?: string }).entraPrincipal = token.entraPrincipal as string | undefined;
         (session.user as { provider?: string }).provider = token.provider as string | undefined;
       }
       return session;

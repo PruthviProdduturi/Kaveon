@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     WEB_URL: str = "http://localhost:3000"
 
     # ── Azure AD ──────────────────────────────────────────────────────────────
+    KAVEON_ENTRA_TENANT_ID: str = ""
+    KAVEON_ENTRA_CLIENT_ID: str = ""
+    KAVEON_ENTRA_APP_ROLES: bool = False
     AZURE_TENANT_ID: str = ""
     AZURE_CLIENT_ID: str = ""
 

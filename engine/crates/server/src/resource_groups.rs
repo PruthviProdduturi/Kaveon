@@ -1063,6 +1063,7 @@ mod tests {
     fn identity(principal: &str, role: Role) -> Identity {
         Identity {
             principal: principal.into(),
+            catalog_claims: Vec::new(),
             display_identity: None,
             role,
         }

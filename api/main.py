@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import time
 
 from config import settings
+from middleware.auth import entra_caller, trusted_directory_request
+from starlette.concurrency import run_in_threadpool
 from middleware.demo import demo_read_only
 import database.pool as pool
 from middleware.errors import AppError, app_error_handler, generic_error_handler, unknown_data_source_handler
@@ -225,7 +227,16 @@ app.add_exception_handler(Exception, generic_error_handler)
 async def security_headers(request: Request, call_next):
     if request.method == "OPTIONS":
         return Response(status_code=200, headers=_CORS_HEADERS)
-    response = await call_next(request)
+    if settings.KAVEON_ENTRA_APP_ROLES:
+        caller = await run_in_threadpool(trusted_directory_request, request)
+        request.state.directory_caller = caller
+        scope = entra_caller.set((caller[0], caller[2], caller[3]) if caller else None)
+        try:
+            response = await call_next(request)
+        finally:
+            entra_caller.reset(scope)
+    else:
+        response = await call_next(request)
     response.headers.update(_CORS_HEADERS)
     response.headers["Vary"] = "Origin"
     response.headers["X-Content-Type-Options"] = "nosniff"

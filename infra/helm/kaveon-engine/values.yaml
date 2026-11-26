@@ -177,3 +177,6 @@ resourceGroups:
     selectors:
       - {role: admin, group: default}
       - {group: demo}
+
+# Set from the tenant registration receipt to enable directory-managed roles.
+entraAccess: {}

@@ -21,11 +21,12 @@ error is returned verbatim, because the person registering it needs the path
 or schema mismatch the Engine names.
 """
 import concurrent.futures
+from contextvars import copy_context
 import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 
-from middleware.auth import UserContext
+from middleware.auth import UserContext, entra_caller
 from middleware.permissions import require_min_role
 from models.engine_catalog import CatalogCreate, SchemaCreate, TableAnalyze, TableCreate, TableReplace
 from routers import lab
@@ -199,7 +200,9 @@ def schema_inventory(schema_id: str, response: Response, refresh: bool = False,
             except HTTPException:
                 return
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_INVENTORY_MAX_WORKERS, len(measurements))) as pool:
-            list(pool.map(measure, [item for item in measurements if item.get("state") == "unmeasured"]))
+            jobs = [pool.submit(copy_context().run, measure, item) for item in measurements if item.get("state") == "unmeasured"]
+            for job in jobs:
+                job.result()
         measurements = _measurements(schema_id, ids, ctx, True)
     return {"success": True, "measurements": measurements}
 
@@ -213,7 +216,7 @@ _INVENTORY_CACHE: dict = {}
 
 
 def _measurements(schema_id: str, ids: list, ctx: UserContext, refresh: bool) -> list:
-    key = (schema_id, ctx.email, ctx.role, tuple(ids))
+    key = (schema_id, ctx.email, ctx.role, entra_caller.get(), tuple(ids))
     now = time.monotonic()
     cached = _INVENTORY_CACHE.get(key)
     if cached and not refresh and now - cached[0] < _INVENTORY_TTL_SECONDS:
@@ -222,8 +225,8 @@ def _measurements(schema_id: str, ids: list, ctx: UserContext, refresh: bool) ->
         return []
     workers = min(_INVENTORY_MAX_WORKERS, len(ids))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        measured = list(pool.map(
-            lambda table_id: _measurement(table_id, ctx), ids))
+        jobs = [pool.submit(copy_context().run, _measurement, table_id, ctx) for table_id in ids]
+        measured = [job.result() for job in jobs]
     # One expiring entry per schema and caller; the map never grows past the
     # schemas a live process has actually served.
     _INVENTORY_CACHE[key] = (now, measured)

@@ -1,0 +1,993 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.46.1.21595",
+      "templateHash": "1982022165554092675"
+    }
+  },
+  "parameters": {
+    "installationName": {
+      "type": "string",
+      "defaultValue": "kaveon",
+      "minLength": 3,
+      "maxLength": 16,
+      "metadata": {
+        "description": "Installation name. Use 3–16 lowercase letters, numbers or hyphens. Start with a letter and end with a letter or number."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the Kaveon deployment."
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "prod",
+      "allowedValues": [
+        "dev",
+        "stage",
+        "prod"
+      ]
+    },
+    "storageAccountName": {
+      "type": "string",
+      "defaultValue": "[format('stkv{0}{1}', parameters('environment'), if(equals(parameters('installationName'), 'kaveon'), uniqueString(resourceGroup().id), uniqueString(resourceGroup().id, parameters('installationName'))))]",
+      "metadata": {
+        "description": "Globally unique ADLS Gen2 storage account name."
+      }
+    },
+    "registryName": {
+      "type": "string",
+      "defaultValue": "[format('acrkaveon{0}{1}', parameters('environment'), if(equals(parameters('installationName'), 'kaveon'), uniqueString(resourceGroup().id), uniqueString(resourceGroup().id, parameters('installationName'))))]",
+      "metadata": {
+        "description": "Globally unique Azure Container Registry name."
+      }
+    },
+    "operatorObjectId": {
+      "type": "string",
+      "defaultValue": "[deployer().objectId]",
+      "metadata": {
+        "description": "Object ID of the initial Azure RBAC cluster operator."
+      }
+    },
+    "configureDirectory": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create the dedicated Kaveon Entra application and assign its first Admin. Requires directory permission. Disable for an infrastructure-only deployment."
+      }
+    },
+    "serviceManagementReference": {
+      "type": "string",
+      "defaultValue": "[coalesce(tryGet(resourceGroup().tags, 'ServiceTreeId'), '')]",
+      "metadata": {
+        "description": "Service or asset management reference for the Entra application. Defaults to the resource group ServiceTreeId tag when present."
+      }
+    },
+    "kaveonAdminObjectId": {
+      "type": "string",
+      "defaultValue": "[parameters('operatorObjectId')]",
+      "metadata": {
+        "description": "Kaveon Admin user or group object ID. Defaults to the cluster operator."
+      }
+    },
+    "nodeSize": {
+      "type": "string",
+      "defaultValue": "Standard_B2s",
+      "metadata": {
+        "description": "AKS worker VM size."
+      }
+    },
+    "minWorkers": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Minimum autoscaled worker count."
+      }
+    },
+    "maxWorkers": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Maximum autoscaled worker count."
+      }
+    },
+    "enableNatGateway": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create a dedicated NAT Gateway. Disabled by default to avoid unnecessary monthly cost."
+      }
+    }
+  },
+  "variables": {
+    "resourcePrefix": "[format('{0}-{1}', parameters('installationName'), parameters('environment'))]",
+    "installKey": "[uniqueString(resourceGroup().id, variables('resourcePrefix'))]",
+    "studioDnsLabel": "[format('{0}-{1}', variables('resourcePrefix'), variables('installKey'))]",
+    "tags": {
+      "product": "kaveon",
+      "environment": "[parameters('environment')]",
+      "managedBy": "kaveon-marketplace",
+      "architecture": "kaveondb"
+    }
+  },
+  "resources": [
+    {
+      "condition": "[parameters('configureDirectory')]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}-studio-ip', variables('resourcePrefix'))]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "publicIPAddressVersion": "IPv4",
+        "dnsSettings": {
+          "domainNameLabel": "[variables('studioDnsLabel')]",
+          "domainNameLabelScope": "ResourceGroupReuse"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "properties": {
+        "isHnsEnabled": true,
+        "minimumTlsVersion": "TLS1_2",
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'opensource')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'product')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'backups')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('registryName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "condition": "[parameters('configureDirectory')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('directory-{0}', variables('installKey'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "installationKey": {
+            "value": "[format('kaveon-{0}', variables('installKey'))]"
+          },
+          "installationName": {
+            "value": "[variables('resourcePrefix')]"
+          },
+          "studioOrigin": "[if(parameters('configureDirectory'), createObject('value', format('https://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix'))), '2024-05-01').dnsSettings.fqdn)), createObject('value', ''))]",
+          "serviceManagementReference": {
+            "value": "[parameters('serviceManagementReference')]"
+          },
+          "adminPrincipalId": {
+            "value": "[parameters('kaveonAdminObjectId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "585947337056483682"
+            }
+          },
+          "parameters": {
+            "installationKey": {
+              "type": "string",
+              "metadata": {
+                "description": "Stable key for this installation in the customer tenant."
+              }
+            },
+            "installationName": {
+              "type": "string"
+            },
+            "studioOrigin": {
+              "type": "string"
+            },
+            "serviceManagementReference": {
+              "type": "string"
+            },
+            "adminPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Entra user or security group to receive the initial Kaveon Admin assignment."
+              }
+            }
+          },
+          "variables": {
+            "$fxv#0": [
+              {
+                "id": "7f6e4b2a-1c3d-4e5f-8a9b-0d1e2f3c4b5a",
+                "displayName": "Viewer",
+                "value": "Viewer",
+                "description": "Read-only access to published content",
+                "allowedMemberTypes": [
+                  "User"
+                ],
+                "isEnabled": true
+              },
+              {
+                "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
+                "displayName": "Analyst",
+                "value": "Analyst",
+                "description": "Create and edit own content, SQL Lab access",
+                "allowedMemberTypes": [
+                  "User"
+                ],
+                "isEnabled": true
+              },
+              {
+                "id": "9a8b7c6d-5e4f-3a2b-1c0d-ef9a8b7c6d5e",
+                "displayName": "Editor",
+                "value": "Editor",
+                "description": "Create, edit and publish any content",
+                "allowedMemberTypes": [
+                  "User"
+                ],
+                "isEnabled": true
+              },
+              {
+                "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+                "displayName": "Admin",
+                "value": "Admin",
+                "description": "Full access including user and data source management",
+                "allowedMemberTypes": [
+                  "User"
+                ],
+                "isEnabled": true
+              }
+            ],
+            "roles": "[variables('$fxv#0')]",
+            "scopeId": "[guid(tenant().tenantId, parameters('installationKey'), 'access_as_user')]"
+          },
+          "imports": {
+            "graph": {
+              "provider": "MicrosoftGraph",
+              "version": "1.0.0"
+            }
+          },
+          "resources": {
+            "application": {
+              "import": "graph",
+              "type": "Microsoft.Graph/applications@v1.0",
+              "properties": {
+                "uniqueName": "[parameters('installationKey')]",
+                "displayName": "[format('Kaveon · {0}', parameters('installationName'))]",
+                "serviceManagementReference": "[if(empty(parameters('serviceManagementReference')), null(), parameters('serviceManagementReference'))]",
+                "signInAudience": "AzureADMyOrg",
+                "isFallbackPublicClient": true,
+                "appRoles": "[variables('roles')]",
+                "spa": {
+                  "redirectUris": [
+                    "[format('{0}/auth/microsoft', parameters('studioOrigin'))]"
+                  ]
+                },
+                "api": {
+                  "requestedAccessTokenVersion": 2,
+                  "oauth2PermissionScopes": [
+                    {
+                      "id": "[variables('scopeId')]",
+                      "value": "access_as_user",
+                      "isEnabled": true,
+                      "type": "User",
+                      "adminConsentDisplayName": "Access Kaveon as the signed-in user",
+                      "userConsentDisplayName": "Access Kaveon on your behalf",
+                      "adminConsentDescription": "Use the assigned Kaveon role.",
+                      "userConsentDescription": "Use your assigned Kaveon role."
+                    }
+                  ]
+                }
+              }
+            },
+            "enterprise": {
+              "import": "graph",
+              "type": "Microsoft.Graph/servicePrincipals@v1.0",
+              "properties": {
+                "appId": "[reference('application').appId]",
+                "appRoleAssignmentRequired": true
+              },
+              "dependsOn": [
+                "apiRegistration",
+                "application"
+              ]
+            },
+            "firstAdmin": {
+              "import": "graph",
+              "type": "Microsoft.Graph/appRoleAssignedTo@v1.0",
+              "properties": {
+                "principalId": "[parameters('adminPrincipalId')]",
+                "resourceId": "[reference('enterprise').id]",
+                "appRoleId": "[first(filter(variables('roles'), lambda('role', equals(lambdaVariables('role').value, 'Admin')))).id]"
+              },
+              "dependsOn": [
+                "enterprise"
+              ]
+            },
+            "apiRegistration": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "kaveon-directory-api",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "installationKey": {
+                    "value": "[parameters('installationKey')]"
+                  },
+                  "displayName": {
+                    "value": "[reference('application').displayName]"
+                  },
+                  "clientId": {
+                    "value": "[reference('application').appId]"
+                  },
+                  "scopeId": {
+                    "value": "[variables('scopeId')]"
+                  },
+                  "serviceManagementReference": {
+                    "value": "[parameters('serviceManagementReference')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.46.1.21595",
+                      "templateHash": "5675150534939617126"
+                    }
+                  },
+                  "parameters": {
+                    "installationKey": {
+                      "type": "string"
+                    },
+                    "displayName": {
+                      "type": "string"
+                    },
+                    "clientId": {
+                      "type": "string"
+                    },
+                    "scopeId": {
+                      "type": "string"
+                    },
+                    "serviceManagementReference": {
+                      "type": "string"
+                    }
+                  },
+                  "imports": {
+                    "graph": {
+                      "provider": "MicrosoftGraph",
+                      "version": "1.0.0"
+                    }
+                  },
+                  "resources": {
+                    "api": {
+                      "import": "graph",
+                      "type": "Microsoft.Graph/applications@v1.0",
+                      "properties": {
+                        "uniqueName": "[parameters('installationKey')]",
+                        "displayName": "[parameters('displayName')]",
+                        "serviceManagementReference": "[if(empty(parameters('serviceManagementReference')), null(), parameters('serviceManagementReference'))]",
+                        "identifierUris": [
+                          "[format('api://{0}', parameters('clientId'))]"
+                        ],
+                        "requiredResourceAccess": [
+                          {
+                            "resourceAppId": "[parameters('clientId')]",
+                            "resourceAccess": [
+                              {
+                                "id": "[parameters('scopeId')]",
+                                "type": "Scope"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "application"
+              ]
+            }
+          },
+          "outputs": {
+            "clientId": {
+              "type": "string",
+              "value": "[reference('application').appId]"
+            },
+            "tenantId": {
+              "type": "string",
+              "value": "[tenant().tenantId]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('aks-{0}', variables('installKey'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[parameters('storageAccountName')]"
+          },
+          "registryName": {
+            "value": "[parameters('registryName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "operatorObjectId": {
+            "value": "[parameters('operatorObjectId')]"
+          },
+          "resourcePrefix": {
+            "value": "[variables('resourcePrefix')]"
+          },
+          "nodeResourceGroupName": {
+            "value": "[format('rg-{0}-nodes', variables('resourcePrefix'))]"
+          },
+          "systemNodeSize": {
+            "value": "Standard_D4s_v5"
+          },
+          "systemNodeCount": {
+            "value": 2
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          },
+          "nodeSize": {
+            "value": "[parameters('nodeSize')]"
+          },
+          "minWorkers": {
+            "value": "[parameters('minWorkers')]"
+          },
+          "maxWorkers": {
+            "value": "[parameters('maxWorkers')]"
+          },
+          "enableNatGateway": {
+            "value": "[parameters('enableNatGateway')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "8946609179991775961"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Existing ADLS Gen2 account. No data resources are recreated by this template."
+              }
+            },
+            "registryName": {
+              "type": "string",
+              "metadata": {
+                "description": "Existing ACR containing the immutable Kaveon images."
+              }
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]"
+            },
+            "kubernetesVersion": {
+              "type": "string",
+              "defaultValue": "1.35.7"
+            },
+            "operatorObjectId": {
+              "type": "string"
+            },
+            "nodeSize": {
+              "type": "string",
+              "defaultValue": "Standard_B2s",
+              "metadata": {
+                "description": "Small default worker size for budget-capped qualification. Override only with an approved cost estimate."
+              }
+            },
+            "minWorkers": {
+              "type": "int",
+              "defaultValue": 1
+            },
+            "maxWorkers": {
+              "type": "int",
+              "defaultValue": 2,
+              "metadata": {
+                "description": "Keep the default topology within the qualification budget; raise only with explicit approval."
+              }
+            },
+            "enableNatGateway": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Provision a dedicated NAT gateway only with an approved cost estimate. The default uses the AKS managed load-balancer egress path."
+              }
+            },
+            "resourcePrefix": {
+              "type": "string",
+              "defaultValue": "kaveon"
+            },
+            "nodeResourceGroupName": {
+              "type": "string",
+              "nullable": true
+            },
+            "systemNodeSize": {
+              "type": "string",
+              "defaultValue": "[parameters('nodeSize')]"
+            },
+            "systemNodeCount": {
+              "type": "int",
+              "defaultValue": 1
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {
+                "project": "kaveon",
+                "environment": "production"
+              }
+            }
+          },
+          "resources": {
+            "storage": {
+              "existing": true,
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('storageAccountName')]"
+            },
+            "blobs": {
+              "existing": true,
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]"
+            },
+            "productContainer": {
+              "existing": true,
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'product')]"
+            },
+            "registry": {
+              "existing": true,
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2023-07-01",
+              "name": "[parameters('registryName')]"
+            },
+            "network": {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}-vnet', parameters('resourcePrefix'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "10.225.0.0/16"
+                  ]
+                }
+              }
+            },
+            "egressIp": {
+              "condition": "[parameters('enableNatGateway')]",
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}-egress-ip', parameters('resourcePrefix'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard",
+                "tier": "Regional"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static",
+                "publicIPAddressVersion": "IPv4"
+              }
+            },
+            "egress": {
+              "condition": "[parameters('enableNatGateway')]",
+              "type": "Microsoft.Network/natGateways",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}-egress', parameters('resourcePrefix'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "idleTimeoutInMinutes": 10,
+                "publicIpAddresses": [
+                  {
+                    "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-egress-ip', parameters('resourcePrefix')))]"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "egressIp"
+              ]
+            },
+            "subnet": {
+              "type": "Microsoft.Network/virtualNetworks/subnets",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('{0}-vnet', parameters('resourcePrefix')), 'aks')]",
+              "properties": {
+                "addressPrefix": "10.225.0.0/20",
+                "defaultOutboundAccess": false,
+                "natGateway": "[if(parameters('enableNatGateway'), createObject('id', resourceId('Microsoft.Network/natGateways', format('{0}-egress', parameters('resourcePrefix')))), null())]",
+                "serviceEndpoints": [
+                  {
+                    "service": "Microsoft.Storage"
+                  },
+                  {
+                    "service": "Microsoft.KeyVault"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "egress",
+                "network"
+              ]
+            },
+            "identity": {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}-cluster', parameters('resourcePrefix'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            "networkRole": {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('resourcePrefix')))]",
+              "name": "[guid(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('resourcePrefix'))), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-cluster', parameters('resourcePrefix'))), 'network')]",
+              "properties": {
+                "principalId": "[reference('identity').principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')]"
+              },
+              "dependsOn": [
+                "identity",
+                "network"
+              ]
+            },
+            "cluster": {
+              "type": "Microsoft.ContainerService/managedClusters",
+              "apiVersion": "2025-01-01",
+              "name": "[format('{0}-aks', parameters('resourcePrefix'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Base",
+                "tier": "Free"
+              },
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-cluster', parameters('resourcePrefix'))))]": {}
+                }
+              },
+              "properties": "[shallowMerge(createArray(createObject('dnsPrefix', format('kaveon-{0}', uniqueString(resourceGroup().id)), 'kubernetesVersion', parameters('kubernetesVersion')), if(not(empty(parameters('nodeResourceGroupName'))), createObject('nodeResourceGroup', parameters('nodeResourceGroupName')), createObject()), createObject('enableRBAC', true(), 'disableLocalAccounts', true(), 'aadProfile', createObject('managed', true(), 'enableAzureRBAC', true(), 'tenantID', tenant().tenantId), 'apiServerAccessProfile', createObject('authorizedIPRanges', createArray()), 'oidcIssuerProfile', createObject('enabled', true()), 'securityProfile', createObject('workloadIdentity', createObject('enabled', true())), 'agentPoolProfiles', createArray(createObject('name', 'system', 'count', parameters('systemNodeCount'), 'vmSize', parameters('systemNodeSize'), 'osType', 'Linux', 'osSKU', 'Ubuntu', 'mode', 'System', 'type', 'VirtualMachineScaleSets', 'osDiskSizeGB', 64, 'maxPods', 50, 'vnetSubnetID', resourceId('Microsoft.Network/virtualNetworks/subnets', format('{0}-vnet', parameters('resourcePrefix')), 'aks')), createObject('name', 'workers', 'count', parameters('minWorkers'), 'enableAutoScaling', true(), 'minCount', parameters('minWorkers'), 'maxCount', parameters('maxWorkers'), 'vmSize', parameters('nodeSize'), 'osType', 'Linux', 'osSKU', 'Ubuntu', 'mode', 'User', 'type', 'VirtualMachineScaleSets', 'osDiskSizeGB', 64, 'maxPods', 50, 'vnetSubnetID', resourceId('Microsoft.Network/virtualNetworks/subnets', format('{0}-vnet', parameters('resourcePrefix')), 'aks'), 'nodeLabels', createObject('workload', 'kaveon-worker'))), 'networkProfile', createObject('networkPlugin', 'azure', 'networkPluginMode', 'overlay', 'networkPolicy', 'azure', 'podCidr', '10.244.0.0/16', 'serviceCidr', '10.0.0.0/16', 'dnsServiceIP', '10.0.0.10', 'loadBalancerSku', 'standard', 'outboundType', if(parameters('enableNatGateway'), 'userAssignedNATGateway', 'loadBalancer')))))]",
+              "dependsOn": [
+                "identity",
+                "networkRole",
+                "subnet"
+              ]
+            },
+            "pullRole": {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), resourceId('Microsoft.ContainerService/managedClusters', format('{0}-aks', parameters('resourcePrefix'))), 'pull')]",
+              "properties": {
+                "principalId": "[reference('cluster').identityProfile.kubeletidentity.objectId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+              },
+              "dependsOn": [
+                "cluster"
+              ]
+            },
+            "operatorRole": {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerService/managedClusters', format('{0}-aks', parameters('resourcePrefix')))]",
+              "name": "[guid(resourceId('Microsoft.ContainerService/managedClusters', format('{0}-aks', parameters('resourcePrefix'))), parameters('operatorObjectId'), 'admin')]",
+              "properties": {
+                "principalId": "[parameters('operatorObjectId')]",
+                "principalType": "User",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b')]"
+              },
+              "dependsOn": [
+                "cluster"
+              ]
+            },
+            "readerIdentity": {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}-reader', parameters('resourcePrefix'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            "federation": {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}/{1}', format('{0}-reader', parameters('resourcePrefix')), 'kaveon-engine')]",
+              "properties": {
+                "issuer": "[reference('cluster').oidcIssuerProfile.issuerURL]",
+                "subject": "system:serviceaccount:kaveon:kaveon-engine",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              },
+              "dependsOn": [
+                "cluster",
+                "readerIdentity"
+              ]
+            },
+            "readerRole": {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-reader', parameters('resourcePrefix'))), 'read')]",
+              "properties": {
+                "principalId": "[reference('readerIdentity').principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')]"
+              },
+              "dependsOn": [
+                "readerIdentity"
+              ]
+            },
+            "writerRole": {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', 'product')]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', 'product'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-reader', parameters('resourcePrefix'))), 'product-write')]",
+              "properties": {
+                "principalId": "[reference('readerIdentity').principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]"
+              },
+              "dependsOn": [
+                "readerIdentity"
+              ]
+            }
+          },
+          "outputs": {
+            "clusterName": {
+              "type": "string",
+              "value": "[format('{0}-aks', parameters('resourcePrefix'))]"
+            },
+            "registryName": {
+              "type": "string",
+              "value": "[parameters('registryName')]"
+            },
+            "storageAccountName": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            },
+            "readerClientId": {
+              "type": "string",
+              "value": "[reference('readerIdentity').clientId]"
+            },
+            "workerMin": {
+              "type": "string",
+              "value": "[string(parameters('minWorkers'))]"
+            },
+            "workerMax": {
+              "type": "string",
+              "value": "[string(parameters('maxWorkers'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', 'backups')]",
+        "[resourceId('Microsoft.Resources/deployments', format('directory-{0}', variables('installKey')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', 'opensource')]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', 'product')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('configureDirectory')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('edge-access-{0}', variables('installKey'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "publicIpName": {
+            "value": "[format('{0}-studio-ip', variables('resourcePrefix'))]"
+          },
+          "clusterIdentityName": {
+            "value": "[format('{0}-cluster', variables('resourcePrefix'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.46.1.21595",
+              "templateHash": "14851889024914575969"
+            }
+          },
+          "parameters": {
+            "publicIpName": {
+              "type": "string"
+            },
+            "clusterIdentityName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]",
+              "name": "[guid(resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('clusterIdentityName')), 'studio-edge')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('clusterIdentityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', format('aks-{0}', variables('installKey')))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "clusterName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', format('aks-{0}', variables('installKey'))), '2025-04-01').outputs.clusterName.value]"
+    },
+    "registryName": {
+      "type": "string",
+      "value": "[parameters('registryName')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[parameters('storageAccountName')]"
+    },
+    "adlsOpenSourceContainer": {
+      "type": "string",
+      "value": "opensource"
+    },
+    "adlsProductContainer": {
+      "type": "string",
+      "value": "product"
+    },
+    "adlsBackupContainer": {
+      "type": "string",
+      "value": "backups"
+    },
+    "readerClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', format('aks-{0}', variables('installKey'))), '2025-04-01').outputs.readerClientId.value]"
+    },
+    "plannedStudioOrigin": {
+      "type": "string",
+      "metadata": {
+        "description": "Expected origin to configure on the ingress. It becomes reachable after the workloads and TLS are deployed."
+      },
+      "value": "[if(parameters('configureDirectory'), format('https://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix'))), '2024-05-01').dnsSettings.fqdn), '')]"
+    },
+    "studioPublicIpName": {
+      "type": "string",
+      "value": "[if(parameters('configureDirectory'), format('{0}-studio-ip', variables('resourcePrefix')), '')]"
+    },
+    "entraHelmValues": {
+      "type": "object",
+      "value": "[if(parameters('configureDirectory'), createObject('entraAccess', createObject('tenantId', tenant().tenantId, 'clientId', reference(resourceId('Microsoft.Resources/deployments', format('directory-{0}', variables('installKey'))), '2025-04-01').outputs.clientId.value, 'catalogs', createArray()), 'portal', createObject('publicUrl', if(parameters('configureDirectory'), format('https://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', format('{0}-studio-ip', variables('resourcePrefix'))), '2024-05-01').dnsSettings.fqdn), ''), 'entraPublicClient', true(), 'entraAccess', createObject('tenantId', tenant().tenantId, 'clientId', reference(resourceId('Microsoft.Resources/deployments', format('directory-{0}', variables('installKey'))), '2025-04-01').outputs.clientId.value))), createObject())]"
+    },
+    "entraClientId": {
+      "type": "string",
+      "value": "[coalesce(tryGet(if(parameters('configureDirectory'), reference(resourceId('Microsoft.Resources/deployments', format('directory-{0}', variables('installKey'))), '2025-04-01'), null()), 'outputs', 'clientId', 'value'), '')]"
+    },
+    "deploymentMode": {
+      "type": "string",
+      "value": "KaveonDB"
+    }
+  }
+}
