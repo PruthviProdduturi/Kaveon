@@ -2030,16 +2030,74 @@ def _fuzzy_question(question: str, vocab: set) -> str:
     return re.sub(r"[A-Za-z][A-Za-z_]+", fix, question)
 
 
+def _implicit_measures(columns: List[dict], named: List[dict]) -> List[dict]:
+    """`SUM(col)` for each measure column no named metric already covers.
+
+    A dataset declares its measures twice over: once as columns carrying
+    `is_metric`, and again — optionally — as named metrics with expressions.
+    Only the named ones reached the router, so a question naming a measure the
+    dataset genuinely has, but nobody had named, matched nothing and fell
+    through to whichever metric the fallback preferred. That is how "total
+    deaths by country" came back as `COUNT(DISTINCT country)`: a wrong answer
+    rather than a declined one, which is the failure this product exists not
+    to make.
+
+    A column already summed by a named metric is skipped, so curation keeps
+    precedence and nothing is offered twice. The name is the column itself,
+    which is what the question said and what the clarification will echo back.
+    """
+    covered = set()
+    for metric in named:
+        expression = (metric.get("expression") or "").upper()
+        for match in re.finditer(r"\b(?:SUM|AVG|MIN|MAX|COUNT)\s*\(\s*(?:DISTINCT\s+)?([A-Z_][A-Z0-9_]*)",
+                                 expression):
+            covered.add(match.group(1).lower())
+    implicit, seen = [], set()
+    for column in columns:
+        if not column.get("is_metric"):
+            continue
+        name = str(column.get("column_name") or column.get("name") or "")
+        key = name.lower()
+        if not name or key in covered or key in seen:
+            continue
+        seen.add(key)
+        implicit.append({"name": name, "expression": f"SUM({name})",
+                         "metric_type": "sum", "implicit": True})
+    return implicit
+
+
 def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List[str]]] = None) -> List[tuple]:
-    """Every metric with its overlap score, best first, stable in dataset order."""
+    """Every metric with its overlap score, best first, stable in dataset order.
+
+    The distinctive overlap decides, because a question's quantifier words say
+    nothing about which measure it wants -- "total" appears in half of them.
+    But when two measures tie on the distinctive words, the quantifier is the
+    only thing left that separates them: "total deaths" ties `total_deaths`
+    against `new_deaths` on "deaths" alone, and the discarded word is exactly
+    the one that chooses. So the full overlap is carried as a lower-order term
+    -- it orders a tie without ever outranking a distinctive match, and it is
+    only counted once the metric matched something distinctive, so a bare
+    "total" still resolves to the default rather than to whichever measure
+    happens to be called "Total something".
+
+    A pair the question gives nothing to separate still scores equal, and the
+    caller still asks which was meant.
+    """
     q = _distinctive(qset)
     ranked = []
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
-        toks = _distinctive(set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_syn(name, extra)))
-        ranked.append((m, len(q & toks)))
+        words = set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_syn(name, extra))
+        distinctive = len(q & _distinctive(words))
+        score = distinctive * _RANK_TIE_BREAK + (len(qset & words) if distinctive else 0)
+        ranked.append((m, score))
     ranked.sort(key=lambda t: -t[1])
     return ranked
+
+
+# Wide enough that a quantifier overlap can never climb past one more
+# distinctive word: no question carries this many tokens.
+_RANK_TIE_BREAK = 1000
 
 
 # "divided by" and "multiplied by" are arithmetic: the "by" belongs to the
@@ -2384,6 +2442,15 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     m_alias = _alias_index(spec, "metrics")
     d_alias = _alias_index(spec, "dimensions")
     _mspec, _dspec = spec.get("metrics") or {}, spec.get("dimensions") or {}
+    # A column the dataset marks `is_metric` is a measure whether or not anyone
+    # wrote a named metric over it. Without this the router could only choose
+    # among named metrics, so a question naming a real measure column matched
+    # nothing and fell through to an unrelated metric: "total deaths by
+    # country" over a dataset with `total_deaths` declared but unnamed answered
+    # `COUNT(DISTINCT country)`, confidently and wrongly. Summing is the right
+    # default for an undeclared measure, and a named metric over the same
+    # column always wins because it is added first and matched by name.
+    metrics = list(metrics) + _implicit_measures(columns, metrics)
     metrics = [m for m in metrics
                if not _mspec.get(m.get("name") or m.get("metric_name"), {}).get("hidden")]
     dims = [d for d in dims
