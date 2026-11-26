@@ -24,7 +24,7 @@ import psycopg2
 
 NEON = os.environ["NEON_URL"]
 API = "http://localhost:8080"
-EMAIL = "demo-owner@example.org"
+EMAIL = os.environ["KAVEON_DEMO_OWNER"]
 SECRET = os.environ.get("KAVEON_PROXY_SECRET", "dev-only-proxy-secret-change-me-fedcba9876543210")
 H = {"x-user-email": EMAIL, "x-user-role": "Admin", "x-user-roles": "Admin",
      "x-proxy-secret": SECRET, "content-type": "application/json"}

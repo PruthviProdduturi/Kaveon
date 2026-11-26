@@ -161,6 +161,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check for deployment identifiers
+        run: python scripts/check-deployment-identifiers.py
+
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:

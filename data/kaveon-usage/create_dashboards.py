@@ -19,7 +19,7 @@ import database.pool as pool  # noqa: E402
 DB = "kaveon"
 DS = 142
 SRC = "kaveon.public.kaveon_product_analytics"
-OWNER = "demo-owner@example.org"
+OWNER = os.environ["KAVEON_DEMO_OWNER"]
 
 C_ACCENT = "#4A9EE8"
 C_ACCENT_DARK = "#2d7dd2"

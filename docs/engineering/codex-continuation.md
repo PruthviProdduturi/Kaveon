@@ -53,7 +53,7 @@ Local evidence on `dev`:
 > operation.
 
 The personal Azure environment remains intentionally preserved. In subscription
-`00000000-0000-4000-8000-000000000000`, resource group `kaveon-rg` (West US 2),
+`<subscription-id>`, resource group `kaveon-rg` (West US 2),
 PostgreSQL Flexible Server `kaveon-db` is Ready (Standard_B1ms, 64 GiB), and
 the active Container Apps API still reports PostgreSQL metadata authority,
 retirement mode disabled, and no product-storage cutover. ADLS Gen2 account
@@ -86,7 +86,7 @@ superiority claim is currently supported.
 git switch dev
 git pull origin dev
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-local-postgresql-retirement.ps1
-az account set --subscription 00000000-0000-4000-8000-000000000000
+az account set --subscription <subscription-id>
 az postgres flexible-server show -g kaveon-rg -n kaveon-db -o table
 az containerapp show -g kaveon-rg -n kaveon-api --query "{revision:properties.latestRevisionName,env:properties.template.containers[0].env}" -o json
 az storage container list --account-name kaveonlake --auth-mode login -o table
@@ -191,7 +191,7 @@ Windows may warn that Cargo incremental hard links are unavailable and copy file
 Personal subscription:
 
 ```text
-Subscription: 00000000-0000-4000-8000-000000000000
+Subscription: <subscription-id>
 Resource group: kaveon-rg
 ACR: kaveonacr.azurecr.io
 Container Apps environment: kaveon-env
@@ -203,7 +203,7 @@ Migration job: none; the obsolete `kaveon-migrate` job was removed
 The Azure CLI context can be changed by another concurrent shell. Always scope the subscription in the same command sequence before Azure operations:
 
 ```powershell
-az account set --subscription 00000000-0000-4000-8000-000000000000
+az account set --subscription <subscription-id>
 ```
 
 Engine ACR build `ccc2` succeeded. It built from the public Git context to avoid traversing roughly 24 GiB of local ignored Cargo targets:

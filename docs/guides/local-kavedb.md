@@ -28,7 +28,7 @@ cloud-level replication or multi-node failover.
 Verify the transaction capability and identity boundary:
 
 ```powershell
-curl.exe -H "Authorization: Bearer kaveon-local-admin-token-not-for-production" `
+curl.exe -H "Authorization: Bearer $env:KAVEON_API_ACCESS_TOKEN" `
   http://localhost:8080/v1/capabilities
 ```
 

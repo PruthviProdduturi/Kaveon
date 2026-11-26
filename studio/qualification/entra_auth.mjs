@@ -37,7 +37,7 @@ for (const publicClientEnabled of [false, true]) {
   });
 }
 
-const tenantId = "11111111-2222-3333-4444-555555555555";
+const tenantId = "11111111-1111-4111-8111-111111111111";
 const oid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const clientId = "22222222-2222-4222-8222-222222222222";
 const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;

@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--port', type=int, default=18444)
-    p.add_argument('--subscription', default='00000000-0000-4000-8000-000000000000')
-    p.add_argument('--resource-group', default='example-work-environment')
+    p.add_argument('--subscription', required=True)
+    p.add_argument('--resource-group', required=True)
     p.add_argument('--cluster', default='kaveon-test-aks')
     p.add_argument('--private', type=Path, default=ROOT / 'tmp/aks-private-v2')
     p.add_argument('--interval', type=int, default=60)

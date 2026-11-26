@@ -9,7 +9,7 @@ installation. Defect D-4 in `docs/engineering/OPEN-DEFECTS.md`.
 ## 1. What is wrong with the published table
 
 Measured live against `KaveonTelemetry.events.enriched` on 2026-10-13, through
-the Engine as `demo-owner@example.org` / Admin:
+the Engine as `operator@example.org` / Admin:
 
 | Fact | Value | Why it reads as fabricated |
 |---|---|---|

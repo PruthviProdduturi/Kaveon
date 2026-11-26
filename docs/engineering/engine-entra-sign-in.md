@@ -2,7 +2,7 @@
 
 Status: implementation and automated validation complete; existing Entra application
 configured for this test deployment. The user supplied client ID
-`22222222-2222-4222-8222-222222222222` (Forge-Dev), owned by the deploying user.
+`<client-id>` (Forge-Dev), owned by the deploying user.
 Added the Kaveon delegated permission and SPA redirects while preserving Forge and
 Trino scopes, existing redirects and token version 2. The ID is an application ID,
 not a Service Tree ID. New-app creation was rejected by Microsoft tenant Service Tree
@@ -39,7 +39,7 @@ or stale key state fails closed.
 
 ## Required registration
 
-In tenant `11111111-1111-4111-8111-111111111111`, create a single-tenant app named
+In tenant `<tenant-id>`, create a single-tenant app named
 `Kaveon Engine Test - prproddu` with the correct Service Tree ownership reference.
 Set `api.requestedAccessTokenVersion` to 2 and expose a delegated permission named
 `access_as_user` with identifier URI `api://<client-id>`. Configure these **SPA**
@@ -64,7 +64,7 @@ principal and bridge credentials. Supply the real client ID; do not deploy place
 ```json
 {
   "entra": {
-    "tenant_id": "11111111-1111-4111-8111-111111111111",
+    "tenant_id": "<tenant-id>",
     "client_id": "<registered-engine-client-id>",
     "required_scope": "access_as_user",
     "principals": {

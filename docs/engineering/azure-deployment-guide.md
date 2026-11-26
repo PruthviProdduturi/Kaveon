@@ -61,10 +61,10 @@ either script to install a checksummed release instead of the preview; see
 For the existing test environment:
 
 ```powershell
-az login --tenant 11111111-1111-4111-8111-111111111111
-az account set --subscription 00000000-0000-4000-8000-000000000000
-# westus2 since 2026-09-14; the eastus resource group example-work-environment is retired
-az aks get-credentials --resource-group example-work-environment-westus2 --name kaveon-test-aks --overwrite-existing
+az login --tenant <tenant-id>
+az account set --subscription <subscription-id>
+# westus2 since 2026-09-14; the eastus resource group work-environment is retired
+az aks get-credentials --resource-group work-environment-westus2 --name kaveon-test-aks --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl config current-context
 kubectl get nodes

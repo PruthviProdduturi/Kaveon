@@ -6,7 +6,7 @@ brought back -- because restarting the cluster unchanged recreates the outage
 about eight days later.
 
 Everything below was measured on 2026-10-18 against subscription
-`00000000-0000-4000-8000-000000000000`.
+`<subscription-id>`.
 
 ## State
 

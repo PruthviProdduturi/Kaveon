@@ -20,8 +20,8 @@ cur = conn.cursor()
 def create_dataset(name, desc, table, schema, columns, metrics):
     cur.execute(
         """INSERT INTO datasets (dataset_name, description, fact_table, schema_name, database_name, date_column, created_by)
-        VALUES (%s, %s, %s, %s, 'kaveon', 'year', 'demo-owner@example.org') RETURNING id""",
-        (name, desc, table, schema),
+        VALUES (%s, %s, %s, %s, 'kaveon', 'year', %s) RETURNING id""",
+        (name, desc, table, schema, os.environ["KAVEON_DEMO_OWNER"]),
     )
     ds_id = cur.fetchone()[0]
     for col in columns:

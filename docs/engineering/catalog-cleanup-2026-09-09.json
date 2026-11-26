@@ -21,7 +21,7 @@
     "table": "OpenSource.ai_benchmarks.open_llm_results",
     "rows": 4576
   },
-  "scope": "example-work-environment AKS only; no subscription policy changes",
+  "scope": "example-work-deployment-name AKS only; no subscription policy changes",
   "subject_schema_cleanup": {
     "removed_schemas": [
       "bronze",

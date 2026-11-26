@@ -1,10 +1,10 @@
 # AKS test deployment — September 8, 2026
 
 > **Historical record.** This page records the eastus deployment
-> (`example-work-environment`, storage and registry `kvtestegmf6oweugsno`) from
+> (`work-environment`, storage and registry `kvtestegmf6oweugsno`) from
 > September 8 to 14, 2026 and the gates it passed. That cluster was deleted; the
 > qualification cluster has run in **westus2** since 2026-09-14 (resource group
-> `example-work-environment-westus2`, cluster `kaveon-test-aks`, storage and registry
+> `work-environment-westus2`, cluster `kaveon-test-aks`, storage and registry
 > `kvtesticmwwliihpppo`, the lake copied across). The chart, secrets, fixture
 > and verifier procedures below still apply to it; the resource names, image
 > digests and the stop command do not. Current operations:
@@ -21,7 +21,7 @@
 > deployment records do not prove that every API metadata call site has cut
 > over.
 
-The user authorized provisioning in Microsoft tenant `11111111-1111-4111-8111-111111111111`, subscription `example-work-environment` (`00000000-0000-4000-8000-000000000000`), resource group `example-work-environment`. This resumes AKS deployment only; the engine performance goal remains paused. No subscription policies, exemptions, or subscription-level role assignments were changed.
+The user authorized provisioning in Microsoft tenant `<tenant-id>`, subscription `work-environment` (`<subscription-id>`), resource group `work-environment`. This resumes AKS deployment only; the engine performance goal remains paused. No subscription policies, exemptions, or subscription-level role assignments were changed.
 
 ## Provisioned resources
 
@@ -31,7 +31,7 @@ East US hosts `kaveon-test-aks`, a Kubernetes 1.35.7 test cluster with one syste
 - ADLS Gen2: `kvtestegmf6oweugsno`, Standard LRS, including the `kavedb` test catalog container; HTTPS only, shared keys and anonymous blob access disabled, firewall default deny with AKS subnet access.
 - Network: `kaveon-test-vnet`, dedicated AKS subnet, Azure CNI overlay.
 - Identity: Entra/Azure RBAC cluster access, local cluster accounts disabled, OIDC and workload identity enabled. `kaveon-test-reader` has read-only blob access to the test account and contributor access only on the dedicated `product-transactions` container. It cannot write to the bronze, silver, or gold analytics containers. Caller upload permission is scoped to the test account; image pull and cluster administration roles are scoped to their new resources.
-- AKS-managed resources are in `MC_example-work-environment_kaveon-test-aks_eastus`.
+- AKS-managed resources are in `MC_work-environment_kaveon-test-aks_eastus`.
 
 `infra/bicep/environments/aks-test.bicep` is the resource-group template. Supply the operator object ID and verified outbound IP CIDRs. The initial what-if contained only creates in the test group. Two verified workstation egress addresses were allowed at these resources, but direct workstation access still timed out; deployment uses authenticated `az aks command invoke`. Do not widen access or change subscription policy to work around that network limitation.
 
@@ -95,7 +95,7 @@ port-forward process open in a separate terminal:
 kubectl --context kaveon-test-aks -n kaveon port-forward service/kaveon-api 18000:8080 --address 127.0.0.1
 
 $env:KAVEON_API_ACCESS_TOKEN = (az account get-access-token `
-  --resource api://22222222-2222-4222-8222-222222222222 `
+  --resource api://<client-id> `
   --query accessToken -o tsv).Trim()
 python scripts/verify-aks-dlm-coverage.py `
   --api-url http://127.0.0.1:18000 `
@@ -235,7 +235,7 @@ Microsoft popup/MFA completion remains a manual check.
 To stop compute between sessions (after queries finish):
 
 ```powershell
-az aks stop --subscription 00000000-0000-4000-8000-000000000000 --resource-group example-work-environment --name kaveon-test-aks
+az aks stop --subscription <subscription-id> --resource-group work-environment --name kaveon-test-aks
 ```
 
 Resume with the same command using `start`. Storage, registry, disks and some networking charges persist while stopped. Resource group deletion is destructive and is not part of this deployment. The cluster is left running for the requested testing unless the user asks otherwise.
@@ -278,7 +278,7 @@ Default rollout scope: Engine and the native API on AKS, with Studio deployed se
 
 ### Phases and acceptance gates
 
-1. **Access and design:** select inputs below; read-only inventory resources, permissions, quotas and current configuration. The recorded Kaveon subscription `00000000-0000-4000-8000-000000000000` is not visible to the current Azure identity. Do not change context or choose another subscription implicitly.
+1. **Access and design:** select inputs below; read-only inventory resources, permissions, quotas and current configuration. The recorded Kaveon subscription `<subscription-id>` is not visible to the current Azure identity. Do not change context or choose another subscription implicitly.
 2. **Reviewable implementation:** author parameterized Bicep and Helm, migration/backup runbooks and an explicit release workflow. Run Bicep build/lint, Helm lint/template and Kubernetes schema validation locally. Once target access and deployment authorization exist, review Bicep what-if and image digests before provisioning staging.
 3. **Staging functional/security gate:** validate image pulls, DNS, certificates, federated ADLS reads, secret loading, restart persistence, schema migration, Entra sign-in, Studio/API/Engine exact-result queries, catalog lifecycle, unauthorized/forged-actor rejection and tenant/principal query ownership. Test representative Parquet/Delta/Iceberg paths individually; local format support does not prove every cloud combination.
 4. **Distributed resilience/capacity gate:** run the frozen correctness/performance suite on at least five workers; test worker termination, retries, cancellation, duplicate exchange, disk exhaustion, memory pressure, skew, concurrent tenants, coordinator restart, node drain and a sustained soak. Record exact images, machine sizes, dataset, limits, errors and cost. Prove backup/restore in an isolated environment. Do not publish an 8/10 or comparative performance claim without its evidence.

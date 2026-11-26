@@ -93,7 +93,7 @@ Stopping a cluster that hosts the entire stack also stops Studio and its documen
 
 ```powershell
 az login
-az account set --subscription 00000000-0000-4000-8000-000000000000
+az account set --subscription <subscription-id>
 az aks get-credentials --resource-group kaveon-rg --name kaveon-aks --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl get nodes

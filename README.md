@@ -7,6 +7,8 @@
 
 # Talk to your data
 
+Make every question decision-ready. One governed platform for analytics, dashboards, and deterministic data intelligence. Kaveon Intelligence connects the Data Language Model, Kaveon Engine, and Kaveon Studio: governed context, distributed execution, and a product surface for asking, exploring, and sharing answers.
+
 Kaveon is an open-source analytics platform for data you own. Define what *revenue*, *sessions*, or an *active user* means in a semantic dataset. Use that definition to answer questions in chat, explore your lake in SQL, and publish interactive dashboards.
 
 [Open Studio](https://kaveon.io) · [Run locally](#run-locally) · [Deploy Kaveon](#deploy) · [Documentation](https://kaveon.io/docs)

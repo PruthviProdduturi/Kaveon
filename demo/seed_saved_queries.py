@@ -10,7 +10,7 @@ import os
 import psycopg2
 
 URL = os.environ["NEON_URL"]
-EMAIL = "demo-owner@example.org"
+EMAIL = os.environ["KAVEON_DEMO_OWNER"]
 
 QUERIES = [
     ("🌍 Top 15 countries by cases",

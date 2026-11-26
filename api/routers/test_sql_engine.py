@@ -323,7 +323,7 @@ class EngineCancellationTests(unittest.TestCase):
         another principal's statement."""
         first = sql.UserContext(email="analyst@example.com", role="Analyst", jwt_roles=[])
         second = sql.UserContext(email="other@example.com", role="Analyst", jwt_roles=[])
-        token = "abcd1234efgh"
+        token = "unit-test"
         self.assertNotEqual(sql._cancel_tag(first, token), sql._cancel_tag(second, token))
         self.assertEqual(sql._cancel_tag(first, token), sql._cancel_tag(first, token))
         self.assertIsNone(sql._cancel_tag(first, None))

@@ -1,6 +1,8 @@
 """Create 3 separate Climate/Energy dashboards in Kaveon."""
 import os, psycopg2, json, uuid, random, string
 
+owner = os.environ["KAVEON_DEMO_OWNER"]
+
 conn = psycopg2.connect(
     host=os.environ.get("PGHOST", "kaveon-db.postgres.database.azure.com"),
     dbname=os.environ.get("PGDATABASE", "kaveon"),
@@ -12,16 +14,16 @@ cur = conn.cursor()
 def uid(): return "c" + "".join(random.choices(string.hexdigits[:16], k=8))
 
 def chart(name, ctype, qc, vc=None):
-    cur.execute("INSERT INTO charts (name,chart_type,query_config,viz_config,visibility,created_by) VALUES (%s,%s,%s,%s,'internal','demo-owner@example.org') RETURNING id",
-        (name, ctype, json.dumps(qc), json.dumps(vc or {})))
+    cur.execute("INSERT INTO charts (name,chart_type,query_config,viz_config,visibility,created_by) VALUES (%s,%s,%s,%s,'internal',%s) RETURNING id",
+        (name, ctype, json.dumps(qc), json.dumps(vc or {}), owner))
     cid = cur.fetchone()[0]
     print(f"  {cid}: {name}")
     return cid
 
 def dash(name, desc, cids, layout):
     did = uuid.uuid4().hex
-    cur.execute("INSERT INTO dashboards (id,name,description,layout,charts,theme,is_published,visibility,created_by) VALUES (%s,%s,%s,%s,%s,'dark',true,'internal','demo-owner@example.org')",
-        (did, name, desc, json.dumps(layout), json.dumps(cids)))
+    cur.execute("INSERT INTO dashboards (id,name,description,layout,charts,theme,is_published,visibility,created_by) VALUES (%s,%s,%s,%s,%s,'dark',true,'internal',%s)",
+        (did, name, desc, json.dumps(layout), json.dumps(cids), owner))
     print(f"  Dashboard: {name}")
     return did
 

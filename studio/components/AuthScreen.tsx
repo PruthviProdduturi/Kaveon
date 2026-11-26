@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
 import { unknownText } from "./Reading";
@@ -217,6 +218,9 @@ export function AuthScreen() {
 					background: #171717;
 				}
 				.auth-signin-inner { width: 100%; max-width: 320px; }
+				.auth-home-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; color: #b8c7d9; font-size: 14px; text-decoration: none; }
+				.auth-home-link:hover { color: #fff; text-decoration: underline; }
+				.auth-home-link:focus-visible { outline: 2px solid #60a5fa; outline-offset: 3px; }
 				.auth-dots { display: flex; gap: 6px; margin-top: 28px; }
 
 				@media (max-width: 768px) {
@@ -310,6 +314,7 @@ export function AuthScreen() {
 			{/* ─── RIGHT PANEL — Sign-in ─── */}
 			<div className="auth-signin">
 				<div className="auth-signin-inner">
+					<Link href="/" className="auth-home-link"><span aria-hidden="true">←</span> Back to homepage</Link>
 					<h2 style={{ fontSize: 26, fontWeight: 600, color: "#f0f0f2", marginBottom: 6, letterSpacing: "-0.3px" }}>
 						Sign in
 					</h2>

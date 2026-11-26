@@ -2,7 +2,7 @@
 
 ## Pause and resume (the weekend procedure since 2026-09-17)
 
-The westus2 cluster (`example-work-environment-westus2` / `kaveon-test-aks`) is
+The westus2 cluster (`work-environment-westus2` / `kaveon-test-aks`) is
 paused over the weekend, not deleted: `az aks stop` deallocates the control
 plane and both node pools while the managed disks stay, so the coordinator's
 KaveonDB catalog PVC, the storage account with the benchmark objects
@@ -12,13 +12,13 @@ as they were. Worker `emptyDir` state (exchange spools, spills) is lost,
 which is by design.
 
 ```powershell
-az account set --subscription 00000000-0000-4000-8000-000000000000
+az account set --subscription <subscription-id>
 # Friday, after the last run's record is committed:
 kubectl -n kaveon get jobs            # nothing Running
-az aks stop  --resource-group example-work-environment-westus2 --name kaveon-test-aks
+az aks stop  --resource-group work-environment-westus2 --name kaveon-test-aks
 # Monday:
-az aks start --resource-group example-work-environment-westus2 --name kaveon-test-aks
-az aks get-credentials --resource-group example-work-environment-westus2 --name kaveon-test-aks --overwrite-existing
+az aks start --resource-group work-environment-westus2 --name kaveon-test-aks
+az aks get-credentials --resource-group work-environment-westus2 --name kaveon-test-aks --overwrite-existing
 kubectl config use-context kaveon-test-aks
 kubectl -n kaveon rollout status sts/kaveon-coordinator && kubectl -n kaveon rollout status sts/kaveon-worker
 kubectl -n kaveon rollout status deploy/kaveon-api
@@ -50,7 +50,7 @@ under `docs/qualification/clickbench/runs/`.
 ## Delete and recreate (the earlier procedure, eastus, historical)
 
 This is the procedure used on the eastus cluster (resource group
-`example-work-environment`, storage account `kvtestegmf6oweugsno`) before 2026-09-14;
+`work-environment`, storage account `kvtestegmf6oweugsno`) before 2026-09-14;
 the names below are that cluster's and the snapshot named is that cluster's.
 It is kept because it is the recovery path if a stopped cluster ever has to be
 rebuilt: `az aks stop` is the weekend procedure now. The runbook removes only
@@ -62,12 +62,12 @@ current deployments use KaveonDB.
 ## Before suspension
 
 ```powershell
-$sub = "00000000-0000-4000-8000-000000000000"
-$rg = "example-work-environment"
+$sub = "<subscription-id>"
+$rg = "work-environment"
 $aks = "kaveon-test-aks"
 az account set --subscription $sub
 az aks show --resource-group $rg --name $aks --query "{name:name,state:provisioningState,location:location,pools:agentPoolProfiles[].{name:name,count:count,vmSize:vmSize}}" -o json
-az resource list --resource-group $rg --query "[].{name:name,type:type,id:id}" -o json > tmp/example-work-environment-resources-before-aks-delete.json
+az resource list --resource-group $rg --query "[].{name:name,type:type,id:id}" -o json > tmp/work-environment-resources-before-aks-delete.json
 ```
 
 Create and verify a KaveonDB catalog disk snapshot before deleting AKS. The

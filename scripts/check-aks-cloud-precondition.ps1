@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$SubscriptionId = "00000000-0000-4000-8000-000000000000",
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$SubscriptionId,
     [string]$ResourceGroup = "kaveon-rg",
     [string]$AksName = "kaveon-aks",
     [string]$StorageAccount = "kaveonlake",

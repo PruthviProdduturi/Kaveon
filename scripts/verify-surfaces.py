@@ -46,7 +46,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import quote
 
-ACTOR = os.environ.get("KAVEON_VERIFY_ACTOR", "demo-owner@example.org")
+ACTOR = os.environ.get("KAVEON_VERIFY_ACTOR")
 ROLE = "Admin"
 API = os.environ.get("KAVEON_VERIFY_API", "http://127.0.0.1:8080")
 PORTAL = os.environ.get("KAVEON_VERIFY_PORTAL", "http://kaveon-portal.kaveon.svc.cluster.local:3000")
@@ -80,6 +80,8 @@ def api_headers() -> dict:
     secret = os.environ.get("KAVEON_PROXY_SECRET", "")
     if not secret:
         raise SystemExit("KAVEON_PROXY_SECRET is not set; run this inside the API pod")
+    if not ACTOR:
+        raise SystemExit("Set KAVEON_VERIFY_ACTOR to the authorized verification account")
     return {"X-User-Email": ACTOR, "X-User-Role": ROLE, "X-Proxy-Secret": secret}
 
 
