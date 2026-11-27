@@ -2082,13 +2082,30 @@ def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
 
     A pair the question gives nothing to separate still scores equal, and the
     caller still asks which was meant.
+
+    A match has to be anchored on one side or the other: the shared word must
+    be one the question actually said, or one the metric is actually named or
+    defined by. Both sides were being expanded through the seed lexicon and
+    then intersected, so any two unrelated concepts sharing a single synonym
+    matched — "churn by region" over a dataset of `revenue` and `orders`
+    answered revenue, because `churn` expands to `turnover` and so does
+    `revenue`. Neither side ever says the other's word, and a dataset without
+    a churn measure must decline rather than substitute one. An honest synonym
+    still matches: "sales by region" reaches `revenue` because the question
+    said "sales" and the metric expands to it.
     """
     q = _distinctive(qset)
+    q_own = {t for t in (qset | {_stem(t) for t in qset}) if t not in _GENERIC_METRIC_TOKENS}
     ranked = []
     for m in metrics:
         name = m.get("name") or m.get("metric_name") or ""
+        own = _name_tokens(name, extra) | set(_tokenize(m.get("expression") or ""))
+        own |= {_stem(t) for t in own}
         words = set(_tokenize(name)) | set(_tokenize(m.get("expression") or "")) | set(_syn(name, extra))
-        distinctive = len(q & _distinctive(words))
+        expanded = _distinctive(words)
+        m_own = {t for t in own if t not in _GENERIC_METRIC_TOKENS}
+        anchored = (q_own & expanded) | (q & m_own)
+        distinctive = len(anchored)
         score = distinctive * _RANK_TIE_BREAK + (len(qset & words) if distinctive else 0)
         ranked.append((m, score))
     ranked.sort(key=lambda t: -t[1])
@@ -2122,6 +2139,69 @@ def _by_phrase(question: str) -> Optional[str]:
     wants the answer broken down by, or ordered by."""
     m = _BY_PHRASE_RE.search(question)
     return m.group(1) if m else None
+
+
+def _dimension_naming_tokens(tokens: set, dims: List[dict]) -> set:
+    """Of these tokens, the ones that name a dimension of this dataset outright.
+
+    Stems on the question's side only, so "countries" reaches `country`
+    without `country` reaching anything it is merely near. A multi-word column
+    counts only when every word of it is present, which is the same subset
+    test the grouping resolution trusts.
+    """
+    stems = {t: _stem(t) for t in tokens}
+    naming: set = set()
+    for d in dims:
+        own = set(_tokenize(d.get("column_name") or d.get("name") or ""))
+        if not own:
+            continue
+        matched = {t for t, s in stems.items() if t in own or s in own}
+        if own <= {stems[t] for t in matched} | matched:
+            naming |= matched
+    return naming
+
+
+def _grouping_only_tokens(question: str, dims: List[dict],
+                          metrics: Optional[List[dict]] = None,
+                          m_alias: Optional[Dict[str, List[str]]] = None) -> set:
+    """Tokens whose only job in the question is to name the grouping dimension.
+
+    Every word of a question was scored against its measures, the breakdown
+    included, so "revenue by region" put "region" in front of a metric called
+    `Regions` — `COUNT(DISTINCT region)` — and answered the count of regions
+    rather than the revenue. A breakdown says how to split the answer, never
+    what to measure.
+
+    Which side of the cue holds the breakdown depends on the question. "revenue
+    by region" measures before "by" and groups after it; "top 5 countries by
+    total deaths" does the reverse, and there the phrase after "by" *is* the
+    measure. So the breakdown is identified rather than assumed: the side that
+    names a dimension of this dataset outright is the grouping, and when the
+    phrase after the cue names a measure outright the head is read as the
+    grouping instead.
+
+    A word the question uses on both sides of the cue is left alone — in
+    "orders by order date" the question says "order" about the measure too.
+    """
+    phrase = _by_phrase(question)
+    if not phrase:
+        return set()
+    phrase_tokens = set(_tokenize(phrase))
+    head_tokens = set(_tokenize(question[:question.lower().rindex(phrase.lower())]))
+    # Stems on the other side too: "orders by order date" says the measure's
+    # word as a plural, and a literal comparison would not notice.
+    head_said = head_tokens | {_stem(t) for t in head_tokens}
+    phrase_said = phrase_tokens | {_stem(t) for t in phrase_tokens}
+    grouping = _dimension_naming_tokens(phrase_tokens, dims)
+    if grouping:
+        return {t for t in grouping if t not in head_said and _stem(t) not in head_said}
+    # "top 5 regions by revenue": the measure is after the cue, so the
+    # dimension in front of it is the breakdown and says nothing about which
+    # measure was asked for.
+    if metrics and _names_metric(phrase_tokens, metrics, m_alias):
+        return {t for t in _dimension_naming_tokens(head_tokens, dims)
+                if t not in phrase_said and _stem(t) not in phrase_said}
+    return set()
 
 
 def _name_tokens(name: str, extra: Optional[Dict[str, List[str]]] = None) -> set:
@@ -2564,9 +2644,12 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                              closest=_closest_questions(spec, dim_names, metrics),
                              examples=sample)
 
-    # 2) metric — curated aliases + default metric; generic quantifier words ignored.
+    # 2) metric — curated aliases + default metric; generic quantifier words
+    #    ignored, and so is a breakdown that names a dimension outright: the
+    #    words after "by" say how to split the answer, not what to measure.
     #    A tie between named metrics is a question for the user, not a coin flip.
-    ranked = _rank_metrics(qset, metrics, m_alias)
+    ranked = _rank_metrics(
+        qset - _grouping_only_tokens(question, dims, metrics, m_alias), metrics, m_alias)
     top_score = ranked[0][1] if ranked else 0
     pinned = choices.get("metric")
     metric = None
@@ -2582,6 +2665,30 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         metric = tied[0]
     if metric is None and follow_up and frame and frame.get("metric"):
         metric = next((m for m in metrics if (m.get("name") or m.get("metric_name")) == frame["metric"]), None)
+    if metric is None and top_score == 0 and not pinned:
+        # Nothing in the question named a measure, and the default is about to
+        # answer it. That is right for "what is the total", where the question
+        # names no measure because it wants the headline one — and wrong for
+        # "churn by region" over a dataset of revenue and orders, where the
+        # question named a measure this dataset does not have. The default
+        # would answer a question nobody asked. The words that look like a
+        # filter are already checked above; this is the one at the head of the
+        # sentence, which no shape there examines.
+        for term in _unplaced_content_words(
+                _strip_scope_phrases(_strip_presentation_phrases(_strip_time_phrases(question))),
+                vocabulary, consumed, grammar=classes.GRAMMAR_WORDS):
+            options = _near_names(term, [m.get("name") or m.get("metric_name") for m in metrics], m_alias)
+            if options:
+                return _clarify("metric",
+                                f'"{term}" is not a measure of {_dataset_label(ds)} — '
+                                f'did you mean {", ".join(options)}?',
+                                [{"id": name, "label": name, "description": ""} for name in options],
+                                original_question, choices, dataset_id, ds, t0)
+            return _unanswerable(dataset_id, ds, original_question, t0,
+                                 why=f'"{term}" is not a measure, a dimension or a value of '
+                                     f'{_dataset_label(ds)}.',
+                                 closest=_closest_questions(spec, dim_names, metrics),
+                                 examples=_index_examples(dataset_id, limit=4))
     if metric is None:
         metric = _match_metric(qset, metrics, m_alias, spec.get("default_metric"))
 
@@ -5478,6 +5585,48 @@ def _unresolved_terms(question: str, consumed: set, vocabulary: set,
                 and len(words[i - 1]) >= 4 and words[i - 1].isalpha():
             add([words[i - 1]])
     return found
+
+
+def _unplaced_content_words(question: str, vocabulary: set, consumed: set,
+                            grammar: Optional[set] = None) -> List[str]:
+    """Words the dataset cannot account for at all, in question order.
+
+    `_unresolved_terms` looks at the two shapes a stray filter takes — the
+    object of a preposition, and a qualifier in front of a measure's name. A
+    word at the head of the sentence is neither, so "churn by region" over a
+    dataset of revenue and orders passed through unexamined and the default
+    measure answered it.
+
+    This is only consulted where the question named no measure at all, so its
+    job is narrow: name the word that made the question unanswerable instead
+    of letting the default answer a different one. The accounting is the same
+    as `_unresolved_terms` uses — a value the index matched, a metric,
+    dimension or column name, a stem or prefix of one, a stopword, a
+    quantifier, a ranking word, grammar — and a seed synonym of a measure
+    counts too, so "sales" over a dataset of `revenue` is a question this
+    dataset can answer rather than a word it cannot place.
+
+    That allowance runs one way only: the dataset's words are expanded and the
+    question's word must land in the result. Expanding both sides and
+    intersecting is what let `churn` reach `revenue` through the shared synonym
+    `turnover` in the first place, and it would have let it straight back in
+    here.
+    """
+    known = (set(consumed) | vocabulary | _STOPWORDS | _GENERIC_METRIC_TOKENS
+             | _RANKING_WORDS | set(grammar or ()))
+    known |= {t for word in vocabulary for t in _expand_tokens({word})}
+    known_stems = {_stem(t) for t in known}
+    heads = [t for t in vocabulary if len(t) >= 3]
+    out: List[str] = []
+    for word in re.findall(r"[A-Za-z][A-Za-z&.\-]*", question):
+        w = _normalize(word)
+        if (not w or len(w) < 4 or w in known or _stem(w) in known_stems
+                or any(w in c.split() for c in consumed)
+                or any(w.startswith(h) for h in heads)):
+            continue
+        if w not in out:
+            out.append(w)
+    return out
 
 
 def _distinctive(tokens: set) -> set:

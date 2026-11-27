@@ -139,6 +139,41 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
         metrics for generic &ldquo;how many&rdquo; questions.
       </Callout>
 
+      <h4>Answered or declined, never substituted</h4>
+      <p>
+        A measure the question did not ask for is the one answer a deterministic router must never give, so three
+        rules stand between a question and the wrong measure.
+      </p>
+      <ul>
+        <li>
+          <strong>A match is anchored.</strong> Question and metric are both expanded through the synonym lexicon,
+          but the shared word has to be one the question said or one the metric is named or defined by. Intersecting
+          two expansions alone made any shared synonym a match: &ldquo;churn&rdquo; reached a{" "}
+          <code>revenue</code> measure because both expand to &ldquo;turnover&rdquo;, though neither says the
+          other&apos;s word. An honest synonym still matches — &ldquo;sales&rdquo; reaches <code>revenue</code>,
+          because the question said &ldquo;sales&rdquo; and the metric expands to it.
+        </li>
+        <li>
+          <strong>The breakdown is not scored as a measure.</strong> The words that name the grouping say how to
+          split the answer, not what to measure, so &ldquo;revenue by region&rdquo; cannot resolve to a metric
+          called <code>Regions</code>. Which side of &ldquo;by&rdquo; holds the breakdown is identified, not
+          assumed: in &ldquo;top 5 countries by total deaths&rdquo; the phrase after the cue is the measure, and the
+          dimension in front of it is the breakdown. A word the question uses on both sides keeps its say.
+        </li>
+        <li>
+          <strong>A measure this dataset does not have refuses.</strong> Scoring nothing is the right reading of a
+          question that names no measure — &ldquo;what is the total&rdquo; wants the headline one — but a question
+          that named a measure the dataset lacks is a different question. The word is named back rather than
+          answered around: <code>&quot;churn&quot; is not a measure, a dimension or a value of COVID global</code>.
+        </li>
+      </ul>
+      <p>
+        Two measures a question genuinely does not separate still tie, and a tie is a clarification rather than a
+        coin flip. A quantifier breaks a tie it cannot win on its own: &ldquo;total deaths&rdquo; against{" "}
+        <code>total_deaths</code> and <code>new_deaths</code> ties on &ldquo;deaths&rdquo;, and the discarded word is
+        exactly the one that chooses.
+      </p>
+
       <h3>Entity filter resolution</h3>
       <p>
         The value index resolves entity references in the question to column filters. &ldquo;in the US&rdquo; becomes{" "}
