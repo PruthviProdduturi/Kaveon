@@ -174,6 +174,30 @@ Tie-break: narrowest dataset (fewest columns) wins.`}</Code>
         exactly the one that chooses.
       </p>
 
+      <h4>The vocabulary queue</h4>
+      <p>
+        Everything structural about a dataset is derived when it is created. The one thing no statistic can supply is
+        the vocabulary of the organisation reading it — that a column is &ldquo;the number&rdquo;, that
+        &ldquo;churn&rdquo; here means cancelled accounts, the product names, the acronyms. Aliases otherwise come
+        only from a seed lexicon of generic business English.
+      </p>
+      <p>
+        So a refused word is collected rather than discarded. <code>GET /dlm/vocabulary-gaps</code> is the queue:
+        one row per word per dataset, most asked first, with how many people asked, an example question, and the
+        measures and dimensions it could be mapped to.{" "}
+        <code>POST /dlm/vocabulary-gaps/resolve</code> answers one — mapping it writes an alias on that element, the
+        same curation the context editor writes, so the next question using the word is answered. Dismissing records
+        it as noise and stops the queue asking again; it does not make the word answerable.{" "}
+        <strong>Settings → Maintenance</strong> renders it.
+      </p>
+      <Callout type="note">
+        Curation driven by demand rather than modelled in advance: a gap only appears once a real reader has asked a
+        real question it blocked. Two honest limits. The observations are held in the API process and are lost on a
+        restart — the words return as people ask again, while mappings and dismissals are durable. And a word is
+        recorded against the dataset its question routed to, so a question that routes nowhere leaves no entry: there
+        is no element to map it onto, which makes it a missing dataset rather than a missing word.
+      </Callout>
+
       <h3>Entity filter resolution</h3>
       <p>
         The value index resolves entity references in the question to column filters. &ldquo;in the US&rdquo; becomes{" "}

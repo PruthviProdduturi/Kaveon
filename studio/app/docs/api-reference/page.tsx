@@ -92,6 +92,8 @@ curl -s http://kaveon-api:8080/api/v1/datasets \\
       <tr><td>GET</td><td><code>/api/v1/datasets/{`{id}`}/freshness</code></td><td>Staleness of the compiled context.</td></tr>
       <tr><td>GET</td><td><code>/api/v1/dlm/freshness</code></td><td>Every context&apos;s staleness, worst first, rebuilding none.</td></tr>
       <tr><td>POST</td><td><code>/api/v1/dlm/sweep</code></td><td>Rebuild every stale context. Administrator only.</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/dlm/vocabulary-gaps</code></td><td>Words readers asked that their dataset could not place.</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/dlm/vocabulary-gaps/resolve</code></td><td>Map one of those words to a measure or dimension, or dismiss it.</td></tr>
     </tbody></table>
     <Code lang="bash">{`curl -s $API/api/v1/dlm/ask \\
   -H 'content-type: application/json' \\

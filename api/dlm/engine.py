@@ -48,6 +48,7 @@ import dlm.engine_dialect as dialects
 import services.datasets as datasets_svc
 import dlm.hll as hll
 import dlm.curation as auto_curation
+from dlm import vocabulary_gaps
 import dlm.classes as classes
 from services import engine_cube_rewrite
 from services import revalidating_cache
@@ -2638,6 +2639,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                             [{"id": name, "label": name, "description": ""} for name in dimension_options],
                             original_question, choices, dataset_id, ds, t0)
         sample = _index_examples(dataset_id, limit=4)
+        vocabulary_gaps.record(dataset_id, term, original_question, actor or principal)
         return _unanswerable(dataset_id, ds, original_question, t0,
                              why=f'"{term}" is not a value, a measure or a dimension of '
                                  f'{_dataset_label(ds)}.',
@@ -2684,6 +2686,13 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                                 f'did you mean {", ".join(options)}?',
                                 [{"id": name, "label": name, "description": ""} for name in options],
                                 original_question, choices, dataset_id, ds, t0)
+            # The word is the curation this dataset is missing, and a reader
+            # just supplied it in a real question. Noted so the vocabulary
+            # queue is driven by demand rather than modelled in advance.
+            # `actor` is None on the re-entered call: `ask` installs the
+            # identity as serving state and forwards it as `principal`, so the
+            # asker's name is there rather than here.
+            vocabulary_gaps.record(dataset_id, term, original_question, actor or principal)
             return _unanswerable(dataset_id, ds, original_question, t0,
                                  why=f'"{term}" is not a measure, a dimension or a value of '
                                      f'{_dataset_label(ds)}.',
@@ -6837,10 +6846,116 @@ def get_context_spec(dataset_id: str, actor: Optional[str] = None,
             "effective": _merge_spec(suggested, curation)}
 
 
-def save_curation(dataset_id: str, curation: Any, actor: Optional[str] = None) -> Dict[str, Any]:
+def vocabulary_queue(actor: Optional[str] = None, role: str = "Viewer") -> Dict[str, Any]:
+    """The words readers asked that their dataset could not place, with what
+    each one could be mapped to.
+
+    One row per word per dataset, most asked first, carrying the measures and
+    dimensions it might mean so a curator can answer it without leaving the
+    page. Only datasets the caller can see, and only words no one has already
+    dismissed.
+    """
+    if not actor:
+        return {"terms": 0, "datasets": 0, "gaps": [],
+                "skipped": "a PostgreSQL-free read needs a caller identity"}
+    if _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role, lambda: vocabulary_queue(actor, role))
+    visible: Dict[str, dict] = {}
+    dismissed: Dict[str, List[str]] = {}
+    for artifact in _serving_artifacts():
+        dataset_id = str((artifact or {}).get("dataset_id") or "")
+        if not dataset_id:
+            continue
+        visible[dataset_id] = artifact or {}
+        curation = ((artifact or {}).get("compiled_context") or {}).get("curation") or {}
+        dismissed[dataset_id] = list(curation.get("dismissed_terms") or [])
+    rows = vocabulary_gaps.gaps(visible.keys(), dismissed)
+    for row in rows:
+        artifact = visible.get(row["dataset_id"]) or {}
+        manifest = artifact.get("manifest") or {}
+        row["dataset_name"] = manifest.get("name")
+        spec = _merge_spec(manifest.get("context_spec") or {},
+                           (artifact.get("compiled_context") or {}).get("curation") or {})
+        # What this word could be mapped to. Offered in full rather than
+        # guessed at: a word the router could not place is exactly the word no
+        # automatic suggestion should be trusted on.
+        row["measures"] = sorted((spec.get("metrics") or {}).keys())
+        row["dimensions"] = sorted((spec.get("dimensions") or {}).keys())
+        row["closest"] = _near_names(row["term"], row["measures"] + row["dimensions"], None)
+    return {"terms": len(rows), "datasets": len({r["dataset_id"] for r in rows}),
+            "gaps": rows,
+            "note": "Observations are held in this API process and are lost on a restart; "
+                    "a mapping or a dismissal is durable."}
+
+
+def resolve_vocabulary_gap(dataset_id: str, term: str, kind: Optional[str] = None,
+                           name: Optional[str] = None, dismiss: bool = False,
+                           actor: Optional[str] = None,
+                           role: str = "Analyst") -> Dict[str, Any]:
+    """Answer one word of the queue, durably.
+
+    A mapping is an alias on the element it names -- the same curation a human
+    would type on the context page, written the same way, so it needs no new
+    storage and takes effect on the next question: an alias joins the
+    dataset's vocabulary, which is both what the router matches against and
+    what decides whether a word can be placed at all.
+
+    A dismissal records the word as judged rather than deleting it, because the
+    observation ledger does not survive a restart and the judgement must.
+    Dismissing does not make the word answerable -- a question using it is
+    still refused, which is correct; it only stops the queue asking again.
+    """
+    term = str(term or "").strip().lower()
+    if not term:
+        return {"ok": False, "reason": "no_term"}
+    if not actor:
+        return {"ok": False, "reason": "no_identity"}
+    spec = get_context_spec(str(dataset_id), actor, role)
+    if not spec.get("ok"):
+        return {"ok": False, "reason": spec.get("reason", "no_artifact")}
+    curation = dict(spec.get("curation") or {})
+    if dismiss:
+        existing = [str(t) for t in (curation.get("dismissed_terms") or [])]
+        curation["dismissed_terms"] = sorted(set(existing) | {term})
+    else:
+        if kind not in ("metric", "dimension") or not name:
+            return {"ok": False, "reason": "no_target"}
+        group = "metrics" if kind == "metric" else "dimensions"
+        effective = (spec.get("effective") or {}).get(group) or {}
+        if name not in effective:
+            return {"ok": False, "reason": "unknown_target", "target": name}
+        elements = dict(curation.get(group) or {})
+        element = dict(elements.get(name) or {})
+        # The aliases already in force, not only the curated ones: curation
+        # replaces rather than extends, so writing back just the curated set
+        # would silently drop the derived synonyms.
+        aliases = list((effective.get(name) or {}).get("aliases") or [])
+        element["aliases"] = sorted({a.lower() for a in aliases} | {term})
+        elements[name] = element
+        curation[group] = elements
+    saved = save_curation(str(dataset_id), curation, actor, role)
+    if not saved.get("ok"):
+        return saved
+    vocabulary_gaps.forget(dataset_id, term)
+    return {"ok": True, "dataset_id": str(dataset_id), "term": term,
+            "dismissed": bool(dismiss),
+            "mapped_to": None if dismiss else {"kind": kind, "name": name},
+            "needs_regenerate": saved.get("needs_regenerate", False)}
+
+
+def save_curation(dataset_id: str, curation: Any, actor: Optional[str] = None,
+                  role: str = "Viewer") -> Dict[str, Any]:
     """Persist human curation overrides. Alias / display / default / value-alias edits
     take effect immediately (caches invalidated). Breakdown / depth edits change what
-    is precomputed, so those need a regenerate — flagged as ``needs_regenerate``."""
+    is precomputed, so those need a regenerate — flagged as ``needs_regenerate``.
+
+    The caller's `role` is carried through to the publish, which allows an
+    Admin to curate a dataset they do not own. Without it every curation
+    published as a Viewer, and a seeded dataset -- owned by `system`, which
+    nobody can sign in as -- could not be curated by anyone at all: the save
+    failed with "Only the dataset owner or an Admin can publish its DLM
+    generation", on the context editor as well as here.
+    """
     if not actor:
         raise RuntimeError("PostgreSQL-free DLM curation requires actor identity")
     artifact = get_dlm(str(dataset_id), actor, "Admin")
@@ -6851,11 +6966,19 @@ def save_curation(dataset_id: str, curation: Any, actor: Optional[str] = None) -
         raise RuntimeError("Compiled DLM context is unavailable for curation")
     clean = _sanitize_curation(curation)
     previous = context.get("curation") or {}
+    # Curation replaces rather than merges, which is what makes the editor
+    # WYSIWYG -- a suggested alias it did not send back is one the curator
+    # removed. Dismissed words are the exception: no editor shows them, so an
+    # editor save carrying none of them means "I was not asked about these",
+    # not "clear them". A caller that means to clear them sends an empty list.
+    if "dismissed_terms" not in (curation if isinstance(curation, dict) else {}):
+        if previous.get("dismissed_terms"):
+            clean["dismissed_terms"] = list(previous["dismissed_terms"])
     from services import dlm_generation_cutover
     next_payload = {key: value for key, value in artifact.items() if key != "version"}
     next_payload["built_at"] = _now_iso()
     next_payload["compiled_context"] = {**context, "curation": clean}
-    dlm_generation_cutover.publish(next_payload, actor)
+    dlm_generation_cutover.publish(next_payload, actor, role)
     suggested = (artifact.get("manifest") or {}).get("context_spec") or {}
     _SPEC_CACHE.pop(str(dataset_id), None)
     return {"ok": True, "dataset_id": str(dataset_id),
@@ -6902,6 +7025,13 @@ def _sanitize_curation(c: Any) -> Dict[str, Any]:
         out["default_metric"] = str(c["default_metric"])
     if c.get("freshness_policy") in ("cached", "live"):
         out["freshness_policy"] = c["freshness_policy"]
+    # Words a curator judged to be noise rather than missing vocabulary. A
+    # judgement, so it is curation and survives a regenerate; bounded, because
+    # it is fed by whatever readers typed.
+    if isinstance(c.get("dismissed_terms"), list):
+        terms = sorted({str(t).strip().lower() for t in c["dismissed_terms"] if str(t).strip()})
+        if terms:
+            out["dismissed_terms"] = terms[:500]
     return out
 
 

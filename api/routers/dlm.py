@@ -47,6 +47,20 @@ class CurationBody(BaseModel):
     value_aliases: Dict[str, str] = {}
     default_metric: Optional[str] = None
     freshness_policy: Optional[Literal["cached", "live"]] = None
+    # Words a curator judged to be noise rather than missing vocabulary. Sent
+    # by the vocabulary queue; the context editor leaves it alone, and an
+    # omitted field is not a cleared one on this route either.
+    dismissed_terms: Optional[List[str]] = None
+
+
+class VocabularyGapBody(BaseModel):
+    """One answer to the vocabulary queue. Either `dismiss`, or a `kind` and
+    the `name` of the element the word should become an alias of."""
+    dataset_id: str
+    term: str
+    kind: Optional[Literal["metric", "dimension"]] = None
+    name: Optional[str] = None
+    dismiss: bool = False
 
 
 class ReproduceBody(BaseModel):
@@ -148,7 +162,10 @@ def put_context(dataset_id: str, body: CurationBody,
     """Save human curation overrides (aliases, breakdowns, additivity, value aliases,
     default metric). Returns needs_regenerate=true when a breakdown/depth change means
     the precomputed answers must be rebuilt."""
-    result = dlm.save_curation(dataset_id, body.dict(), ctx.email)
+    # `exclude_none` so a field this form does not carry reads as absent rather
+    # than as cleared: curation replaces the whole document, and the editor
+    # knows nothing about the vocabulary queue's dismissals.
+    result = dlm.save_curation(dataset_id, body.dict(exclude_none=True), ctx.email, ctx.role)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason", "save_failed"))
     return result
@@ -342,3 +359,38 @@ def coverage(ctx: UserContext = Depends(require_user_context)):
     value coverage. Powers the homepage 'available context' banner."""
     items = dlm.coverage(ctx.email, ctx.role)
     return {"count": len(items), "datasets": items}
+
+
+@router.get("/dlm/vocabulary-gaps")
+def vocabulary_gaps(ctx: UserContext = Depends(require_user_context)):
+    """The words readers asked that their dataset could not place, most asked
+    first, with the measures and dimensions each one could be mapped to.
+
+    A dataset's structure is derived from the Engine's statistics; its
+    organisation's vocabulary cannot be. This is the queue of what is missing,
+    written by the questions people actually asked rather than modelled in
+    advance. Observations live in this API process and are lost on a restart;
+    a mapping or a dismissal is durable."""
+    return dlm.vocabulary_queue(ctx.email, ctx.role)
+
+
+@router.post("/dlm/vocabulary-gaps/resolve")
+def resolve_vocabulary_gap(body: VocabularyGapBody,
+                           ctx: UserContext = Depends(require_min_role("Analyst"))):
+    """Answer one word of the queue: map it to a measure or a dimension, or
+    dismiss it as noise.
+
+    A mapping writes an alias on that element — the same curation the context
+    page writes, so it takes effect on the next question. A dismissal is
+    recorded as a judgement and stops the queue asking again; it does not make
+    the word answerable."""
+    _assert_dataset_visible(body.dataset_id, ctx)
+    result = dlm.resolve_vocabulary_gap(
+        body.dataset_id, body.term, kind=body.kind, name=body.name,
+        dismiss=bool(body.dismiss), actor=ctx.email, role=ctx.role)
+    if not result.get("ok"):
+        reason = result.get("reason")
+        if reason in ("no_artifact", "unknown_target"):
+            raise HTTPException(status_code=404, detail=reason)
+        raise HTTPException(status_code=422, detail=reason or "resolve_failed")
+    return result

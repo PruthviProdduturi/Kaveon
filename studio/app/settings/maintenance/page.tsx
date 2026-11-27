@@ -10,6 +10,7 @@ import {
 } from "../../../utils/previewRefresh";
 import { unknownText } from "../../../components/Reading";
 import ContextFreshness from "./ContextFreshness";
+import VocabularyGaps from "./VocabularyGaps";
 import g from "../governance/governance.module.css";
 import s from "../settings.module.css";
 
@@ -496,6 +497,9 @@ export default function MaintenancePage() {
 			{/* Server-side state, and the only card here whose staleness changes an
 			    answer rather than a thumbnail — so it leads. */}
 			<ContextFreshness />
+			{/* A queue rather than a schedule: it only has rows when readers have
+			    asked something their dataset could not place. */}
+			<VocabularyGaps />
 			<PassCard pass={dashboards} icon={<ImagesIcon />} />
 			<PassCard pass={charts} icon={<ChartIcon />} />
 		</div>
