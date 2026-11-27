@@ -90,6 +90,8 @@ curl -s http://kaveon-api:8080/api/v1/datasets \\
       <tr><td>POST</td><td><code>/api/v1/datasets/{`{id}`}/dlm/generate</code></td><td>Compile the dataset context.</td></tr>
       <tr><td>GET / PUT</td><td><code>/api/v1/datasets/{`{id}`}/dlm/context</code></td><td>Read or curate the context spec.</td></tr>
       <tr><td>GET</td><td><code>/api/v1/datasets/{`{id}`}/freshness</code></td><td>Staleness of the compiled context.</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/dlm/freshness</code></td><td>Every context&apos;s staleness, worst first, rebuilding none.</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/dlm/sweep</code></td><td>Rebuild every stale context. Administrator only.</td></tr>
     </tbody></table>
     <Code lang="bash">{`curl -s $API/api/v1/dlm/ask \\
   -H 'content-type: application/json' \\

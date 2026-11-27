@@ -3902,7 +3902,62 @@ def maybe_auto_rebuild(dataset_id: str, actor: Optional[str] = None,
     return _trigger_background_rebuild(dataset_id, actor)
 
 
-_SWEEP_INTERVAL_SECONDS = 1800.0  # 30 minutes
+def freshness_status(actor: Optional[str] = None,
+                     role: str = "Viewer") -> Dict[str, Any]:
+    """Every compiled context's freshness, changing none of them.
+
+    `freshness_sweep` was the only thing that could see the whole fleet, and it
+    rebuilds whatever it finds stale — so there was no way to look at freshness
+    without acting on it, and between sweeps nothing to look at. This reads the
+    same artifacts and reports.
+
+    `rebuilding` is the field a score cannot supply, and the one that decides
+    whether a stale context needs a human: stale with a rebuild in flight is
+    the system working, stale with none is the system waiting. Both read as
+    `recommendation: rebuild`.
+
+    Worst first — a status list nobody can triage is a status list nobody
+    reads.
+    """
+    if not actor:
+        return {"checked": 0, "stale": 0, "rebuilding": 0, "uncompiled": 0,
+                "datasets": [],
+                "skipped": "a PostgreSQL-free read needs a caller identity"}
+    if _RETIREMENT_SERVING.get() is None:
+        return _with_serving_identity(actor, role,
+                                      lambda: freshness_status(actor, role))
+    with _REBUILD_LOCK:
+        in_flight = set(_REBUILD_ACTIVE)
+    rows: List[Dict[str, Any]] = []
+    for artifact in _serving_artifacts():
+        dataset_id = str((artifact or {}).get("dataset_id") or "")
+        if not dataset_id:
+            continue
+        freshness = check_freshness(dataset_id)
+        manifest = _loads((artifact or {}).get("manifest")) or {}
+        rows.append({
+            "dataset_id": dataset_id,
+            "fact_table": manifest.get("fact_table"),
+            "status": (artifact or {}).get("status"),
+            "built_at": freshness.get("computed_at"),
+            "score": freshness["score"],
+            "fresh": freshness["fresh"],
+            "recommendation": freshness["recommendation"],
+            "data_modified": freshness["data_modified"],
+            "signal": freshness.get("signal"),
+            "rebuilding": dataset_id in in_flight,
+        })
+    # A context that cannot answer at all outranks one answering from older
+    # data, and within either the lowest score is the most urgent.
+    order = {"no_context": 0, "rebuild": 1, "use_context": 2}
+    rows.sort(key=lambda row: (order.get(row["recommendation"], 3), row["score"]))
+    return {
+        "checked": len(rows),
+        "stale": sum(1 for row in rows if row["recommendation"] == "rebuild"),
+        "rebuilding": sum(1 for row in rows if row["rebuilding"]),
+        "uncompiled": sum(1 for row in rows if row["recommendation"] == "no_context"),
+        "datasets": rows,
+    }
 
 
 def freshness_sweep(actor: Optional[str] = None, role: str = "Admin") -> Dict[str, Any]:

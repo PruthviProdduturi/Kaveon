@@ -300,10 +300,28 @@ def invalidate_cache(
     return {"ok": True, "cleared": cleared}
 
 
+@router.get("/dlm/freshness")
+def freshness_status(ctx: UserContext = Depends(require_user_context)):
+    """Freshness for every context the caller can see, worst first, changing
+    nothing. The counts summarise it: how many are compiled, how many are
+    serving older data than the source holds, how many are rebuilding now, and
+    how many cannot answer from context at all.
+
+    Read-only on purpose. The sweep below is the only other view of the whole
+    fleet and it rebuilds what it finds, so looking was indistinguishable from
+    acting."""
+    return dlm.freshness_status(ctx.email, ctx.role)
+
+
 @router.post("/dlm/sweep")
 def sweep(ctx: UserContext = Depends(require_min_role("Admin"))):
     """Check all datasets for freshness and trigger rebuilds for stale ones.
-    Runs automatically every 30 minutes; this endpoint triggers it manually."""
+
+    Nothing in this process schedules it: the in-process loop was removed with
+    PostgreSQL because a thread started at import has no identity to read
+    product state as. The schedule is the `kaveon-dlm-freshness` CronJob, which
+    carries one and is off by default. This endpoint is the manual run, and
+    `GET /dlm/freshness` is how to see the same fleet without rebuilding it."""
     return dlm.freshness_sweep(ctx.email, ctx.role)
 
 

@@ -9,6 +9,7 @@ import {
 	startPass, stopPass, subscribe, writeInterval,
 } from "../../../utils/previewRefresh";
 import { unknownText } from "../../../components/Reading";
+import ContextFreshness from "./ContextFreshness";
 import g from "../governance/governance.module.css";
 import s from "../settings.module.css";
 
@@ -492,6 +493,9 @@ export default function MaintenancePage() {
 
 	return (
 		<div className={s.stack}>
+			{/* Server-side state, and the only card here whose staleness changes an
+			    answer rather than a thumbnail — so it leads. */}
+			<ContextFreshness />
 			<PassCard pass={dashboards} icon={<ImagesIcon />} />
 			<PassCard pass={charts} icon={<ChartIcon />} />
 		</div>

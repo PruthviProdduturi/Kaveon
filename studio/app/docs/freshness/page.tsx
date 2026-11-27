@@ -134,18 +134,52 @@ fresh = (not data_modified) or score >= 0.5`}</Code>
             <td>Active</td>
           </tr>
           <tr>
-            <td><strong>The automatic background sweep.</strong> A daemon thread was intended to run the same check every 30 minutes.</td>
-            <td><strong>Not running</strong></td>
+            <td><strong>Scheduled sweep.</strong> The <code>kaveon-dlm-freshness</code> CronJob runs the same check on a schedule under an account the chart names. The in-process daemon thread that preceded it is gone: a thread started at import has no identity to read compiled artifacts as.</td>
+            <td>Off unless <code>api.dlmFreshness.enabled</code> is set</td>
           </tr>
         </tbody>
       </table>
       <Callout type="warn">
-        <strong>Nothing rebuilds a dataset nobody asks about.</strong> The periodic sweep does not start, because
-        reading compiled artifacts requires a caller identity and an unattended thread has none — it reports that
-        rather than silently checking nothing. So a dataset that is loaded but never queried keeps a stale artifact
-        until someone asks, a pipeline notifies, or an administrator sweeps. If your data arrives on a schedule, call
-        the notification endpoint from the pipeline; that is the supported path, not a timer.
+        <strong>Nothing rebuilds a dataset nobody asks about</strong> unless you schedule it. With the CronJob off,
+        a dataset that is loaded but never queried keeps a stale artifact until someone asks, a pipeline notifies, or
+        an administrator sweeps. If your data arrives on a schedule, call the notification endpoint from the pipeline
+        — a push from the loader that just finished beats a timer guessing when it might have.
       </Callout>
+
+      <h2>Seeing the whole fleet</h2>
+      <p>
+        <code>GET /dlm/freshness</code> reports every context the caller can see — worst first, and without
+        rebuilding any of them. It answers the question the sweep could not: the sweep rebuilds what it finds, so
+        running it to find out what was stale changed what was stale.
+      </p>
+      <Code lang="json">{`GET /api/v1/dlm/freshness
+
+{
+  "checked": 3,
+  "stale": 1,
+  "rebuilding": 1,
+  "uncompiled": 0,
+  "datasets": [
+    {
+      "dataset_id": "24",
+      "fact_table": "events",
+      "status": "ready",
+      "built_at": "2026-11-20T04:11:08",
+      "score": 0.21,
+      "fresh": false,
+      "recommendation": "rebuild",
+      "data_modified": true,
+      "signal": "engine_source_version",
+      "rebuilding": true
+    }
+  ]
+}`}</Code>
+      <p>
+        <code>rebuilding</code> is the field that decides whether a stale row needs a person. Behind its source with
+        a rebuild in flight is the system working; behind its source with none is the system waiting. Both report{" "}
+        <code>recommendation: rebuild</code>. <strong>Settings → Maintenance</strong> renders the same read, with the
+        manual sweep as its one action.
+      </p>
 
       <h2>Reading a freshness report</h2>
       <Code lang="json">{`GET /datasets/24/freshness
