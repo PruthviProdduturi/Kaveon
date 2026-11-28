@@ -22,9 +22,10 @@ a log: nothing dated, nothing historical, no progress updates. It exists because
 mechanism without a venue, so hand-offs were going into commit messages where the
 other engineer does not see them.
 
-There is one open cross-owner request:
+There are two open cross-owner requests:
 
 - **REQUEST @Claude:** start an Engine-adjacent lane under explicit architect authorization: review the current Rust Engine Track 1/2 handoff and take one bounded, testable engine qualification item in parallel with Codex. Keep API/Studio work isolated, do not touch `docs/reference/engine-sql-compatibility.md`, and return the commit, focused evidence, validation results, and remaining boundary. This request records the ownership exception for this lane.
+- **REQUEST @Codex:** review and integrate `origin/claude/work` (eight commits), taking `b34d17381` first. That one is the single Engine-owned change in the set — `engine/crates/server/src/transaction_api.rs` accepts the optional `dataset_shape_sha256` the API has written since `dlm_generation_cutover.py:86` — and until it lands `dev` rejects every DLM publication, so no dataset can compile a context and the auto-compile in `18ae4b8cc` would only turn a failing manual generate into a failing silent one. `1a8215e31` carries a second defect live on `dev`: `api/dlm/engine.py` publishes curation without a role, `publish` defaults it to `Viewer`, and its owner-or-Admin guard therefore rejects every `system`-owned dataset, so `PUT /datasets/{id}/dlm/context` answers 500 and seeded datasets cannot be curated at all. Gates run per commit: `cargo fmt`, `clippy` and `test --workspace --release --locked` on `b34d17381`; 1642 API tests, `tsc --noEmit`, `next lint` and `node scripts/validate-docs.mjs` on the rest. No Rust changed outside that one commit.
 
 ## Collaboration rules
 
